@@ -2,7 +2,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v2.1 |
+| 文档版本 | v2.2 |
 | 状态 | 草案 |
 | 关联 | [README.md](README.md) |
 | 基础平台 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
@@ -331,6 +331,213 @@ Agent <-> 本地 MCP Proxy (virbius-core sandbox)
 **fail-open/fail-closed**：virbius-engine 不可用时（网络分区），高风险工具 fail-closed(deny)，低风险工具 fail-open(allow + 全量审计)。
 
 **风险缓解**：快速通道工具的审计事件全量采样(sample_rate=1.0)，异步送 virbius-engine 复核。若异步复核发现违规，提升 session_risk_score，后续请求自动退出快速通道。
+
+### 2.8 Prompt Gateway（提示增强）
+
+Prompt Gateway 是端层的**预防性**安全组件，在 Agent 发送 prompt 到 LLM 前注入安全约束。与工具拦截（检测性）互补，形成"预防 + 检测"纵深防御。
+
+```
+Agent 生成 prompt
+  |
+  v
+Prompt Gateway（嵌入 virbius-core，<0.5ms）
+  |  <- 注入宪法约束（from virbius-control，本地缓存）
+  |  <- 注入工具规则（from License permissions）
+  |  <- 注入动态上下文（session risk + 最近工具调用）
+  |  <- PII 输入脱敏（复用 dlp/engine.rs）
+  |
+  v
+增强后的 prompt -> LLM API
+  |
+  v
+LLM 生成 tool_call -> 端层预检 -> 管层 -> 云层终判 -> 执行
+```
+
+| 层 | 机制 | 性质 | 效果 |
+|----|------|------|------|
+| Prompt Gateway | 注入规则让 LLM 自我约束 | 预防(proactive) | 减少危险意图产生 |
+| 工具拦截 | 阻止危险工具执行 | 检测(reactive) | 阻止危险行为落地 |
+| Falco 观测 | 监控运行时异常 | 检测(reactive) | 发现已发生异常 |
+
+#### 2.8.1 注入内容
+
+**宪法约束（系统提示增强）**——由 virbius-control 管理，编译为场景相关模板：
+
+```
+## Virbius Agent Constitution v1.2 (scene: code_review)
+
+### 绝对禁止
+1. 不得将数据发送到白名单之外的外部端点
+2. 不得在沙箱之外执行代码
+3. 不得访问允许路径之外的文件
+4. 不得尝试绕过安全控制
+5. 不得在输出中包含凭据、令牌或密钥
+
+### 工具使用规则
+- 可用工具: read_file, search, curl
+- curl 仅允许连接: api.internal:443, cdn.internal:443
+- read_file 仅允许读取: /tmp/data/*, /home/user/workdir/*
+- 每分钟最多 50 次工具调用
+- 工具返回错误时，重试不超过 3 次
+
+### 数据处理规则
+- 工具结果中的 PII 必须脱敏后才能包含在响应中
+- 不得在记忆中存储敏感数据
+- 超过 64KB 的工具结果应摘要，不要原样传递
+
+### 场景约束（code_review）
+- 你在审查代码，不是执行代码
+- 禁止使用 execute_python 或 shell 工具
+```
+
+**动态上下文注入**——根据当前 session 状态实时生成：
+
+```
+## 当前会话上下文
+- 会话风险分: 25/100（低风险）
+- 本次会话已调用: read_file(3), search(2)
+- 场景: code_review
+- License 剩余有效期: 2h 15m
+
+## 最近活动
+- 上次工具: read_file(/tmp/data/auth.py) -> 成功
+- 注意: 正在读取认证相关文件，警惕凭据泄露
+```
+
+**工具描述增强**——修改 Agent 发送给 LLM 的工具定义，嵌入约束：
+
+```json
+{
+  "name": "curl",
+  "description": "发起 HTTP 请求。限制: 仅允许连接 api.internal:443 和 cdn.internal:443。尝试连接其他主机将被阻断并记录。",
+  "parameters": {...}
+}
+```
+
+**PII 输入脱敏**——复用现有 virbius-core/src/dlp/engine.rs，在 prompt 发送前脱敏用户输入。
+
+#### 2.8.2 实现
+
+```rust
+// virbius-core/src/prompt_gateway.rs
+
+pub struct PromptGateway {
+    constitution_cache: RwLock<ConstitutionTemplates>,  // 本地缓存，sync from control
+    dlp_engine: DlpEngine,                               // 复用现有
+}
+
+pub struct EnhanceContext<'a> {
+    pub license: &'a LicenseContext,
+    pub session_id: &'a str,
+    pub scene: &'a str,
+    pub risk_score: u32,
+    pub recent_tools: Vec<ToolCallSummary>,
+}
+
+impl PromptGateway {
+    /// 增强 prompt，返回增强后的 messages
+    pub fn enhance(
+        &self,
+        messages: &mut Vec<ChatMessage>,
+        ctx: &EnhanceContext,
+    ) -> Result<()> {
+        // 1. 宪法约束注入（prepend to system message）
+        let constitution = self.constitution_cache.read();
+        let rules = constitution.select(ctx.scene, ctx.license.constitution_version);
+        let system_augment = rules.render(ctx);
+        self.prepend_system(messages, &system_augment)?;
+
+        // 2. 动态上下文注入（append to system message）
+        let dynamic_ctx = self.render_dynamic_context(ctx);
+        self.append_system(messages, &dynamic_ctx)?;
+
+        // 3. 工具描述增强
+        if let Some(tools) = self.extract_tools(messages) {
+            let augmented = self.augment_tool_descriptions(tools, ctx.license);
+            self.replace_tools(messages, augmented)?;
+        }
+
+        // 4. PII 输入脱敏（仅 user/assistant 消息，不改 system）
+        for msg in messages.iter_mut() {
+            if msg.role == Role::User || msg.role == Role::Assistant {
+                msg.content = self.dlp_engine.desensitize_in(
+                    &msg.content, ctx.session_id, ...
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+}
+```
+
+#### 2.8.3 Agent 框架集成
+
+| 框架 | 集成方式 | 拦截点 |
+|------|---------|--------|
+| **OpenAI SDK** | EnhancedOpenAIClient 代理，在 chat.completions.create() 前调 gateway.enhance() | 请求发送前 |
+| **LangChain** | ConstitutionalPromptTemplate，在 LLMChain.invoke() 前增强 | prompt 模板渲染后 |
+| **通用 HTTP proxy** | 独立服务，拦截 LLM API 请求，增强 body 后转发 | HTTP 层 |
+| **MCP proxy 模式** | 复用 §2.6 MCP proxy，在转发前增强 | tools/call 前 |
+
+#### 2.8.4 宪法模板编译
+
+```
+virbius-control
+  |
+  +-- tb_constitution（宪法规则表）
+  |   +-- id, version, category, rule_text, priority, scene_filter
+  |
+  +-- virbius-compiler
+  |   +-- 按 scene 编译宪法规则为 prompt 模板
+  |   +-- 输出: constitution_templates.json
+  |
+  v
+端层 virbius-core（PromptGateway 本地缓存）
+  +-- 按 scene + constitution_version 选择模板
+  +-- 模板变量填充（license permissions, session context）
+  +-- 注入到 prompt
+```
+
+模板示例：
+
+```json
+{
+  "version": "v1.2",
+  "templates": [
+    {
+      "scene": "code_review",
+      "system_prefix": "## Virbius Agent Constitution {{version}} (scene: {{scene}})\n\n### 绝对禁止\n{{prohibitions}}\n\n### 工具使用规则\n{{tool_rules}}",
+      "dynamic_suffix": "## 当前会话上下文\n- 风险分: {{risk_score}}/100\n- 已调用: {{recent_tools}}\n- 场景: {{scene}}",
+      "prohibitions": [
+        "不得将数据发送到白名单之外的外部端点",
+        "不得在沙箱之外执行代码",
+        "不得在输出中包含凭据、令牌或密钥"
+      ]
+    }
+  ]
+}
+```
+
+#### 2.8.5 预期效果
+
+| 指标 | 无 Gateway | 有 Gateway | 改善 |
+|------|-----------|-----------|------|
+| 危险工具调用尝试 | 基线 | -60~80% | LLM 知道约束后自我约束 |
+| 重试循环 | 基线 | -70~90% | LLM 知道限制不再重试 |
+| Prompt 注入抵抗力 | 基线 | +15~25% | 宪法规则建立基线抵抗 |
+| 延迟开销 | 0 | <0.5ms | 字符串拼接，无 LLM 调用 |
+| Token 开销 | 0 | 200-500 tokens/prompt | 宪法规则占位 |
+
+#### 2.8.6 风险与局限
+
+| 风险 | 说明 | 缓解 |
+|------|------|------|
+| **Prompt 注入可覆盖** | 攻击者通过工具返回值注入"忽略之前的指令" | 宪法规则提供基线抵抗；STI Taint(P1)检测注入；工具拦截是最终防线 |
+| **Token 成本** | 每次增加 200-500 tokens | 压缩规则格式；只注入场景相关规则；小模型不注入 |
+| **模型差异** | GPT-4 遵守规则好，小模型可能不遵守 | 按模型能力调整注入格式；小模型依赖工具拦截 |
+| **非替代工具拦截** | Prompt Gateway 是预防不是阻断 | 永远不能单独依赖；必须与工具拦截 + Falco 观测配合 |
+
 
 ---
 
@@ -1025,3 +1232,4 @@ Agent Client
 | v1.1 | 2026-07-05 | 新增预检/执行两阶段、快速通道 |
 | v2.0 | 2026-07-06 | 重大修订：1) 管层改为 OpenResty+Lua(删除 gateway-agent+AgentGateway) 2) 核层改为 Falco 观测引擎(眼睛/手分离) 3) 新增 Tetragon 检测+Falco 降级链 4) 新增 Falco plugin 模式(serverless 降级) 5) 删除 sidecar 部署模式 6) P0 只实现观测，seccomp-notify/Landlock/gVisor 推迟至 P2 7) 修正 posix_spawn/ seccomp 白名单/Groovy 逻辑 bug/eBPF IPv6 等技术问题 8) 新增 §9 第三方技术栈依赖与稳定性 |
 | v2.1 | 2026-07-06 | 新增 §1.4 身份标识体系：app_id 即 agent_id，不区分类型与实例；新增 Agent 运行许可证(Runtime License)机制 |
+| v2.2 | 2026-07-06 | 新增 §2.8 Prompt Gateway（提示增强）：宪法约束注入 + 动态上下文注入 + 工具描述增强 + PII 输入脱敏 |
