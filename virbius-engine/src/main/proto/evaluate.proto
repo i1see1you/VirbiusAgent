@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package virbius.engine.v1;
+
+option java_package = "io.virbius.engine.v1";
+option java_multiple_files = true;
+
+service EvaluateService {
+  rpc Evaluate(EvaluateRequest) returns (EvaluateResponse);
+}
+
+message EvaluateRequest {
+  string tenant_id = 1;
+  string scene = 2;
+  string role = 3;
+  string session_id = 4;
+  string content = 5;
+  bool is_stream_chunk = 6;
+  repeated Signal prior_signals = 7;  // gateway→engine 内部；不出现在响应
+  string trace_id = 8;
+  string user_id = 9;
+  string device_id = 10;
+  map<string, string> vars = 11;
+}
+
+message Signal {
+  string rule_id = 1;
+  int32 rule_revision = 2;
+  string source = 3;
+  double score = 4;
+  string reason_code = 5;
+  string layer = 6;
+  string intent_action = 7;   // allow | deny | captcha | review
+  string enforce_mode = 8;
+  optional int32 canary_percent = 9;   // optional; 0 = unset
+}
+
+// 对外扁平响应（与 HTTP EvaluateResponseDto / gateway-agent 对齐）
+message EvaluateResponse {
+  string effective_action = 1;  // allow | block | captcha | review
+  int32 max_risk_score = 2;
+  string rule_id = 3;
+  int32 rule_revision = 4;
+  string reason_code = 5;
+  string trace_id = 6;
+  bool degraded = 7;
+}
+
+message EngineDecision {
+  string effective_action = 1;
+  int32 max_risk_score = 2;
+  string enforce_mode = 3;
+}

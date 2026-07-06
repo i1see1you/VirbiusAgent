@@ -1,0 +1,51 @@
+spring:
+  # Required env: VIRBIUS_JDBC_URL, VIRBIUS_JDBC_USER, VIRBIUS_JDBC_PASSWORD, KAFKA_BOOTSTRAP_SERVERS
+  datasource:
+    url: ${VIRBIUS_JDBC_URL}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${VIRBIUS_JDBC_USER}
+    password: ${VIRBIUS_JDBC_PASSWORD}
+    hikari:
+      maximum-pool-size: 50
+      connection-timeout: 3000
+      leak-detection-threshold: 30000
+  sql:
+    init:
+      mode: never
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    producer:
+      acks: all
+      retries: 3
+      batch-size: 16384
+      properties:
+        linger.ms: 10
+    consumer:
+      group-id: virbius-audit-ingest
+      auto-offset-reset: earliest
+      max-poll-records: 500
+
+virbius:
+  security:
+    api-key:
+      enabled: true
+
+audit:
+  publish:
+    backend: kafka
+    kafka:
+      topic: virbius-audit-events
+  ingest:
+    enabled: true
+    backend: kafka
+    kafka:
+      topic: virbius-audit-events
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus

@@ -1,0 +1,18 @@
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+virbius:
+  prompt-llm:
+    base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
+    model: ${VIRBIUS_PROMPT_LLM_MODEL:sileader/qwen3guard:0.6b}
+
+audit:
+  publish:
+    backend: redis-stream
+    redis:
+      stream-key: virbius:audit:events
+
+logging:
+  level:
+    io.virbius: DEBUG

@@ -1,0 +1,14 @@
+spring:
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+
+virbius:
+  prompt-llm:
+    base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL}
+    model: ${VIRBIUS_PROMPT_LLM_MODEL}
+
+audit:
+  publish:
+    backend: redis-stream
+    redis:
+      stream-key: virbius:audit:events

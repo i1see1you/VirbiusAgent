@@ -1,0 +1,75 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+logging:
+  file:
+    name: ${VIRBIUS_LOG_DIR:/tmp/virbius/logs}/control.log
+  logback:
+    rollingpolicy:
+      max-file-size: ${VIRBIUS_LOG_MAX_FILE_SIZE:100MB}
+      max-history: ${VIRBIUS_LOG_MAX_HISTORY_DAYS:30}
+
+spring:
+  application:
+    name: virbius-control
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+virbius:
+  data-dir: ${VIRBIUS_DATA_DIR:./data}
+  redis:
+    url: ${VIRBIUS_REDIS_URL:redis://127.0.0.1:6379}
+  engine:
+    base-url: ${VIRBIUS_ENGINE_URL:http://127.0.0.1:8082}
+  gateway:
+    artifact:
+      enabled: ${VIRBIUS_GATEWAY_ARTIFACT_ENABLED:true}
+      local-fallback: ${VIRBIUS_GATEWAY_ARTIFACT_LOCAL_FALLBACK:false}
+      storage: ${VIRBIUS_GATEWAY_ARTIFACT_STORAGE:redis}
+      redis:
+        blob-prefix: virbius:artifacts:gateway
+        pointer-prefix: virbius:config:gateway
+        ack-prefix: virbius:ack:gateway
+        events-stream: virbius:config:events
+        retain-revisions: 10
+        ack-ttl-seconds: 86400
+      oss:
+        base-url: ${VIRBIUS_GATEWAY_OSS_BASE_URL:}
+        public-base-url: ${VIRBIUS_GATEWAY_OSS_PUBLIC_BASE_URL:}
+        access-key: ${VIRBIUS_GATEWAY_OSS_ACCESS_KEY:}
+        secret-key: ${VIRBIUS_GATEWAY_OSS_SECRET_KEY:}
+        authorization-header: ${VIRBIUS_GATEWAY_OSS_AUTH_HEADER:}
+  lists:
+    redis:
+      enabled: true
+      key-prefix: virbius:lists
+      sweep-cron: "0 0 3 * * *"
+  audit:
+    allow-log-path: ${VIRBIUS_AUDIT_ALLOW_PATH:${virbius.data-dir}/audit-allow.jsonl}
+    allow-log:
+      max-file-size: ${VIRBIUS_AUDIT_ALLOW_MAX_FILE_SIZE:100MB}
+      max-history: ${VIRBIUS_AUDIT_ALLOW_MAX_HISTORY_DAYS:30}
+      total-size-cap: ${VIRBIUS_AUDIT_ALLOW_TOTAL_SIZE_CAP:5GB}
+
+audit:
+  publish:
+    async: true
+    queue-max: 2000
+    flush-batch-size: 64
+    flush-interval-ms: 100
+  ingest:
+    poll-ms: 1000
+    batch-size: 256
+    consumer-group: virbius-audit-ingest
+
+rollout:
+  metrics:
+    rollup-ms: 60000
+  ladder:
+    poll-ms: 900000
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

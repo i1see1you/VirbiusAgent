@@ -1,0 +1,31 @@
+spring:
+  datasource:
+    url: jdbc:sqlite:${virbius.data-dir:./data}/virbius-control.db
+    driver-class-name: org.sqlite.JDBC
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+      data-locations: classpath:db/seed.sql
+  flyway:
+    enabled: false
+
+virbius:
+  security:
+    api-key:
+      enabled: false
+
+audit:
+  publish:
+    backend: redis-stream
+    redis:
+      stream-key: virbius:audit:events
+  ingest:
+    enabled: true
+    backend: redis-stream
+    redis:
+      stream-key: virbius:audit:events
+
+logging:
+  level:
+    io.virbius: DEBUG

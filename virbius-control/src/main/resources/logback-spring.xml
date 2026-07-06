@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+    <include resource="org/springframework/boot/logging/logback/console-appender.xml"/>
+
+    <springProperty scope="context" name="LOG_FILE" source="logging.file.name"/>
+    <springProperty scope="context" name="LOG_MAX_FILE_SIZE"
+                    source="logging.logback.rollingpolicy.max-file-size" defaultValue="100MB"/>
+    <springProperty scope="context" name="LOG_MAX_HISTORY"
+                    source="logging.logback.rollingpolicy.max-history" defaultValue="30"/>
+    <springProperty scope="context" name="AUDIT_ALLOW_LOG_FILE"
+                    source="virbius.audit.allow-log-path" defaultValue="./data/audit-allow.jsonl"/>
+    <springProperty scope="context" name="AUDIT_ALLOW_MAX_FILE_SIZE"
+                    source="virbius.audit.allow-log.max-file-size" defaultValue="100MB"/>
+    <springProperty scope="context" name="AUDIT_ALLOW_MAX_HISTORY"
+                    source="virbius.audit.allow-log.max-history" defaultValue="30"/>
+    <springProperty scope="context" name="AUDIT_ALLOW_TOTAL_SIZE_CAP"
+                    source="virbius.audit.allow-log.total-size-cap" defaultValue="5GB"/>
+
+    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_FILE}</file>
+        <encoder>
+            <pattern>${FILE_LOG_PATTERN}</pattern>
+            <charset>${FILE_LOG_CHARSET}</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_FILE}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+            <maxFileSize>${LOG_MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${LOG_MAX_HISTORY}</maxHistory>
+        </rollingPolicy>
+    </appender>
+
+    <appender name="AUDIT_ALLOW" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${AUDIT_ALLOW_LOG_FILE}</file>
+        <encoder>
+            <pattern>%msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${AUDIT_ALLOW_LOG_FILE}.%d{yyyy-MM-dd}.%i.gz</fileNamePattern>
+            <maxFileSize>${AUDIT_ALLOW_MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${AUDIT_ALLOW_MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${AUDIT_ALLOW_TOTAL_SIZE_CAP}</totalSizeCap>
+        </rollingPolicy>
+    </appender>
+
+    <logger name="virbius.audit.allow" level="INFO" additivity="false">
+        <appender-ref ref="AUDIT_ALLOW"/>
+    </logger>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="FILE"/>
+    </root>
+</configuration>

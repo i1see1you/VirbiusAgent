@@ -1,0 +1,31 @@
+spring:
+  datasource:
+    url: ${VIRBIUS_JDBC_URL}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    username: ${VIRBIUS_JDBC_USER}
+    password: ${VIRBIUS_JDBC_PASSWORD}
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 5000
+  sql:
+    init:
+      mode: never
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+virbius:
+  security:
+    api-key:
+      enabled: true
+
+audit:
+  publish:
+    backend: redis-stream
+    redis:
+      stream-key: virbius:audit:events
+  ingest:
+    enabled: true
+    backend: redis-stream
+    redis:
+      stream-key: virbius:audit:events

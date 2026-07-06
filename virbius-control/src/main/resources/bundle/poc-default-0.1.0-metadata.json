@@ -1,0 +1,48 @@
+{
+  "scope": {
+    "tenants": ["default"],
+    "scenes": ["beta_chat", "medical-prod_chat", "medical-prod_clinical"],
+    "apps": ["beta", "medical-prod"]
+  },
+  "scene_registry": {
+    "version": 1,
+    "fail_on_unknown_app": false,
+    "fail_on_unresolved_scene": false,
+    "scenes": {
+      "beta_chat": {
+        "app_id": "beta",
+        "default": true,
+        "uris": ["/v1/chat/completions"],
+        "priority": 0
+      },
+      "medical-prod_chat": {
+        "app_id": "medical-prod",
+        "default": true,
+        "uris": ["/v1/chat/completions"],
+        "priority": 0
+      },
+      "medical-prod_clinical": {
+        "app_id": "medical-prod",
+        "uris": ["/v1/chat/completions"],
+        "priority": 10,
+        "match": {
+          "query": { "mode": "clinical" }
+        }
+      }
+    }
+  },
+    "gateway": {
+      "evaluate": true,
+      "fail_mode": "open",
+      "cloud_scan": {
+        "agent_url": "http://127.0.0.1:9070",
+        "timeout_ms": 3000
+      },
+      "routes": [
+        {
+          "uri": "/v1/chat/completions",
+          "methods": ["POST"]
+        }
+      ]
+    }
+  }

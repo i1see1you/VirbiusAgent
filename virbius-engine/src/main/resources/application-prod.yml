@@ -1,0 +1,29 @@
+spring:
+  # Required env: KAFKA_BOOTSTRAP_SERVERS, VIRBIUS_PROMPT_LLM_BASE_URL, VIRBIUS_PROMPT_LLM_MODEL
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    producer:
+      acks: all
+      retries: 3
+      batch-size: 16384
+      properties:
+        linger.ms: 10
+
+virbius:
+  prompt-llm:
+    base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL}
+    model: ${VIRBIUS_PROMPT_LLM_MODEL}
+    timeout-ms: ${VIRBIUS_PROMPT_LLM_TIMEOUT_MS:30000}
+    fail-open: false
+
+audit:
+  publish:
+    backend: kafka
+    kafka:
+      topic: virbius-audit-events
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus

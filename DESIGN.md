@@ -2,10 +2,10 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v2.5 |
+| 文档版本 | v2.7 |
 | 状态 | 草案 |
 | 关联 | [README.md](README.md) |
-| 基础平台 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
+| 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
 
 ---
 
@@ -20,7 +20,8 @@
 7. 策略一致性
 8. 部署视图
 9. 第三方技术栈依赖与稳定性
-10. 路线图
+10. 与 VirbiusLLM 的关系
+11. 路线图
 
 ---
 
@@ -75,7 +76,9 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 
 ### 1.4 身份标识体系
 
-本设计复用 VirbiusLLM 现有的 `app_id` 作为 **Agent 身份标识（agent_id）**，不区分 Agent 类型与运行实例。
+本设计沿用 VirbiusLLM 的 `app_id` 作为 **Agent 身份标识（agent_id）**，不区分 Agent 类型与运行实例。
+
+VirbiusAgent 代码实现参考 VirbiusLLM，详细复用关系见 10。
 
 | 层级 | 标识 | 说明 | 示例 |
 |------|------|------|------|
@@ -112,6 +115,8 @@ virbius-control 签发 License（JWT 签名）：
 | 云层 virbius-engine | 当前 session_risk_score 是否超过 License 的 risk_quota |
 
 **许可证吊销**：通过 Redis pub/sub 实时通知各层。吊销后该 `app_id` 的所有后续请求被拒绝。
+**会话中过期处理**：License 在会话进行中过期时，当前正在执行的工具调用允许完成（保持原子性），但完成后立即拒绝后续请求并通知 Agent 需要重新授权。端层 virbius-core 在每次预检时校验 License 剩余有效期，剩 5 分钟内到期时发出告警。
+
 
 ---
 
@@ -131,18 +136,18 @@ virbius-control 签发 License（JWT 签名）：
 ```
 ToolCallRequest { name, args }
   |
-  +-- P0: sandbox_type = "none"
+  +-- sandbox_type = "none" (P0)
   |    同进程执行（只做预检，不隔离）
   |    适用：所有工具（P0 阶段不区分沙箱类型）
   |    延迟：冷 <0.1ms / 热 <0.1ms
   |    安全保障：HTTP 层阻断 + session risk 累积 + Falco 观测
   |
-  +-- P2: sandbox_type = "subprocess"
+  +-- sandbox_type = "subprocess" (P2)
   |    posix_spawn + Landlock + drop caps
   |    适用：read_file、write_file、curl（白名单目标）
-  |    延迟：冷 ~2ms / 热 ~1ms + notify 决策 ~10-50us/syscall
+  |    延迟：冷 ~2ms / 热 ~1ms
   |
-  +-- P2: sandbox_type = "gvisor"
+  +-- sandbox_type = "gvisor" (P2)
   |    gVisor runsc 容器（预热池）
   |    适用：execute_python、shell、任意不可信代码
   |    延迟：冷 1-5s / 热 ~50ms（预热池命中）
@@ -865,7 +870,7 @@ eBPF Maps(策略数据)：
 
 ### 5.1 职责
 
-完全复用 VirbiusLLM 的 virbius-engine + virbius-control，覆盖 Agent 专属场景。
+参考 VirbiusLLM 的 virbius-engine + virbius-control 设计并做了大量扩展以适应 Agent 专属场景（详见 §10）。
 
 ### 5.2 新增规则类型
 
@@ -932,6 +937,7 @@ def decide(ctx) {
 | ctx.recordToolCall(tool_name, args) | 记录本次工具调用 | 异步写 Redis LPUSH + LTRIM |
 | ctx.toolName() | 当前工具名 | 请求上下文 |
 | ctx.lastToolResult() | 上一个工具的返回值摘要 | 预加载自 Redis LRANGE 0 0 |
+| ctx.isInternalHost(url) | 判断 URL 是否指向内部网络 | 根据 License 或策略中配置的 CIDR/域名列表判断 |
 
 ### 5.4 语义审计 — STI 协议
 
@@ -1234,14 +1240,16 @@ Agent Client
 **可降级(失败有 fallback)**：
 - Falco eBPF 驱动 -> userspace -> plugin 降级链
 - gVisor -> Landlock subprocess 降级
-- Tetragon -> Falco + Landlock-notify 替代
+- Tetragon -> Falco + Landlock subprocess(P2) 替代
 - qwen3guard -> 任意 guard 模型
 
-### 9.4 与 VirbiusLLM 的复用关系
+---
+
+## 10. 与 VirbiusLLM 的关系
 
 VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依赖。两个项目独立演进，VirbiusAgent 从 VirbiusLLM 拷贝所需代码后自行维护。
 
-**决策理由**：virbius-engine/virbius-control/virbius-compiler 需要大幅扩展（加 License、宪法、Agent 规则、Redis session、Nginx config 编译），作为依赖不如直接拷贝修改。virbius-core 虽能完整复用，但其 EdgeManifest/EngineClient 等结构需扩展字段，依赖关系下只能 fork 或提 PR。两个项目同属一人维护，拷贝后独立演进更灵活。
+**决策理由**：virbius-engine/virbius-control/virbius-compiler 需要大幅扩展（加 License、宪法、Agent 规则、Redis session、Nginx config 编译），作为依赖不如直接拷贝修改。virbius-core 虽能完整复用，但其 EdgeManifest/EngineClient 等结构需扩展字段，依赖关系下只能 fork 或提 PR。两个项目同属一个团队维护，拷贝后独立演进更灵活。
 
 #### 直接复用（零改动，拷贝即用）
 
@@ -1258,7 +1266,6 @@ VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依
 | virbius-core | `src/engine.rs` | EngineClient(调 /v1/evaluate) | virbius-core/src/engine.rs |
 | virbius-core | `src/matcher.rs` | 规则匹配 | virbius-core/src/matcher.rs |
 | virbius-gateway | `lib/*.lua` (11 个文件) | access_lists/list_redis/effective/scene_registry/trace/context_vars/config_redis/json_util/file_cache/uri_match/prompt | virbius-gateway/lib/ |
-| virbius-gateway | `plugins/openresty/access.lua` | OpenResty access 阶段入口 | virbius-gateway/plugins/ |
 | virbius-policy | `ActionMerge.java` | 动作合并 | virbius-policy/ |
 | virbius-policy | `IntentAction.java` | 意图归一化 | virbius-policy/ |
 | virbius-policy | `ListMatcher.java` | 名单匹配 | virbius-policy/ |
@@ -1299,6 +1306,9 @@ VirbiusAgent/
 +-- virbius-core/              # 拷贝自 VirbiusLLM + 扩展
 |   +-- src/dlp/               # 直接复用
 |   +-- src/sync.rs            # 直接复用
+|   +-- src/bootstrap.rs       # 直接复用
+|   +-- src/runtime.rs         # 直接复用
+|   +-- src/matcher.rs         # 直接复用
 |   +-- src/manifest.rs        # 复用 + 加 tool_policies/landlock_profiles
 |   +-- src/audit.rs           # 直接复用
 |   +-- src/trace.rs           # 直接复用
@@ -1337,14 +1347,14 @@ VirbiusAgent/
 #### 复用率
 
 ```
-直接复用(零改动)   ████████████████████████  ~60%  (35 个文件)
-需扩展(拷贝+改)    ████                      ~10%  (6 个文件)
+直接复用(零改动)   ████████████████████████  ~56%  (25 个文件)
+需扩展(拷贝+改)    ██████                    ~16%  (7 个文件)
 需新建            ███████████               ~30%  (13 个组件)
 ```
 
 ---
 
-## 10. 路线图
+## 11. 路线图
 
 ### P0 — 核心安全链路（身份 + 观测 + HTTP 阻断 + Prompt Gateway）
 
@@ -1363,10 +1373,9 @@ VirbiusAgent/
 | 控制面 Agent 规则 CRUD + 发布 | control | 2w |
 | 核层 Falco 部署 + eBPF 驱动（标准节点池） | virbius-kernel | 2w |
 | 核层 Falco plugin 模式（serverless 降级: k8saudit + filetail） | virbius-kernel | 2w |
-| 核层 Tetragon 检测 + 降级逻辑（detect_mode） | virbius-kernel | 1w |
 | 核层 PID->trace_id 映射 + 审计上报 | virbius-kernel | 1w |
 | 端到端集成测试 | 全组件 | 3w |
-| **P0 合计** | | **~34w** |
+| **P0 合计** | | **~33w** |
 
 ### P1 — 增强观测 + 记忆管控
 
@@ -1389,6 +1398,7 @@ VirbiusAgent/
 |------|------|
 | Landlock + drop caps 沙箱 | 文件路径限制 + capabilities 丢弃 + ABI 版本适配 |
 | gVisor 预热池 | 不可信代码执行沙箱 |
+| Tetragon 检测 + 降级逻辑（detect_mode） | 内核能力自动检测 + 模式选择 |
 | Tetragon enforcer（eBPF 可用时） | 宿主级 enforcement 叠加 |
 | eBPF 自定义观测程序（execveat + IPv6） | 补充 Falco 内置规则 |
 | TEE 硬件安全根（金融级） | SGX/SEV-SNP enclave + 远程证明 |
@@ -1415,4 +1425,6 @@ VirbiusAgent/
 | v2.2 | 2026-07-06 | 新增 §2.8 Prompt Gateway（提示增强）：宪法约束注入 + 动态上下文注入 + 工具描述增强 + PII 输入脱敏 |
 | v2.3 | 2026-07-06 | P2 subprocess 沙箱简化：seccomp-notify + Landlock 改为 Landlock + drop caps。删除 seccomp-notify supervisor（消除 TOCTOU/SPOF 风险），SSRF 防护由 HTTP 层 URL 校验 + NetworkPolicy 承担 |
 | v2.4 | 2026-07-06 | 路线图修订：1) P0 新增 Runtime License + Prompt Gateway + 宪法 v1 2) P0 快速通道/Falco 插件/审计大盘移至 P1 3) P1 新增记忆管控 4) P2 新增 TEE 硬件安全根 5) P2 合并重复任务 6) macOS 降级说明改为不做沙箱 |
-| v2.5 | 2026-07-06 | 新增 §9.4 与 VirbiusLLM 的复用关系：文件级复用策略，直接复用 35 个文件，需扩展 6 个，需新建 13 个组件 |
+| v2.5 | 2026-07-06 | 新增 §9.4 与 VirbiusLLM 的关系：文件级代码参考策略，35 个文件可参考 VirbiusLLM 实现 |
+| v2.6 | 2026-07-06 | 全面修正：1) access.lua 移出直接复用表（已在需扩展表）2) §9.4 独立为 §10，路线图重编号为 §11 3) 复用计数修正(25+7+13) 4) 补充 License 会话中过期处理 5) 补充 isInternalHost() 定义 6) 修正 Tetragon 降级引用 7) 项目结构图补充缺失文件 8) §1.4 增加对 VirbiusLLM 关系的前向引用 9) §2.2 沙箱流程改按隔离级别排序 |
+| v2.7 | 2026-07-06 | 路线图修订：Tetragon 检测 + detect_mode 从 P0 移至 P2（Tetragon 是阻断层能力，P0 只做观测） |

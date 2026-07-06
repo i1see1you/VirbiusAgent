@@ -1,0 +1,11 @@
+[package]
+name = "virbius-kernel"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "VirbiusAgent kernel layer: Falco deployment, Tetragon detection, mode fallback"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"

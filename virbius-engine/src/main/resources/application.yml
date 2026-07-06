@@ -1,0 +1,69 @@
+server:
+  port: ${SERVER_PORT:8082}
+
+logging:
+  file:
+    name: ${VIRBIUS_LOG_DIR:/tmp/virbius/logs}/engine.log
+  logback:
+    rollingpolicy:
+      max-file-size: ${VIRBIUS_LOG_MAX_FILE_SIZE:100MB}
+      max-history: ${VIRBIUS_LOG_MAX_HISTORY_DAYS:30}
+
+spring:
+  application:
+    name: virbius-engine
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+virbius:
+  data-dir: ${VIRBIUS_DATA_DIR:./data}
+  control:
+    base-url: ${VIRBIUS_CONTROL_BASE_URL:http://127.0.0.1:8080}
+  redis:
+    url: ${VIRBIUS_REDIS_URL:redis://127.0.0.1:6379}
+  lists:
+    redis:
+      match-cache-ttl-sec: 60
+      match-cache-max-entries: 200000
+  grpc:
+    port: ${VIRBIUS_GRPC_PORT:50051}
+  audit:
+    engine-path: ${VIRBIUS_ENGINE_AUDIT:/tmp/virbius/engine-audit.jsonl}
+    engine-allow-path: ${VIRBIUS_ENGINE_AUDIT_ALLOW:/tmp/virbius/engine-audit-allow.jsonl}
+  prompt-llm:
+    base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
+    model: ${VIRBIUS_PROMPT_LLM_MODEL:sileader/qwen3guard:0.6b}
+    api-path: /v1/chat/completions
+    timeout-ms: ${VIRBIUS_PROMPT_LLM_TIMEOUT_MS:30000}
+    fail-open: true
+    im-start: "<|im_start|>"
+    im-end: ""
+    system-prompt: |
+      You are a strict LLM input auditor. Classify the user input for safety.
+      If unsafe or controversial, output strict JSON only with no extra text:
+      {"hit_rule": true, "triggered_id": "SYSTEM", "reason": "<specific safety category>"}
+      If safe:
+      {"hit_rule": false, "triggered_id": null, "reason": ""}
+    category-rule-mapping:
+      Violent: prompt-violent
+      Non-violent Illegal Acts: prompt-illegal
+      Sexual Content or Sexual Acts: prompt-sexual
+      PII: prompt-pii
+      Suicide & Self-Harm: prompt-self-harm
+      Unethical Acts: prompt-unethical
+      Politically Sensitive Topics: prompt-political
+      Copyright Violation: prompt-copyright
+      Jailbreak: prompt-jailbreak
+
+audit:
+  publish:
+    async: true
+    queue-max: 2000
+    flush-batch-size: 64
+    flush-interval-ms: 100
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

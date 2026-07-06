@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title data-i18n="nav.title">Virbius Ops</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #0f172a; background: #f1f5f9; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; }
+    .app-layout { display: flex; min-height: 100vh; }
+    .sidebar {
+      width: 220px; flex-shrink: 0; background: #0f172a; color: #e2e8f0;
+      display: flex; flex-direction: column; transition: width 0.2s ease;
+      position: sticky; top: 0; height: 100vh; overflow: hidden;
+    }
+    .sidebar.collapsed { width: 56px; }
+    .sidebar-head {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.85rem 0.75rem; border-bottom: 1px solid #1e293b; gap: 0.35rem;
+    }
+    .sidebar-title { font-size: 0.95rem; font-weight: 600; white-space: nowrap; overflow: hidden; }
+    .sidebar.collapsed .sidebar-title { opacity: 0; width: 0; }
+    .sidebar-toggle {
+      background: #1e293b; color: #cbd5e1; border: none; border-radius: 4px;
+      width: 28px; height: 28px; cursor: pointer; flex-shrink: 0; font-size: 0.75rem; padding: 0;
+    }
+    .sidebar-toggle:hover { background: #334155; }
+    .sidebar-nav { flex: 1; overflow-y: auto; padding: 0.5rem 0; }
+    .nav-item, .nav-sub {
+      display: flex; align-items: center; gap: 0.5rem; width: 100%;
+      border: none; background: transparent; color: #94a3b8; text-align: left;
+      padding: 0.55rem 0.85rem; cursor: pointer; font-size: 0.88rem;
+    }
+    .nav-item:hover, .nav-sub:hover { background: #1e293b; color: #f1f5f9; }
+    .nav-item.active, .nav-sub.active { background: #1d4ed8; color: #fff; }
+    .nav-icon { width: 1.25rem; text-align: center; flex-shrink: 0; font-size: 0.9rem; }
+    .nav-label { white-space: nowrap; overflow: hidden; }
+    .sidebar.collapsed .nav-label { display: none; }
+    .nav-group { margin-top: 0.15rem; }
+    .nav-group-head {
+      display: flex; align-items: center; justify-content: space-between; width: 100%;
+    }
+    .nav-chevron { font-size: 0.65rem; opacity: 0.7; transition: transform 0.15s; }
+    .nav-group.expanded .nav-chevron { transform: rotate(180deg); }
+    .sidebar.collapsed .nav-chevron { display: none; }
+    .nav-sublist { display: none; padding-left: 0.35rem; }
+    .nav-group.expanded .nav-sublist { display: block; }
+    .sidebar.collapsed .nav-sublist { display: none !important; }
+    .nav-sub { padding-left: 2.1rem; font-size: 0.82rem; }
+    .sidebar.collapsed .nav-sub { padding-left: 0.85rem; justify-content: center; }
+    .sidebar.collapsed .nav-sub .nav-label { display: inline; font-size: 0.65rem; }
+    .main { flex: 1; min-width: 0; display: flex; flex-direction: column; max-height: 100vh; overflow: hidden; }
+    .main-topbar {
+      display: flex; align-items: center; justify-content: flex-end; flex-shrink: 0;
+      padding: 0.6rem 1.25rem; background: #fff; border-bottom: 1px solid #e2e8f0;
+    }
+    .tenant-field { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: #475569; margin: 0; }
+    .tenant-field input { width: 8.5rem; }
+    .main-scroll { flex: 1; overflow-y: auto; padding: 0.75rem 1.25rem 0; }
+    .toolbar, .row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.75rem; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+    label { font-size: 0.8rem; color: #475569; }
+    input, select, textarea { padding: 0.35rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 0.9rem; }
+    textarea { width: 100%; min-height: 120px; font-family: ui-monospace, monospace; font-size: 0.82rem; }
+    button { padding: 0.4rem 0.85rem; border: none; border-radius: 4px; background: #2563eb; color: #fff; cursor: pointer; font-size: 0.85rem; }
+    button.secondary { background: #64748b; }
+    button.danger { background: #dc2626; }
+    button.btn-loading {
+      pointer-events: none; opacity: 0.7;
+      display: inline-flex; align-items: center; gap: 0.35rem;
+    }
+    button.btn-loading::after {
+      content: ''; display: inline-block;
+      width: 0.75rem; height: 0.75rem;
+      border: 2px solid transparent;
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: btn-spin 0.6s linear infinite;
+    }
+    @keyframes btn-spin { to { transform: rotate(360deg); } }
+    button.seg { background: #e2e8f0; color: #334155; padding: 0.35rem 0.65rem; font-size: 0.82rem; }
+    button.seg.active { background: #2563eb; color: #fff; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.45rem 0.5rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
+    th { background: #f8fafc; color: #475569; font-weight: 600; }
+    tr:hover { background: #f8fafc; }
+    tr.sel { background: #eff6ff; }
+    .tag { font-size: 0.7rem; padding: 0.1rem 0.35rem; border-radius: 3px; background: #e2e8f0; color: #334155; }
+    .tag.deny { background: #fee2e2; color: #991b1b; }
+    .tag.allow { background: #dcfce7; color: #166534; }
+    .tag.disabled { background: #fef3c7; color: #92400e; }
+    .tag.draft { background: #e0e7ff; color: #3730a3; }
+    #log { font-size: 0.8rem; padding: 0.75rem; border-radius: 6px; white-space: pre-wrap; min-height: 4rem; max-height: 160px; overflow: auto; margin: 0 1.25rem 1rem; flex-shrink: 0; }
+    #log.log-ok { color: #16a34a; background: #dcfce7; }
+    #log.log-err { color: #dc2626; background: #fee2e2; }
+    #log.log-warn { color: #d97706; background: #fef3c7; }
+    #log.log-info { color: #94a3b8; background: #0f172a; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .hint { font-size: 0.8rem; color: #64748b; margin: 0.25rem 0 0.75rem; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+    .flow-strip { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.75rem 0 1rem; align-items: center; }
+    .flow-step { padding: 0.35rem 0.65rem; border-radius: 999px; font-size: 0.78rem; background: #e2e8f0; color: #475569; }
+    .flow-step.done { background: #dcfce7; color: #166534; }
+    .flow-step.active { background: #2563eb; color: #fff; font-weight: 600; }
+    .flow-arrow { color: #94a3b8; font-size: 0.75rem; }
+    .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.65rem; margin-bottom: 1rem; }
+    .kpi-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 0.65rem 0.75rem; }
+    .kpi-card .label { font-size: 0.72rem; color: #64748b; margin-bottom: 0.15rem; }
+    .kpi-card .value { font-size: 1.15rem; font-weight: 600; }
+    .rollout-section { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid #e2e8f0; }
+    .rollout-section h3 { font-size: 0.92rem; margin: 0 0 0.5rem; color: #334155; }
+    .bar-cell { display: flex; align-items: flex-end; gap: 1px; height: 2rem; min-width: 3rem; }
+    .bar-seg { width: 4px; border-radius: 1px; }
+    .script-editor-wrap { position: relative; margin-bottom: 0.5rem; }
+    .script-editor-wrap textarea,
+    .script-editor-wrap pre {
+      margin: 0; padding: 0.35rem 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px;
+      font-family: ui-monospace, monospace; font-size: 0.82rem; line-height: 1.45;
+      width: 100%; min-height: 120px; box-sizing: border-box;
+      white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word;
+      tab-size: 2;
+    }
+    .script-editor-wrap pre {
+      position: absolute; top: 0; left: 0; pointer-events: none;
+      border-color: transparent; background: #282c34; color: #abb2bf;
+      overflow: hidden; z-index: 1;
+    }
+    .script-editor-wrap textarea {
+      position: relative; z-index: 2; resize: vertical; outline: none;
+    }
+    .script-editor-wrap textarea::selection { background: rgba(82,139,255,0.3); }
+    .script-editor-wrap textarea:focus { border-color: #2563eb; }
+    .script-ac {
+      position: absolute; z-index: 20; left: 0.35rem; max-height: 10rem; overflow-y: auto;
+      list-style: none; margin: 0; padding: 0.25rem 0; min-width: 12rem;
+      background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; box-shadow: 0 4px 12px rgba(15,23,42,0.12);
+      font-family: ui-monospace, monospace; font-size: 0.8rem;
+    }
+    .script-ac li { padding: 0.3rem 0.55rem; cursor: pointer; display: flex; align-items: center; gap: 0.4rem; }
+    .script-ac li:hover, .script-ac li.sel { background: #eff6ff; color: #1d4ed8; }
+    .script-ac .ac-badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 1rem; height: 1rem; flex-shrink: 0; font-size: 0.7rem;
+      color: #64748b; background: #f1f5f9; border-radius: 3px;
+    }
+    .script-ac li.sel .ac-badge { color: #1d4ed8; background: #dbeafe; }
+    .script-wizard { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem;
+      padding: 0.55rem 0.65rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; }
+    .script-snippet-row { margin-bottom: 0.35rem; }
+    .script-validate-ok { color: #166534; }
+    .script-validate-err { color: #991b1b; }
+    .cond-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.35rem; padding: 0.35rem; background: #f8fafc; border-radius: 4px; }
+    .sim-trace { font-size: 0.85rem; margin: 0.5rem 0; }
+    .sim-trace li.ok { color: #166534; }
+    .sim-trace li.fail { color: #991b1b; }
+    #fSimFixture { width: 100%; min-height: 10rem; font-family: ui-monospace, monospace; font-size: 0.85rem; padding: 0.5rem; border: 1px solid #cbd5e1; border-radius: 4px; box-sizing: border-box; }
+    #ruleSummaryCard { margin: 0.5rem 0; padding: 0.5rem; background: #f0f9ff; border-radius: 4px; font-size: 0.9rem; }
+    .async-var-chip { display: inline-block; cursor: pointer; padding: 0.12rem 0.35rem; margin: 0.15rem 0.2rem 0.15rem 0; border-radius: 3px; background: #e0e7ff; color: #3730a3; font-family: ui-monospace,monospace; font-size: 0.72rem; white-space: nowrap; }
+    .async-var-chip:hover { background: #c7d2fe; }
+    .uri-chip-container { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; padding: 0.2rem 0.4rem; border: 1px solid #cbd5e1; border-radius: 4px; background: #fff; min-width: 14rem; cursor: text; }
+    .uri-chip-container:focus-within { border-color: #2563eb; outline: 1px solid #2563eb; }
+    .uri-chip { display: inline-flex; align-items: center; gap: 0.2rem; padding: 0.1rem 0.3rem 0.1rem 0.45rem; border-radius: 3px; background: #e0e7ff; color: #3730a3; font-family: ui-monospace,monospace; font-size: 0.78rem; }
+    .uri-chip .remove { cursor: pointer; font-size: 0.7rem; padding: 0 0.15rem; color: #64748b; line-height: 1; }
+    .uri-chip .remove:hover { color: #dc2626; }
+    .uri-chip-input { border: none !important; outline: none !important; padding: 0.2rem 0 !important; font-family: ui-monospace,monospace; font-size: 0.78rem; flex: 1; min-width: 6rem; }
+    .uri-chip-err { border-color: #dc2626 !important; }
+    .uri-chip-err:focus-within { border-color: #dc2626 !important; outline: 1px solid #dc2626 !important; }
+    .kv-row { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: center; }
+    .kv-row input { width: 8rem; }
+    .kv-row .kv-del { background: transparent; color: #64748b; padding: 0.15rem 0.3rem; font-size: 0.75rem; }
+    .kv-row .kv-del:hover { color: #dc2626; }
+    .btn-edit { background: transparent; color: #2563eb; padding: 0.15rem 0.4rem; font-size: 0.78rem; }
+    .btn-edit:hover { text-decoration: underline; }
+    select[multiple] { min-height: 4.5rem; font-size: 0.78rem; }
+    .big-kpi-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem; margin-bottom: 0.75rem; text-align: center; }
+    .big-kpi-card .label { font-size: 0.8rem; color: #64748b; margin-bottom: 0.25rem; }
+    .big-kpi-card .value { font-size: 2rem; font-weight: 700; }
+    .big-kpi-card .value.rate-low  { color: #16a34a; background: #dcfce7; padding: 0.15rem 1rem; border-radius: 6px; display: inline-block; }
+    .big-kpi-card .value.rate-mid  { color: #d97706; background: #fef3c7; padding: 0.15rem 1rem; border-radius: 6px; display: inline-block; }
+    .big-kpi-card .value.rate-high { color: #dc2626; background: #fee2e2; padding: 0.15rem 1rem; border-radius: 6px; display: inline-block; }
+    .chart-wrap { position: relative; width: 100%; margin: 0.5rem 0 0; }
+    .chart-wrap canvas { width: 100% !important; max-height: 300px; }
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+      display: flex; align-items: center; justify-content: center; z-index: 1000;
+    }
+    .modal-box {
+      background: #fff; border-radius: 8px; padding: 1.25rem 1.5rem;
+      min-width: 320px; max-width: 420px; box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+    }
+    .toast-container {
+      position: fixed; top: 1rem; right: 1rem; z-index: 9999;
+      display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none;
+    }
+    .toast {
+      pointer-events: auto; padding: 0.65rem 1rem; border-radius: 6px;
+      font-size: 0.85rem; box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      max-width: 420px; word-break: break-word;
+      animation: toast-in 0.25s ease;
+    }
+    @keyframes toast-in { from { opacity:0; transform:translateX(2rem); } to { opacity:1; transform:translateX(0); } }
+    .toast.toast-ok { background: #dcfce7; color: #166534; border-left: 4px solid #16a34a; }
+    .toast.toast-err { background: #fee2e2; color: #991b1b; border-left: 4px solid #dc2626; }
+    .toast.toast-warn { background: #fef3c7; color: #92400e; border-left: 4px solid #d97706; }
+    .toast.toast-info { background: #0f172a; color: #e2e8f0; border-left: 4px solid #475569; }
+  </style>
+  <script src="vendor/chartjs/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="vendor/highlightjs/styles/atom-one-dark.min.css">
+  <script src="vendor/highlightjs/highlight.min.js"></script>
+  <script src="vendor/highlightjs/languages/groovy.min.js"></script>
+  <script src="vendor/highlightjs/languages/lua.min.js"></script>
+  <script src="vendor/highlightjs/languages/json.min.js"></script>
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-head">
+        <span class="sidebar-title" data-i18n="nav.title">Virbius Ops</span>
+        <button type="button" class="sidebar-toggle" id="btnSidebarToggle" data-i18n-title="nav.collapse">◀</button>
+      </div>
+      <nav class="sidebar-nav">
+        <button type="button" class="nav-item" data-tab="tenants"><span class="nav-icon">🏢</span><span class="nav-label" data-i18n="nav.tenants">租户</span></button>
+        <button type="button" class="nav-item active" data-tab="lists"><span class="nav-icon">📋</span><span class="nav-label" data-i18n="nav.lists">名单</span></button>
+        <button type="button" class="nav-item" data-tab="cumulatives"><span class="nav-icon">📊</span><span class="nav-label" data-i18n="nav.cumulatives">累计</span></button>
+        <button type="button" class="nav-item" data-tab="bindings"><span class="nav-icon">🔗</span><span class="nav-label" data-i18n="nav.bindings">请求因子</span></button>
+        <button type="button" class="nav-item" data-tab="ext-bindings"><span class="nav-icon">🧮</span><span class="nav-label" data-i18n="nav.ext-bindings">扩展因子</span></button>
+        <button type="button" class="nav-item" data-tab="scene-registry"><span class="nav-icon">🎭</span><span class="nav-label" data-i18n="nav.scene-registry">场景注册</span></button>
+        <button type="button" class="nav-item" data-tab="gateway-routes"><span class="nav-icon">🛣</span><span class="nav-label" data-i18n="nav.gateway-routes">网关路由</span></button>
+        <div class="nav-group expanded" id="navGroupRules">
+          <button type="button" class="nav-item nav-group-head" data-tab="rules" id="navRulesHead">
+            <span class="nav-icon">📜</span><span class="nav-label" data-i18n="nav.rules">规则</span><span class="nav-chevron">▼</span>
+          </button>
+          <div class="nav-sublist">
+            <button type="button" class="nav-sub active" data-layer="cloud"><span class="nav-label" data-i18n="nav.cloud">云 cloud</span></button>
+            <button type="button" class="nav-sub" data-layer="gateway"><span class="nav-label" data-i18n="nav.gateway">管 gateway</span></button>
+            <button type="button" class="nav-sub" data-layer="edge"><span class="nav-label" data-i18n="nav.edge">端 edge</span></button>
+          </div>
+        </div>
+        <button type="button" class="nav-item" data-tab="rollout"><span class="nav-icon">🚀</span><span class="nav-label" data-i18n="nav.rollout">策略上线</span></button>
+        <button type="button" class="nav-item" data-tab="audit-center"><span class="nav-icon">🔍</span><span class="nav-label" data-i18n="nav.audit-center">审计中心</span></button>
+        <button type="button" class="nav-item" data-tab="monitor"><span class="nav-icon">📈</span><span class="nav-label" data-i18n="nav.monitor">监控中心</span></button>
+      </nav>
+    </aside>
+
+    <div class="main">
+      <header class="main-topbar">
+        <label class="tenant-field"><span data-i18n="topbar.tenant">租户</span>
+          <select id="tenantSelect" style="min-width:7rem"></select>
+          <input id="tenantId" value="default" autocomplete="off" style="display:none;width:7rem" />
+        </label>
+        <input type="hidden" id="apiKey" />
+        <button type="button" id="btnLangSwitch" class="secondary" style="margin-left:0.5rem;font-size:0.75rem;padding:0.25rem 0.5rem" onclick="setLocale(window._locale === 'zh' ? 'en' : 'zh')">EN</button>
+      </header>
+      <input type="hidden" id="bundleId" value="poc-default" />
+        <input type="text" id="bundleVer" placeholder="版本号，留空自动递增" size="14" style="display:none" />
+      <div class="main-scroll">
+
+  <div id="panel-tenants" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="tenants.title">租户与 API 凭证</h2>
+    <p class="hint" data-i18n-html="tenants.desc">角色：<code>tenant_viewer</code>（Edge manifest + 只读）、<code>tenant_admin</code>（写/放量/发布/本租户 Key）、<code>platform_admin</code>（租户管理）。鉴权开启时（<code>VIRBIUS_API_KEY_AUTH_ENABLED=true</code>）请在顶栏填写 API Key。</p>
+    <div class="row" style="margin-bottom:0.75rem">
+      <input id="newTenantId" placeholder="tenant_id (小写)" size="14" />
+      <input id="newTenantName" placeholder="显示名称" size="18" />
+      <button type="button" id="btnCreateTenant" data-i18n="tenants.btn-create">新建租户</button>
+      <button type="button" id="btnReloadTenants" data-i18n="common.refresh">刷新</button>
+    </div>
+    <table id="tenantTable" class="data-table" style="width:100%;margin-bottom:1rem">
+      <thead><tr><th data-i18n="tenants.header-id">租户 ID</th><th data-i18n="tenants.header-name">名称</th><th data-i18n="tenants.header-rules">规则数</th><th data-i18n="tenants.header-created">创建时间</th><th data-i18n="tenants.header-actions">操作</th></tr></thead>
+      <tbody id="tenantTableBody"></tbody>
+    </table>
+    <h3 style="margin:0.5rem 0;font-size:0.95rem" data-i18n-html="tenants.cred-title">当前租户凭证 · <code id="credTenantLabel">default</code></h3>
+    <div class="row" style="margin-bottom:0.5rem">
+      <select id="issueCredRole">
+        <option value="tenant_viewer">tenant_viewer</option>
+        <option value="tenant_admin">tenant_admin</option>
+      </select>
+      <input id="issueCredLabel" placeholder="备注（可选）" size="20" />
+      <button type="button" id="btnIssueCred" data-i18n="tenants.btn-issue-key">签发 Key</button>
+      <button type="button" id="btnIssuePlatformCred" data-i18n="tenants.btn-issue-platform">签发 platform_admin</button>
+    </div>
+    <table id="credTable" class="data-table" style="width:100%">
+      <thead><tr><th data-i18n="tenants.header-prefix">前缀</th><th data-i18n="tenants.header-role">角色</th><th data-i18n="tenants.header-remark">备注</th><th data-i18n="tenants.header-status">状态</th><th data-i18n="tenants.header-last-used">最后使用</th><th data-i18n="tenants.header-actions">操作</th></tr></thead>
+      <tbody id="credTableBody"></tbody>
+    </table>
+  </div>
+
+  <div id="panel-lists" class="panel active card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="lists.title">命名名单</h2>
+    <p class="hint" data-i18n-html="lists.desc">名单仅定义 <code>list_name</code> + 维度 + 纯值条目；拦截/放行由脚本规则 <code>listMatch(...)</code> + 规则行 <code>intent_action</code> / <code>risk_score</code> 决定。按 Header/Query 匹配：维度选 <code>var:逻辑变量</code>（如 <code>var:app_id</code>），条目填纯值（如 <code>evil</code>），脚本写 <code>listMatch('名单', ctx.var('app_id'))</code>。<strong>存储</strong>：<code>keyword</code> / <code>ip_cidr</code> → 内存（gateway JSON + Engine reload）；<code>user_id</code> / <code>device_id</code> / <code>var:*</code> → Redis ZSET（支持单条过期）。内存名单<strong>生效条目上限 1000</strong>；保存后自动刷新 gateway 产物、Redis 并推送 Engine。</p>
+    <div class="row">
+      <input id="newListName" placeholder="list_name" size="14" />
+      <select id="newListDim">
+        <option value="keyword">keyword</option>
+        <option value="user_id">user_id</option>
+        <option value="device_id">device_id</option>
+        <option value="ip_cidr">ip_cidr</option>
+        <option value="var">var<span data-i18n="lists.dim-logical">（逻辑变量）</span></option>
+      </select>
+      <span id="listVarWrap" style="display:none">
+        <label><span data-i18n="lists.dim-logical">逻辑变量</span>
+          <select id="listVarLogical" style="min-width:8rem"></select>
+          <input id="listVarLogicalCustom" placeholder="或输入" style="width:7rem" />
+        </label>
+      </span>
+      <input id="newListRemark" placeholder="名单备注" style="min-width:10rem" />
+      <button type="button" id="btnListCreate" data-i18n="lists.btn-create">新建名单</button>
+    </div>
+    <div class="row">
+      <select id="entryListName" style="min-width:12rem"><option value="" data-i18n="lists.placeholder-select">选择名单</option></select>
+      <input id="entryVal" placeholder="值" style="min-width:10rem" />
+      <input id="entryExpires" placeholder="过期(ISO，可空)" style="min-width:14rem" />
+      <input id="entryRemark" placeholder="明细备注" style="min-width:8rem" />
+      <button type="button" id="btnListAdd" data-i18n="lists.btn-add-entry">添加明细</button>
+    </div>
+    <table id="listsTable">
+      <thead><tr><th data-i18n="lists.header-name">名单</th><th data-i18n="lists.header-dim">维度</th><th data-i18n="lists.header-storage">存储</th><th data-i18n="lists.header-value">值</th><th data-i18n="lists.header-created">创建</th><th data-i18n="lists.header-expires">过期</th><th data-i18n="lists.header-remark">备注</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="panel-cumulatives" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="cum.title">累计定义（tb_cumulative）</h2>
+    <p class="hint" data-i18n-html="cum.desc">定义滑动窗口与默认计数维度（CounterStore）；保存后刷新网关产物。须在「规则」中创建 <code>runtime=cumulative</code>，引用 <code>cumulative_name</code> 并配置 <code>condition</code>（阈值/compare）及 reason/risk/intent。Global 与 Route 级限流请使用<strong>不同</strong> <code>cumulative_name</code>。按 Header/Query 累计：选 dimension <code>var</code> + 逻辑变量（须先在「上下文映射」配置，如 <code>app_id</code> ← <code>X-App-Id</code>）。</p>
+    <div class="row">
+      <button type="button" id="btnCumNew" data-i18n="cum.btn-new">新建累计</button>
+      <button type="button" class="secondary" id="btnCumRefresh" data-i18n="cum.btn-refresh">刷新列表</button>
+    </div>
+    <table id="cumTable">
+      <thead><tr><th data-i18n="cum.header-name">名称</th><th data-i18n="cum.header-dim">维度</th><th data-i18n="cum.header-window">窗口</th><th data-i18n="cum.header-status">状态</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="cumEditor" style="display:none;margin-top:1rem;border-top:1px solid #e2e8f0;padding-top:1rem">
+      <h3 style="font-size:0.95rem;margin:0 0 0.5rem"><span id="cumEditTitle" data-i18n="cum.edit-title-edit">编辑</span> <code id="cumEditName"></code></h3>
+      <div class="grid2">
+        <div>
+          <div class="row" id="cumNameRow">
+            <label>cumulative_name <input id="cumName" placeholder="user_req_1h" style="min-width:12rem" /></label>
+          </div>
+          <div class="row">
+            <label><span data-i18n="cum.label-desc">说明</span> <input id="cumDesc" style="min-width:14rem" /></label>
+          </div>
+          <div class="row">
+            <label><span data-i18n="cum.label-dimension">dimension</span>
+              <select id="cumDim">
+                <option value="user_id">user_id</option>
+                <option value="device_id">device_id</option>
+                <option value="ip">ip</option>
+                <option value="session_id">session_id</option>
+                <option value="keyword">keyword</option>
+                <option value="var">var<span data-i18n="cum.label-logical">（逻辑变量）</span></option>
+              </select>
+            </label>
+            <label id="cumVarWrap" style="display:none"><span data-i18n="cum.label-logical">逻辑变量</span>
+              <select id="cumVarLogical" style="min-width:8rem"></select>
+              <input id="cumVarLogicalCustom" placeholder="或输入" style="width:7rem" />
+            </label>
+            <label><span data-i18n="cum.label-status">status</span>
+              <select id="cumStatus"><option value="active">active</option><option value="disabled">disabled</option></select>
+            </label>
+            <label><span data-i18n="cum.label-priority">priority</span> <input id="cumPriority" type="number" value="10" style="width:4rem" /></label>
+          </div>
+          <p id="cumVarHint" class="hint" style="display:none;margin:0" data-i18n-html="cum.var-hint">var 维度从「上下文映射」的 <code>vars</code> 取值；未映射时该请求跳过 ingest/判定。</p>
+        </div>
+        <div>
+          <div class="row" id="cumRollingWrap">
+            <label><span data-i18n="cum.label-window-kind">window_kind</span>
+              <select id="cumWinKind"><option value="rolling">rolling</option><option value="calendar_day">calendar_day</option></select>
+            </label>
+            <span id="cumWinUnitWrap" style="display:inline-flex;align-items:center;gap:0.5rem;font-size:0.85rem">
+              <label style="flex-direction:row;align-items:center;gap:0.2rem;margin:0"><input type="radio" name="cumWinUnit" id="cumWinUnitMin" value="minutes" checked /> <span data-i18n="cum.rolling-min">按分钟</span></label>
+              <label style="flex-direction:row;align-items:center;gap:0.2rem;margin:0"><input type="radio" name="cumWinUnit" id="cumWinUnitHr" value="hours" /> <span data-i18n="cum.rolling-hour">按小时</span></label>
+            </span>
+            <label id="cumWinLenWrap"><span data-i18n="cum.label-duration">时长</span> <input id="cumWinLen" type="number" min="1" value="60" style="width:5rem" /><span id="cumWinLenHint" class="hint" style="margin:0">分钟</span></label>
+            <label id="cumTzWrap" style="display:none"><span data-i18n="cum.label-timezone">时区</span> <input id="cumTz" placeholder="Asia/Shanghai" style="width:10rem" /></label>
+          </div>
+          <div class="row" style="align-items:flex-start;margin-top:0.5rem">
+            <label style="width:100%"><span data-i18n="cum.label-ingest-predicate">写入条件（Lua，可选）</span>
+              <textarea id="cumIngestPredicate" rows="4" placeholder="return tonumber(var('order_amount') or '0') &gt; 20" style="width:100%;font-family:ui-monospace,SFMono-Regular,Menlo,monospace"></textarea>
+            </label>
+          </div>
+          <p class="hint" style="margin:0" data-i18n-html="cum.ingest-predicate-hint">为空表示所有请求写入；可使用 <code>ctx</code> 与 <code>var('name')</code>，不开放 <code>getCumulative</code>。</p>
+        </div>
+      </div>
+      <div class="row" style="margin-top:0.5rem">
+        <button type="button" id="btnCumSave" data-i18n="cum.btn-save">保存定义</button>
+        <button type="button" class="danger" id="btnCumDelete" data-i18n="cum.btn-delete">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel-bindings" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="bind.title">上下文映射（context_bindings）</h2>
+    <p class="hint" data-i18n-html="bind.desc">逻辑名 → HTTP 来源；策略与名单只引用逻辑名。wire 留空时默认与逻辑名相同（如逻辑名 <code>debug_flag</code> → Query 参数 <code>debug_flag</code>）。</p>
+    <table id="bindTable">
+      <thead><tr><th data-i18n="bind.header-logical">逻辑名</th><th data-i18n="bind.header-from">来源 from</th><th data-i18n="bind.header-wire">wire name / field</th><th data-i18n="bind.header-scope">作用范围</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row" style="margin-top:0.5rem;flex-wrap:wrap">
+      <input id="bLogical" placeholder="app_id" size="10" />
+      <select id="bFrom"><option value="header">header</option><option value="query">query</option><option value="subject">subject</option><option value="network">network</option></select>
+      <input id="bWire" placeholder="wire（可空，默认同逻辑名）" size="18" />
+      <select id="bScope"><option value="global">🌐 global</option><option value="service">🏢 service</option><option value="route">🛣️  route</option></select>
+      <select id="bScopeAppIds" multiple size="3" style="display:none;width:8rem" data-i18n-title="bind.scope-hint"></select>
+      <select id="bScopeScenes" multiple size="3" style="display:none;width:8rem" data-i18n-title="bind.scope-hint"></select>
+      <button type="button" id="btnBindAdd" data-i18n="bind.btn-add">添加行</button>
+      <button type="button" id="btnSaveBindings" data-i18n="bind.btn-save">保存映射</button>
+    </div>
+  </div>
+
+  <div id="panel-ext-bindings" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="ext.title">扩展因子（extended_vars）</h2>
+    <p class="hint" data-i18n-html="ext.desc">通过 Lua 表达式从请求因子派生计算变量。表达式可用 <code>ctx.var('逻辑名')</code> 引用已解析的请求因子。扩展因子与请求因子共享命名空间，规则中通过 <code>ctx.var('扩展因子名')</code> 引用。<strong>计算顺序</strong>：请求因子 → scope 过滤 → 扩展因子计算 → 合并 → 规则执行。</p>
+    <table id="extVarTable">
+      <thead><tr><th data-i18n="ext.header-logical">逻辑名</th><th data-i18n="ext.header-expr">Lua 表达式</th><th data-i18n="ext.header-scope">作用范围</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row" style="margin-top:0.5rem;flex-wrap:wrap">
+      <input id="extLogical" placeholder="is_high_risk" size="14" />
+      <textarea id="extExpr" placeholder="if ctx.var('app_id') == 'evil' then 'true' else 'false' end" rows="2" style="min-width:20rem;flex:1;font-family:monospace;font-size:0.85rem"></textarea>
+      <select id="extScope"><option value="global">🌐 global</option><option value="service">🏢 service</option><option value="route">🛣️  route</option></select>
+      <select id="extScopeAppIds" multiple size="3" style="display:none;width:8rem" data-i18n-title="bind.scope-hint"></select>
+      <select id="extScopeScenes" multiple size="3" style="display:none;width:8rem" data-i18n-title="bind.scope-hint"></select>
+      <button type="button" id="btnExtVarAdd" data-i18n="ext.btn-add">添加</button>
+      <button type="button" id="btnSaveExtVars" data-i18n="ext.btn-save">保存</button>
+    </div>
+    <details class="ext-help" id="extHelp" style="margin-top:0.5rem;font-size:0.8rem">
+      <summary style="color:#64748b;cursor:pointer" data-i18n="ext.help-title">📖 Lua 表达式参考</summary>
+      <div style="padding:0.5rem;background:#f8fafc;border-radius:4px;margin-top:0.25rem">
+        <div data-i18n="ext.help-avail-vars">可用请求因子（点击插入 <code>ctx.var('名称')</code>）：</div>
+        <div id="extHelpVars" style="display:flex;flex-wrap:wrap;gap:0.25rem;margin:0.3rem 0 0.5rem"></div>
+        <div data-i18n="ext.help-examples">常用示例：</div>
+        <pre id="extHelpExamples" style="margin:0.3rem 0 0;font-size:0.75rem;color:#334155;line-height:1.6;white-space:pre-wrap"></pre>
+      </div>
+    </details>
+  </div>
+
+  <div id="panel-scene-registry" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="sr.title">场景注册（scene_registry）</h2>
+    <p class="hint" data-i18n-html="sr.desc">每个 <code>scene_id</code> 归属唯一 <code>app_id</code>；同一 app 可有多个 scene。运行时由 <code>(app_id, uri, match)</code> 解析 scene（见「请求因子」中的 <code>app_id</code>）。<strong>uris</strong> 须已在「网关路由」覆盖（支持 <code>/path/*</code>）。<strong>添加 / 删除 / 改 fail 开关</strong>会写入 DB；点<strong>同步到网关</strong>推产物。</p>
+    <div class="row" style="flex-wrap:wrap;gap:0.75rem">
+      <label style="flex-direction:row;align-items:center;gap:0.35rem;margin:0">
+        <input type="checkbox" id="srFailUnknown" /> fail_on_unknown_app
+      </label>
+      <label style="flex-direction:row;align-items:center;gap:0.35rem;margin:0">
+        <input type="checkbox" id="srFailUnresolved" /> fail_on_unresolved_scene
+      </label>
+    </div>
+    <table id="sceneRegTable">
+      <thead><tr><th data-i18n="sr.header-scene">scene_id</th><th data-i18n="sr.header-app">app_id</th><th data-i18n="sr.header-default">default</th><th data-i18n="sr.header-uris">uris</th><th data-i18n="sr.header-priority">priority</th><th data-i18n="sr.header-match">match query</th><th></th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row" style="margin-top:0.5rem;flex-wrap:wrap">
+      <input id="srSceneId" placeholder="scene_id（如 beta_chat）" size="18" />
+      <input id="srAppId" placeholder="app_id（如 beta）" size="12" />
+      <label style="flex-direction:row;align-items:center;gap:0.25rem;margin:0"><input type="checkbox" id="srDefault" /> default</label>
+      <div id="srUrisContainer" class="uri-chip-container" style="min-width:16rem;flex:1"></div>
+      <input id="srPriority" type="number" value="0" style="width:4rem" />
+      <div id="srMatchQueryContainer" style="display:flex;flex-direction:column;gap:0.25rem">
+        <div id="srKvList"></div>
+        <div class="kv-row"><input id="srMqKey" placeholder="k" size="8" style="width:6rem" /> = <input id="srMqVal" placeholder="v" size="10" style="width:7rem" /><button type="button" id="btnMqAdd" style="font-size:0.78rem;padding:0.25rem 0.5rem" data-i18n="sr.add-kv">+</button></div>
+      </div>
+      <input type="hidden" id="srEditIndex" value="-1" />
+      <button type="button" id="btnSceneRegAdd" data-i18n="sr.btn-add">添加 scene</button>
+      <button type="button" id="btnSceneRegCancel" class="secondary" style="display:none" data-i18n="common.cancel">取消</button>
+      <button type="button" class="secondary" id="btnSyncSceneRegistry" data-i18n="sr.btn-sync">同步到网关</button>
+    </div>
+  </div>
+
+  <div id="panel-gateway-routes" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="gw.title">网关路由（gateway.routes）</h2>
+    <p class="hint" data-i18n-html="gw.desc">定义哪些 URI 进入网关 evaluate（精确 path 或末尾 <code>*</code> 前缀，如 <code>/v1/chat/*</code>）；scene 由「场景注册」解析。保存后需「同步到网关」推产物。</p>
+    <div class="row" style="flex-wrap:wrap;gap:0.75rem">
+      <label style="flex-direction:row;align-items:center;gap:0.35rem;margin:0">
+        <input type="checkbox" id="gwEvaluate" checked /> evaluate
+      </label>
+      <label>fail_mode
+        <select id="gwFailMode"><option value="open">open</option><option value="closed">closed</option></select>
+      </label>
+      <label>cloud_scan.agent_url <input id="gwAgentUrl" placeholder="http://127.0.0.1:9070" style="min-width:14rem" /></label>
+      <label>timeout_ms <input id="gwTimeoutMs" type="number" min="100" value="3000" style="width:5rem" /></label>
+    </div>
+    <table id="gwRoutesTable">
+      <thead><tr><th data-i18n="gw.header-uri">uri</th><th data-i18n="gw.header-methods">methods</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div class="row" style="margin-top:0.5rem;flex-wrap:wrap">
+      <input id="grUri" placeholder="/v1/chat/* 或 /v1/chat/completions" size="28" />
+      <input id="grMethods" placeholder="POST" size="8" value="POST" />
+      <button type="button" id="btnGwRouteAdd" data-i18n="gw.btn-add-uri">添加入口 URI</button>
+      <button type="button" id="btnSaveGatewayRoutes" data-i18n="gw.btn-save">保存路由</button>
+    </div>
+  </div>
+
+  <div id="panel-rules" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="rules.title">规则（Registry）</h2>
+    <p class="hint" data-i18n-html="hint.rules">新建规则默认为 <code>draft</code>（不进执行面）；保存后请到左侧「<strong>策略上线</strong>」点 <code>上线</code> 进入 <code>dry_run</code> 观测。停用后可 <code>恢复草稿</code> 再编辑。管/云 <code>prompt</code> / <code>lua</code> / <code>groovy</code> 可配 <code>bind_scope</code>（含 Route）；<strong>端 edge</strong> 用关键词表单 + <code>global</code> / <code>service(app_ids)</code>。</p>
+    <div class="row">
+      <span class="hint" style="margin:0" data-i18n-html="rules.current-layer">当前层：<strong id="rulesLayerLabel">cloud</strong>（在左侧菜单「规则」下切换）</span>
+      <button type="button" id="btnNewRule" data-i18n="rules.btn-new">新建规则</button>
+    </div>
+    <table id="rulesTable">
+      <thead><tr><th data-i18n="rules.header-id">rule_id</th><th data-i18n="rules.header-runtime">runtime</th><th data-i18n="rules.header-bind">bind</th><th data-i18n="rules.header-rollout">rollout</th><th data-i18n="rules.header-rev">rev</th><th data-i18n="rules.header-risk">risk</th><th data-i18n="rules.header-intent">intent</th><th data-i18n="rules.header-enforce">enforce</th><th data-i18n="rules.header-async">async</th><th data-i18n="rules.header-reason">reason</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="ruleEditor" style="display:none;margin-top:1rem">
+      <h3 style="font-size:0.95rem"><span id="editTitle" data-i18n="rules.edit-title-edit">编辑</span> <span id="editRuleId"></span></h3>
+      <div id="newRuleRow" class="row" style="display:none">
+        <label>rule_id <input id="fRuleId" placeholder="cloud_custom_l1" /></label>
+        <label>runtime
+          <select id="fRuntime"></select>
+        </label>
+      </div>
+      <div class="row">
+        <label><span data-i18n="rules.label-reason">reason</span> <input id="fReason" /></label>
+        <label><span data-i18n="rules.label-risk">risk</span> <input id="fRisk" type="number" min="0" max="100" style="width:4rem" /></label>
+        <label><span data-i18n="rules.label-intent">intent</span>
+          <select id="fIntent">
+            <option value="deny">deny</option>
+            <option value="allow">allow</option>
+            <option value="captcha">captcha</option>
+            <option value="review">review</option>
+          </select>
+        </label>
+        <label id="asyncWrap" style="display:none"><input type="checkbox" id="fIsAsync" /> <span data-i18n="rules.label-async">异步规则</span></label>
+
+      </div>
+      <div id="asyncConfigRow" class="card" style="display:none;padding:0.75rem;margin:0.5rem 0;background:#f8fafc;border:1px dashed #cbd5e1">
+        <div class="row" style="margin-bottom:0.5rem">
+          <label><span data-i18n="rules.action-type">动作类型</span>
+            <select id="fActionType">
+              <option value="redis_stream">Redis Stream</option>
+              <option value="webhook">Webhook</option>
+            </select>
+          </label>
+          <span id="actionTargetWrap">
+            <label id="actionStreamKeyWrap"><span data-i18n="rules.stream-key">Stream Key</span>
+              <input id="fActionStreamKey" placeholder="virbius:rule:hit:actions" style="min-width:18rem" />
+            </label>
+            <label id="actionWebhookUrlWrap" style="display:none"><span data-i18n="rules.webhook-url">URL</span>
+              <input id="fActionWebhookUrl" placeholder="https://example.com/notify" style="min-width:18rem" />
+            </label>
+          </span>
+        </div>
+        <div style="display:flex;gap:0.75rem;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <label style="display:block;margin-bottom:0.25rem" data-i18n-html="rules.msg-content">消息内容 (支持 <code>\{\{变量}}</code> 占位)</label>
+            <textarea id="fActionMessage" rows="7" style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace;font-size:0.82rem" spellcheck="false" placeholder='{"rule_id":"{{rule_id}}","user_id":"{{user_id}}","app_id":"{{vars.app_id}}"}'></textarea>
+          </div>
+          <div style="width:11rem;flex-shrink:0">
+            <label style="display:block;margin-bottom:0.25rem" data-i18n="rules.avail-vars">可用变量</label>
+            <div id="asyncVarPalette" style="max-height:13rem;overflow-y:auto;font-size:0.78rem;background:#fff;border:1px solid #e2e8f0;border-radius:4px;padding:0.35rem"></div>
+          </div>
+          <div style="width:13rem;flex-shrink:0">
+            <label style="display:block;margin-bottom:0.25rem" data-i18n="rules.live-preview">实时预览</label>
+            <pre id="asyncActionPreview" style="margin:0;padding:0.35rem;background:#fff;border:1px solid #e2e8f0;border-radius:4px;font-size:0.75rem;min-height:3rem;max-height:13rem;overflow:auto;white-space:pre-wrap;word-break:break-all;color:#64748b"></pre>
+          </div>
+        </div>
+        <p class="hint" style="margin:0.35rem 0 0" data-i18n="rules.async-hint">点击「可用变量」名称插入光标位置。异步规则 intent_action 固定为 allow，命中后仅执行异步动作。</p>
+        <input type="hidden" id="fAsyncActionConfig" />
+      </div>
+      <div class="row" id="scriptWizardRow" style="display:none">
+        <div class="script-wizard" style="width:100%;margin:0">
+          <label><span data-i18n="rules.script-template">脚本模板</span>
+            <select id="wPattern">
+              <option value="list" data-i18n="rules.pattern-list">名单命中</option>
+              <option value="cumulative" data-i18n="rules.pattern-cum">累计超阈</option>
+              <option value="l3" data-i18n="rules.pattern-l3">L3 汇总（仅 cloud groovy）</option>
+              <option value="custom" data-i18n="rules.pattern-custom">自定义</option>
+            </select>
+          </label>
+          <span id="wListWrap"><label><span data-i18n="lists.title">名单</span> <select id="wListName"></select></label></span>
+          <span id="wCumWrap">
+            <label><span data-i18n="cum.title">累计</span> <select id="wCumName"></select></label>
+            <label>比较
+              <select id="wCompare">
+                <option value="gte">≥</option>
+                <option value="gt">&gt;</option>
+                <option value="lte">≤</option>
+                <option value="lt">&lt;</option>
+                <option value="eq">=</option>
+              </select>
+            </label>
+            <label><span data-i18n="rules.compare-threshold">阈值</span> <input id="wThreshold" type="number" min="1" value="120" style="width:5rem" /></label>
+          </span>
+          <button type="button" id="btnGenScript" class="secondary" data-i18n="rules.btn-gen-script">生成脚本</button>
+        </div>
+      </div>
+      <div class="row script-snippet-row" id="scriptSnippetRow" style="display:none">
+        <span class="hint" style="margin:0" data-i18n="rules.snippet-label">片段：</span>
+        <button type="button" class="seg" data-snippet="list" data-i18n="rules.snippet-list">名单 deny</button>
+        <button type="button" class="seg" data-snippet="cumulative" data-i18n="rules.snippet-cum">累计限流</button>
+        <button type="button" class="seg" data-snippet="l3" data-i18n="rules.snippet-l3">L3 汇总</button>
+        <button type="button" class="seg" data-snippet="var" data-i18n="rules.snippet-var">逻辑变量</button>
+        <span class="hint" style="margin:0" data-i18n="rules.snippet-hint">Ctrl+Space 补全名单/累计/变量</span>
+      </div>
+      <div class="row" id="bindScopeRow" style="display:none">
+        <label>bind_scope
+          <select id="fBindScope">
+            <option value="global" data-i18n="gw.scope.global">global（租户内全流量）</option>
+            <option value="route" data-i18n="gw.scope.route">route（Scene 匹配）</option>
+            <option value="service" data-i18n="gw.scope.service">service（app_ids）</option>
+          </select>
+        </label>
+        <label id="bindSceneWrap" style="display:none">scenes <input id="fBindScenes" placeholder="chat, sse" style="min-width:12rem" /></label>
+      </div>
+      <div class="row" id="bindServiceWrap" style="display:none">
+        <label>app_ids <input id="fBindAppIds" placeholder="beta, medical-prod" style="min-width:18rem" /></label>
+      </div>
+      <p id="bindScopeHint" class="hint" style="display:none;margin:0 0 0.5rem" data-i18n-html="gw.scope-hint">
+        Route：按 scene 精确匹配（scenes 须已在 SceneRegistry 中注册）。Service 绑 <code>app_ids</code>（来自 context_bindings 的 <code>app_id</code>）。<strong>端 edge</strong>：仅 <code>global</code> / <code>service(app_ids)</code>；发布时按 App 拆 manifest，SDK 不做运行时 bind。
+      </p>
+      <div id="conditionAuthoringRow" class="row" style="display:none;flex-wrap:wrap;align-items:center;gap:0.75rem">
+        <label><span data-i18n="rules.editor-mode">编辑模式</span>
+          <select id="fEditorMode"><option value="simple" data-i18n="rules.editor-simple">简单（表单）</option><option value="advanced" data-i18n="rules.editor-advanced">高级（JSON / 脚本）</option></select>
+        </label>
+        <label id="fRecipeWrap"><span data-i18n="rules.recipe">模板</span>
+          <select id="fRecipe"><option value="" data-i18n="rules.select-recipe">— 选择 —</option></select>
+        </label>
+        <button type="button" class="secondary" id="btnApplyRecipe" data-i18n="rules.btn-apply-recipe">应用</button>
+        <button type="button" class="secondary" id="btnPreviewScript" data-i18n="rules.btn-preview-script">预览脚本</button>
+      </div>
+      <div id="simpleConditionPanel" style="display:none;margin-bottom:0.5rem">
+        <p class="hint" style="margin:0 0 0.35rem" data-i18n="rules.condition-hint">触发条件（保存时编译为脚本，不落库 AST）：</p>
+        <div id="conditionLeaves"></div>
+        <div class="row" style="margin-top:0.35rem">
+          <button type="button" class="seg" id="btnAddListCond" data-i18n="rules.btn-add-list-cond">+ 名单命中</button>
+          <button type="button" class="seg" id="btnAddCumCond" data-i18n="rules.btn-add-cum-cond">+ 累计阈值</button>
+        </div>
+        <pre id="scriptPreview" class="hint" style="display:none;margin-top:0.5rem;white-space:pre-wrap;background:#f8fafc;padding:0.5rem"></pre>
+      </div>
+      <div id="ruleSummaryCard" style="display:none"></div>
+      <p id="groovyHint" class="hint" style="display:none;margin:0 0 0.5rem" data-i18n-html="hint.groovy">
+        Groovy 脚本实现 <code>decide(ctx)</code>，返回 <code>true</code>（命中）/ <code>false</code>（未命中）。
+        可用 <code>ctx.listMatch(name)</code>、<code>ctx.listMatch(name, value)</code>、<code>ctx.getCumulative(name)</code>、<code>ctx.var('logical')</code>。
+        命中后 intent / risk / reason / enforce 取自规则行。
+      </p>
+      <p id="luaHint" class="hint" style="display:none;margin:0 0 0.5rem" data-i18n-html="hint.lua">
+        Lua 脚本实现 <code>decide(ctx)</code>，返回 boolean。可用全局 <code>listMatch(name, value)</code>、<code>getCumulative(name)</code>、<code>ctx.var('logical')</code>。
+      </p>
+      <p id="promptHint" class="hint" style="display:none;margin:0 0 0.5rem" data-i18n-html="hint.prompt">
+        填写<strong>自然语言描述</strong>（保存后进入 engine【安全规则矩阵】，由 1B 模型判定 <code>triggered_id</code>）。
+        仅需配置 <code>bind_scope</code>；无需名单/累计等触发条件表单。
+      </p>
+      <p id="edgeDslHint" class="hint" style="display:none;margin:0 0 0.5rem" data-i18n-html="hint.edge-dsl">
+        端 L0 关键词规则：<code>list_type</code> + <code>keywords</code>。简单模式用表单；高级模式直接编辑 JSON body。
+      </p>
+      <p id="dlpDslHint" class="hint" style="display:none;margin:0 0 0.5rem" data-i18n-html="hint.dlp-dsl">
+        端 DLP 脱敏规则：检测 PII 实体并替换占位符（<code>dry_run</code> 仅检测不脱敏）。<code>intent_action</code> 固定 <code>allow</code>，不参与 ActionMerge。
+      </p>
+      <div id="edgeDslPanel" style="display:none;margin-bottom:0.5rem">
+        <div class="row">
+          <label><span data-i18n="edge.list-type">list_type</span>
+            <select id="fEdgeListType">
+              <option value="deny" data-i18n="edge.list-type.deny">deny（违禁词）</option>
+              <option value="allow" data-i18n="edge.list-type.allow">allow（放行词）</option>
+            </select>
+          </label>
+        </div>
+        <label style="display:block;margin-top:0.35rem" data-i18n="edge.keywords-label">keywords（每行一词，或英文逗号分隔）
+          <textarea id="fEdgeKeywords" rows="6" style="width:100%;font-family:inherit;margin-top:0.25rem" spellcheck="false"></textarea>
+        </label>
+      </div>
+      <div id="dlpDslPanel" style="display:none;margin-bottom:0.5rem">
+        <div class="row" style="flex-wrap:wrap">
+          <label><span data-i18n="dlp.entity-type">entity_type</span>
+            <select id="fDlpEntityType">
+              <option value="phone_cn" data-i18n="dlp.phone-cn">phone_cn（手机号）</option>
+              <option value="idcard_cn" data-i18n="dlp.idcard-cn">idcard_cn（身份证）</option>
+              <option value="email" data-i18n="dlp.email">email</option>
+              <option value="bank_card_cn" data-i18n="dlp.bank-card-cn">bank_card_cn（银行卡）</option>
+              <option value="custom_regex" data-i18n="dlp.custom-regex">custom_regex</option>
+            </select>
+          </label>
+          <label><span data-i18n="dlp.priority">priority</span> <input id="fDlpPriority" type="number" value="0" style="width:4rem" /></label>
+        </div>
+        <label id="fDlpPatternWrap" style="display:none;margin-top:0.35rem" data-i18n-html="dlp.pattern-label">pattern（custom_regex 必填）
+          <input id="fDlpPattern" style="width:100%;margin-top:0.25rem;font-family:inherit" spellcheck="false" />
+        </label>
+        <label style="display:block;margin-top:0.35rem" data-i18n-html="dlp.mask-template">mask_template（可选，含 <code>{seq}</code>）
+          <input id="fDlpMaskTemplate" placeholder="{{VIRBIUS_PHONE_CN_{seq}}}" style="width:100%;margin-top:0.25rem;font-family:inherit" spellcheck="false" />
+        </label>
+      </div>
+      <div class="script-editor-wrap">
+        <pre id="fBodyHighlight" class="hljs" aria-hidden="true"></pre>
+        <textarea id="fBody" spellcheck="false"></textarea>
+        <ul id="scriptAcPopup" class="script-ac" style="display:none"></ul>
+      </div>
+      <div class="row" id="scriptValidateRow" style="display:none">
+        <button type="button" class="secondary" id="btnValidateScript" data-i18n="rules.btn-validate">校验脚本</button>
+        <span id="scriptValidateMsg" class="hint" style="margin:0"></span>
+      </div>
+      <div class="row">
+        <button type="button" id="btnSaveRule" data-i18n="rules.btn-save">保存规则（新 revision）</button>
+        <button type="button" class="secondary" id="btnActivateRule" style="display:none" data-i18n="rules.btn-activate">启用（上线）</button>
+        <button type="button" class="danger" id="btnDisableRule" data-i18n="rules.btn-disable">停用规则</button>
+        <button type="button" class="secondary" id="btnEnableRule" style="display:none" data-i18n="rules.btn-enable">恢复为草稿</button>
+      </div>
+      <label id="chkEnableSimulateWrap" style="display:none;align-items:center;gap:0.35rem;margin:0.5rem 0;font-size:0.9rem;cursor:pointer">
+        <input type="checkbox" id="chkEnableSimulate" /> <span data-i18n="rules.btn-simulate">模拟测试</span>
+      </label>
+      <div id="simulateFixtureRow" style="display:none;margin:0.5rem 0">
+        <p class="hint" style="margin:0 0 0.35rem" data-i18n="rules.sim-fixture">样例请求 fixture（JSON，仅用于模拟，不落库）：</p>
+        <div class="row" style="flex-wrap:wrap;align-items:center;gap:0.5rem;margin-bottom:0.35rem">
+          <label><span data-i18n="rules.sim-preset">预设</span>
+            <select id="fSimFixturePreset">
+              <option value="clinical_chat">clinical_chat</option>
+              <option value="beta_chat">beta_chat</option>
+              <option value="l3_prior">L3 + prior_signals</option>
+              <option value="cum_over_limit">累计超限</option>
+              <option value="force_list_hit">强制名单命中</option>
+            </select>
+          </label>
+          <button type="button" class="secondary" id="btnSimFixtureApplyPreset" data-i18n="rules.sim-load-preset">载入预设</button>
+          <button type="button" class="secondary" id="btnSimFixtureReset" data-i18n="rules.sim-reset">重置为默认</button>
+          <button type="button" class="secondary" id="btnSimulateRule" data-i18n="rules.sim-run">模拟运行</button>
+        </div>
+        <textarea id="fSimFixture" spellcheck="false"></textarea>
+        <p id="simFixtureErr" class="hint script-validate-err" style="display:none;margin:0.35rem 0 0"></p>
+      </div>
+      <div id="simulatePanel" class="card" style="display:none;margin:0.5rem 0;padding:0.5rem;background:#fafafa">
+        <strong style="font-size:0.9rem" data-i18n="rules.sim-trace">模拟 Trace</strong>
+        <ul id="simTraceList" class="sim-trace"></ul>
+        <p id="simSummary" class="hint" style="margin:0.35rem 0 0"></p>
+      </div>
+    </div>
+  </div>
+
+  <div id="panel-rollout" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="rollout.title">策略上线</h2>
+    <p class="hint" data-i18n-html="rollout.desc">draft 须先 <code>上线</code> 进入 dry_run；达标后点 <code>升级 / 下一步</code>（后端仍校验门禁，未过可 force）。版本号留空时自动从上次发布递增 patch。<strong>编辑和放量操作仅写 DB，须点「部署」推送到执行面才生效。</strong>看板每 5 秒自动刷新。</p>
+
+    <div class="rollout-section">
+      <h3 style="margin:0 0 0.35rem;font-size:0.95rem" data-i18n="rollout.machine-deploy-title">机器灰度部署</h3>
+      <p class="hint" data-i18n-html="rollout.machine-deploy-desc">按机器 <code>bucket</code> 分池：<code>PENDING→CANARY(5/20/50)→FULL(100)→FINALIZED</code>。Edge 按 <code>device_id</code> CRC32C hash 分池灰度，与 engine/gateway 共用同一份 canary%。</p>
+      <div id="drStatusBar" class="kpi-grid" style="margin-bottom:0.5rem"></div>
+      <div id="drActions" class="row" style="flex-wrap:wrap;gap:0.4rem">
+        <input id="drDescription" placeholder="变更说明" size="24" />
+        <button type="button" id="drPrepareEngine" data-i18n="rollout.btn-prepare-engine">📦 准备 Engine</button>
+        <button type="button" id="drPrepareGateway" class="secondary" data-i18n="rollout.btn-prepare-gateway">📦 准备 Gateway</button>
+        <button type="button" id="drPrepareEdge" class="secondary" data-i18n="rollout.btn-prepare-edge">📡 准备 Edge</button>
+        <button type="button" id="drPrepareAll" class="secondary" style="background:#6366f1" data-i18n="rollout.btn-prepare-all">🚀 全部部署</button>
+        <button type="button" id="drUpgrade" class="secondary" data-i18n="rollout.btn-upgrade">⬆ 升级</button>
+        <button type="button" id="drPause" class="secondary" style="background:#f59e0b" data-i18n="rollout.btn-pause">⏸ 暂停</button>
+        <button type="button" id="drRollback" class="danger" data-i18n="rollout.btn-rollback">↩ 回退</button>
+        <button type="button" id="drFinalize" class="secondary" style="background:#16a34a" data-i18n="rollout.btn-finalize">✅ 完结</button>
+        <button type="button" id="drRefresh" class="secondary" data-i18n="rollout.btn-refresh">🔄 刷新</button>
+      </div>
+      <div id="drActiveSection">
+        <div id="drActiveInfo" class="hint" data-i18n="rollout.no-active-deploy">无进行中的部署</div>
+        <div id="drActiveDetail" style="display:none">
+          <table id="drActiveTable">
+            <thead><tr><th data-i18n="rollout.header-id">ID</th><th data-i18n="rollout.header-status">状态</th><th data-i18n="rollout.header-bundle">Bundle</th><th data-i18n="rollout.header-canary">canary%</th><th data-i18n="rollout.header-engine-canary">Engine 灰度</th><th data-i18n="rollout.header-engine-stable">Engine 稳定</th><th data-i18n="rollout.header-gw-canary">Gateway 灰度</th><th data-i18n="rollout.header-gw-stable">Gateway 稳定</th><th data-i18n="rollout.header-edge-canary">Edge 灰度</th><th data-i18n="rollout.header-edge-stable">Edge 稳定</th><th data-i18n="rollout.header-operator">操作者</th><th data-i18n="rollout.header-notes">备注</th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <h4 style="margin:0.5rem 0 0.25rem;font-size:0.85rem" data-i18n="rollout.node-dist">节点分布</h4>
+          <div id="drNodeDistribution" class="kpi-grid" style="margin-bottom:0.5rem"></div>
+          <h4 style="margin:0.5rem 0 0.25rem;font-size:0.85rem" data-i18n="rollout.block-rate-chart">24h 拦截率 (block_rate)</h4>
+          <div class="chart-wrap">
+            <canvas id="drBlockRateChart"></canvas>
+          </div>
+          <h4 style="margin:0.5rem 0 0.25rem;font-size:0.85rem" data-i18n="rollout.events">事件</h4>
+          <table id="drEventTable">
+            <thead><tr><th data-i18n="rollout.header-time">时间</th><th data-i18n="rollout.header-type">类型</th><th data-i18n="rollout.header-from">从</th><th data-i18n="rollout.header-to">→</th><th data-i18n="rollout.header-desc">说明</th><th data-i18n="rollout.header-operator2">操作者</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div id="drHistorySection">
+        <h4 style="margin:0.5rem 0 0.25rem;font-size:0.85rem" data-i18n="rollout.history">历史部署</h4>
+        <table id="drHistoryTable">
+          <thead><tr><th data-i18n="rollout.header-id">ID</th><th data-i18n="rollout.header-bundle">Bundle</th><th data-i18n="rollout.header-status">状态</th><th data-i18n="rollout.header-start">开始</th><th data-i18n="rollout.header-end">完结</th><th data-i18n="rollout.header-operator">操作者</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="row">
+      <label><span data-i18n="rollout.header-rule">规则</span>
+        <select id="roRuleSelect" style="min-width:16rem"><option value="" data-i18n="rollout.select-rule">— 选择规则 —</option></select>
+      </label>
+      <span id="roBadge"></span>
+      <button type="button" class="secondary" id="roRefresh" data-i18n="rollout.refresh-dashboard">刷新看板</button>
+      <span class="hint" id="roAutoRefreshHint" data-i18n="rollout.auto-refresh">自动刷新 5s</span>
+    </div>
+    <div id="roFlowStrip" class="flow-strip"></div>
+    <div id="roKpi" class="kpi-grid"></div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="rollout.hourly-metrics">24h 按小时指标</h3>
+      <div id="roBlockRateCard" class="big-kpi-card">
+        <div class="label" data-i18n="rollout.block-rate-24h">24h 拦截率 (block_rate)</div>
+        <div class="value" id="roBlockRateValue">—</div>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="roCombinedChart"></canvas>
+      </div>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="rollout.timeline">放量变更时间线</h3>
+      <table id="roTimelineTable">
+        <thead><tr><th data-i18n="rollout.header-time">时间</th><th data-i18n="rollout.header-status">状态</th><th data-i18n="rollout.header-canary">canary%</th><th data-i18n="rollout.header-trigger">触发</th><th data-i18n="rollout.header-operator">操作者</th><th data-i18n="rollout.header-rev">rev</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="rollout.upgrade-title">升级</h3>
+      <div class="row" style="margin-top:0.5rem;flex-wrap:wrap;align-items:center;gap:0.5rem">
+        <button type="button" id="roApply" data-i18n="rollout.btn-next">升级 / 下一步</button>
+        <label style="flex-direction:row;align-items:center;gap:0.25rem"><input type="checkbox" id="roForce" /> <span data-i18n="rollout.force-bypass">force 绕过</span></label>
+        <input id="roForceComment" placeholder="force 说明（勾选 force 时必填）" style="min-width:14rem" />
+      </div>
+      <p class="hint" id="roSuggestedHint"></p>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="rollout.actions-title">操作</h3>
+      <div class="row">
+        <button type="button" id="roPublish" data-i18n="rollout.btn-publish">上线 (→ dry_run)</button>
+        <button type="button" class="secondary" id="roRollback" data-i18n="rollout.btn-rollback2">回退 (→ dry_run)</button>
+        <button type="button" class="danger" id="roDisable" data-i18n="rollout.btn-disable">停用</button>
+        <button type="button" class="secondary" id="roRecover" data-i18n="rollout.btn-recover">恢复草稿</button>
+        <button type="button" class="secondary" id="roLadderStart" data-i18n="rollout.btn-ladder-start">启动阶梯 (auto)</button>
+        <button type="button" class="secondary" id="roLadderPause" data-i18n="rollout.btn-ladder-pause">暂停阶梯</button>
+      </div>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="rollout.audit-samples">审计样本 (review)</h3>
+      <table id="roSamplesTable">
+        <thead><tr><th data-i18n="rollout.header-time">时间</th><th>trace_id</th><th data-i18n="rollout.header-action">action</th><th data-i18n="rollout.header-reason">reason</th><th data-i18n="rollout.header-risk">risk</th><th data-i18n="rollout.header-rollout">rollout</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div id="roTraceModal" class="card" style="display:none;margin-top:0.75rem">
+      <h3 style="margin:0 0 0.5rem;font-size:0.95rem" data-i18n="rollout.trace-detail">Trace 详情</h3>
+      <p class="hint" id="roTraceHint"></p>
+      <table id="roTraceTable">
+        <thead><tr><th data-i18n="rollout.header-time">时间</th><th data-i18n="rollout.header-layer">layer</th><th data-i18n="rollout.header-action">action</th><th>rule</th><th data-i18n="rollout.header-rollout">rollout</th><th data-i18n="rollout.header-risk">risk</th><th data-i18n="rollout.header-source">来源</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <button type="button" class="secondary" id="roTraceClose" style="margin-top:0.5rem" data-i18n="rollout.btn-close">关闭</button>
+    </div>
+
+  </div>
+
+  <div id="panel-audit-center" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="ac.title">审计中心</h2>
+    <p class="hint" data-i18n-html="ac.desc">按 <code>trace_id</code> 查询 <code>tb_audit_events</code>（review/block/captcha 及采样命中的 allow 事件）。未采样的 allow 请求仅归档为 JSONL，不在此查询。</p>
+    <div class="row">
+      <label>trace_id <input id="acTraceId" placeholder="输入 trace_id" style="min-width:22rem" autocomplete="off" /></label>
+      <button type="button" id="acSearch" data-i18n="ac.btn-search">查询</button>
+    </div>
+    <p class="hint" id="acSummary"></p>
+    <div class="rollout-section">
+      <h3 data-i18n-html="ac.tb-audit-title">tb_audit_events（<span id="acDbCount">0</span>）</h3>
+      <table id="acDbTable">
+        <thead><tr><th data-i18n="rollout.header-time">时间</th><th data-i18n="rollout.header-layer">layer</th><th>scene</th><th data-i18n="rollout.header-action">action</th><th>rule</th><th data-i18n="rollout.header-reason">reason</th><th data-i18n="rollout.header-risk">risk</th><th data-i18n="rollout.header-rollout">rollout</th><th data-i18n="rollout.header-user-id">user_id</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="panel-monitor" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="monitor.title">监控中心</h2>
+    <p class="hint" data-i18n-html="hint.monitor">监控看板每 30 秒自动刷新。指标来自 <code>tb_rule_metrics_1h</code>，降级率 = cnt_degraded / cnt_total_requests。</p>
+    <div class="row">
+      <button type="button" class="seg mon-time-btn active" data-hours="24" onclick="setMonitorHours(24)" data-i18n="monitor.time-24h">24 小时</button>
+      <button type="button" class="seg mon-time-btn" data-hours="168" onclick="setMonitorHours(168)" data-i18n="monitor.time-7d">7 天</button>
+      <button type="button" class="seg mon-time-btn" data-hours="720" onclick="setMonitorHours(720)" data-i18n="monitor.time-30d">30 天</button>
+      <button type="button" class="secondary" id="monExportBtn" data-i18n="monitor.btn-export">导出看板</button>
+    </div>
+
+    <div id="monKpiCards" class="kpi-grid"></div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="monitor.overall-traffic">总流量趋势</h3>
+      <div class="chart-wrap"><canvas id="monTrafficChart"></canvas></div>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="monitor.overall-block-rate">拦截率趋势</h3>
+      <div class="chart-wrap"><canvas id="monBlockRateChart"></canvas></div>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="monitor.rule-block-rate">单规则拦截率</h3>
+      <label><span data-i18n="rollout.header-rule">规则</span> <select id="monRuleSelect" style="min-width:14rem"></select></label>
+      <div class="chart-wrap" style="margin-top:0.5rem"><canvas id="monRuleChart"></canvas></div>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="monitor.rule-ranking">规则命中排行</h3>
+      <table style="width:100%">
+        <thead><tr>
+          <th data-i18n="monitor.ranking-header-rule">规则</th>
+          <th data-i18n="monitor.ranking-header-hits">命中</th>
+          <th data-i18n="monitor.ranking-header-block">拦截</th>
+          <th data-i18n="monitor.ranking-header-review">复审</th>
+          <th>captcha</th>
+          <th data-i18n="monitor.ranking-header-hit-rate">命中率</th>
+          <th data-i18n="monitor.ranking-header-block-rate">拦截率</th>
+          <th data-i18n="monitor.kpi-total-requests">总请求</th>
+        </tr></thead>
+        <tbody id="monRankingBody"></tbody>
+      </table>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="monitor.scene-traffic">Scene 流量分布</h3>
+      <div class="chart-wrap" style="max-width:300px;margin:0 auto 0.5rem"><canvas id="monSceneChart"></canvas></div>
+      <table style="width:100%">
+        <thead><tr>
+          <th data-i18n="monitor.scene-header-scene">场景</th>
+          <th data-i18n="monitor.scene-header-layer">层</th>
+          <th data-i18n="monitor.scene-header-requests">请求数</th>
+        </tr></thead>
+        <tbody id="monSceneBody"></tbody>
+      </table>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="monitor.degradation-title">降级率趋势</h3>
+      <div class="chart-wrap"><canvas id="monDegradationChart"></canvas></div>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="monitor.event-timeline">策略变更事件</h3>
+      <table style="width:100%">
+        <thead><tr>
+          <th data-i18n="monitor.event-header-time">时间</th>
+          <th data-i18n="monitor.event-header-rule">规则</th>
+          <th data-i18n="monitor.event-header-state">状态</th>
+          <th data-i18n="monitor.event-header-rev">rev</th>
+          <th data-i18n="monitor.event-header-trigger">触发</th>
+          <th data-i18n="monitor.event-header-operator">操作者</th>
+        </tr></thead>
+        <tbody id="monEventBody"></tbody>
+      </table>
+    </div>
+
+    <div class="rollout-section">
+      <h3 data-i18n="monitor.ingest-health">Ingest 健康状态</h3>
+      <div id="monIngestHealth"></div>
+    </div>
+  </div>
+
+      </div>
+      <pre id="log"></pre>
+    </div>
+  </div>
+
+  <script src="js/i18n.js"></script>
+  <script src="js/ops-common.js"></script>
+  <script src="js/ops-rules.js"></script>
+  <script src="js/ops-lists.js"></script>
+  <script src="js/ops-cumulatives.js"></script>
+  <script src="js/ops-bindings.js"></script>
+  <script src="js/ops-ext-bindings.js"></script>
+  <script src="js/ops-scene-registry.js"></script>
+  <script src="js/ops-gw-routes.js"></script>
+  <script src="js/ops-rollout.js"></script>
+  <script src="js/ops-deploy.js"></script>
+  <script src="js/ops-audit.js"></script>
+  <script src="js/ops-tenants.js"></script>
+  <script src="js/ops-monitor.js"></script>
+  <script src="js/ops-nav.js"></script>
+
+  <!-- Version input modal for deploy prepare -->
+  <div id="drVersionModal" class="modal-overlay" style="display:none">
+    <div class="modal-box">
+      <h3 style="margin:0 0 0.75rem;font-size:1rem" data-i18n="dr.version-modal-title">确认版本号</h3>
+      <p class="hint" style="margin-bottom:0.5rem" data-i18n="dr.version-modal-desc">将以此版本号执行灰度部署：</p>
+      <input type="text" id="drVersionInput" size="20" style="font-size:1rem;padding:0.4rem;width:100%;box-sizing:border-box" />
+      <p class="hint" style="margin-top:0.35rem" data-i18n="dr.version-modal-hint">留空或修改版本号将直接使用该值</p>
+      <div id="drDiffArea" style="margin-top:0.5rem;max-height:200px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:4px;padding:0.5rem;background:#f8fafc;display:none">
+        <div id="drDiffSummary" style="font-size:0.85rem;font-weight:600;margin-bottom:0.35rem"></div>
+        <div id="drDiffList"></div>
+      </div>
+      <div id="drDiffLoading" class="hint" style="margin-top:0.5rem" data-i18n="dr.version-loading">加载规则变更...</div>
+      <div class="row" style="margin-top:0.75rem;justify-content:flex-end;gap:0.5rem">
+        <button type="button" class="secondary" id="drVersionCancel" data-i18n="common.cancel">取消</button>
+        <button type="button" id="drVersionConfirm" data-i18n="dr.btn-confirm-deploy">确认部署</button>
+      </div>
+      <input type="hidden" id="drVersionLayer" value="" />
+    </div>
+  </div>
+
+  <div id="toastContainer" class="toast-container"></div>
+</body>
+</html>
