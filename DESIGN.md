@@ -2,7 +2,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v2.0 |
+| 文档版本 | v2.1 |
 | 状态 | 草案 |
 | 关联 | [README.md](README.md) |
 | 基础平台 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
@@ -72,6 +72,46 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 | **P0** | Falco(eBPF/plugin) + access log + Redis 审计流 + STI 审计 | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 |
 | **P1** | STI Taint 小模型 + virbius-audit Falco 插件 + 审计完整性 | 人工审批流 + 自适应 risk 模型 |
 | **P2** | Tetragon observe(eBPF 可用时) | seccomp-notify + Landlock + gVisor + Tetragon enforcer |
+
+### 1.4 身份标识体系
+
+本设计复用 VirbiusLLM 现有的 `app_id` 作为 **Agent 身份标识（agent_id）**，不区分 Agent 类型与运行实例。
+
+| 层级 | 标识 | 说明 | 示例 |
+|------|------|------|------|
+| 租户 | `tenant_id` | 组织/租户 | "公司A" |
+| **Agent** | `app_id` | **Agent 身份标识（即 agent_id）** | "code-review-agent" |
+| 会话 | `session_id` | 单次对话/工具调用链 | "sess_abc" |
+| 设备 | `device_id` | 客户端设备（canary 灰度用） | "device_xxx" |
+| 追踪 | `trace_id` | 单次请求追踪 | "uuid" |
+
+> **设计决策**：`app_id` 就是 `agent_id`。在 Agent 安全场景下，每个 `app_id` 对应一个具体的 Agent 实体（如"代码审查智能体"、"数据分析智能体"），不需要"类型 vs 实例"的分离。Runtime License、策略、risk_score 均绑 `app_id`。
+
+**Agent 运行许可证（Runtime License）**：
+
+virbius-control 为每个 `app_id` 签发运行许可证，各层在关键路径上校验：
+
+```
+virbius-control 签发 License（JWT 签名）：
+{
+  "app_id": "code-review-agent",      // Agent 身份
+  "tenant_id": "公司A",
+  "allowed_tools": ["read_file", "search", "curl"],
+  "allowed_scenes": ["code_review", "data_analysis"],
+  "risk_quota": 60,                    // 最大允许的 session_risk_score
+  "tool_rate_limit": 50,               // 每分钟最大工具调用数
+  "expiry": "2026-07-06T12:00:00Z",
+  "signature": "RS256..."
+}
+```
+
+| 校验点 | 校验内容 |
+|--------|---------|
+| 管层 OpenResty 入口 | License 签名 + 过期 + 吊销状态 |
+| 端层 virbius-core | License 的 allowed_tools 是否包含当前工具 |
+| 云层 virbius-engine | 当前 session_risk_score 是否超过 License 的 risk_quota |
+
+**许可证吊销**：通过 Redis pub/sub 实时通知各层。吊销后该 `app_id` 的所有后续请求被拒绝。
 
 ---
 
@@ -641,12 +681,14 @@ virbius-control（唯一真源）
   +-- tb_mcp_routes           -> 管层 Nginx upstream + location 配置
   +-- tb_kernel_policies      -> 核层 Falco 规则 + eBPF 白名单 maps
   +-- tb_rules_current        -> 云层 Groovy L3 + Prompt L1 规则（已有）
+  +-- tb_app_licenses         -> Agent 运行许可证（app_id -> license）
   |
   +-- 运行时状态（Redis，非数据库）
       +-- session:{id}:tool_history
       +-- session:{id}:risk_score
       +-- session:{id}:tool_count:*
       +-- pid_trace:{pid}
+      +-- license:revoked:{app_id}  -> 吊销标记（pub/sub 通知各层）
 ```
 
 发布流程复用现有 PublishOrchestrator：draft -> dry_run -> canary -> full
@@ -982,3 +1024,4 @@ Agent Client
 | v1.0 | 2026-07-04 | 初始设计：端管核云四层架构 |
 | v1.1 | 2026-07-05 | 新增预检/执行两阶段、快速通道 |
 | v2.0 | 2026-07-06 | 重大修订：1) 管层改为 OpenResty+Lua(删除 gateway-agent+AgentGateway) 2) 核层改为 Falco 观测引擎(眼睛/手分离) 3) 新增 Tetragon 检测+Falco 降级链 4) 新增 Falco plugin 模式(serverless 降级) 5) 删除 sidecar 部署模式 6) P0 只实现观测，seccomp-notify/Landlock/gVisor 推迟至 P2 7) 修正 posix_spawn/ seccomp 白名单/Groovy 逻辑 bug/eBPF IPv6 等技术问题 8) 新增 §9 第三方技术栈依赖与稳定性 |
+| v2.1 | 2026-07-06 | 新增 §1.4 身份标识体系：app_id 即 agent_id，不区分类型与实例；新增 Agent 运行许可证(Runtime License)机制 |
