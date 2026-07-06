@@ -2,7 +2,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v2.2 |
+| 文档版本 | v2.5 |
 | 状态 | 草案 |
 | 关联 | [README.md](README.md) |
 | 基础平台 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
@@ -34,7 +34,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
   v
 [1] Edge - virbius-core (extended)
     precheck: args + allowlist + JSON Schema
-    execute:  P0 in-process / P2 seccomp-notify + Landlock + gVisor
+    execute:  P0 in-process / P2 Landlock + drop caps + gVisor
   |
 [2] Gateway - OpenResty + virbius-gateway Lua plugin
     TLS/rate-limit/long-conn + allowlist + counter + engine call + HTTP block
@@ -43,7 +43,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
     eBPF driver (standard node) / plugin mode (serverless fallback)
     Tetragon enforcer (P2, eBPF available)
     observe: syscall/net/file + audit stream + session risk
-    enforce(P2): seccomp-notify + Landlock (edge) / Tetragon (kernel)
+    enforce(P2): Landlock + drop caps (edge) / Tetragon (kernel)
   |
 [4] Cloud - virbius-engine + virbius-control
     engine: Groovy L3 + STI audit + tool-chain detect
@@ -57,9 +57,9 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 |------|------|
 | **控制面统一** | 所有层的策略真源为 virbius-control，各层独立执行但配置同源 |
 | **预检先于执行** | 端层预检 -> 管层/云层终判 -> 端层执行。工具在终判通过后才执行 |
-| **观测与阻断分离** | 观测(eyes)和阻断(hands)由不同技术栈承担。观测随环境降级(eBPF->ptrace->plugin)，阻断始终由端层 seccomp-notify+Landlock 保证(P2) |
+| **观测与阻断分离** | 观测(eyes)和阻断(hands)由不同技术栈承担。观测随环境降级(eBPF->ptrace->plugin)，阻断始终由端层 Landlock + drop caps 保证(P2) |
 | **观察先行** | P0 只实现观测(Falco + HTTP 层阻断 + session risk 累积)，P2 补 syscall 级阻断 |
-| **eBPF 是增强非依赖** | eBPF 可用时叠加 Tetragon enforcer；不可用时端层 seccomp-notify 仍是完整可用的阻断 |
+| **eBPF 是增强非依赖** | eBPF 可用时叠加 Tetragon enforcer；不可用时端层 Landlock + drop caps 仍是完整可用的阻断 |
 | **端层兜底** | 即使管层/云层被绕过，端层预检 + 沙箱仍限制进程行为 |
 | **快速通道** | 低风险工具跳过云层 RPC，端层预检 + 管层本地规则直接放行，目标延迟 <5ms |
 | **职责分离** | OpenResty 做路由 + 限流 + 安全预检；安全终判收敛到 virbius-engine |
@@ -69,9 +69,9 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 
 | 阶段 | 观测(eyes) | 阻断(hands) |
 |------|-----------|------------|
-| **P0** | Falco(eBPF/plugin) + access log + Redis 审计流 + STI 审计 | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 |
-| **P1** | STI Taint 小模型 + virbius-audit Falco 插件 + 审计完整性 | 人工审批流 + 自适应 risk 模型 |
-| **P2** | Tetragon observe(eBPF 可用时) | seccomp-notify + Landlock + gVisor + Tetragon enforcer |
+| **P0** | Falco(eBPF/plugin) + access log + Redis 审计流 + STI 审计 + Prompt Gateway(宪法注入) | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 + Runtime License 校验 |
+| **P1** | STI Taint 小模型 + virbius-audit Falco 插件 + 审计完整性 | 人工审批流 + 自适应 risk 模型 + 记忆管控(Memory Interceptor) |
+| **P2** | Tetragon observe(eBPF 可用时) | Landlock + drop caps + gVisor + Tetragon enforcer + TEE(金融级) |
 
 ### 1.4 身份标识体系
 
@@ -122,7 +122,7 @@ virbius-control 签发 License（JWT 签名）：
 | 阶段 | 动作 | 延迟 |
 |------|------|------|
 | **预检** | 参数校验、tool allowlist、JSON Schema 校验、本地规则匹配 | <0.5ms |
-| **执行** | P0: 同进程执行 / P2: seccomp-notify / gVisor 沙箱 | P0: <0.1ms / P2: 见 §2.2 |
+| **执行** | P0: 同进程执行 / P2: Landlock / gVisor 沙箱 | P0: <0.1ms / P2: 见 §2.2 |
 
 **关键约束**：预检阶段不执行任何工具逻辑。只有终判返回 allow 后才进入执行阶段。
 
@@ -138,7 +138,7 @@ ToolCallRequest { name, args }
   |    安全保障：HTTP 层阻断 + session risk 累积 + Falco 观测
   |
   +-- P2: sandbox_type = "subprocess"
-  |    posix_spawn + seccomp-notify + Landlock
+  |    posix_spawn + Landlock + drop caps
   |    适用：read_file、write_file、curl（白名单目标）
   |    延迟：冷 ~2ms / 热 ~1ms + notify 决策 ~10-50us/syscall
   |
@@ -157,93 +157,159 @@ ToolCallRequest { name, args }
 > 3. session risk 累积（Falco 检测异常 -> 风险分升高 -> 后续请求阻断）
 > 4. 高风险工具（execute_python、shell）P0 阶段强制人工审批或禁用
 
-### 2.3 P2: seccomp-notify + Landlock 子进程(Linux)
+### 2.3 P2: Landlock + drop caps 子进程(Linux)
 
 > **P2 实现，P0 不涉及。** 以下为长期设计参考。
 
-**多线程安全**：Agent 框架基于 tokio 异步运行时，是多线程的。禁止使用 fork()，改用 posix_spawn 或 clone3(CLONE_NEWPID)。
+**设计决策**：P2 subprocess 沙箱采用 Landlock + drop caps，不使用 seccomp-notify。
+
+| 维度 | Landlock + drop caps | seccomp-notify（原方案，已弃用） |
+|------|---------------------|-------------------------------|
+| 文件路径限制 | ✅ Landlock 文件规则 | ✅ open/openat 拦截 |
+| 网络 IP 限制（SSRF） | ❌ Landlock v4 只限端口不限 IP | ✅ connect 拦截 |
+| supervisor SPOF | ✅ 无 supervisor | ❌ 崩溃=进程挂起 |
+| TOCTOU 风险 | ✅ 内核强制，无竞态 | ❌ 需 ioctl 校验 |
+| 实现复杂度 | ~5w | ~16w |
+
+**SSRF 防护补偿**：Landlock 不能按 IP 限制 connect，但 subprocess 沙箱仅用于 `read_file`/`write_file`/`curl（白名单目标）`，不用于 `execute_python`/`shell`（后者走 gVisor）。`curl` 的 URL 在 HTTP 层（OpenResty）已做 schema 校验 + 白名单校验，不需要 syscall 级 connect 拦截。网络层由 K8s NetworkPolicy 兜底。
+
+**多线程安全**：Agent 框架基于 tokio 异步运行时，是多线程的。禁止使用 fork()，改用 posix_spawn。
 
 > **注意**：posix_spawn 配合 POSIX_SPAWN_SETSID 只创建新会话/进程组，**不创建新 PID namespace**。如需新 namespace 必须使用 clone3(CLONE_NEWPID | CLONE_NEWNS)。
 
-**seccomp-notify(SECCOMP_RET_USER_NOTIF)** 是 P2 的核心 enforcement 机制。与 seccomp strict mode(只能 kill)不同，notify 模式允许 userspace supervisor 在 syscall 执行前做策略决策：
+**Landlock（P2 核心）**：
 
 ```rust
-// virbius-core/src/sandbox/notify.rs (P2)
+// virbius-core/src/sandbox/landlock.rs (P2)
 
-pub struct NotifySupervisor {
-    seccomp_filter: BpfProgram,      // SECCOMP_RET_USER_NOTIF for connect/open/execve
-    connect_allowlist: Vec<IpCidr>,   // 允许连接的 IP 范围
-    file_allowlist: Vec<PathPattern>, // 允许访问的文件路径
+pub struct LandlockSandbox {
+    rules: LandlockRules,
+    timeout_ms: u64,
 }
 
-impl NotifySupervisor {
-    /// posix_spawn + seccomp-notify -> 同步 userspace 决策
+pub struct LandlockRules {
+    // v1 (kernel 5.13+): 文件路径
+    read_paths: Vec<PathGlob>,      // 只读路径，如 ["/usr/*", "/lib/*"]
+    write_paths: Vec<PathGlob>,     // 读写路径，如 ["/tmp/workdir/*"]
+    exec_paths: Vec<PathGlob>,      // 可执行路径，如 ["/usr/bin/*"]
+    // v4 (kernel 6.7+): 网络端口（可选，不支持则跳过）
+    bind_ports: Vec<u16>,           // 允许绑定的端口
+    connect_ports: Vec<u16>,        // 允许连接的端口
+}
+
+impl LandlockSandbox {
+    /// posix_spawn + LD_PRELOAD(Landlock + drop caps) -> 执行子进程
     pub fn execute(&self, program: &str, args: &[String]) -> Result<String> {
-        // 1. 子进程安装 seccomp filter（安全关键 syscall 走 USER_NOTIF）
-        //    read/write/brk 等高频 syscall 走 strict filter（直接 allow）
-        // 2. 父进程通过 /dev/seccomp 接收通知
-        // 3. 对每个通知的 syscall：
-        //    - 解析参数（connect 的 sockaddr -> 目标 IP:Port）
-        //    - ioctl(SECCOMP_IOCTL_NOTIF_ID_VALID) 防 TOCTOU
-        //    - 查 allowlist -> allow (CONTINUE) / deny (RETURN -EPERM)
-        // 4. 子进程执行完毕，收集结果
+        let (stdout_pipe, stderr_pipe) = create_pipes()?;
+
+        // posix_spawn 创建子进程
+        let mut attrs = posix_spawn::SpawnAttrs::new();
+        attrs.set_flags(PosixSpawnFlags::POSIX_SPAWN_SETSID);
+
+        // 通过 LD_PRELOAD 注入 Landlock + drop caps 初始化
+        let env = vec![
+            ("VIRBIUS_LANDLOCK_RULES", serde_json::to_string(&self.rules)?),
+            ("VIRBIUS_DROP_CAPS", "all"),
+            ("LD_PRELOAD", "libvirbius_sandbox_preload.so"),
+        ];
+
+        let pid = posix_spawn::spawn(program, args, &env, &attrs)?;
+
+        // 父进程：等待 + 超时 + 读 stdout（无 supervisor，无 /dev/seccomp）
+        let output = wait_and_read(pid, stdout_pipe, self.timeout_ms)?;
+        Ok(output)
     }
 }
 ```
 
-**TOCTOU 防护**：supervisor 读取 syscall 参数后、决策前，参数内存可能被篡改。必须在决策前调用 ioctl(SECCOMP_IOCTL_NOTIF_ID_VALID) 校验 notification 仍有效。
-
-**Supervisor 高可用**：supervisor 崩溃会导致所有被监控进程的 syscall 永久挂起。supervisor 必须极简 + watchdog；崩溃时降级为 SECCOMP_RET_KILL（kill 而非 hang）。
-
-**Landlock(P2)**：
+**LD_PRELOAD 注入器**（比原方案简单——只有 Landlock + drop caps，无 seccomp-notify）：
 
 ```c
 // virbius-sandbox-preload.c — 编译为 .so，通过 LD_PRELOAD 注入
-// 顺序：Landlock -> drop caps -> seccomp（seccomp 必须最后应用）
+// 顺序：Landlock -> drop caps（两步，无 seccomp）
 
 __attribute__((constructor))
 static void virbius_sandbox_init(void) {
-    // 1. Landlock: 只读 /usr, /lib; 读写仅 /tmp/workdir
+    // 1. Landlock: 创建 ruleset + 添加规则 + restrict_self
+    //    检测 ABI 版本：v1(5.13+, 文件) / v4(6.7+, 网络)
+    //    不支持网络 v4 则跳过网络规则，只做文件
     //    Landlock 无 audit 模式，只能 enforce（deny），不产生观测事件
-    virbius_landlock_apply(getenv("VIRBIUS_LANDLOCK_PATHS"));
+    virbius_landlock_apply(getenv("VIRBIUS_LANDLOCK_RULES"));
 
     // 2. Capabilities: 丢弃所有 CAP_*
+    //    Landlock 不覆盖的威胁面由 drop caps 补充：
+    //    - CAP_NET_RAW: 禁止 raw socket（ping/抓包）
+    //    - CAP_SYS_PTRACE: 禁止 ptrace 注入其他进程（防逃逸）
+    //    - CAP_SYS_ADMIN: 禁止 mount/namespace 操作
+    //    - CAP_NET_ADMIN: 禁止改 iptables/路由
+    //    - CAP_SYS_MODULE: 禁止加载内核模块
     virbius_drop_all_capabilities();
 
-    // 3. seccomp-notify: 安全关键 syscall 走 USER_NOTIF，其余走 strict allow
-    //    注意：landlock/capset 初始化 syscall 已在前面完成
-    //    不需要在运行期 seccomp 白名单中
-    virbius_seccomp_notify_apply(getenv("VIRBIUS_SECCOMP_RULES"));
+    // 3. 禁止通过 setuid 二进制提权
+    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
 
-    unsetenv("VIRBIUS_SECCOMP_RULES");
-    unsetenv("VIRBIUS_LANDLOCK_PATHS");
+    // 4. 清理环境变量
+    unsetenv("VIRBIUS_LANDLOCK_RULES");
+    unsetenv("VIRBIUS_DROP_CAPS");
+    unsetenv("LD_PRELOAD");
 }
 ```
 
-**seccomp 白名单**(P2 read_file 工具运行期，strict allow 部分)：
+**Landlock + drop caps 的职责分工**：
+
+| 威胁 | Landlock 覆盖 | drop caps 覆盖 |
+|------|-------------|---------------|
+| 读越权文件 | ✅ 路径规则 | - |
+| 写越权文件 | ✅ 路径规则 | - |
+| 执行越权二进制 | ✅ 路径规则 | - |
+| raw socket（ping/抓包） | ❌ | ✅ 去 CAP_NET_RAW |
+| ptrace 注入其他进程（逃逸） | ❌ | ✅ 去 CAP_SYS_PTRACE |
+| mount 伪造文件系统 | ❌ | ✅ 去 CAP_SYS_ADMIN |
+| 改 iptables/路由（流量劫持） | ❌ | ✅ 去 CAP_NET_ADMIN |
+| 加载内核模块 | ❌ | ✅ 去 CAP_SYS_MODULE |
+
+**Landlock ABI 版本适配**：
+
+```rust
+fn detect_landlock_abi_version() -> u32 {
+    // 尝试创建 ruleset 测试支持的 ABI 版本
+    // v1 (5.13+): 文件路径
+    // v2 (5.19+): 文件 + 引用
+    // v3 (6.2+):  文件 + 设备
+    // v4 (6.7+): 文件 + 网络
+    let fd = landlock_create_ruleset(&RulesetAttr {
+        handled_access_fs: AccessFs::ALL,
+        handled_access_net: AccessNet::ALL,  // v4 only
+    }, 0);
+    match fd {
+        Ok(_) => { close(fd); 4 }
+        Err(ENOTSUP) => { /* 重试不带网络 */ ... 1 }
+        Err(_) => 0  // Landlock 不可用
+    }
+}
+```
+
+> **注**：Landlock 网络(v4)需要内核 6.7+，2026 年仍有大量内核不满足。P2 先只做文件路径限制(v1, 5.13+)，网络限制由 NetworkPolicy 承担。
+
+**Landlock 规则示例**（read_file 工具）：
 
 ```json
 {
   "tool_name": "read_file",
   "exec_env": {
     "sandbox_type": "subprocess",
-    "strict_allow_syscalls": [
-      "read", "write", "openat", "close", "fstat", "newfstatat",
-      "mmap", "munmap", "mprotect", "brk",
-      "rt_sigaction", "rt_sigprocmask", "getrandom",
-      "pread64", "preadv", "ioctl", "rseq",
-      "exit_group", "exit"
-    ],
-    "notify_syscalls": ["connect", "open", "openat", "execve", "execveat"],
-    "allowed_file_paths": ["/tmp/data/*", "/home/user/workdir/*"],
+    "landlock_rules": {
+      "read_paths": ["/tmp/data/*", "/home/user/workdir/*", "/usr/lib/*"],
+      "write_paths": [],
+      "exec_paths": ["/usr/bin/cat", "/usr/bin/head"]
+    },
+    "drop_caps": "all",
     "timeout_ms": 5000
   }
 }
 ```
 
-> **注**：白名单已包含 mprotect/rt_sigaction/getrandom/pread64/ioctl/rseq/newfstatat，覆盖 glibc 2.36+ 动态链接二进制的启动需求。
-
-关于 macOS：不支持 seccomp/Landlock，降级为 sandbox_init() + 环境变量清理。syscall 级限制依赖核层 Falco 或跳过。
+关于 macOS：不支持 Landlock。macOS 为开发环境，P2 沙箱不启用，降级为同进程执行 + 告警日志。生产环境部署在 Linux/K8s，Landlock 可用。
 
 ### 2.4 P2: gVisor 子进程 + 预热池
 
@@ -260,7 +326,7 @@ pub struct GvisorPool {
 }
 ```
 
-**降级策略**：gVisor 不可用时，自动降级为 seccomp-notify subprocess + 超时 5s 强制 kill + 限制内存 128MB。
+**降级策略**：gVisor 不可用时，自动降级为 Landlock subprocess + 超时 5s 强制 kill + 限制内存 128MB。
 
 ### 2.5 与 virbius-control 的同步
 
@@ -276,12 +342,12 @@ struct EdgeManifest {
     #[serde(default)]
     tool_policies: Vec<ToolPolicy>,     // 新增：工具策略（allowlist + schema + fast_path）
     #[serde(default)]
-    seccomp_profiles: HashMap<String, SeccompProfile>, // P2：seccomp 模板
+    landlock_profiles: HashMap<String, LandlockProfile>, // P2：Landlock 模板
     sdk_config: SdkConfig,
 }
 ```
 
-> **注**：seccomp_profiles 可能体积较大，建议提供独立 fetch 端点 /api/v1/edge/seccomp-profiles，不随主 manifest 全量拉取。
+> **注**：landlock_profiles 可能体积较大，建议提供独立 fetch 端点 /api/v1/edge/landlock-profiles，不随主 manifest 全量拉取。
 
 ### 2.6 MCP Server 集成
 
@@ -655,9 +721,9 @@ location /mcp/github {
 
 | 范围 | P0 观测 | P2 阻断 |
 |------|---------|---------|
-| Agent 进程内 syscall | Falco eBPF 观测(可用时) | seccomp-notify 同步阻断 |
+| Agent 进程内 syscall | Falco eBPF 观测(可用时) | Landlock 文件路径阻断 |
 | 容器逃逸检测 | Falco eBPF 观测(可用时) | Tetragon enforcer kill |
-| SSRF / 内网扫描 | Falco eBPF 观测 connect | seccomp-notify connect 阻断 |
+| SSRF / 内网扫描 | Falco eBPF 观测 connect | NetworkPolicy 网络阻断 |
 | 基础设施异常 | Falco plugin (k8saudit + cloudtrail) | 云厂商原生 enforcement |
 
 **P0 安全模型**：核层只观测不阻断。发现异常 -> 上报审计流 -> 提升 session risk score -> 管层 HTTP 层阻断后续请求。这是"检测 -> 累积风险 -> 阻断后续"模型，对 Agent 多轮调用场景有效。
@@ -768,10 +834,10 @@ eBPF Maps(策略数据)：
 | **k8saudit** | K8s API Server audit log | privileged Pod 创建、secret 访问、RBAC 变更、exec into pod |
 | **filetail** | OpenResty access log | 工具调用频次、调用链异常、4xx/5xx 突增 |
 | **filetail** | MCP Server 应用日志 | 工具执行失败率、返回值过大、执行超时 |
-| **自定义 virbius-audit** | Redis Stream 审计流 | session risk 累积、seccomp 连续 deny、批量攻击 |
+| **自定义 virbius-audit** | Redis Stream 审计流 | session risk 累积、Landlock 连续 deny、批量攻击 |
 | **cloudtrail** | AWS CloudTrail | IAM 变更、S3 访问、安全组修改 |
 
-> **限制**：plugin 模式无 syscall 可见性。覆盖"谁在动 Agent 基础设施"的威胁面，不覆盖"Agent 运行时做了什么"(后者由端层 seccomp-notify 在 P2 承担)。
+> **限制**：plugin 模式无 syscall 可见性。覆盖"谁在动 Agent 基础设施"的威胁面，不覆盖"Agent 运行时做了什么"(后者由端层 Landlock 在 P2 承担)。
 
 ### 4.6 PID -> trace_id 映射
 
@@ -786,12 +852,12 @@ eBPF Maps(策略数据)：
 
 | 模式 | 判定条件 | 观测 | 阻断 |
 |------|---------|------|------|
-| host | 裸机/自管 VM + root | Falco eBPF + Tetragon(P2) | Tetragon(P2) + seccomp-notify(P2) |
+| host | 裸机/自管 VM + root | Falco eBPF + Tetragon(P2) | Tetragon(P2) + Landlock(P2) |
 | daemonset | K8s 标准节点池 + privileged | 同上 | 同上 |
-| pod-observe | serverless(Fargate/Autopilot) | Falco plugin + 云厂商告警 | 端层 seccomp-notify(P2) + NetworkPolicy |
+| pod-observe | serverless(Fargate/Autopilot) | Falco plugin + 云厂商告警 | 端层 Landlock(P2) + NetworkPolicy |
 | audit-only | 前期观测 | 上述观测的只读子集 | 无 |
 
-> **删除原设计的 sidecar 模式**：sidecar 模式自相矛盾——Falco 也需 eBPF 特权，seccomp 不能由 sidecar 应用到其他容器（必须在 Pod spec 中声明）。serverless 环境下 seccomp profile 通过 mutating admission webhook 注入 Pod spec。
+> **删除原设计的 sidecar 模式**：sidecar 模式自相矛盾——Falco 也需 eBPF 特权，Landlock 不能由 sidecar 应用到其他容器（必须在 Pod spec 中声明）。serverless 环境下 Landlock profile 通过 mutating admission webhook 注入 Pod spec。
 
 ---
 
@@ -957,7 +1023,7 @@ Agent Framework
     v
 [1] 端层执行 (virbius-core, P0: 同进程)
     +-- P0: sandbox_type=none -> 同进程执行
-    +-- P2: sandbox_type=subprocess -> seccomp-notify + Landlock
+    +-- P2: sandbox_type=subprocess -> Landlock + drop caps
     +-- P2: sandbox_type=gvisor -> gVisor 预热池
     |     v 执行结果
     v
@@ -1040,7 +1106,7 @@ virbius-control
 
 | 场景 | 处置 |
 |------|------|
-| seccomp-notify deny | 子进程收到 -EPERM，工具返回 Error |
+| Landlock deny | 子进程收到 -EPERM，工具返回 Error |
 | Tetragon enforcer kill | 进程被 kill，告警 |
 
 > **关键约束**：终判 deny 时工具不执行，不存在"工具已执行但 deny"的副作用。
@@ -1096,7 +1162,7 @@ Agent Client
 |  MCP Server (Python/Node) (:8080+)                       |
 |  +-- 接收 tools/call，执行工具逻辑                         |
 |  +-- virbius-core (端层预检 + P0 同进程执行)               |
-|  +-- P2: seccomp-notify + Landlock 沙箱                   |
+|  +-- P2: Landlock + drop caps 沙箱                   |
 +----------------------------------------------------------+
   | 核层旁路
   v
@@ -1123,15 +1189,14 @@ Agent Client
 
 | 层 | 技术 | 用途 | 稳定性 | 替代方案 |
 |----|------|------|--------|---------|
-| 端 | seccomp-bpf | syscall 过滤(P2) | 极稳定(内核 3.5, 2012) | 无 |
-| 端 | seccomp-notify | 同步 userspace 决策(P2) | 稳定(内核 5.0, 2019) | strict mode 降级 |
-| 端 | Landlock | 文件/网络路径限制(P2) | 较新(文件 5.13/2021, 网络 6.7/2024) | AppArmor |
+| 端 | Landlock | 文件路径限制(P2) | 较新(文件 5.13/2021, 网络 6.7/2024) | AppArmor |
+| 端 | drop caps | capabilities 丢弃(P2) | 极稳定(内核 2.2, 1999) | 无 |
 | 端 | gVisor | 不可信代码沙箱(P2) | 稳定(Google, GKE 使用) | Kata Containers |
 | 端 | PyO3 / napi-rs | Rust<->Python/Node 绑定 | 稳定(广泛使用) | subprocess |
 | 管 | OpenResty + LuaJIT | 反向代理 + 安全插件 | 稳定(10年+生产) | APISIX / Envoy |
 | 核 | eBPF + BTF/CO-RE | 内核观测 | 极稳定(行业标准) | 无 |
 | 核 | Falco | 观测引擎(CNCF 毕业) | 极稳定(CNCF Graduated) | Tracee |
-| 核 | Tetragon | eBPF enforcement(P2) | 较新(Isovalent/Cisco) | Falco + seccomp |
+| 核 | Tetragon | eBPF enforcement(P2) | 较新(Isovalent/Cisco) | Falco + Landlock |
 | 云 | Groovy | L3 规则脚本 | 稳定但 declining(Apache) | Python sandbox |
 | 云 | Redis | session + 审计流 | 极稳定 | KeyDB |
 | 云 | Spring Boot | engine/control 框架 | 极稳定 | Quarkus |
@@ -1140,13 +1205,12 @@ Agent Client
 
 ### 9.2 风险评估
 
-**Tier 1 极稳定(无风险)**：seccomp-bpf, eBPF, Redis, Nginx, Spring Boot, K8s
+**Tier 1 极稳定(无风险)**：eBPF, Redis, Nginx, Spring Boot, K8s, drop caps
 
 **Tier 2 稳定(需关注)**：
 
 | 技术 | 风险 | 缓解 |
 |------|------|------|
-| seccomp-notify | TOCTOU; supervisor 崩溃=进程挂起 | ioctl 校验; watchdog + 降级 KILL |
 | OpenResty/LuaJIT | Mike Pall 半退休; 迭代放缓 | 核心功能已稳定; 可迁 APISIX |
 | Falco | 4 套驱动维护负担; kmod 驱动将弃用 | 只用 eBPF + plugin 两种 |
 | gVisor | Google 依赖; 性能开销 | P2 才引入; Kata 备选 |
@@ -1169,58 +1233,174 @@ Agent Client
 
 **可降级(失败有 fallback)**：
 - Falco eBPF 驱动 -> userspace -> plugin 降级链
-- gVisor -> seccomp subprocess 降级
-- Tetragon -> Falco + seccomp-notify 替代
+- gVisor -> Landlock subprocess 降级
+- Tetragon -> Falco + Landlock-notify 替代
 - qwen3guard -> 任意 guard 模型
+
+### 9.4 与 VirbiusLLM 的复用关系
+
+VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依赖。两个项目独立演进，VirbiusAgent 从 VirbiusLLM 拷贝所需代码后自行维护。
+
+**决策理由**：virbius-engine/virbius-control/virbius-compiler 需要大幅扩展（加 License、宪法、Agent 规则、Redis session、Nginx config 编译），作为依赖不如直接拷贝修改。virbius-core 虽能完整复用，但其 EdgeManifest/EngineClient 等结构需扩展字段，依赖关系下只能 fork 或提 PR。两个项目同属一人维护，拷贝后独立演进更灵活。
+
+#### 直接复用（零改动，拷贝即用）
+
+| 来源 | 文件 | 功能 | VirbiusAgent 位置 |
+|------|------|------|------------------|
+| virbius-core | `src/dlp/engine.rs` | PII 脱敏(desensitize_in/out) | virbius-core/src/dlp/ |
+| virbius-core | `src/dlp/entity.rs` | 实体识别(手机号/身份证/邮箱/银行卡) | virbius-core/src/dlp/ |
+| virbius-core | `src/dlp/vault.rs` | 脱敏 token 保险柜 | virbius-core/src/dlp/ |
+| virbius-core | `src/sync.rs` | manifest 同步(版本检查→canary→sha256→原子写) | virbius-core/src/sync.rs |
+| virbius-core | `src/bootstrap.rs` | 初始化流程 | virbius-core/src/bootstrap.rs |
+| virbius-core | `src/runtime.rs` | 审计 flush loop | virbius-core/src/runtime.rs |
+| virbius-core | `src/audit.rs` | 审计上报 | virbius-core/src/audit.rs |
+| virbius-core | `src/trace.rs` | trace_id 管理 | virbius-core/src/trace.rs |
+| virbius-core | `src/engine.rs` | EngineClient(调 /v1/evaluate) | virbius-core/src/engine.rs |
+| virbius-core | `src/matcher.rs` | 规则匹配 | virbius-core/src/matcher.rs |
+| virbius-gateway | `lib/*.lua` (11 个文件) | access_lists/list_redis/effective/scene_registry/trace/context_vars/config_redis/json_util/file_cache/uri_match/prompt | virbius-gateway/lib/ |
+| virbius-gateway | `plugins/openresty/access.lua` | OpenResty access 阶段入口 | virbius-gateway/plugins/ |
+| virbius-policy | `ActionMerge.java` | 动作合并 | virbius-policy/ |
+| virbius-policy | `IntentAction.java` | 意图归一化 | virbius-policy/ |
+| virbius-policy | `ListMatcher.java` | 名单匹配 | virbius-policy/ |
+| virbius-policy | `audit/RedisStreamAuditSink.java` | Redis Stream 审计 | virbius-policy/ |
+
+#### 需扩展（拷贝后修改）
+
+| 来源 | 文件 | 已有能力 | 需新增 |
+|------|------|---------|--------|
+| virbius-core | `src/manifest.rs` | EdgeManifest(rules/dlp_rules/sdk_config) | 加 tool_policies + landlock_profiles 字段 |
+| virbius-groovy-l3 | `PolicyContext.java` | listMatch/getCumulative/riskScore/scene/sessionId | 加 sessionHistory(n)/sessionRiskScore()/incrementRiskScore()/recordToolCall()/lastToolResult()/toolName() |
+| virbius-gateway | `plugins/openresty/access.lua` | 通用 access 阶段 | 加 tool allowlist + tool 计数 + engine 调用 |
+| virbius-control | `RuleService.java` | 规则 CRUD | 加 Agent 规则类型 + License CRUD + 宪法管理 |
+| virbius-control | `ArtifactService.java` | 产物编译 | 加 Nginx config + Landlock profile + Constitution template 编译 |
+| virbius-control | `PublishOrchestrator.java` | 4 阶段发布 | 加各层独立放量(端层 device_id/管层 tenant_id/核层 PID) |
+| virbius-compiler | 编译器 | edge manifest + gateway JSON + engine input | 加 Nginx upstream + Landlock profile + Constitution template 输出 |
+
+#### 需新建（VirbiusAgent 原创）
+
+| 组件 | 语言 | 功能 |
+|------|------|------|
+| `virbius-core/src/prompt_gateway.rs` | Rust | Prompt Gateway(宪法注入 + PII 脱敏) |
+| `virbius-core/src/license.rs` | Rust | License 校验(签名/过期/吊销) |
+| `virbius-core/src/sandbox/landlock.rs` | Rust | P2: Landlock + drop caps 沙箱 |
+| `virbius-core/src/sandbox/gvisor_pool.rs` | Rust | P2: gVisor 预热池 |
+| virbius-core MCP 绑定 | Rust | PyO3 / napi-rs 绑定 |
+| `virbius-control` License 模块 | Java | License 签发(EdDSA) + 吊销(pub/sub) |
+| `virbius-control` 宪法模块 | Java | 宪法规则管理 + 编译为 prompt 模板 |
+| `virbius-control` Memory Interceptor | Java | P1: 记忆读写拦截 |
+| `virbius-kernel/` | Rust/YAML | Falco 部署 + Tetragon 检测 + 降级逻辑 |
+| virbius-audit Falco 插件 | Go | 自定义 Falco 插件(消费 Redis Stream) |
+
+#### VirbiusAgent 项目结构
+
+```
+VirbiusAgent/
+|
++-- virbius-core/              # 拷贝自 VirbiusLLM + 扩展
+|   +-- src/dlp/               # 直接复用
+|   +-- src/sync.rs            # 直接复用
+|   +-- src/manifest.rs        # 复用 + 加 tool_policies/landlock_profiles
+|   +-- src/audit.rs           # 直接复用
+|   +-- src/trace.rs           # 直接复用
+|   +-- src/engine.rs          # 直接复用
+|   +-- src/prompt_gateway.rs  # 新建
+|   +-- src/license.rs         # 新建
+|   +-- src/sandbox/           # 新建 (P2)
+|   +-- src/mcp/               # 新建 (PyO3/napi-rs)
+|
++-- virbius-gateway/           # 拷贝自 VirbiusLLM
+|   +-- lib/                   # 直接复用 (11 个 Lua 文件)
+|   +-- plugins/openresty/     # 复用 + 扩展 access.lua
+|
++-- virbius-engine/            # 拷贝自 VirbiusLLM + 扩展
+|   +-- (加 Redis session + Agent 规则 + ctx 扩展)
+|
++-- virbius-control/           # 拷贝自 VirbiusLLM + 扩展
+|   +-- (加 License + 宪法 + Agent 规则 + 新发布逻辑)
+|
++-- virbius-groovy-l3/         # 拷贝自 VirbiusLLM + 扩展
+|   +-- PolicyContext.java     # 复用 + 加 session API
+|
++-- virbius-compiler/          # 拷贝自 VirbiusLLM + 扩展
+|   +-- (加 Nginx config + Landlock + Constitution 编译)
+|
++-- virbius-policy/            # 拷贝自 VirbiusLLM
+|   +-- (直接复用，零改动)
+|
++-- virbius-kernel/            # 全新
+|   +-- Falco 部署 + Tetragon 检测
+|
++-- DESIGN.md
++-- README.md
+```
+
+#### 复用率
+
+```
+直接复用(零改动)   ████████████████████████  ~60%  (35 个文件)
+需扩展(拷贝+改)    ████                      ~10%  (6 个文件)
+需新建            ███████████               ~30%  (13 个组件)
+```
 
 ---
 
 ## 10. 路线图
 
-### P0 — 观测(eyes) + HTTP 层 enforcement
+### P0 — 核心安全链路（身份 + 观测 + HTTP 阻断 + Prompt Gateway）
 
 | 任务 | 组件 | 估计 |
 |------|------|------|
-| 端层预检(参数校验 + allowlist + JSON Schema) | virbius-core | 2w |
-| 端层 MCP Server 集成(PyO3 / napi-rs / subprocess) | virbius-core | 3w |
-| 管层 OpenResty Lua 插件(allowlist + 计数 + engine 调用) | virbius-gateway | 3w |
-| 管层 Nginx upstream 自动生成(control -> compiler) | control + compiler | 2w |
-| 云层 Redis session 状态(history + risk + count) | engine | 3w |
-| 云层 Groovy L3 Agent 规则(工具链检测 + 场景匹配) | engine | 2w |
-| 云层 Groovy ctx 扩展(sessionHistory / riskScore，内存预加载) | engine | 2w |
+| Runtime License 签发 + 校验 + 吊销 | control + 全层 | 3w |
+| Prompt Gateway 基础版（宪法注入 + PII 脱敏） | virbius-core | 3w |
+| 企业 AI 智能体宪法 v1（规则定义 + 编译） | control + compiler | 2w |
+| 端层预检（参数校验 + allowlist + JSON Schema） | virbius-core | 2w |
+| 端层 MCP Server 集成（PyO3 / napi-rs / subprocess） | virbius-core | 3w |
+| 管层 OpenResty Lua 插件（allowlist + 计数 + engine 调用） | virbius-gateway | 3w |
+| 管层 Nginx upstream 自动生成（control -> compiler） | control + compiler | 2w |
+| 云层 Redis session 状态（history + risk + count） | engine | 3w |
+| 云层 Groovy L3 Agent 规则（工具链检测 + 场景匹配） | engine | 2w |
+| 云层 Groovy ctx 扩展（sessionHistory / riskScore，内存预加载） | engine | 2w |
 | 控制面 Agent 规则 CRUD + 发布 | control | 2w |
-| 端层快速通道(低风险工具跳过云层) | core + gateway | 2w |
-| 核层 Falco 部署 + eBPF 驱动(标准节点池) | virbius-kernel | 2w |
-| 核层 Falco plugin 模式(serverless 降级: k8saudit + filetail) | virbius-kernel | 2w |
-| 核层 Tetragon 检测 + 降级逻辑(detect_mode) | virbius-kernel | 1w |
+| 核层 Falco 部署 + eBPF 驱动（标准节点池） | virbius-kernel | 2w |
+| 核层 Falco plugin 模式（serverless 降级: k8saudit + filetail） | virbius-kernel | 2w |
+| 核层 Tetragon 检测 + 降级逻辑（detect_mode） | virbius-kernel | 1w |
 | 核层 PID->trace_id 映射 + 审计上报 | virbius-kernel | 1w |
-| 核层自定义 virbius-audit Falco 插件(消费 Redis Stream) | virbius-kernel | 2w |
-| 审计大盘(session risk + 工具调用 + 告警) | control | 2w |
 | 端到端集成测试 | 全组件 | 3w |
 | **P0 合计** | | **~34w** |
 
-### P1 — 增强观测
+### P1 — 增强观测 + 记忆管控
 
 | 任务 | 说明 |
 |------|------|
-| STI 语义审计(Taint 维度调小模型) | 工具返回值注入检测 |
-| 输出 PII 脱敏(端层，工具返回前) | 复用 virbius-core dlp/engine.rs |
-| Falco 规则库扩充(Agent 专用规则集) | 工具调用模式、SSRF 特征、数据外泄 |
+| 端层快速通道（低风险工具跳过云层） | 延迟优化 |
+| 自定义 virbius-audit Falco 插件 | 消费 Redis Stream，Agent 专用规则 |
+| 审计大盘 | session risk + 工具调用 + 告警可视化 |
+| STI 语义审计（Taint 维度调小模型） | 工具返回值注入检测 |
+| 输出 PII 脱敏（端层，工具返回前） | 复用 virbius-core dlp/engine.rs |
+| Falco 规则库扩充（Agent 专用规则集） | 工具调用模式、SSRF 特征、数据外泄 |
 | 高风险工具人工审批流 | engine -> 审批 UI -> 超时 deny |
 | session risk 自适应模型 | 从规则阈值升级为加权累积 |
-| 审计完整性(hash chain) | 防篡改 |
+| 审计完整性（hash chain） | 防篡改 |
+| 记忆管控（Memory Interceptor） | Agent 记忆读写拦截 + 脱敏 + 注入检测 |
 
-### P2 — 阻断(hands)
+### P2 — 阻断(hands) + TEE
 
 | 任务 | 说明 |
 |------|------|
-| seccomp-notify supervisor | 同步 userspace 决策(connect/open/execve) |
-| Landlock 文件路径限制 | 工具进程文件访问白名单 |
+| Landlock + drop caps 沙箱 | 文件路径限制 + capabilities 丢弃 + ABI 版本适配 |
 | gVisor 预热池 | 不可信代码执行沙箱 |
-| Tetragon enforcer(eBPF 可用时) | 宿主级 enforcement 叠加 |
-| TOCTOU 防护 + supervisor 高可用 | seccomp-notify 生产化 |
-| eBPF 自定义观测程序(execveat + IPv6) | 补充 Falco 内置规则 |
+| Tetragon enforcer（eBPF 可用时） | 宿主级 enforcement 叠加 |
+| eBPF 自定义观测程序（execveat + IPv6） | 补充 Falco 内置规则 |
+| TEE 硬件安全根（金融级） | SGX/SEV-SNP enclave + 远程证明 |
 | 端到端红队测试 | 安全验证 |
+
+### 各阶段对照
+
+| 阶段 | 观测(eyes) | 阻断(hands) | 新增能力 |
+|------|-----------|------------|---------|
+| P0 | Falco + access log + Redis 审计 + STI + Prompt Gateway | HTTP 403 + License + allowlist + 计数 + schema + risk 断连 | 身份管控 + 提示增强 |
+| P1 | STI Taint + virbius-audit 插件 + 审计完整性 | 人工审批 + 自适应 risk + 记忆管控 | 记忆管控 |
+| P2 | Tetragon observe | Landlock + gVisor + Tetragon enforcer + TEE | syscall 级阻断 + 硬件安全 |
 
 ---
 
@@ -1233,3 +1413,6 @@ Agent Client
 | v2.0 | 2026-07-06 | 重大修订：1) 管层改为 OpenResty+Lua(删除 gateway-agent+AgentGateway) 2) 核层改为 Falco 观测引擎(眼睛/手分离) 3) 新增 Tetragon 检测+Falco 降级链 4) 新增 Falco plugin 模式(serverless 降级) 5) 删除 sidecar 部署模式 6) P0 只实现观测，seccomp-notify/Landlock/gVisor 推迟至 P2 7) 修正 posix_spawn/ seccomp 白名单/Groovy 逻辑 bug/eBPF IPv6 等技术问题 8) 新增 §9 第三方技术栈依赖与稳定性 |
 | v2.1 | 2026-07-06 | 新增 §1.4 身份标识体系：app_id 即 agent_id，不区分类型与实例；新增 Agent 运行许可证(Runtime License)机制 |
 | v2.2 | 2026-07-06 | 新增 §2.8 Prompt Gateway（提示增强）：宪法约束注入 + 动态上下文注入 + 工具描述增强 + PII 输入脱敏 |
+| v2.3 | 2026-07-06 | P2 subprocess 沙箱简化：seccomp-notify + Landlock 改为 Landlock + drop caps。删除 seccomp-notify supervisor（消除 TOCTOU/SPOF 风险），SSRF 防护由 HTTP 层 URL 校验 + NetworkPolicy 承担 |
+| v2.4 | 2026-07-06 | 路线图修订：1) P0 新增 Runtime License + Prompt Gateway + 宪法 v1 2) P0 快速通道/Falco 插件/审计大盘移至 P1 3) P1 新增记忆管控 4) P2 新增 TEE 硬件安全根 5) P2 合并重复任务 6) macOS 降级说明改为不做沙箱 |
+| v2.5 | 2026-07-06 | 新增 §9.4 与 VirbiusLLM 的复用关系：文件级复用策略，直接复用 35 个文件，需扩展 6 个，需新建 13 个组件 |
