@@ -84,4 +84,29 @@ function _M.match(redis_key, tenant_id, list_name, lookup_value)
     return hit
 end
 
+function _M.get_cumulative(key)
+    local redis = require("resty.redis")
+    local red = redis:new()
+    red:set_timeout(REDIS_TIMEOUT)
+    local redis_url = os.getenv("VIRBIUS_REDIS_URL") or "127.0.0.1:6379"
+    local host, port = redis_url:match("^redis://([^:/]+):?(%d*)")
+    if not host then
+        host, port = redis_url:match("^([^:/]+):?(%d*)")
+    end
+    host = host or "127.0.0.1"
+    port = tonumber(port) or 6379
+    local ok, err = red:connect(host, port)
+    if not ok then
+        ngx.log(ngx.ERR, "redis connection failed: ", err)
+        return nil
+    end
+    local count, rerr = red:get(key)
+    red:set_keepalive(10000, 100)
+    if rerr then
+        ngx.log(ngx.ERR, "redis get failed: ", rerr)
+        return nil
+    end
+    return tonumber(count) or 0
+end
+
 return _M

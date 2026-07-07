@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     sync::{OnceLock, RwLock},
@@ -94,6 +94,30 @@ fn default_session_key() -> String {
     "device_id".into()
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolPolicy {
+    pub tool_name: String,
+    #[serde(default)]
+    pub allowed_args_schema: Option<serde_json::Value>,
+    #[serde(default)]
+    pub fast_path: bool,
+    #[serde(default)]
+    pub sandbox_type: String,
+    #[serde(default)]
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LandlockProfile {
+    pub tool_name: String,
+    #[serde(default)]
+    pub read_paths: Vec<String>,
+    #[serde(default)]
+    pub write_paths: Vec<String>,
+    #[serde(default)]
+    pub exec_paths: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct EdgeManifestFile {
     #[serde(default)]
@@ -106,6 +130,10 @@ struct EdgeManifestFile {
     dlp_rules: Vec<DlpRule>,
     #[serde(default)]
     sdk_config: SdkConfig,
+    #[serde(default)]
+    tool_policies: Vec<ToolPolicy>,
+    #[serde(default)]
+    landlock_profiles: Vec<LandlockProfile>,
 }
 
 #[derive(Debug, Clone)]
@@ -115,6 +143,8 @@ pub struct EdgeManifest {
     pub rules: Vec<EdgeRule>,
     pub dlp_rules: Vec<DlpRule>,
     pub sdk_config: SdkConfig,
+    pub tool_policies: Vec<ToolPolicy>,
+    pub landlock_profiles: Vec<LandlockProfile>,
 }
 
 static MANIFEST: OnceLock<RwLock<EdgeManifest>> = OnceLock::new();
@@ -127,6 +157,8 @@ fn manifest_lock() -> &'static RwLock<EdgeManifest> {
             rules: Vec::new(),
             dlp_rules: Vec::new(),
             sdk_config: SdkConfig::default(),
+            tool_policies: Vec::new(),
+            landlock_profiles: Vec::new(),
         })
     })
 }
@@ -161,6 +193,8 @@ fn read_manifest() -> EdgeManifest {
                 rules,
                 dlp_rules,
                 sdk_config: parsed.sdk_config,
+                tool_policies: parsed.tool_policies,
+                landlock_profiles: parsed.landlock_profiles,
             };
         }
         eprintln!(
@@ -179,6 +213,8 @@ fn read_manifest() -> EdgeManifest {
         rules: Vec::new(),
         dlp_rules: Vec::new(),
         sdk_config: SdkConfig::default(),
+        tool_policies: Vec::new(),
+        landlock_profiles: Vec::new(),
     }
 }
 
@@ -226,4 +262,8 @@ pub fn tenant_id() -> String {
 #[allow(dead_code)]
 pub fn app_id() -> String {
     load().app_id
+}
+
+pub fn tool_policy(name: &str) -> Option<ToolPolicy> {
+    load().tool_policies.into_iter().find(|t| t.tool_name == name)
 }

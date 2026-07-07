@@ -24,6 +24,7 @@ local context_vars = require("context_vars")
 local scene_registry = require("scene_registry")
 local access_lists = require("access_lists")
 local config_redis = require("config_redis")
+local list_redis = require("list_redis")
 local http = require("resty.http")
 
 local function get_header(name)
@@ -239,6 +240,128 @@ if out and out.effective_action == "captcha" then
         effective_action = "captcha",
         max_risk_score = out.max_risk_score,
     })
+end
+
+-- === Agent Tool Pre-check ===
+-- If the request is a tool call (POST to /mcp/{app_id}/tools/call or /tools/call),
+-- perform pre-check before proxying.
+
+local function is_tool_call_request()
+    local method = ngx.req.get_method()
+    local uri = ngx.var.uri
+    if method ~= "POST" then
+        return false
+    end
+    if uri:match("/tools/call$") then
+        return true
+    end
+    return false
+end
+
+local function read_tool_call_body()
+    ngx.req.read_body()
+    local body = ngx.req.get_body_data()
+    if not body or body == "" then
+        return nil
+    end
+    local ok, data = pcall(json_util.decode, body)
+    if not ok or not data then
+        return nil
+    end
+    return data
+end
+
+if is_tool_call_request() then
+    local tool_data = read_tool_call_body()
+    if tool_data then
+        local tool_name = tool_data.tool_name or tool_data.name
+        local args = tool_data.args or tool_data.parameters or {}
+        local agent_app_id = conf.tenant_id .. ":" .. (tool_data.app_id or ngx.var.app_id or "default")
+
+        -- 1. Tool allowlist check (reuse access_lists module)
+        local tool_allowlist_check = access_lists.match(lists_source, "tool-allowlist", tool_name)
+        if tool_allowlist_check == false then
+            return json_exit(403, {
+                code = "TOOL_NOT_ALLOWED",
+                message = "tool '" .. tostring(tool_name) .. "' is not in allowlist",
+                trace_id = trace_id,
+                tool_name = tool_name,
+            })
+        end
+
+        -- 2. Tool rate counter (reuse list_redis module)
+        local session_tool_key = "tool:" .. tostring(tool_name) .. "-session:" .. tostring(session_id)
+        local count = list_redis.get_cumulative(session_tool_key)
+        local rate_limit = conf.tool_rate_limit or 50
+        if count and count >= rate_limit then
+            return json_exit(429, {
+                code = "TOOL_RATE_EXCEEDED",
+                message = "tool '" .. tostring(tool_name) .. "' rate limit exceeded (" .. rate_limit .. "/min)",
+                trace_id = trace_id,
+                tool_name = tool_name,
+            })
+        end
+
+        -- 3. Fast path: skip engine call for low-risk tools with low session risk
+        local fast_path_tools = conf.fast_path_tools or {}
+        local session_risk = list_redis.get_cumulative("risk:session:" .. tostring(session_id)) or 0
+        local is_fast_path = false
+        for _, ft in ipairs(fast_path_tools) do
+            if ft == tool_name then
+                is_fast_path = true
+                break
+            end
+        end
+
+        if not is_fast_path or tonumber(session_risk) >= 30 then
+            -- 4. Call virbius-engine for final evaluation
+            local engine_url = conf.engine_url or "http://127.0.0.1:8082"
+            local engine_timeout = conf.engine_timeout_ms or 3000
+
+            local httpc = http.new()
+            httpc:set_timeout(engine_timeout)
+
+            local engine_payload = json_util.encode({
+                trace_id = trace_id,
+                session_id = session_id,
+                tool_name = tool_name,
+                args = args,
+                app_id = agent_app_id,
+                tenant_id = conf.tenant_id or "default",
+                scene = scene_id or conf.scene,
+                user_id = user_id,
+                device_id = device_id,
+            })
+
+            local res, err = httpc:request_uri(engine_url .. "/v1/evaluate", {
+                method = "POST",
+                body = engine_payload,
+                headers = { ["Content-Type"] = "application/json" },
+            })
+
+            if res then
+                local out = json_util.decode(res.body)
+                if out and out.effective_action == "block" then
+                    return json_exit(403, {
+                        code = "TOOL_BLOCKED",
+                        message = "tool call blocked by virbius policy",
+                        trace_id = trace_id,
+                        tool_name = tool_name,
+                        reason_code = out.reason_code,
+                        rule_id = out.rule_id,
+                        effective_action = "block",
+                        max_risk_score = out.max_risk_score,
+                    })
+                end
+            else
+                ngx.log(ngx.ERR, "virbius gateway engine error: ", err)
+                if conf.fail_mode == "close" then
+                    return json_exit(503, { code = "ENGINE_UNAVAILABLE", message = "policy engine unavailable", trace_id = trace_id })
+                end
+                ngx.log(ngx.WARN, "virbius gateway fail_open for tool call: ", tool_name)
+            end
+        end
+    end
 end
 
 ngx.req.set_header("X-Virbius-Trace-Id", trace_id)

@@ -1,5 +1,6 @@
 package io.virbius.groovy.l3;
 
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
@@ -21,6 +22,11 @@ public final class PolicyContext {
     private final Map<String, String> vars;
     private final ScriptEnvironment scriptEnv;
 
+    // === Agent Session API fields ===
+    private final List<Map<String, Object>> sessionHistory;
+    private final int currentRiskScore;
+    private final Map<String, Long> toolCounts;
+
     public PolicyContext(
             String tenantId,
             String sessionId,
@@ -28,7 +34,7 @@ public final class PolicyContext {
             String currentRuleId,
             Map<String, L3RuleView> rulesById,
             List<L3SignalView> signals) {
-        this(tenantId, sessionId, scene, currentRuleId, rulesById, signals, Map.of(), null);
+        this(tenantId, sessionId, scene, currentRuleId, rulesById, signals, Map.of(), null, List.of(), 0, Map.of());
     }
 
     public PolicyContext(
@@ -39,7 +45,7 @@ public final class PolicyContext {
             Map<String, L3RuleView> rulesById,
             List<L3SignalView> signals,
             Map<String, String> vars) {
-        this(tenantId, sessionId, scene, currentRuleId, rulesById, signals, vars, null);
+        this(tenantId, sessionId, scene, currentRuleId, rulesById, signals, vars, null, List.of(), 0, Map.of());
     }
 
     public PolicyContext(
@@ -51,6 +57,21 @@ public final class PolicyContext {
             List<L3SignalView> signals,
             Map<String, String> vars,
             ScriptEnvironment scriptEnv) {
+        this(tenantId, sessionId, scene, currentRuleId, rulesById, signals, vars, scriptEnv, List.of(), 0, Map.of());
+    }
+
+    public PolicyContext(
+            String tenantId,
+            String sessionId,
+            String scene,
+            String currentRuleId,
+            Map<String, L3RuleView> rulesById,
+            List<L3SignalView> signals,
+            Map<String, String> vars,
+            ScriptEnvironment scriptEnv,
+            List<Map<String, Object>> sessionHistory,
+            int currentRiskScore,
+            Map<String, Long> toolCounts) {
         this.tenantId = tenantId != null ? tenantId : "";
         this.sessionId = sessionId != null ? sessionId : "";
         this.scene = scene != null ? scene : "";
@@ -59,6 +80,9 @@ public final class PolicyContext {
         this.signals = signals != null ? List.copyOf(signals) : List.of();
         this.vars = vars != null ? Map.copyOf(vars) : Map.of();
         this.scriptEnv = scriptEnv;
+        this.sessionHistory = sessionHistory != null ? List.copyOf(sessionHistory) : List.of();
+        this.currentRiskScore = currentRiskScore;
+        this.toolCounts = toolCounts != null ? Map.copyOf(toolCounts) : Map.of();
     }
 
     public String tenantId() {
@@ -149,5 +173,45 @@ public final class PolicyContext {
             return 0;
         }
         return scriptEnv.getCumulative(cumulativeName);
+    }
+
+    // ========== Agent Session API ==========
+
+    /**
+     * Get last N tool calls in this session.
+     * Data is pre-loaded from Redis at evaluate time.
+     */
+    public List<Map<String, Object>> sessionHistory(int n) {
+        if (sessionHistory == null || sessionHistory.isEmpty()) {
+            return List.of();
+        }
+        return sessionHistory.stream().limit(n).toList();
+    }
+
+    /** Get current session risk score (0-100). Pre-loaded from Redis. */
+    public int sessionRiskScore() {
+        return currentRiskScore;
+    }
+
+    /** Get count of calls for a specific tool in this session. */
+    public long toolCallCount(String toolName) {
+        if (toolCounts == null) return 0;
+        return toolCounts.getOrDefault(toolName, 0L);
+    }
+
+    /** Check if URL points to internal network. Uses CIDR/domain list from session context. */
+    public boolean isInternalHost(String url) {
+        if (url == null || url.isBlank()) return false;
+        try {
+            URI uri = new URI(url);
+            String host = uri.getHost();
+            if (host == null) return false;
+            if (host.endsWith(".internal") || host.endsWith(".local") || host.endsWith(".svc.cluster.local")) return true;
+            if (host.startsWith("10.") || host.startsWith("172.") || host.startsWith("192.168.")) return true;
+            if (host.equals("localhost") || host.equals("127.0.0.1")) return true;
+            return false;
+        } catch (Exception e) {
+            return false;
+        }
     }
 }

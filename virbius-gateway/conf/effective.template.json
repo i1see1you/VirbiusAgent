@@ -1,0 +1,17 @@
+{
+  "virbius": {
+    "tenant_id": "${TENANT_ID}",
+    "scene": "default",
+    "evaluate": true,
+    "auth_mode": "optional",
+    "fail_mode": "open",
+    "agent_url": "http://localhost:8082",
+    "engine_url": "http://localhost:8082",
+    "timeout_ms": 3000,
+    "engine_timeout_ms": 3000,
+    "tool_rate_limit": 50,
+    "fast_path_tools": ["search", "calculator"],
+    "lists_file": "/etc/virbius-gateway/access-lists.json",
+    "scene_registry_file": "/etc/virbius-gateway/scene-registry.json"
+  }
+}

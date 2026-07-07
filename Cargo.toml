@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "virbius-core",
+    "virbius-mcp-python",
+    "virbius-mcp-node",
+    "virbius-mcp-proxy",
+    "virbius-kernel",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"

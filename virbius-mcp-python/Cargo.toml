@@ -1,0 +1,14 @@
+[package]
+name = "virbius-mcp-python"
+version.workspace = true
+edition.workspace = true
+description = "VirbiusAgent Python MCP bindings via PyO3"
+
+[lib]
+name = "virbius_mcp_python"
+crate-type = ["cdylib"]
+
+[dependencies]
+virbius-core = { path = "../virbius-core" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+serde_json = "1"

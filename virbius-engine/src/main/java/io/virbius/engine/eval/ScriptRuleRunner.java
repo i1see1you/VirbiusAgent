@@ -42,6 +42,7 @@ public class ScriptRuleRunner {
     private final Optional<GatewayListRedisMatcher> listRedisMatcher;
     private final TenantAwareTaskExecutor tenantTaskExecutor;
     private final AsyncActionHandler asyncActionHandler;
+    private final SessionStatePreloader sessionStatePreloader;
     private final ObjectMapper mapper = new ObjectMapper();
 
     public ScriptRuleRunner(
@@ -58,6 +59,7 @@ public class ScriptRuleRunner {
         this.listRedisMatcher = listRedisMatcher;
         this.tenantTaskExecutor = tenantTaskExecutor;
         this.asyncActionHandler = asyncActionHandler;
+        this.sessionStatePreloader = jedisPool.map(pool -> new SessionStatePreloader(pool, mapper)).orElse(null);
     }
 
     @PostConstruct
@@ -83,6 +85,9 @@ public class ScriptRuleRunner {
         PolicyDataCache.TenantPolicyData data = policyData.get(tenantId);
         ScriptEnvironment scriptEnv = buildScriptEnv(tenantId, matchCtx, data);
 
+        // Pre-load session data once for all rules in this evaluation
+        Map<String, Object> sessionData = preloadSession(matchCtx.sessionId());
+
         for (RuleEntry rule : cache.rulesForTenant(tenantId)) {
             if (!"groovy".equals(rule.runtime()) || !"cloud".equals(rule.layer())) {
                 continue;
@@ -96,13 +101,13 @@ public class ScriptRuleRunner {
             String rolloutState = rule.rolloutStateOrDefault();
             if (rule.isAsync()) {
                 tenantTaskExecutor.submit(tenantId, () ->
-                        evaluateAsync(rule, tenantId, matchCtx, priorSignals, scriptEnv));
+                        evaluateAsync(rule, tenantId, matchCtx, priorSignals, scriptEnv, sessionData));
             } else if ("dry_run".equalsIgnoreCase(rolloutState)) {
                 tenantTaskExecutor.submit(tenantId, () ->
-                        evaluateDryRun(rule, tenantId, matchCtx, priorSignals, scriptEnv));
+                        evaluateDryRun(rule, tenantId, matchCtx, priorSignals, scriptEnv, sessionData));
             } else {
                 try {
-                    PolicyContext ctx = buildContext(tenantId, matchCtx, rule, priorSignals, syncSignals, scriptEnv);
+                    PolicyContext ctx = buildContext(tenantId, matchCtx, rule, priorSignals, syncSignals, scriptEnv, sessionData);
                     boolean hit = executor.executeDecide(bodyText(rule.body()), ctx);
                     if (hit) {
                         syncSignals.add(toSignal(rule));
@@ -115,10 +120,19 @@ public class ScriptRuleRunner {
         return syncSignals;
     }
 
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> preloadSession(String sessionId) {
+        if (sessionStatePreloader == null || sessionId == null || sessionId.isBlank()) {
+            return Map.of("history", List.of(), "riskScore", 0, "toolCounts", Map.of());
+        }
+        return sessionStatePreloader.preload(sessionId);
+    }
+
     private void evaluateAsync(RuleEntry rule, String tenantId, MatchContext matchCtx,
-                                List<SignalDto> priorSignals, ScriptEnvironment scriptEnv) {
+                                List<SignalDto> priorSignals, ScriptEnvironment scriptEnv,
+                                Map<String, Object> sessionData) {
         try {
-            PolicyContext ctx = buildContext(tenantId, matchCtx, rule, priorSignals, List.of(), scriptEnv);
+            PolicyContext ctx = buildContext(tenantId, matchCtx, rule, priorSignals, List.of(), scriptEnv, sessionData);
             boolean hit = executor.executeDecide(bodyText(rule.body()), ctx);
             if (hit) {
                 SignalDto signal = toSignal(rule);
@@ -131,9 +145,10 @@ public class ScriptRuleRunner {
     }
 
     private void evaluateDryRun(RuleEntry rule, String tenantId, MatchContext matchCtx,
-                                 List<SignalDto> priorSignals, ScriptEnvironment scriptEnv) {
+                                 List<SignalDto> priorSignals, ScriptEnvironment scriptEnv,
+                                 Map<String, Object> sessionData) {
         try {
-            PolicyContext ctx = buildContext(tenantId, matchCtx, rule, priorSignals, List.of(), scriptEnv);
+            PolicyContext ctx = buildContext(tenantId, matchCtx, rule, priorSignals, List.of(), scriptEnv, sessionData);
             boolean hit = executor.executeDecide(bodyText(rule.body()), ctx);
             if (hit) {
                 log.info("dry_run rule hit tenant={} rule={} revision={} riskScore={}",
@@ -163,13 +178,15 @@ public class ScriptRuleRunner {
                 redisReader);
     }
 
+    @SuppressWarnings("unchecked")
     private PolicyContext buildContext(
             String tenantId,
             MatchContext matchCtx,
             RuleEntry current,
             List<SignalDto> priorSignals,
             List<SignalDto> newSignals,
-            ScriptEnvironment scriptEnv) {
+            ScriptEnvironment scriptEnv,
+            Map<String, Object> sessionData) {
         Map<String, L3RuleView> rules = new HashMap<>();
         for (RuleEntry e : cache.rulesForTenant(tenantId)) {
             if (!"groovy".equals(e.runtime())) {
@@ -190,6 +207,17 @@ public class ScriptRuleRunner {
         }
         all.addAll(newSignals.stream().map(this::toL3Signal).toList());
         Map<String, String> vars = matchCtx.varsOrEmpty();
+
+        List<Map<String, Object>> history = sessionData != null
+                ? (List<Map<String, Object>>) sessionData.getOrDefault("history", List.of())
+                : List.of();
+        int riskScore = sessionData != null
+                ? (int) sessionData.getOrDefault("riskScore", 0)
+                : 0;
+        Map<String, Long> toolCounts = sessionData != null
+                ? (Map<String, Long>) sessionData.getOrDefault("toolCounts", Map.of())
+                : Map.of();
+
         return new PolicyContext(
                 tenantId,
                 matchCtx.sessionId(),
@@ -198,7 +226,10 @@ public class ScriptRuleRunner {
                 rules,
                 all,
                 vars,
-                scriptEnv);
+                scriptEnv,
+                history,
+                riskScore,
+                toolCounts);
     }
 
     private L3SignalView toL3Signal(SignalDto s) {

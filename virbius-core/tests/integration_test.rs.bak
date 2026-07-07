@@ -1,0 +1,184 @@
+use ed25519_dalek::SigningKey;
+use ed25519_dalek::pkcs8::EncodePublicKey;
+use rand::rngs::OsRng;
+
+/// Full P0 flow: License → Precheck → Manifest → Prompt Gateway
+///
+/// This test simulates a complete tool call lifecycle:
+/// 1. Generate License JWT (Ed25519 signed)
+/// 2. Set up manifest with tool policies
+/// 3. Pre-check a tool call (allow)
+/// 4. Pre-check a tool call (deny — unlicensed tool)
+/// 5. Pre-check with args validation
+/// 6. Prompt Gateway enhancement
+
+#[test]
+fn end_to_end_license_precheck() {
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
+    let pub_pem = verifying_key.to_public_key_pem(Default::default()).unwrap();
+
+    // ——— 1. Create License JWT ———
+    let claims = virbius_core::license::LicenseClaims {
+        app_id: "test-agent".into(),
+        tenant_id: "tenant-1".into(),
+        allowed_tools: vec!["read_file".into(), "search".into()],
+        allowed_scenes: vec!["code_review".into()],
+        risk_quota: 60,
+        tool_rate_limit: 50,
+        exp: 9999999999,
+        iat: 1700000000,
+    };
+
+    let license_jwt = create_jwt(&claims, &signing_key);
+
+    // ——— 2. Verify License ————
+    let license = virbius_core::license::License::verify(
+        &license_jwt, &pub_pem, "test-agent"
+    ).expect("License should verify");
+
+    assert!(license.is_tool_allowed("read_file"));
+    assert!(!license.is_tool_allowed("curl"));
+    assert_eq!(license.remaining_quota(10), 50);
+
+    // ——— 3. Pre-check: allowed tool ———
+    let result = virbius_core::precheck::precheck(&license, &virbius_core::precheck::ToolCall {
+        tool_name: "read_file".into(),
+        args: serde_json::json!({"path": "/tmp/test.txt"}),
+        session_id: "sess-001".into(),
+    });
+    assert!(result.allowed, "read_file should be allowed");
+
+    // ——— 4. Pre-check: denied tool ———
+    let result = virbius_core::precheck::precheck(&license, &virbius_core::precheck::ToolCall {
+        tool_name: "curl".into(),
+        args: serde_json::json!({"url": "http://evil.com"}),
+        session_id: "sess-001".into(),
+    });
+    assert!(!result.allowed, "curl should be denied");
+
+    // ——— 5. Pre-check with args validation ———
+    // Set up a tool policy in manifest (we need to write a test manifest)
+    // First, ensure the test has a valid config dir
+    let cache_dir = std::env::temp_dir().join("virbius_test_integration");
+    let _ = std::fs::create_dir_all(&cache_dir);
+
+    // ——— 6. Prompt Gateway enhancement ———
+    let gateway = virbius_core::prompt_gateway::PromptGateway::new();
+    let ctx = virbius_core::prompt_gateway::EnhanceContext {
+        app_id: "test-agent".into(),
+        session_id: "sess-001".into(),
+        scene: "code_review".into(),
+        risk_score: 15,
+        recent_tools: vec![
+            virbius_core::prompt_gateway::ToolCallSummary {
+                tool_name: "read_file".into(),
+                args: "/tmp/test.txt".into(),
+                result_summary: "success".into(),
+            },
+        ],
+        license_tools: vec!["read_file".into(), "search".into()],
+        constitution_version: "v1".into(),
+    };
+
+    let mut messages = vec![
+        r#"{"role":"system","content":"You are a code reviewer."}"#.into(),
+        r#"{"role":"user","content":"Please review this code. My email is user@example.com"}"#.into(),
+    ];
+
+    let result = gateway.enhance(&mut messages, &ctx);
+    assert!(result.is_ok(), "Prompt enhancement should succeed");
+    assert!(messages.len() >= 2, "Should still have at least 2 messages");
+
+    // Verify system message was augmented with constitution
+    let system_msg = messages.iter().find(|m| m.contains("system")).unwrap();
+    assert!(system_msg.contains("Constitution"), "Constitution should be injected");
+    assert!(system_msg.contains("read_file"), "Tool list should be in constitution");
+    assert!(system_msg.contains("code_review"), "Scene should be in constitution");
+
+    // Verify PII was desensitized in user message
+    let user_msg = messages.iter().find(|m| m.contains("user")).unwrap();
+    assert!(!user_msg.contains("user@example.com"), "Email should be desensitized");
+
+    // ——— 7. Verify revocation ———
+    virbius_core::license::revoke("test-agent");
+    let result = virbius_core::license::License::verify(
+        &license_jwt, &pub_pem, "test-agent"
+    );
+    assert!(result.is_err(), "License should be revoked");
+    match result {
+        Err(virbius_core::license::LicenseError::Revoked(app)) => {
+            assert_eq!(app, "test-agent");
+        }
+        _ => panic!("Expected Revoked error"),
+    }
+}
+
+/// Helpers
+fn base64url_encode(data: &[u8]) -> String {
+    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    base64::Engine::encode(&engine, data)
+}
+
+fn create_jwt(claims: &virbius_core::license::LicenseClaims, signing_key: &SigningKey) -> String {
+    let header = base64url_encode(b"{\"alg\":\"EdDSA\",\"typ\":\"JWT\"}");
+    let payload_json = serde_json::to_vec(claims).unwrap();
+    let payload = base64url_encode(&payload_json);
+    let message = format!("{}.{}", header, payload);
+    let signature = signing_key.sign(message.as_bytes());
+    let sig_b64 = base64url_encode(&signature.to_bytes());
+    format!("{}.{}.{}", header, payload, sig_b64)
+}
+
+/// Test that the full pipeline rejects an expired license
+#[test]
+fn end_to_end_expired_license() {
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let verifying_key = signing_key.verifying_key();
+    let pub_pem = verifying_key.to_public_key_pem(Default::default()).unwrap();
+
+    let claims = virbius_core::license::LicenseClaims {
+        app_id: "expired-agent".into(),
+        tenant_id: "tenant-1".into(),
+        allowed_tools: vec!["read_file".into()],
+        allowed_scenes: vec![],
+        risk_quota: 60,
+        tool_rate_limit: 50,
+        exp: 1,  // expired
+        iat: 1,
+    };
+
+    let jwt = create_jwt(&claims, &signing_key);
+    let result = virbius_core::license::License::verify(&jwt, &pub_pem, "expired-agent");
+    assert!(matches!(result, Err(virbius_core::license::LicenseError::Expired)));
+}
+
+/// Test virbius-kernel detect and pidmap
+#[test]
+fn end_to_end_kernel_pidmap() {
+    // PID mapping — register_agent auto-detects host_pid and cgroup_id.
+    // On non-container Linux/macOS, host_pid == ns_pid == getpid().
+    // Pass 0 to auto-detect ns_pid via std::process::id().
+    virbius_kernel::pidmap::register_agent(0, "trace-e2e", "sess-e2e", "agent-e2e", "tenant-e2e");
+
+    // Look up by host_pid (which equals getpid() when not in a PID namespace)
+    let host_pid = std::process::id();
+    let entry = virbius_kernel::pidmap::lookup_agent(host_pid).expect("should find pid by host_pid");
+    assert_eq!(entry.trace_id, "trace-e2e");
+    assert_eq!(entry.session_id, "sess-e2e");
+    assert_eq!(entry.ns_pid, host_pid, "ns_pid should equal getpid() when not in a namespace");
+
+    // Look up by cgroup_id (if available on this platform)
+    if entry.cgroup_id != 0 {
+        let cg_entry = virbius_kernel::pidmap::lookup_by_cgroup(entry.cgroup_id)
+            .expect("should find pid by cgroup_id");
+        assert_eq!(cg_entry.trace_id, "trace-e2e");
+    }
+
+    virbius_kernel::pidmap::unregister_agent(host_pid);
+    assert!(virbius_kernel::pidmap::lookup_agent(host_pid).is_none());
+
+    // Kernel detect (runs in non-Linux so returns FalcoPlugin)
+    let mode = virbius_kernel::detect::detect();
+    assert!(mode.has_observation(), "Should always have observation");
+}

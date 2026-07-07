@@ -3,7 +3,8 @@ package io.virbius.control.domain.enums;
 public enum RuleLayer {
     EDGE("edge"),
     GATEWAY("gateway"),
-    CLOUD("cloud");
+    CLOUD("cloud"),
+    AGENT("agent");
 
     private final String value;
 

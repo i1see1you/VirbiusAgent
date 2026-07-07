@@ -6,7 +6,7 @@
 
 mod api;
 mod audit;
-mod bootstrap;
+pub mod bootstrap;
 mod dlp;
 mod enforce;
 mod engine;
@@ -16,8 +16,9 @@ mod runtime;
 mod sync;
 mod trace;
 mod upload;
-mod license;
-mod prompt_gateway;
+pub mod license;
+pub mod precheck;
+pub mod prompt_gateway;
 #[cfg(target_os = "linux")]
 mod sandbox;
 
@@ -25,6 +26,9 @@ pub use api::{
     DesensitizeInResult, DesensitizeOutResult, DlpHit, EffectiveAction, RuleHit, ScanContext,
     ScanOutcome, TraceIdSource, VirbiusEdge, VirbiusError,
 };
+pub use license::{License, LicenseClaims, LicenseError};
+pub use manifest::ToolPolicy;
+pub use precheck::{precheck, PrecheckResult, ToolCall};
 pub use sync::EdgeInitConfig;
 
 use std::ffi::{CStr, CString};

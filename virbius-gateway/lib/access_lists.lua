@@ -417,6 +417,33 @@ local function collect_named_list_hits(lists, content, user_id, device_id, clien
     return hits
 end
 
+function _M.match(lists_source, list_name, value)
+    if not value or value == "" then
+        return false
+    end
+    local lists
+    if type(lists_source) == "table" then
+        lists = lists_source
+    else
+        lists = file_cache.load_json(lists_source, "access_lists:" .. lists_source)
+    end
+    if not lists then
+        return false
+    end
+    local blocks = memory_list_blocks(lists)
+    for _, block in ipairs(blocks) do
+        if block.list_name == list_name then
+            local entries = active_values(block.entries)
+            for _, entry in ipairs(entries) do
+                if entry == value then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
 function _M.check(lists_source, get_header, content, user_id, device_id, client_ip)
     local lists
     if type(lists_source) == "table" then

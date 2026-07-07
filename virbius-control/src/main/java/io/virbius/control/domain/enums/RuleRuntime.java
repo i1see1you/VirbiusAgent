@@ -5,7 +5,8 @@ public enum RuleRuntime {
     DLP_DSL("dlp-dsl"),
     LUA("lua"),
     PROMPT("prompt"),
-    GROOVY("groovy");
+    GROOVY("groovy"),
+    AGENT_GROOVY("agent-groovy");
 
     private final String value;
 

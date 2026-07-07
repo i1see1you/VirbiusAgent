@@ -1,8 +1,8 @@
 [package]
 name = "virbius-core"
-version = "0.1.0"
-edition = "2021"
-license = "MIT"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "VirbiusAgent edge SDK: DLP, precheck, sandbox, Prompt Gateway, License"
 
 [lib]
@@ -20,6 +20,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 ureq = { version = "2", default-features = false, features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
 thiserror = "1"
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core", "zeroize"] }
 
 [dev-dependencies]
 tempfile = "3"

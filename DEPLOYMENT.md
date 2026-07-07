@@ -1,0 +1,385 @@
+# VirbiusAgent 部署视图 — DEPLOYMENT
+
+| 项目 | 说明 |
+|------|------|
+| 文档版本 | v3.2 |
+| 状态 | 草案 |
+| 关联 | [DESIGN.md](DESIGN.md)（索引） · [ARCHITECTURE.md](ARCHITECTURE.md) |
+
+> 本文件包含 §8 部署视图（组件端口 + 部署拓扑 + 接入方式对比 + 四层全覆盖组合部署）。
+
+---
+
+## 8. 部署视图
+
+### 8.1 组件端口
+
+| 组件 | 端口 | 部署位置 | 流量方向 |
+|------|------|---------|---------|
+| **Agent 应用** | 动态 | 用户侧 / Serverless 容器 | — |
+| **MCP Proxy** (端层 Sidecar) | localhost:9090 | 与 Agent 同 Pod / 同主机 | 东西向 |
+| **virbius-core** (端层嵌入) | 嵌入 MCP Server 进程 | 与 MCP Server 同进程 | 东西向 |
+| **Higress** (管层 Ingress) | 80/443 | 独立部署 / K8s | 南北向（入站） |
+| **Higress** (管层 Egress) | 8081 | 独立部署 / K8s | 南北向（出站） |
+| **MCP Server** (Python/Node) | 8080+ | 独立部署 / K8s | — |
+| **virbius-engine** | 8082 | 云侧 | — |
+| **virbius-control** | 8080 | 云侧 | — |
+| **Falco** (核层观测) | 无（DaemonSet） | Agent 所在宿主机 | 旁路 |
+| **virbius-kernel-daemon** | 9090 | Agent 所在宿主机 | 旁路 |
+| **Redis** | 6379 | 云侧 | — |
+| **Database** | — | 云侧 | — |
+
+> **删除原设计的 AgentGateway (9080)**：MCP 路由由 Higress 承担。
+> **删除原设计的 virbius-gateway-agent (9070)**：安全预检由 Higress WASM 插件承担。
+
+### 8.2 部署拓扑
+
+**模式 A：Sidecar 部署（K8s Pod 内，东西向为主）**
+
+```
+┌─── K8s Pod ──────────────────────────────────────────────┐
+|                                                          |
+|  ┌──────────────┐         ┌──────────────────────────┐   |
+|  | Agent        |  MCP    | MCP Proxy (端层)         |   |
+|  |              |──JSON-RPC──> localhost:9090        |   |
+|  |              |  stdio  | +-- License 校验          |   |
+|  |              | /SSE    | +-- 预检 + engine 终判     |   |
+|  |              |         | +-- curl 代发 (Egress)    |   |
+|  └──────────────┘         └─────────────┬────────────┘   |
+|  东西向（不经管层）                      |               |
+└──────────────────────────────────────────┼───────────────┘
+                                           | 南北向
+                                           v
+┌───────────────────────────────────────────────────────────┐
+|  MCP Server (Python/Node) (:8080+)                        |
+|  +-- 接收 tools/call，执行工具逻辑                          |
+|  +-- virbius-core (端层嵌入: 预检 + P0 同进程执行)           |
+|  +-- P2: Landlock + drop caps 沙箱                        |
+└───────────────────────────────────────────────────────────┘
+
+┌─── 宿主机 ────────────────────────────────────────────────┐
+|  Falco DaemonSet (核层旁路)                                |
+|  +-- eBPF 驱动 / plugin 模式                               |
+|  +-- 事件 -> Redis Audit Stream                           |
+└───────────────────────────────────────────────────────────┘
+
+┌─── 云侧 ──────────────────────────────────────────────────┐
+|  +-- virbius-engine (:8082) — Groovy L3 终判               |
+|  +-- virbius-control (:8080) — 规则管理 + 发布              |
+|  +-- Redis (:6379) — session 状态 + 审计流                 |
+|  +-- Database — 规则持久化                                  |
+└───────────────────────────────────────────────────────────┘
+```
+
+> Sidecar 模式下 MCP 工具调用走 localhost（东西向），不经管层 Higress。
+> 外部 HTTP 请求（curl）由 Proxy 代发，在应用层校验 URL 白名单（[§3.5](ARCHITECTURE.md)）。
+
+**模式 B：远程部署（南北向，管层 Ingress）**
+
+```
+远程 Agent Client
+  | MCP / JSON-RPC over HTTPS (南北向)
+  v
++----------------------------------------------------------+
+|  Higress (:443) — 管层 Ingress Gateway                 |
+|  +-- TLS 终止                                             |
+|  +-- 限流 / 长连接 / SSE 转发                              |
+|  +-- virbius-gateway Lua 插件 (安全预检)                   |
+|  +-- Higress MCP route -> MCP Server 路由                    |
++----------------------------------------------------------+
+  | allow -> 转发；block -> 403
+  v
++----------------------------------------------------------+
+|  MCP Server (Python/Node) (:8080+)                       |
+|  +-- virbius-core (端层预检 + P0 同进程执行)               |
+|  +-- P2: Landlock + drop caps 沙箱                        |
++----------------------------------------------------------+
+
+┌─── 宿主机 ────────────────────────────────────────────────┐
+|  Falco DaemonSet (核层旁路)                                |
+|  +-- eBPF 驱动 / plugin 模式                               |
+|  +-- 事件 -> Redis Audit Stream                           |
+└───────────────────────────────────────────────────────────┘
+
+┌─── 云侧 ──────────────────────────────────────────────────┐
+|  +-- virbius-engine (:8082) — Groovy L3 终判               |
+|  +-- virbius-control (:8080) — 规则管理 + 发布              |
+|  +-- Redis (:6379) — session 状态 + 审计流                 |
+|  +-- Database — 规则持久化                                  |
+└───────────────────────────────────────────────────────────┘
+```
+
+> 远程模式下 Agent 的 MCP 调用和外部 HTTP 请求均经过管层（南北向）。
+> 管层 Higress 同时承担 Ingress（MCP 路由）和 Egress（外部 HTTP 代理）职责。
+
+**模式 C：SDK 嵌入（进程内，无独立代理）**
+
+```
+┌─── Agent 进程 ───────────────────────────────────────────┐
+│                                                           │
+│  Agent 业务代码                                           │
+│    │                                                      │
+│    │ 1. 发送 LLM 请求前                                    │
+│    │    prompt_gateway.enhance(&mut messages, &ctx)       │
+│    │    → 宪法约束注入 + PII 输入脱敏                       │
+│    │                                                      │
+│    │ 2. 工具调用前                                         │
+│    │    precheck(&license, &tool_call)                    │
+│    │    → allowlist + JSON Schema 校验 + fast_path        │
+│    │    → 未命中快速通道时调 engine 终判                    │
+│    │                                                      │
+│    │ 3. 工具返回后                                         │
+│    │    output_reviewer.review(&content, &ctx)            │
+│    │    → PII 输出脱敏 + 凭据泄露检测                       │
+│    v                                                      │
+│  virbius-core (Rust 库, 链接进 Agent 进程)                │
+│    +-- License::verify() (Ed25519 JWT)                    │
+│    +-- precheck() (allowlist + schema)                    │
+│    +-- PromptGateway::enhance() (宪法注入 + DLP)           │
+│    +-- DlpEngine (PII 脱敏, 进程内)                        │
+│    +-- P2: Landlock + drop caps (Agent 可直接沙箱)         │
+│                                                           │
+│  C ABI (virbius_init / virbius_scan / virbius_reload)     │
+│  → 可被 Python / Go / Java / Node.js 通过 FFI 调用         │
+└──────────────────────────────┬────────────────────────────┘
+                               │ HTTP (调 engine, 可选)
+                               v
+┌─── 云侧 ──────────────────────────────────────────────────┐
+│  +-- virbius-engine (:8082) — Groovy L3 终判               │
+│  +-- virbius-control (:8080) — 规则管理 + 发布              │
+│  +-- Redis (:6379) — session 状态 + 审计流                 │
+└───────────────────────────────────────────────────────────┘
+```
+
+> SDK 模式下安全预检在 Agent 进程内完成，无额外进程开销。
+> `virbius-core` 通过 Rust FFI 导出 C ABI（`virbius_init` / `virbius_scan` / `virbius_reload`），可被非 Rust 语言调用。
+> 缺少管层（无限流/TLS）和核层（无 Falco 观测），需在需要时与方式 1 或方式 7 组合使用。
+
+---
+
+### 8.3 接入方式对比
+
+#### 8.3.1 三种方式全景
+
+| 维度 | 方式 1：MCP Proxy (Sidecar) | 方式 7：Higress (远程) | 方式 3：SDK 嵌入 |
+|------|---------------------------|------------------------|----------------|
+| **部署形态** | Agent + Proxy 同 Pod，独立进程 | Agent 远程，Higress 集群内 | `virbius-core` 链接进 Agent 进程 |
+| **流量方向** | 东西向（localhost） | 南北向（HTTPS） | 无网络流量（进程内调用） |
+| **Agent 改造量** | **零代码**——改 MCP Server URL | **零代码**——改 MCP Server URL | **需改代码**——集成 SDK API |
+| **语言限制** | 无（任何 MCP Client） | 无（任何 HTTP Client） | Rust 原生 / 其他语言需 C ABI FFI |
+| **协议** | MCP (JSON-RPC 2.0) | HTTP/HTTPS | 函数调用（`precheck()` / `enhance()`） |
+
+#### 8.3.2 四层安全覆盖
+
+| 层级 | 方式 1 (MCP Proxy) | 方式 7 (Higress) | 方式 3 (SDK) |
+|------|:------------------:|:------------------:|:------------:|
+| **端层 (Edge)** | ✅ Proxy 内嵌完整管线 | ❌ 远程 Agent 无 `virbius-core` | ✅ 进程内直接调用 |
+| **管层 (Gateway)** | ❌ 东西向不经 Higress | ✅ Higress 拦截南北向 | ❌ 无网关 |
+| **核层 (Kernel)** | ✅ Falco DaemonSet 观测 | ❌ 远程 Agent 不在节点 | ❌ Agent 不在集群节点 |
+| **云层 (Cloud)** | ✅ engine 终判 | ✅ engine 终判 | ✅ engine 终判（可选跳过） |
+| **覆盖层数** | **3/4** | **2/4** | **2/4 + 端层深度** |
+| **缺失补偿** | NetworkPolicy + 端层内嵌限流 | HTTP 阻断 + risk 累积 | 无核层观测，无管层限流 |
+
+#### 8.3.3 安全能力对比
+
+| 安全能力 | 方式 1 (MCP Proxy) | 方式 7 (Higress) | 方式 3 (SDK) |
+|---------|:------------------:|:------------------:|:------------:|
+| **License 校验** | ✅ Proxy 内 `license::verify()` | ✅ Higress WASM 校验签名 | ✅ 进程内 `License::verify()` |
+| **工具白名单** | ✅ `precheck()` | ✅ WASM allowlist | ✅ `precheck()` |
+| **JSON Schema 校验** | ✅ `precheck::validate_args()` | ⚠️ WASM 实现较弱 | ✅ `precheck::validate_args()` |
+| **快速通道** | ✅ 跳过 engine，<2ms | ✅ 跳过 engine | ✅ 跳过 engine，零网络 |
+| **engine 终判** | ✅ HTTP 调用 | ✅ HTTP 调用 | ✅ HTTP 调用（可选跳过） |
+| **Prompt 增强** | ⚠️ 需 Agent 配合 | ❌ 不在拦截范围 | ✅ **进程内直接调** `enhance()` |
+| **PII 输入脱敏** | ⚠️ 仅输出脱敏 | ❌ 不支持 | ✅ 输入+输出脱敏 |
+| **DLP 检测** | ✅ Proxy 内 `dlp_engine` | ❌ 不支持 | ✅ `dlp_engine` 进程内 |
+| **限流** | ✅ Fallback rate_limit | ✅ Envoy rate limit + Redis | ❌ 需自行实现 |
+| **TLS 加密** | ❌ localhost 无需 TLS | ✅ Higress 终止 TLS | N/A（进程内） |
+| **Falco 观测** | ✅ syscall/net/file | ❌ | ❌ |
+| **沙箱隔离 (P2)** | ✅ Proxy 可 posix_spawn + Landlock | ❌ | ✅ Agent 可直接 Landlock |
+
+> **方式 3 的独特价值**：SDK 方式是唯一能在 **prompt 层面** 拦截的方式——在 Agent 发送 LLM 请求前，进程内调用 `PromptGateway::enhance()` 完成宪法约束注入和 PII 脱敏。方式 1 和方式 7 只能拦截 `tools/call`，无法拦截 prompt。如果安全需求包含 Prompt 注入防护和 PII 脱敏，SDK 方式是唯一选择，或需在方式 1/7 基础上叠加方式 3。
+
+#### 8.3.4 性能对比
+
+| 性能指标 | 方式 1 (MCP Proxy) | 方式 7 (Higress) | 方式 3 (SDK) |
+|---------|:------------------:|:------------------:|:------------:|
+| **预检延迟** | ~1-2ms（含 IPC） | ~3-5ms（含 HTTP + WASM） | **<0.5ms**（内存函数调用） |
+| **快速通道延迟** | ~2ms | ~5ms | **<0.5ms** |
+| **全链路延迟** | ~10-50ms | ~20-50ms | ~10-50ms（engine RPC） |
+| **Agent 启动开销** | 需启动 Proxy 进程 | 无额外进程 | **无**（库已链接） |
+| **内存开销** | Proxy 独立进程 ~20MB | Higress 共享 | **~0**（共享 Agent 进程内存） |
+| **网络跳数** | 1 跳（localhost） | 2 跳（Agent→Higress→MCP） | 0 跳（进程内）+ 1 跳（engine） |
+
+#### 8.3.5 优缺点总结
+
+**方式 1：MCP Proxy (Sidecar)**
+
+| 优点 | 缺点 |
+|------|------|
+| Agent 零代码改造 | 额外进程开销（~20MB 内存） |
+| 完整安全管线（License + 预检 + engine） | 不经管层，无 TLS/全局限流 |
+| 核层 Falco 可观测 | 仅限 K8s Sidecar 部署 |
+| 框架无关（任何 MCP Client） | Prompt 增强需 Agent 配合 |
+| P2 可叠加沙箱隔离 | Egress 需额外 NetworkPolicy |
+
+**方式 7：Higress (远程)**
+
+| 优点 | 缺点 |
+|------|------|
+| Agent 零代码改造 | 仅 2 层覆盖（管层 + 云层） |
+| TLS 终止 + 全局限流 | 无端层防护（无沙箱/无进程内预检） |
+| 生产级网关（Higress 成熟稳定） | 无核层观测（远程 Agent 不在节点） |
+| 适合远程/SaaS Agent | WASM Schema 校验能力弱 |
+| Egress 管控能力强 | 不支持 Prompt 增强/PII 脱敏 |
+
+**方式 3：SDK 嵌入**
+
+| 优点 | 缺点 |
+|------|------|
+| **最低延迟**（进程内 <0.5ms） | **需改 Agent 代码** |
+| **最深安全能力**——Prompt 增强 + PII 脱敏 + DLP | 无管层（无限流/TLS/网络隔离） |
+| 无额外进程/无 IPC 开销 | 无核层观测（Agent 不在集群） |
+| 快速通道零网络开销 | 语言限制（Rust 原生 / 其他需 FFI） |
+| P2 可直接 Landlock 沙箱 | License 校验在 Agent 进程内（可被篡改） |
+| C ABI 可跨语言（Python/Go/Java/C++） | 限流需自行实现 |
+
+#### 8.3.6 选型决策树
+
+```
+Agent 是否在 K8s 集群内？
+├── 是
+│   ├── Agent 是否自研（可改代码）？
+│   │   ├── 是 → Agent 语言？
+│   │   │   ├── Rust → 方式 3 (SDK) ← 零延迟 + 最深安全
+│   │   │   └── 其他 → 方式 1 (MCP Proxy) ← 零代码 + 核层观测
+│   │   └── 否（存量框架）→ 方式 1 (MCP Proxy) ← 零代码接入
+│   └── 是否需要四层全覆盖？
+│       └── 是 → 方式 1 + 方式 7 组合 ← 纵深防御（见 §8.4）
+└── 否（远程/SaaS）
+    ├── 需要 TLS + 限流 → 方式 7 (Higress) ← 唯一选择
+    └── 自研 Agent 可改代码 → 方式 3 (SDK) ← 端层深度安全
+                              + 方式 7 (Higress) ← 补管层能力
+```
+
+---
+
+### 8.4 四层全覆盖（组合部署）
+
+#### 8.4.1 拓扑
+
+当安全需求要求端管核云四层全部覆盖时，需将方式 1（MCP Proxy Sidecar）与方式 7（Higress Ingress）组合部署——远程流量经管层入集群，到达端层 Sidecar Agent Pod，核层在节点上观测，云层统一终判：
+
+```
+远程 Agent (集群外)
+  │
+  │ HTTPS (南北向)
+  v
+┌─────────────────────────────────────────────────────────────┐
+│ [管层] Higress (:443) — Ingress Gateway                    │
+│   +-- TLS 终止                                               │
+│   +-- 全局限流 (Envoy rate limit)                                    │
+│   +-- License 签名校验                                        │
+│   +-- tool allowlist (WASM)                                   │
+│   +-- 转发到集群内 Agent Pod                                  │
+└────────────────────────┬────────────────────────────────────┘
+                         │ ClusterIP (集群内)
+                         v
+┌─── K8s Pod ──────────────────────────────────────────────────┐
+│                                                              │
+│  ┌──────────────┐         ┌──────────────────────────┐       │
+│  | Agent        |  MCP    | [端层] MCP Proxy         |       │
+│  |              |──JSON-RPC──> localhost:9090        |       │
+│  |              |  stdio  | +-- License 校验          |       │
+│  |              | /SSE    | +-- precheck (schema)     |       │
+│  |              |         | +-- engine 终判            |       │
+│  |              |         | +-- Prompt 增强 (可选)     |       │
+│  └──────────────┘         └─────────────┬────────────┘       │
+│  东西向（localhost）                     |                   │
+└──────────────────────────────────────────┼───────────────────┘
+                                           │
+                     ┌─────────────────────┐│
+                     │ [核层] Falco        ││
+                     │ DaemonSet           ││
+                     │ +-- eBPF 观测       ││
+                     │ +-- syscall/net/file││
+                     │ +-- audit stream    ││
+                     └─────────────────────┘│
+                                            v
+┌─── 云侧 ──────────────────────────────────────────────────────┐
+│ [云层]                                                       │
+│   +-- virbius-engine (:8082) — Groovy L3 终判                 │
+│   +-- virbius-control (:8080) — 规则管理 + 发布                │
+│   +-- Redis (:6379) — session 状态 + 审计流                   │
+└──────────────────────────────────────────────────────────────┘
+                                           │
+                                           v
+                                      MCP Server
+```
+
+#### 8.4.2 优点
+
+| 优点 | 说明 |
+|------|------|
+| **纵深防御完整** | 四层独立运作，任一层被绕过仍有其他层兜底。端层预检失败 → 管层 allowlist 拦截；管层被绕过 → 端层 License 校验仍在；核层观测异常 → 提升 risk_score → 云层阻断后续请求 |
+| **南北东西分离** | 远程流量经管层（TLS/限流/Ingress 安全），集群内流量经端层（深度预检/schema/Prompt 增强），各司其职 |
+| **运行时观测** | 核层 Falco 提供 syscall/net/file 级观测，捕获端层和管层都无法检测的异常（如容器逃逸、SSRF 内网扫描） |
+| **策略同源** | 四层共享 `virbius-control` 作为策略真源，共享 Redis 存储 session/risk_score，策略一致、风险分互通 |
+| **渐进降级** | eBPF 不可用时核层降级为 plugin 模式（不致盲）；engine 不可用时端层 fail-open/fail-closed；管层不可用时端层独立兜底 |
+| **沙箱隔离 (P2)** | 端层 Proxy 可 posix_spawn + Landlock，管层和云层不参与执行，隔离边界清晰 |
+| **全链路审计** | 管层记 HTTP 层审计，端层记 MCP 协议层审计，核层记 syscall 级审计，云层汇总终判审计——四层审计互补无死角 |
+
+#### 8.4.3 缺点
+
+| 缺点 | 说明 | 缓解方案 |
+|------|------|---------|
+| **双重拦截延迟** | 远程流量经管层 → 端层两次安全校验，全链路延迟 ~60-100ms（含两次 engine 调用） | 按能力分工：管层退化为 TLS + 限流 + 路由，安全终判收敛到端层（见 §8.4.4） |
+| **部署复杂度高** | 需同时部署 Higress + MCP Proxy + Falco DaemonSet + Engine + Control + Redis，组件数 6+ | 提供 Helm Chart 一键部署；非生产环境可仅部署端层 + 云层 |
+| **双重 engine 调用** | 管层和端层各调一次 `/v1/evaluate`，engine 负载翻倍 | 管层配置 `evaluate=false`，仅端层调 engine |
+| **双重计数器冲突** | 管层 WASM Redis 和端层 Fallback 限流各计一次，rate_limit 语义混乱 | 限流统一收敛到管层，端层移除 Fallback rate_limit |
+| **运维成本** | 四层组件需独立监控、日志、告警，故障排查需跨层关联 trace_id | 统一 trace_id 串联四层审计；运营台提供跨层调用链可视化 |
+| **资源开销** | 每个 Agent Pod 额外 ~20MB（Proxy）+ 每节点 ~50MB（Falco）+ Higress 集群 + Engine 集群 | 轻量场景可降级为 2 层（端层 + 云层）；Falco 可选 plugin 模式降低开销 |
+| **串联配置风险** | 管层和端层策略不一致时行为不可预测（如管层 allow 但端层 deny） | 策略同源（`virbius-control` 统一下发）；管层 allowlist ⊆ 端层 allowlist（端层更严格） |
+
+#### 8.4.4 串联分工方案
+
+为避免双重拦截导致的延迟翻倍和冲突，组合部署时需按能力分工：
+
+| 安全能力 | 由谁负责 | 另一方行为 | 原因 |
+|---------|---------|-----------|------|
+| TLS 终止 | 管层 Higress | 端层 Proxy 不做 TLS（内网 HTTP） | TLS 是网络边界能力 |
+| 全局限流 | 管层 Higress (Envoy rate limit) | 端层移除 Fallback rate_limit | 限流是网络边界能力 |
+| tool allowlist | **只做一次**——端层 Proxy | 管层跳过 allowlist | 端层 schema 校验更完整 |
+| 计数器 | **只做一次**——管层 Higress | 端层不查 Redis 计数 | 避免双重计数 |
+| License 校验 | 管层 Higress（入口） + 端层 Proxy（深度） | 两层都做 | 管层验签名，端层验 allowed_tools |
+| JSON Schema 校验 | 端层 MCP Proxy | 管层不做 | WASM Schema 库弱，Rust 实现完整 |
+| engine 终判 | **只做一次**——端层 MCP Proxy | 管层配置 `evaluate=false` | 避免双重 engine 调用 |
+| 快速通道 | 端层 MCP Proxy | 管层不判断快速通道 | 端层有 SessionStateCache |
+| 审计 | 两者都做（不同维度） | 管层记 HTTP 层，端层记 MCP 协议层 | 审计互补 |
+| 核层观测 | Falco DaemonSet（旁路） | — | 旁路无侵入 |
+| 沙箱隔离 (P2) | 端层 Proxy | — | 管层不参与执行 |
+
+管层 Higress effective JSON 配置：
+
+```json
+{
+  "virbius": {
+    "evaluate": false,
+    "tool_precheck": false,
+    "rate_limit": true,
+    "tls": true,
+    "license_verify": true
+  }
+}
+```
+
+#### 8.4.5 适用场景
+
+| 场景 | 是否推荐组合部署 | 原因 |
+|------|:---------------:|------|
+| **金融/医疗等强合规** | ✅ 推荐 | 监管要求纵深防御 + 全链路审计 |
+| **高安全 SaaS 平台** | ✅ 推荐 | 多租户隔离 + TLS + 限流 + 深度预检 |
+| **内部工具 Agent** | ❌ 过度 | 端层 + 云层即可，无需管层 |
+| **开发/测试环境** | ❌ 过度 | SDK 模式（方式 3）最快迭代 |
+| **存量 Agent 集群内部署** | ⚠️ 可选 | 方式 1 已覆盖 3 层，按需叠加管层 |
+
+---

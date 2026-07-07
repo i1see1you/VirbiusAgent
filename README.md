@@ -9,7 +9,7 @@ Agent 安全防护工具 — 端管核云四层架构。
 | 层 | 组件 | 职责 |
 |----|------|------|
 | 端层 | virbius-core | 工具调用预检（参数校验 + allowlist + JSON Schema） |
-| 管层 | OpenResty + virbius-gateway Lua | TLS/限流/安全预检/HTTP 阻断 |
+| 管层 | Higress + virbius-gateway WASM | TLS/限流/安全预检/HTTP 阻断 |
 | 核层 | Falco + Tetragon(P2) | 运行时观测（eBPF/plugin 降级链） |
 | 云层 | virbius-engine + virbius-control | Groovy L3 终判 + STI 语义审计 + 策略管理 |
 

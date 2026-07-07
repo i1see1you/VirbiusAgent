@@ -29,8 +29,8 @@ public class CompilerCli implements Runnable {
 
     @Option(
             names = {"-g", "--gateway"},
-            defaultValue = "apisix",
-            description = "gateway backend when --target=gateway: apisix | openresty | all")
+            defaultValue = "higress",
+            description = "gateway backend when --target=gateway: higress | apisix | openresty | all")
     private String gateway;
 
     @Option(
@@ -71,6 +71,11 @@ public class CompilerCli implements Runnable {
                 count += compileLayerRules(root, output, "gateway");
                 Path gwDir = output.resolve("gateway");
                 String gw = gateway == null ? "apisix" : gateway.trim().toLowerCase(Locale.ROOT);
+                if ("higress".equals(gw) || "all".equals(gw)) {
+                    Path higressDir = gwDir.resolve("higress");
+                    int crdCount = HigressCrdEmitter.emit(root, higressDir, json);
+                    System.out.println("gateway higress CRDs: " + crdCount);
+                }
                 if ("apisix".equals(gw) || "all".equals(gw)) {
                     GatewayApisixEmitter.emitService(root, gwDir, json);
                     GatewayApisixEmitter.emitSceneRegistry(root, gwDir, json);

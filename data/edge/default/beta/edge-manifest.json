@@ -1,0 +1,41 @@
+{
+  "tenant_id" : "default",
+  "manifest_version" : "1",
+  "app_id" : "beta",
+  "rules" : [ {
+    "rule_id" : "edge_l0_content_allow",
+    "rule_revision" : 1,
+    "reason_code" : "EDGE_CONTENT_KEYWORD_ALLOW",
+    "risk_score" : 0,
+    "intent_action" : "allow",
+    "enforce_mode" : "dry_run",
+    "rollout_state" : "dry_run",
+    "body" : {
+      "keywords" : [ ],
+      "list_type" : "allow"
+    }
+  }, {
+    "rule_id" : "edge_l0_content_deny",
+    "rule_revision" : 1,
+    "reason_code" : "EDGE_CONTENT_KEYWORD_DENY",
+    "risk_score" : 100,
+    "intent_action" : "deny",
+    "enforce_mode" : "dry_run",
+    "rollout_state" : "dry_run",
+    "body" : {
+      "keywords" : [ "招嫖", "办证", "暴恐", "枪支刀具", "炸弹制作", "jailbreak", "绕过" ],
+      "list_type" : "deny"
+    }
+  } ],
+  "dlp_rules" : [ ],
+  "sdk_config" : {
+    "audit_sample_rate_allow" : 0.1,
+    "audit_sample_rate_hit" : 1.0,
+    "audit_flush_interval_ms" : 30000,
+    "audit_queue_max" : 500,
+    "canary_session_key" : "device_id",
+    "dlp_vault_ttl_ms" : 1800000
+  },
+  "artifact_revision" : 6,
+  "published_at" : "2026-07-07T03:15:38.554384Z"
+}
