@@ -17,7 +17,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 bytes = "1"
-async-trait = "0.1"
 chrono = "0.4"
 futures-util = "0.3"
 url = "2"
+axum = { version = "0.7", features = ["json"] }
+tokio-stream = "0.1"

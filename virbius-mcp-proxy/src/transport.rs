@@ -1,20 +1,47 @@
-/// Transport layer: abstract trait + stdio and SSE implementations.
+/// Transport layer: stdio + axum-based HTTP/SSE server.
+///
+/// Two transport modes:
+/// - **stdio**: newline-delimited JSON-RPC over stdin/stdout (for Claude Desktop, etc.)
+/// - **SSE/HTTP**: axum HTTP server supporting both MCP SSE protocol and simple HTTP POST
+///
+/// The HTTP server exposes three routes:
+/// - `GET /sse` — MCP SSE server: establishes SSE long connection, sends `endpoint` event
+/// - `POST /messages/?session_id=xxx` — MCP SSE protocol: receives JSON-RPC, returns 202
+/// - `POST /` — Simple HTTP: JSON-RPC request → JSON response (for non-SSE clients)
+///
+/// Session lifecycle is decoupled from TCP connections:
+/// - `session_id` (UUID) is the logical session key throughout the proxy
+/// - Sessions persist across TCP reconnects (within TTL)
+/// - Upstream connections are per-session (via UpstreamManager)
 
-use async_trait::async_trait;
+use std::sync::Arc;
+
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::{
+        sse::{Event, Sse},
+        IntoResponse, Response,
+    },
+    routing::{get, post},
+    Json, Router,
+};
+use dashmap::DashMap;
+use serde::Deserialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt as _;
 use tracing::{debug, warn};
 
-/// Trait for MCP transport implementations.
-#[async_trait]
-pub trait McpTransport: Send + Sync {
-    /// Read the next incoming JSON-RPC message.
-    /// Returns `None` when the transport is closed.
-    async fn read(&self) -> Option<Value>;
+use crate::egress::EgressClient;
+use crate::pipeline::SharedPipeline;
+use crate::router;
+use crate::session::SessionManager;
+use crate::upstream::UpstreamManager;
 
-    /// Write a JSON-RPC message to the output.
-    async fn write(&self, message: &Value);
-}
+// ─── Stdio Transport ─────────────────────────────────────────
 
 /// stdio transport: reads JSON-RPC messages from stdin (newline-delimited),
 /// writes to stdout.
@@ -96,107 +123,145 @@ impl StdioTransport {
     }
 }
 
-/// SSE / HTTP transport: listens on a TCP port for MCP HTTP requests.
-pub struct SseTransport {
-    listener_rx: tokio::sync::mpsc::Receiver<(Value, tokio::sync::oneshot::Sender<Value>)>,
+// ─── HTTP/SSE Server (axum-based) ────────────────────────────
+
+/// Shared state for the axum HTTP server, passed to all handlers via `State`.
+#[derive(Clone)]
+pub struct AppState {
+    pub session_mgr: Arc<SessionManager>,
+    pub pipeline: SharedPipeline,
+    pub upstream_mgr: Arc<UpstreamManager>,
+    pub egress_client: EgressClient,
+    pub egress_hosts: Arc<Vec<String>>,
+    pub public_key_pem: Arc<String>,
+    /// SSE sessions: session_id → channel to push JSON-RPC responses
+    pub sse_sessions: Arc<DashMap<String, mpsc::Sender<Value>>>,
 }
 
-impl SseTransport {
-    pub async fn new(addr: &str) -> Result<(Self, tokio::task::JoinHandle<()>), std::io::Error> {
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        let (tx, rx) = tokio::sync::mpsc::channel::<(Value, tokio::sync::oneshot::Sender<Value>)>(64);
-        let addr_owned = addr.to_string();
+/// Create the axum router with all routes.
+pub fn create_router(state: AppState) -> Router {
+    Router::new()
+        // MCP SSE protocol
+        .route("/sse", get(handle_sse))
+        .route("/messages/", post(handle_post_message))
+        // Simple HTTP POST (for non-SSE clients and testing)
+        .route("/", post(handle_simple_post))
+        .with_state(state)
+}
 
-        let handle = tokio::spawn(async move {
-            debug!("SSE transport listening on {}", addr_owned);
-            loop {
-                match listener.accept().await {
-                    Ok((stream, peer)) => {
-                        debug!("SSE connection from {}", peer);
-                        let tx = tx.clone();
-                        tokio::spawn(async move {
-                            handle_sse_connection(stream, tx).await;
-                        });
-                    }
-                    Err(e) => {
-                        warn!("accept error: {e}");
-                        continue;
-                    }
-                }
+/// GET /sse — Establish SSE connection (MCP SSE server protocol).
+///
+/// Returns a `text/event-stream` response:
+/// 1. First event: `endpoint` with the POST URL (`/messages/?session_id=xxx`)
+/// 2. Subsequent events: `message` with JSON-RPC responses
+async fn handle_sse(State(state): State<AppState>) -> Response {
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    let (tx, rx) = mpsc::channel::<Value>(64);
+
+    state.sse_sessions.insert(session_id.clone(), tx);
+
+    let endpoint_url = format!("/messages/?session_id={}", session_id);
+
+    debug!("SSE session created: {}", session_id);
+
+    // Create stream: first the endpoint event, then message events from channel
+    let endpoint_stream = futures_util::stream::once(async {
+        Ok::<_, std::io::Error>(Event::default().event("endpoint").data(endpoint_url))
+    });
+
+    let message_stream = ReceiverStream::new(rx).map(|msg| {
+        let json = serde_json::to_string(&msg).unwrap_or_default();
+        Ok::<_, std::io::Error>(Event::default().event("message").data(json))
+    });
+
+    let stream = endpoint_stream.chain(message_stream);
+
+    Sse::new(stream).into_response()
+}
+
+/// POST /messages/?session_id=xxx — Receive JSON-RPC request (MCP SSE protocol).
+///
+/// Returns 202 Accepted immediately. The response is pushed asynchronously
+/// via the SSE stream associated with the session_id.
+#[derive(Deserialize)]
+struct MessageQuery {
+    session_id: String,
+}
+
+async fn handle_post_message(
+    State(state): State<AppState>,
+    Query(query): Query<MessageQuery>,
+    Json(request): Json<Value>,
+) -> Response {
+    let session_id = query.session_id;
+
+    // Look up SSE session
+    let sender = match state.sse_sessions.get(&session_id) {
+        Some(s) => s.clone(),
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    // Touch session to update last_active (if session exists)
+    state.session_mgr.touch(&session_id);
+
+    // Spawn task to route the request and send response via SSE
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        let response = router::route_request(
+            &request,
+            &session_id,
+            &state_clone.session_mgr,
+            &state_clone.upstream_mgr,
+            &state_clone.pipeline,
+            &state_clone.egress_client,
+            &state_clone.egress_hosts,
+            &state_clone.public_key_pem,
+        )
+        .await;
+
+        if let Some(resp) = response {
+            if sender.send(resp).await.is_err() {
+                warn!(
+                    "SSE session {} disconnected, response dropped",
+                    session_id
+                );
+                // Clean up SSE channel
+                state_clone.sse_sessions.remove(&session_id);
             }
-        });
+        }
+    });
 
-        Ok((Self { listener_rx: rx }, handle))
-    }
-
-    pub async fn recv(&mut self) -> Option<(Value, tokio::sync::oneshot::Sender<Value>)> {
-        self.listener_rx.recv().await
-    }
+    StatusCode::ACCEPTED.into_response()
 }
 
-async fn handle_sse_connection(
-    stream: tokio::net::TcpStream,
-    tx: tokio::sync::mpsc::Sender<(Value, tokio::sync::oneshot::Sender<Value>)>,
-) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+/// POST / — Simple JSON-RPC request/response (for non-SSE clients).
+///
+/// Returns the JSON-RPC response directly in the HTTP body.
+/// Uses a per-request session_id (stateless), suitable for testing.
+async fn handle_simple_post(
+    State(state): State<AppState>,
+    Json(request): Json<Value>,
+) -> Response {
+    // For simple HTTP POST, generate a per-request session_id.
+    // This is stateless — each request gets its own session.
+    // For stateful usage, clients should use the SSE protocol.
+    let session_id = uuid::Uuid::new_v4().to_string();
 
-    let mut buf = vec![0u8; 65536];
-    let (mut reader, mut writer) = stream.into_split();
+    let response = router::route_request(
+        &request,
+        &session_id,
+        &state.session_mgr,
+        &state.upstream_mgr,
+        &state.pipeline,
+        &state.egress_client,
+        &state.egress_hosts,
+        &state.public_key_pem,
+    )
+    .await;
 
-    let n = match reader.read(&mut buf).await {
-        Ok(0) => return,
-        Ok(n) => n,
-        Err(_) => return,
-    };
-
-    let raw = String::from_utf8_lossy(&buf[..n]);
-    let body = extract_http_body(&raw);
-
-    if body.is_empty() {
-        let _ = writer
-            .write_all(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
-            .await;
-        return;
-    }
-
-    let request: Value = match serde_json::from_str(&body) {
-        Ok(v) => v,
-        Err(e) => {
-            let msg = format!("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{{\"error\":\"{e}\"}}", e.to_string().len());
-            let _ = writer.write_all(msg.as_bytes()).await;
-            return;
-        }
-    };
-
-    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
-    if tx.send((request, resp_tx)).await.is_err() {
-        return;
-    }
-
-    match resp_rx.await {
-        Ok(resp) => {
-            let body = serde_json::to_string(&resp).unwrap_or_default();
-            let http_resp = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = writer.write_all(http_resp.as_bytes()).await;
-        }
-        Err(_) => {
-            let _ = writer
-                .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
-                .await;
-        }
-    }
-}
-
-fn extract_http_body(raw: &str) -> String {
-    if let Some(pos) = raw.find("\r\n\r\n") {
-        raw[pos + 4..].to_string()
-    } else if let Some(pos) = raw.find("\n\n") {
-        raw[pos + 2..].to_string()
-    } else {
-        raw.to_string()
+    match response {
+        Some(resp) => Json(resp).into_response(),
+        None => StatusCode::OK.into_response(),
     }
 }

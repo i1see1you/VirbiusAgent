@@ -21,6 +21,10 @@ pub struct ProxySection {
     pub upstream_url: String,
     #[serde(default = "default_upstream_transport")]
     pub upstream_transport: String,
+    #[serde(default = "default_upstream_sse_path")]
+    pub upstream_sse_path: String,
+    #[serde(default = "default_session_ttl_secs")]
+    pub session_ttl_secs: u64,
 }
 
 fn default_listen() -> String {
@@ -32,6 +36,12 @@ fn default_upstream() -> String {
 fn default_upstream_transport() -> String {
     "sse".to_string()
 }
+fn default_upstream_sse_path() -> String {
+    "/sse".to_string()
+}
+fn default_session_ttl_secs() -> u64 {
+    1800 // 30 minutes
+}
 
 impl Default for ProxySection {
     fn default() -> Self {
@@ -39,6 +49,8 @@ impl Default for ProxySection {
             listen: default_listen(),
             upstream_url: default_upstream(),
             upstream_transport: default_upstream_transport(),
+            upstream_sse_path: default_upstream_sse_path(),
+            session_ttl_secs: default_session_ttl_secs(),
         }
     }
 }
@@ -184,6 +196,14 @@ impl ProxyConfig {
         }
         if let Ok(v) = std::env::var("VIRBIUS_UPSTREAM_TRANSPORT") {
             cfg.proxy.upstream_transport = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_UPSTREAM_SSE_PATH") {
+            cfg.proxy.upstream_sse_path = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_SESSION_TTL_SECS") {
+            if let Ok(secs) = v.parse::<u64>() {
+                cfg.proxy.session_ttl_secs = secs;
+            }
         }
         if let Ok(v) = std::env::var("VIRBIUS_CONTROL_URL") {
             cfg.security.control_base_url = v;

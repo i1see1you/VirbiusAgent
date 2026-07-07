@@ -11,7 +11,9 @@ mod transport;
 mod upstream;
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use dashmap::DashMap;
 use tracing::{error, info};
 use virbius_core::EdgeInitConfig;
 
@@ -20,7 +22,8 @@ use crate::config::ProxyConfig;
 use crate::egress::EgressClient;
 use crate::pipeline::SecurityPipeline;
 use crate::session::SessionManager;
-use crate::upstream::{UpstreamClient, UpstreamConfig};
+use crate::transport::AppState;
+use crate::upstream::{UpstreamConfig, UpstreamManager};
 
 #[tokio::main]
 async fn main() {
@@ -43,8 +46,10 @@ async fn main() {
         info!("virbius-core bootstrap (non-fatal): {e}");
     }
 
-    // Create session manager
-    let session_mgr = Arc::new(SessionManager::new());
+    // Create session manager with TTL from config
+    let session_mgr = Arc::new(SessionManager::with_ttl(Duration::from_secs(
+        cfg.proxy.session_ttl_secs,
+    )));
 
     // Create audit sink
     let audit = Arc::new(AuditSink::new(
@@ -54,7 +59,7 @@ async fn main() {
 
     // Create security pipeline
     let pipeline = Arc::new(SecurityPipeline::new(
-        pubkey_pem,
+        pubkey_pem.clone(),
         &cfg.security.engine_url,
         cfg.security.fast_path.clone(),
         cfg.security.failover.clone(),
@@ -62,12 +67,14 @@ async fn main() {
         audit.clone(),
     ));
 
-    // Create upstream client
-    let upstream = UpstreamClient::new(UpstreamConfig {
+    // Create upstream manager (per-session upstream connections)
+    let upstream_config = UpstreamConfig {
         url: cfg.proxy.upstream_url.clone(),
         transport: cfg.proxy.upstream_transport.clone(),
         timeout_secs: 30,
-    });
+        sse_path: cfg.proxy.upstream_sse_path.clone(),
+    };
+    let upstream_mgr = Arc::new(UpstreamManager::new(&upstream_config));
 
     // Create egress client for proxying tool calls (curl/http_request)
     // to external APIs with streaming response support
@@ -80,44 +87,81 @@ async fn main() {
     // Start transport
     let listen = cfg.proxy.listen.clone();
     if listen == "stdio" {
-        run_stdio(session_mgr, pipeline, upstream, egress_client, egress_hosts).await;
+        run_stdio(
+            session_mgr,
+            pipeline,
+            upstream_mgr,
+            egress_client,
+            egress_hosts,
+            pubkey_pem,
+        )
+        .await;
     } else if listen.starts_with("tcp://") || listen.starts_with("http://") {
         let addr = listen
             .strip_prefix("tcp://")
             .or_else(|| listen.strip_prefix("http://"))
             .unwrap_or("0.0.0.0:9090");
-        run_sse(addr, session_mgr, pipeline, upstream, egress_client, egress_hosts).await;
+        run_sse(
+            addr,
+            session_mgr,
+            pipeline,
+            upstream_mgr,
+            egress_client,
+            egress_hosts,
+            pubkey_pem,
+        )
+        .await;
     } else {
-        error!("unknown transport: {}, use 'stdio' or 'tcp://0.0.0.0:9090'", listen);
+        error!(
+            "unknown transport: {}, use 'stdio' or 'tcp://0.0.0.0:9090'",
+            listen
+        );
         std::process::exit(1);
     }
 }
 
 /// Run in stdio transport mode.
+///
+/// Reads newline-delimited JSON-RPC from stdin, writes responses to stdout.
+/// Uses a fixed session_id for the single stdio connection.
 async fn run_stdio(
     session_mgr: Arc<SessionManager>,
     pipeline: Arc<SecurityPipeline>,
-    upstream: UpstreamClient,
+    upstream_mgr: Arc<UpstreamManager>,
     egress_client: EgressClient,
     egress_hosts: Vec<String>,
+    pubkey_pem: String,
 ) {
     info!("stdio transport mode");
     let (transport, _writer_handle) = transport::StdioTransport::new();
     let mut stdin_rx = transport;
 
+    // stdio uses a fixed session_id
+    let session_id = "stdio-session".to_string();
+
     loop {
         match stdin_rx.recv().await {
             Some(request) => {
-                let conn_id = 1u64; // stdio has a single connection
                 let session_mgr = session_mgr.clone();
                 let pipeline = pipeline.clone();
-                let upstream = upstream.clone();
+                let upstream_mgr = upstream_mgr.clone();
                 let egress_client = egress_client.clone();
                 let egress_hosts = egress_hosts.clone();
+                let pubkey_pem = pubkey_pem.clone();
+                let session_id = session_id.clone();
 
                 tokio::spawn(async move {
-                    if let Some(response) =
-                        router::route_request(&request, conn_id, &session_mgr, &pipeline, &upstream, &egress_client, &egress_hosts, "").await
+                    if let Some(response) = router::route_request(
+                        &request,
+                        &session_id,
+                        &session_mgr,
+                        &upstream_mgr,
+                        &pipeline,
+                        &egress_client,
+                        &egress_hosts,
+                        &pubkey_pem,
+                    )
+                    .await
                     {
                         // Write response to stdout
                         let json = serde_json::to_string(&response).unwrap_or_default();
@@ -137,50 +181,66 @@ async fn run_stdio(
     }
 }
 
-/// Run in SSE/HTTP transport mode.
+/// Run in SSE/HTTP transport mode (axum-based).
+///
+/// Exposes three routes:
+/// - `GET /sse` — MCP SSE server endpoint
+/// - `POST /messages/?session_id=xxx` — MCP SSE message endpoint
+/// - `POST /` — Simple HTTP JSON-RPC endpoint
+///
+/// Also starts a background task that cleans up expired sessions every 60 seconds.
 async fn run_sse(
     addr: &str,
     session_mgr: Arc<SessionManager>,
     pipeline: Arc<SecurityPipeline>,
-    upstream: UpstreamClient,
+    upstream_mgr: Arc<UpstreamManager>,
     egress_client: EgressClient,
     egress_hosts: Vec<String>,
+    pubkey_pem: String,
 ) {
-    info!("SSE transport mode on {}", addr);
-    let (mut transport, _handle) = match transport::SseTransport::new(addr).await {
-        Ok((t, h)) => (t, h),
+    info!("SSE/HTTP transport mode on {}", addr);
+
+    // Start background cleanup task
+    let cleanup_mgr = session_mgr.clone();
+    let cleanup_upstream = upstream_mgr.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let expired = cleanup_mgr.cleanup_expired();
+            for sid in &expired {
+                cleanup_upstream.remove(sid);
+            }
+            if !expired.is_empty() {
+                info!("cleaned up {} expired sessions", expired.len());
+            }
+        }
+    });
+
+    let state = AppState {
+        session_mgr,
+        pipeline,
+        upstream_mgr,
+        egress_client,
+        egress_hosts: Arc::new(egress_hosts),
+        public_key_pem: Arc::new(pubkey_pem),
+        sse_sessions: Arc::new(DashMap::new()),
+    };
+
+    let app = transport::create_router(state);
+
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
         Err(e) => {
             error!("failed to bind {}: {}", addr, e);
             std::process::exit(1);
         }
     };
 
-    loop {
-        match transport.recv().await {
-            Some((request, resp_tx)) => {
-                let conn_id = session::next_connection_id();
-                let session_mgr = session_mgr.clone();
-                let pipeline = pipeline.clone();
-                let upstream = upstream.clone();
-                let egress_client = egress_client.clone();
-                let egress_hosts = egress_hosts.clone();
-
-                tokio::spawn(async move {
-                    let response =
-                        router::route_request(&request, conn_id, &session_mgr, &pipeline, &upstream, &egress_client, &egress_hosts, "").await;
-                    if response.is_none() {
-                        // For notifications, send an empty 200
-                        let _ = resp_tx.send(serde_json::json!({}));
-                    } else {
-                        let _ = resp_tx.send(response.unwrap());
-                    }
-                });
-            }
-            None => {
-                info!("SSE transport closed");
-                break;
-            }
-        }
+    info!("listening on {}", addr);
+    if let Err(e) = axum::serve(listener, app).await {
+        error!("server error: {}", e);
+        std::process::exit(1);
     }
 }
 

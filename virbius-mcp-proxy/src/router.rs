@@ -7,17 +7,18 @@ use crate::egress::EgressClient;
 use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
 use crate::pipeline::{PipelineResult, SharedPipeline};
 use crate::session::{Session, SessionManager};
-use crate::upstream::UpstreamClient;
+use crate::upstream::UpstreamManager;
 
 /// Process a single JSON-RPC request and return a response.
 ///
-/// Returns `Some(response)` for requests (have `id`), `None` for notifications (no `id`).
+/// `session_id` identifies the logical session (decoupled from TCP connection).
+/// Returns `Some(response)` for requests (have `id`), `None` for notifications.
 pub async fn route_request(
     request: &Value,
-    conn_id: u64,
+    session_id: &str,
     session_mgr: &SessionManager,
+    upstream_mgr: &UpstreamManager,
     pipeline: &SharedPipeline,
-    upstream: &UpstreamClient,
     egress_client: &EgressClient,
     egress_hosts: &[String],
     public_key_pem: &str,
@@ -29,24 +30,56 @@ pub async fn route_request(
     // Notifications (no `id`) are forwarded but don't get a response
     let is_notification = request.get("id").is_none();
 
-    debug!("routing method={} id={:?} conn={}", method, id, conn_id);
+    debug!(
+        "routing method={} id={:?} session={}",
+        method, id, session_id
+    );
 
     match method {
-        "initialize" => handle_initialize(&id, &params, conn_id, session_mgr, upstream, public_key_pem).await,
-        "tools/list" => handle_tools_list(&id, conn_id, session_mgr, upstream).await,
-        "tools/call" => handle_tools_call(&id, &params, conn_id, session_mgr, pipeline, upstream, egress_client, egress_hosts).await,
+        "initialize" => {
+            handle_initialize(&id, &params, session_id, session_mgr, upstream_mgr, public_key_pem)
+                .await
+        }
+        "tools/list" => handle_tools_list(&id, session_id, session_mgr, upstream_mgr).await,
+        "tools/call" => {
+            handle_tools_call(
+                &id,
+                &params,
+                session_id,
+                session_mgr,
+                upstream_mgr,
+                pipeline,
+                egress_client,
+                egress_hosts,
+            )
+            .await
+        }
         _ => {
             // Transparent forward for all other methods
             if is_notification {
-                let _ = upstream.forward_notification(request).await;
+                match upstream_mgr.get_or_connect(session_id).await {
+                    Ok(upstream) => {
+                        let _ = upstream.forward_notification(request).await;
+                    }
+                    Err(e) => {
+                        warn!("upstream connect failed for notification: {e}");
+                    }
+                }
                 None
             } else {
-                match upstream.forward(request).await {
-                    Ok(resp) => Some(resp),
+                match upstream_mgr.get_or_connect(session_id).await {
+                    Ok(upstream) => match upstream.forward(request).await {
+                        Ok(resp) => Some(resp),
+                        Err(e) => Some(jsonrpc_error(
+                            -32603,
+                            &id,
+                            &format!("upstream error: {e}"),
+                        )),
+                    },
                     Err(e) => Some(jsonrpc_error(
                         -32603,
                         &id,
-                        &format!("upstream error: {e}"),
+                        &format!("upstream connect error: {e}"),
                     )),
                 }
             }
@@ -58,21 +91,35 @@ pub async fn route_request(
 async fn handle_initialize(
     id: &Value,
     params: &Value,
-    conn_id: u64,
+    session_id: &str,
     session_mgr: &SessionManager,
-    upstream: &UpstreamClient,
+    upstream_mgr: &UpstreamManager,
     _public_key_pem: &str,
 ) -> Option<Value> {
     // Extract session info from _meta
     let meta = params.get("_meta").unwrap_or(&Value::Null);
-    let session = Session::from_meta(meta);
+    let mut session = Session::from_meta(meta);
+    // Use the session_id assigned by the transport layer
+    session.session_id = session_id.to_string();
     debug!(
         "initialize: app_id={}, session_id={}, has_license={}",
         session.app_id,
         session.session_id,
         session.has_license()
     );
-    session_mgr.insert(conn_id, session);
+    session_mgr.insert(session_id.to_string(), session);
+
+    // Get or create upstream connection for this session
+    let upstream = match upstream_mgr.get_or_connect(session_id).await {
+        Ok(u) => u,
+        Err(e) => {
+            return Some(jsonrpc_error(
+                -32603,
+                id,
+                &format!("upstream connect failed: {e}"),
+            ))
+        }
+    };
 
     // Forward initialize to upstream MCP Server
     let forward_req = serde_json::json!({
@@ -84,16 +131,28 @@ async fn handle_initialize(
 
     match upstream.forward(&forward_req).await {
         Ok(resp) => {
+            // Mark session as upstream-initialized
+            if let Some(mut s) = session_mgr.get(session_id) {
+                s.upstream_initialized = true;
+                session_mgr.update(session_id.to_string(), s);
+            }
+
             // Inject Proxy capabilities into the response
             let mut resp = resp;
             if let Some(result) = resp.get_mut("result").and_then(|r| r.as_object_mut()) {
-                if let Some(caps) = result.get_mut("capabilities").and_then(|c| c.as_object_mut()) {
-                    caps.insert("virbiusProxy".to_string(), serde_json::json!({
-                        "securityPipeline": true,
-                        "licenseVerification": true,
-                        "engineEvaluate": true,
-                        "fastPath": true,
-                    }));
+                if let Some(caps) = result
+                    .get_mut("capabilities")
+                    .and_then(|c| c.as_object_mut())
+                {
+                    caps.insert(
+                        "virbiusProxy".to_string(),
+                        serde_json::json!({
+                            "securityPipeline": true,
+                            "licenseVerification": true,
+                            "engineEvaluate": true,
+                            "fastPath": true,
+                        }),
+                    );
                 }
             }
             Some(resp)
@@ -109,17 +168,28 @@ async fn handle_initialize(
 /// Handle `tools/list`: forward to upstream, filter by License allowed_tools.
 async fn handle_tools_list(
     id: &Value,
-    conn_id: u64,
+    session_id: &str,
     session_mgr: &SessionManager,
-    upstream: &UpstreamClient,
+    upstream_mgr: &UpstreamManager,
 ) -> Option<Value> {
-    let session = match session_mgr.get(conn_id) {
+    let session = match session_mgr.get(session_id) {
         Some(s) => s,
         None => {
             return Some(jsonrpc_error(
                 -32600,
                 id,
                 "session not initialized (call initialize first)",
+            ))
+        }
+    };
+
+    let upstream = match upstream_mgr.get_or_connect(session_id).await {
+        Ok(u) => u,
+        Err(e) => {
+            return Some(jsonrpc_error(
+                -32603,
+                id,
+                &format!("upstream connect failed: {e}"),
             ))
         }
     };
@@ -150,16 +220,8 @@ fn filter_tools_list(mut resp: Value, session: &Session) -> Option<Value> {
         return Some(resp);
     }
 
-    // Try to verify License and get allowed_tools
-    // Note: we use the public key from the pipeline, but here we just check
-    // the License claims. If verification fails, we return all tools and let
-    // the tools/call handler deny.
     if let Some(result) = resp.get_mut("result").and_then(|r| r.as_object_mut()) {
         if let Some(tools) = result.get_mut("tools").and_then(|t| t.as_array_mut()) {
-            // We don't have the pubkey here directly, but we can check if
-            // the License JWT has allowed_tools by decoding the payload.
-            // For security, the actual verification happens in the pipeline.
-            // Here we just pass through — filtering happens at tools/call time.
             let _ = tools; // No filtering at list level for P0
         }
     }
@@ -173,14 +235,14 @@ fn filter_tools_list(mut resp: Value, session: &Session) -> Option<Value> {
 async fn handle_tools_call(
     id: &Value,
     params: &Value,
-    conn_id: u64,
+    session_id: &str,
     session_mgr: &SessionManager,
+    upstream_mgr: &UpstreamManager,
     pipeline: &SharedPipeline,
-    upstream: &UpstreamClient,
     egress_client: &EgressClient,
     egress_hosts: &[String],
 ) -> Option<Value> {
-    let mut session = match session_mgr.get(conn_id) {
+    let mut session = match session_mgr.get(session_id) {
         Some(s) => s,
         None => {
             return Some(jsonrpc_error(
@@ -218,14 +280,27 @@ async fn handle_tools_call(
         PipelineResult::Allow { reason: _, .. } => {
             // Increment call count
             session.increment_calls();
-            session_mgr.update(conn_id, session.clone());
+            session_mgr.update(session_id.to_string(), session.clone());
 
             // Egress tools: Proxy HTTP request directly with streaming response
             if crate::egress::is_egress_tool(tool_name) {
-                return Some(proxy_egress_tool(id, tool_name, &args, egress_client, egress_hosts).await);
+                return Some(
+                    proxy_egress_tool(id, tool_name, &args, egress_client, egress_hosts).await,
+                );
             }
 
             // Non-egress tools: Forward to upstream MCP Server
+            let upstream = match upstream_mgr.get_or_connect(session_id).await {
+                Ok(u) => u,
+                Err(e) => {
+                    return Some(jsonrpc_error(
+                        -32603,
+                        id,
+                        &format!("upstream connect failed: {e}"),
+                    ))
+                }
+            };
+
             let forward_req = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -242,16 +317,14 @@ async fn handle_tools_call(
                 )),
             }
         }
-        PipelineResult::Deny { code, reason, .. } => {
-            Some(jsonrpc_error_simple(
-                code,
-                id.clone(),
-                tool_name,
-                &session.trace_id,
-                session.session_risk_score,
-                Some(&reason),
-            ))
-        }
+        PipelineResult::Deny { code, reason, .. } => Some(jsonrpc_error_simple(
+            code,
+            id.clone(),
+            tool_name,
+            &session.trace_id,
+            session.session_risk_score,
+            Some(&reason),
+        )),
     }
 }
 
@@ -301,7 +374,10 @@ async fn proxy_egress_tool(
     let headers_ref = headers.as_deref();
 
     // 5. Proxy the request with streaming response
-    match egress_client.proxy_request(&url, method, body, headers_ref).await {
+    match egress_client
+        .proxy_request(&url, method, body, headers_ref)
+        .await
+    {
         Ok(response) => {
             let result = crate::egress::to_mcp_result(&response);
             serde_json::json!({
