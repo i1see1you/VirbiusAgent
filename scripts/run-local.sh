@@ -129,8 +129,8 @@ if command -v java >/dev/null 2>&1 && [[ -f virbius-control/target/virbius-contr
   nohup env VIRBIUS_DATA_DIR="$VIRBIUS_DATA_DIR" VIRBIUS_REDIS_URL="$VIRBIUS_REDIS_URL" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
     java -jar "$ROOT/virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar" \
-    >/dev/null 2>&1 &
-  wait_http "http://127.0.0.1:8080/api/v1/health" "virbius-control" || true
+    >"$LOG_DIR/control.log" 2>&1 &
+  wait_http "http://127.0.0.1:8080/api/v1/health" "virbius-control" || { err "Check logs: $LOG_DIR/control.log"; tail -30 "$LOG_DIR/control.log" 2>/dev/null || true; }
 fi
 
 if command -v java >/dev/null 2>&1 && [[ -f virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar ]]; then
@@ -138,8 +138,8 @@ if command -v java >/dev/null 2>&1 && [[ -f virbius-engine/target/virbius-engine
   nohup env VIRBIUS_DATA_DIR="$VIRBIUS_DATA_DIR" VIRBIUS_REDIS_URL="$VIRBIUS_REDIS_URL" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
     java -jar "$ROOT/virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar" \
-    >/dev/null 2>&1 &
-  wait_http "http://127.0.0.1:8082/admin/health" "virbius-engine" || true
+    >"$LOG_DIR/engine.log" 2>&1 &
+  wait_http "http://127.0.0.1:8082/admin/health" "virbius-engine" || { err "Check logs: $LOG_DIR/engine.log"; tail -30 "$LOG_DIR/engine.log" 2>/dev/null || true; }
 fi
 
 # ─── Summary ───

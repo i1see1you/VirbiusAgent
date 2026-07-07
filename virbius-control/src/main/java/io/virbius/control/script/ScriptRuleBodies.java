@@ -25,7 +25,7 @@ public final class ScriptRuleBodies {
             }
             return script;
         }
-        if (("lua".equals(rt) || "groovy".equals(rt)) && body instanceof Map<?, ?>) {
+        if (("lua".equals(rt) || "groovy".equals(rt) || "agent-groovy".equals(rt)) && body instanceof Map<?, ?>) {
             throw new IllegalArgumentException(
                     rt + " runtime requires decide(ctx) script body, not JSON list/cumulative DSL");
         }

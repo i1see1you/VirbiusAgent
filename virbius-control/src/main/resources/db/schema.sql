@@ -423,3 +423,44 @@ CREATE INDEX IF NOT EXISTS idx_tb_deploy_event_deploy
 
 CREATE INDEX IF NOT EXISTS idx_tb_deploy_event_rule
     ON tb_deploy_event (tenant_id, rule_id);
+
+-- ============================================================
+-- Constitution rules for Prompt Gateway (§2.8)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS tb_constitution (
+    id              INTEGER PRIMARY KEY,
+    tenant_id       VARCHAR(64)  NOT NULL,
+    rule_id         VARCHAR(128) NOT NULL,
+    version         VARCHAR(32)  NOT NULL DEFAULT '1.0',
+    category        VARCHAR(64)  NOT NULL,
+    priority        INTEGER      NOT NULL DEFAULT 50,
+    scene_filter    TEXT         NOT NULL DEFAULT '[]',
+    rule_text       TEXT         NOT NULL,
+    status          VARCHAR(16)  NOT NULL DEFAULT 'active',
+    created_by      VARCHAR(64),
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, rule_id, version),
+    CHECK (category IN ('prohibition', 'tool_rule', 'boundary', 'principle')),
+    CHECK (status IN ('active', 'disabled')),
+    CHECK (priority >= 0 AND priority <= 100)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tb_constitution_tenant_scene
+    ON tb_constitution (tenant_id, status);
+
+CREATE TABLE IF NOT EXISTS tb_constitution_templates (
+    id              INTEGER PRIMARY KEY,
+    tenant_id       VARCHAR(64)  NOT NULL,
+    constitution_version VARCHAR(32) NOT NULL,
+    scene           VARCHAR(64)  NOT NULL,
+    system_prefix   TEXT         NOT NULL,
+    dynamic_suffix  TEXT         NOT NULL DEFAULT '',
+    prohibitions    TEXT         NOT NULL DEFAULT '[]',
+    tool_rules      TEXT         NOT NULL DEFAULT '[]',
+    compiled_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (tenant_id, constitution_version, scene)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tb_constitution_templates_lookup
+    ON tb_constitution_templates (tenant_id, scene, constitution_version);

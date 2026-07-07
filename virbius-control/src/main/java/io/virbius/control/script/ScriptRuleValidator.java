@@ -36,7 +36,7 @@ public class ScriptRuleValidator {
         String rt = runtime != null ? runtime.trim().toLowerCase() : "";
         String script = "";
         try {
-            if ("lua".equals(rt) || "groovy".equals(rt)) {
+            if ("lua".equals(rt) || "groovy".equals(rt) || "agent-groovy".equals(rt)) {
                 script = ScriptRuleBodies.asExecutableScript(body, rt);
             } else {
                 script = GroovyRuleBodies.asScript(body);
@@ -53,9 +53,9 @@ public class ScriptRuleValidator {
 
         if (script.isBlank()) {
             errors.add("script body is empty");
-        } else if ("groovy".equals(rt)) {
-            validateGroovy(script, errors);
-        } else if ("lua".equals(rt)) {
+        } else if ("groovy".equals(rt) || "agent-groovy".equals(rt)) {
+                validateGroovy(script, errors);
+            } else if ("lua".equals(rt)) {
             validateLua(script, errors);
         } else if ("prompt".equals(rt)) {
             if (script.length() > 4096) {
@@ -81,9 +81,9 @@ public class ScriptRuleValidator {
         if ("lua".equals(rt) && script.contains("ctx.listMatch")) {
             warnings.add("gateway lua prefers listMatch(...), not ctx.listMatch(...)");
         }
-        if ("groovy".equals(rt) && script.matches("(?s).*\\blistMatch\\s*\\(.*")) {
-            warnings.add("cloud groovy prefers ctx.listMatch(...)");
-        }
+        if (("groovy".equals(rt) || "agent-groovy".equals(rt)) && script.matches("(?s).*\\blistMatch\\s*\\(.*")) {
+                warnings.add("cloud/agent groovy prefers ctx.listMatch(...)");
+            }
 
         return Map.of(
                 "valid", errors.isEmpty(),

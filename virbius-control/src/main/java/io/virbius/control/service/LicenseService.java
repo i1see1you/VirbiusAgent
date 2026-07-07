@@ -3,10 +3,12 @@ package io.virbius.control.service;
 import io.virbius.control.common.exception.ResourceNotFoundException;
 import io.virbius.control.domain.AgentLicense;
 import io.virbius.control.repository.LicenseRepository;
+import io.virbius.control.config.ControlJedisPools;
 import io.virbius.control.security.LicenseSigner;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,12 +30,12 @@ public class LicenseService {
 
     private final LicenseRepository repo;
     private final LicenseSigner signer;
-    private final JedisPool jedisPool;
+    private final Optional<JedisPool> jedisPool;
 
-    public LicenseService(LicenseRepository repo, LicenseSigner signer, JedisPool jedisPool) {
+    public LicenseService(LicenseRepository repo, LicenseSigner signer, ControlJedisPools jedisPools) {
         this.repo = repo;
         this.signer = signer;
-        this.jedisPool = jedisPool;
+        this.jedisPool = jedisPools.pool();
     }
 
     /**
@@ -100,11 +102,15 @@ public class LicenseService {
         repo.revoke(licenseId, revokedBy, reason);
 
         // Publish revocation via Redis pub/sub
-        try (var jedis = jedisPool.getResource()) {
-            jedis.publish(REVOCATION_CHANNEL,
-                    "{\"license_id\":\"" + licenseId + "\",\"reason\":\"" + reason + "\"}");
-        } catch (Exception e) {
-            log.warn("failed to publish revocation via Redis: {}", e.getMessage());
+        if (jedisPool.isPresent()) {
+            try (var jedis = jedisPool.get().getResource()) {
+                jedis.publish(REVOCATION_CHANNEL,
+                        "{\"license_id\":\"" + licenseId + "\",\"reason\":\"" + reason + "\"}");
+            } catch (Exception e) {
+                log.warn("failed to publish revocation via Redis: {}", e.getMessage());
+            }
+        } else {
+            log.warn("Redis not configured; revocation not published via pub/sub");
         }
 
         log.info("revoked license {} by {} reason: {}", licenseId, revokedBy, reason);

@@ -61,7 +61,8 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 │  Agent/curl工具 ──HTTP──> [管层] Higress (Egress) ──> 外部 API  │
 │                         或端层 Egress 拦截（Sidecar 模式）      │
 │                                                              │
-│  特点：跨网络流量必经管层，管层是网络边界安全网关               │
+│  特点：非 Sidecar 模式跨网络流量必经管层；Sidecar 模式 Egress  │
+│  由端层 Proxy 代发（见 §3.5）                                   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -262,7 +263,7 @@ ToolCallRequest { name, args }
 ```
 
 > **P0 安全模型**：无 syscall 级隔离。安全保障依赖：
-> 1. HTTP 层阻断（Higress allow/deny + engine 终判）
+> 1. HTTP 层阻断（端层 Proxy allow/deny 或管层 Higress allow/deny + engine 终判，取决于部署模式）
 > 2. 参数 schema 校验（path 白名单等）
 > 3. session risk 累积（Falco 检测异常 -> 风险分升高 -> 后续请求阻断）
 > 4. 高风险工具（execute_python、shell）P0 阶段强制人工审批或禁用
@@ -281,7 +282,7 @@ ToolCallRequest { name, args }
 | TOCTOU 风险 | ✅ 内核强制，无竞态 | ❌ 需 ioctl 校验 |
 | 实现复杂度 | ~5w | ~16w |
 
-**SSRF 防护补偿**：Landlock 不能按 IP 限制 connect，但 subprocess 沙箱仅用于 `read_file`/`write_file`/`curl（白名单目标）`，不用于 `execute_python`/`shell`（后者走 gVisor）。`curl` 的 URL 在 HTTP 层（Higress）已做 schema 校验 + 白名单校验，不需要 syscall 级 connect 拦截。网络层由 K8s NetworkPolicy 兜底。
+**SSRF 防护补偿**：Landlock 不能按 IP 限制 connect，但 subprocess 沙箱仅用于 `read_file`/`write_file`/`curl（白名单目标）`，不用于 `execute_python`/`shell`（后者走 gVisor）。`curl` 的 URL 在应用层已做 schema 校验 + 白名单校验（Sidecar 模式由端层 MCP Proxy 代发时校验，非 Sidecar 模式由管层 Higress Egress 校验，见 [§3.5](#35-egress-流量管控)），不需要 syscall 级 connect 拦截。网络层由 K8s NetworkPolicy 兜底。
 
 **多线程安全**：Agent 框架基于 tokio 异步运行时，是多线程的。禁止使用 fork()，改用 posix_spawn。
 
@@ -1117,14 +1118,14 @@ Agent 发起的外部 HTTP 请求属于南北向 Egress 流量，分为两类：
 
 > **设计决策：工具级管控而非进程级断网**
 >
-> 原方案规定“Agent 不具备直接网络出站能力，所有 HTTP 由 Proxy 代发”。但这会破坏存量 Agent 框架兼容性——LangChain、AutoGen、OpenAI SDK 等会隐式发起网络请求，直接断网会导致无法运行。且全量代发需支持流式响应、大文件分块、复杂 Header 透传，开发成本极高。
+> 原方案规定“Agent 不具备直接网络出站能力，所有 HTTP 由 Proxy 代发”。但这会破坏存量 Agent 框架兼容性——LangChain、AutoGen、OpenAI SDK 等会隐式发起网络请求，直接断网会导致无法运行。且全量代发（代理 Agent 所有网络流量）需支持 WebSocket 双工、大文件分块上传、HTTP/2 多路复用等全部 HTTP 语义，开发成本极高。
 >
 > 修订后的方案：
 > - **业务工具请求**（`curl`/`web_search` 等显式 MCP 工具）走 Proxy 代发 + URL 白名单校验
 > - **框架隐式请求**（配置拉取、模型下载、心跳等）由 Agent 自身发起，受 NetworkPolicy 限制到白名单目标
 > - **进程级全量出站**（P2 兜底）由 eBPF/iptables 透明劫持
 >
-> 这三分法匹配威胁模型：安全威胁来自 Agent 通过业务工具发起的**可控外部请求**，而非框架底层的**固定目标**网络调用。详见 [§2.6.1](PROTOCOL.md) Egress 流量管控。
+> 这三分法匹配威胁模型：安全威胁来自 Agent 通过业务工具发起的**可控外部请求**，而非框架底层的**固定目标**网络调用。工具级代发只需支持 GET/POST + 流式响应透传（chunked/SSE），reqwest `bytes_stream()` 即可实现，开发成本可控。详见 [§2.6.1](PROTOCOL.md) Egress 流量管控。
 
 #### Sidecar 模式——工具级 Proxy 代发
 
@@ -1172,6 +1173,63 @@ fn validate_egress_url(args: &Value, license: &License) -> Result<(), String> {
         return Err(format!("host '{}' not in egress allowlist", host));
     }
     Ok(())
+}
+
+/// 流式代发 HTTP 请求：使用 reqwest bytes_stream() 避免大响应 OOM
+///
+/// 支持两种响应模式：
+/// - 普通响应（JSON/HTML/...）：流式读取 chunk，累计到上限后返回
+/// - SSE 响应（text/event-stream）：逐条解析 event，透传给 Agent
+async fn proxy_egress_request(
+    client: &reqwest::Client,
+    url: &str,
+    method: &str,
+    body: Option<&Value>,
+    max_bytes: usize,  // 默认 50MB
+) -> Result<EgressResponse, EgressError> {
+    let mut req = match method {
+        "GET" => client.get(url),
+        "POST" => {
+            let r = client.post(url);
+            match body {
+                Some(v) => r.json(v),
+                None => r,
+            }
+        }
+        _ => return Err(EgressError::UnsupportedMethod(method.into())),
+    };
+
+    let resp = req.send().await.map_err(EgressError::Http)?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(EgressError::Status(status.as_u16(), body));
+    }
+
+    let content_type = resp.headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    // 流式读取响应体，避免大响应 OOM
+    use futures_util::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut buf = Vec::new();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(EgressError::Http)?;
+        if buf.len() + chunk.len() > max_bytes {
+            return Err(EgressError::TooLarge(max_bytes));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+
+    Ok(EgressResponse {
+        status: status.as_u16(),
+        content_type,
+        body: buf,
+    })
 }
 ```
 

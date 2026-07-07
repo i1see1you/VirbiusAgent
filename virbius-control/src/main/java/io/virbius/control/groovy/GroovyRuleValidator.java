@@ -9,7 +9,7 @@ import org.springframework.stereotype.Component;
 public class GroovyRuleValidator {
 
     public void validateRevision(RuleRevision draft) {
-        if (draft == null || !"groovy".equals(draft.runtime())) {
+        if (draft == null || (!"groovy".equals(draft.runtime()) && !"agent-groovy".equals(draft.runtime()))) {
             return;
         }
         try {

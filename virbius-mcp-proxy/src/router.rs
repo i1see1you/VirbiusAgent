@@ -1,8 +1,9 @@
 /// JSON-RPC method router: routes MCP protocol methods to handlers.
 
 use serde_json::Value;
-use tracing::debug;
+use tracing::{debug, warn};
 
+use crate::egress::EgressClient;
 use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
 use crate::pipeline::{PipelineResult, SharedPipeline};
 use crate::session::{Session, SessionManager};
@@ -17,6 +18,8 @@ pub async fn route_request(
     session_mgr: &SessionManager,
     pipeline: &SharedPipeline,
     upstream: &UpstreamClient,
+    egress_client: &EgressClient,
+    egress_hosts: &[String],
     public_key_pem: &str,
 ) -> Option<Value> {
     let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
@@ -31,7 +34,7 @@ pub async fn route_request(
     match method {
         "initialize" => handle_initialize(&id, &params, conn_id, session_mgr, upstream, public_key_pem).await,
         "tools/list" => handle_tools_list(&id, conn_id, session_mgr, upstream).await,
-        "tools/call" => handle_tools_call(&id, &params, conn_id, session_mgr, pipeline, upstream).await,
+        "tools/call" => handle_tools_call(&id, &params, conn_id, session_mgr, pipeline, upstream, egress_client, egress_hosts).await,
         _ => {
             // Transparent forward for all other methods
             if is_notification {
@@ -163,7 +166,10 @@ fn filter_tools_list(mut resp: Value, session: &Session) -> Option<Value> {
     Some(resp)
 }
 
-/// Handle `tools/call`: run the security pipeline, forward if allowed.
+/// Handle `tools/call`: run the security pipeline, then either:
+/// - For egress tools (curl/http_request/fetch): Proxy the HTTP request directly
+///   with streaming response support (reqwest bytes_stream).
+/// - For other tools: Forward to upstream MCP Server.
 async fn handle_tools_call(
     id: &Value,
     params: &Value,
@@ -171,6 +177,8 @@ async fn handle_tools_call(
     session_mgr: &SessionManager,
     pipeline: &SharedPipeline,
     upstream: &UpstreamClient,
+    egress_client: &EgressClient,
+    egress_hosts: &[String],
 ) -> Option<Value> {
     let mut session = match session_mgr.get(conn_id) {
         Some(s) => s,
@@ -212,7 +220,12 @@ async fn handle_tools_call(
             session.increment_calls();
             session_mgr.update(conn_id, session.clone());
 
-            // Forward to upstream MCP Server
+            // Egress tools: Proxy HTTP request directly with streaming response
+            if crate::egress::is_egress_tool(tool_name) {
+                return Some(proxy_egress_tool(id, tool_name, &args, egress_client, egress_hosts).await);
+            }
+
+            // Non-egress tools: Forward to upstream MCP Server
             let forward_req = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
@@ -238,6 +251,68 @@ async fn handle_tools_call(
                 session.session_risk_score,
                 Some(&reason),
             ))
+        }
+    }
+}
+
+/// Proxy an egress tool call (curl/http_request/fetch) to an external API.
+///
+/// Uses reqwest `bytes_stream()` for streaming response reading, preventing OOM
+/// on large responses. SSE (text/event-stream) responses are transparently
+/// passed through as text content.
+async fn proxy_egress_tool(
+    id: &Value,
+    tool_name: &str,
+    args: &Value,
+    egress_client: &EgressClient,
+    egress_hosts: &[String],
+) -> Value {
+    // 1. Extract URL from tool arguments
+    let url = match crate::egress::extract_url_from_args(tool_name, args) {
+        Ok(u) => u,
+        Err(e) => {
+            warn!("egress tool '{}' url extraction failed: {}", tool_name, e);
+            return crate::egress::egress_error_response(id, &e);
+        }
+    };
+
+    // 2. Validate URL against egress allowlist
+    if let Err(e) = crate::egress::validate_egress_url(&url, egress_hosts) {
+        warn!("egress url validation failed: {}", e);
+        return crate::egress::egress_error_response(id, &e);
+    }
+
+    // 3. Extract HTTP method and body from args
+    let method = args
+        .get("method")
+        .and_then(|v| v.as_str())
+        .unwrap_or("GET");
+    let body = args.get("body").or_else(|| args.get("data"));
+
+    // 4. Extract headers from args (filter happens inside proxy_request)
+    let headers: Option<Vec<(String, String)>> = args
+        .get("headers")
+        .and_then(|h| h.as_object())
+        .map(|map| {
+            map.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        });
+    let headers_ref = headers.as_deref();
+
+    // 5. Proxy the request with streaming response
+    match egress_client.proxy_request(&url, method, body, headers_ref).await {
+        Ok(response) => {
+            let result = crate::egress::to_mcp_result(&response);
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": result
+            })
+        }
+        Err(e) => {
+            warn!("egress proxy failed for {}: {}", url, e);
+            crate::egress::egress_error_response(id, &e.to_string())
         }
     }
 }

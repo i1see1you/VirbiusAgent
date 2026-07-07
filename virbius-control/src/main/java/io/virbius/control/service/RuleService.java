@@ -105,7 +105,7 @@ public class RuleService {
                 null,
                 isAsync,
                 req.asyncActionConfig());
-        if ("groovy".equals(req.runtime()) || "lua".equals(req.runtime())) {
+        if ("groovy".equals(req.runtime()) || "lua".equals(req.runtime()) || "agent-groovy".equals(req.runtime())) {
             scriptRuleValidator.validateOrThrow(tenantId, req.runtime(), resolveBody(req));
         }
         if ("cumulative".equals(req.runtime()) || "list_match".equals(req.runtime())) {

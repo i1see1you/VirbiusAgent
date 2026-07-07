@@ -444,7 +444,7 @@ sample_rate = 1.0                   # 审计采样率
 >
 > 这一决策基于以下考量：
 > 1. **存量兼容性**：LangChain、AutoGen、OpenAI SDK 等框架会隐式发起网络请求（拉取配置、下载模型、心跳检测），直接断网会导致大量存量 Agent 无法运行
-> 2. **代发成本**：Proxy 代发需支持流式响应、大文件分块、复杂 Header 透传等，全量代发开发成本极高；仅代发 MCP 业务工具可大幅降低复杂度
+> 2. **全量代发成本**：全量代发（代理 Agent 所有网络流量）需支持 WebSocket 双工、大文件分块上传、复杂 Header 透传、HTTP/2 多路复用等全部 HTTP 语义，开发成本极高；仅代发 MCP 业务工具可大幅降低复杂度。工具级代发只需支持 GET/POST + 流式响应透传（chunked/SSE），reqwest `bytes_stream()` 即可实现
 > 3. **威胁模型匹配**：安全威胁来自 Agent 通过业务工具（curl/execute_python/shell）发起的**可控外部请求**，而非框架底层的**固定目标**网络调用。前者需要安全管线校验，后者通过 NetworkPolicy 限制目标即可
 >
 > | 流量类型 | 来源 | P0 管控方式 | 说明 |
@@ -522,8 +522,8 @@ sample_rate = 1.0                   # 审计采样率
 > |------|---------|---------|------|
 > | GET/POST | ✅ | — | 基础 HTTP 方法 |
 > | 自定义 Header | ✅（白名单透传） | — | 仅透传安全 Header，过滤 `Authorization`（由 License 注入） |
-> | 流式响应（SSE/chunked） | ❌ | ✅ | P0 返回完整 body，P1 支持流式透传 |
-> | 大文件下载 | ❌ | ✅ | P0 限制 body <10MB，P1 支持分块传输 |
+> | 流式响应透传（chunked/SSE） | ✅ | — | reqwest `bytes_stream()` 流式读取，避免大响应 OOM；SSE 事件逐条透传 |
+> | 大文件下载 | ✅（流式，上限 50MB） | ✅（分块写入临时文件） | P0 流式读取 + 内存上限保护，超限返回 413 |
 > | 超时控制 | ✅（30s） | — | 超时返回 504 |
 > | 重定向跟随 | ✅（最多 5 跳） | — | 防止 SSRF via redirect |
 > | HTTPS | ✅ | — | Proxy 发起 TLS，Agent 不接触证书 |

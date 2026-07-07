@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco-plugin
+  namespace: virbius-system
+  labels:
+    app: falco
+    mode: plugin
+spec:
+  selector:
+    matchLabels:
+      app: falco
+      mode: plugin
+  template:
+    metadata:
+      labels:
+        app: falco
+        mode: plugin
+    spec:
+      serviceAccountName: falco-k8saudit
+      containers:
+        - name: falco
+          image: falcosecurity/falco:0.39.0
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+          env:
+            - name: FALCO_DRIVER
+              value: plugin
+          volumeMounts:
+            - name: falco-config
+              mountPath: /etc/falco/falco.yaml
+              subPath: falco.yaml
+            - name: falco-rules
+              mountPath: /etc/falco/falco_rules.local.yaml
+              subPath: falco_rules.local.yaml
+            - name: agent-logs
+              mountPath: /var/log/virbius
+              readOnly: true
+            - name: k8s-audit-cert
+              mountPath: /etc/falco/k8saudit.crt
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 5
+            periodSeconds: 5
+      volumes:
+        - name: falco-config
+          configMap:
+            name: falco-plugin-config
+        - name: falco-rules
+          configMap:
+            name: falco-plugin-config
+        - name: agent-logs
+          hostPath:
+            path: /var/log/virbius
+            type: DirectoryOrCreate
+        - name: k8s-audit-cert
+          secret:
+            secretName: k8s-audit-cert

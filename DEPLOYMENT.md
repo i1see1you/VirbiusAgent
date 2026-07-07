@@ -161,7 +161,7 @@
 
 #### 8.3.1 三种方式全景
 
-| 维度 | 方式 1：MCP Proxy (Sidecar) | 方式 7：Higress (远程) | 方式 3：SDK 嵌入 |
+| 维度 | 方式 1：MCP Proxy (Sidecar) | 方式 2：Higress (远程) | 方式 3：SDK 嵌入 |
 |------|---------------------------|------------------------|----------------|
 | **部署形态** | Agent + Proxy 同 Pod，独立进程 | Agent 远程，Higress 集群内 | `virbius-core` 链接进 Agent 进程 |
 | **流量方向** | 东西向（localhost） | 南北向（HTTPS） | 无网络流量（进程内调用） |
@@ -222,7 +222,7 @@
 | 框架无关（任何 MCP Client） | Prompt 增强需 Agent 配合 |
 | P2 可叠加沙箱隔离 | Egress 需额外 NetworkPolicy |
 
-**方式 7：Higress (远程)**
+**方式 2：Higress (远程)**
 
 | 优点 | 缺点 |
 |------|------|

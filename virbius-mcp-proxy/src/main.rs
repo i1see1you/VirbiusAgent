@@ -2,6 +2,7 @@
 
 mod audit;
 mod config;
+mod egress;
 mod error;
 mod pipeline;
 mod router;
@@ -16,6 +17,7 @@ use virbius_core::EdgeInitConfig;
 
 use crate::audit::AuditSink;
 use crate::config::ProxyConfig;
+use crate::egress::EgressClient;
 use crate::pipeline::SecurityPipeline;
 use crate::session::SessionManager;
 use crate::upstream::{UpstreamClient, UpstreamConfig};
@@ -67,16 +69,24 @@ async fn main() {
         timeout_secs: 30,
     });
 
+    // Create egress client for proxying tool calls (curl/http_request)
+    // to external APIs with streaming response support
+    let egress_client = EgressClient::new(30, 50);
+
+    // Egress allowed hosts (from config or empty — populated from License
+    // allowed_hosts when that field is added)
+    let egress_hosts: Vec<String> = Vec::new();
+
     // Start transport
     let listen = cfg.proxy.listen.clone();
     if listen == "stdio" {
-        run_stdio(session_mgr, pipeline, upstream).await;
+        run_stdio(session_mgr, pipeline, upstream, egress_client, egress_hosts).await;
     } else if listen.starts_with("tcp://") || listen.starts_with("http://") {
         let addr = listen
             .strip_prefix("tcp://")
             .or_else(|| listen.strip_prefix("http://"))
             .unwrap_or("0.0.0.0:9090");
-        run_sse(addr, session_mgr, pipeline, upstream).await;
+        run_sse(addr, session_mgr, pipeline, upstream, egress_client, egress_hosts).await;
     } else {
         error!("unknown transport: {}, use 'stdio' or 'tcp://0.0.0.0:9090'", listen);
         std::process::exit(1);
@@ -88,6 +98,8 @@ async fn run_stdio(
     session_mgr: Arc<SessionManager>,
     pipeline: Arc<SecurityPipeline>,
     upstream: UpstreamClient,
+    egress_client: EgressClient,
+    egress_hosts: Vec<String>,
 ) {
     info!("stdio transport mode");
     let (transport, _writer_handle) = transport::StdioTransport::new();
@@ -100,10 +112,12 @@ async fn run_stdio(
                 let session_mgr = session_mgr.clone();
                 let pipeline = pipeline.clone();
                 let upstream = upstream.clone();
+                let egress_client = egress_client.clone();
+                let egress_hosts = egress_hosts.clone();
 
                 tokio::spawn(async move {
                     if let Some(response) =
-                        router::route_request(&request, conn_id, &session_mgr, &pipeline, &upstream, "").await
+                        router::route_request(&request, conn_id, &session_mgr, &pipeline, &upstream, &egress_client, &egress_hosts, "").await
                     {
                         // Write response to stdout
                         let json = serde_json::to_string(&response).unwrap_or_default();
@@ -129,6 +143,8 @@ async fn run_sse(
     session_mgr: Arc<SessionManager>,
     pipeline: Arc<SecurityPipeline>,
     upstream: UpstreamClient,
+    egress_client: EgressClient,
+    egress_hosts: Vec<String>,
 ) {
     info!("SSE transport mode on {}", addr);
     let (mut transport, _handle) = match transport::SseTransport::new(addr).await {
@@ -146,10 +162,12 @@ async fn run_sse(
                 let session_mgr = session_mgr.clone();
                 let pipeline = pipeline.clone();
                 let upstream = upstream.clone();
+                let egress_client = egress_client.clone();
+                let egress_hosts = egress_hosts.clone();
 
                 tokio::spawn(async move {
                     let response =
-                        router::route_request(&request, conn_id, &session_mgr, &pipeline, &upstream, "").await;
+                        router::route_request(&request, conn_id, &session_mgr, &pipeline, &upstream, &egress_client, &egress_hosts, "").await;
                     if response.is_none() {
                         // For notifications, send an empty 200
                         let _ = resp_tx.send(serde_json::json!({}));

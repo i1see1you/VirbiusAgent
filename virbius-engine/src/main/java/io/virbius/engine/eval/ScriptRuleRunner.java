@@ -29,7 +29,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import redis.clients.jedis.JedisPool;
 
-/** Cloud {@code groovy} script rules: {@code decide(ctx)} → boolean; signal from rule row on hit. */
+/** Cloud {@code groovy} and Agent {@code agent-groovy} script rules:
+ *  {@code decide(ctx)} → boolean; signal from rule row on hit. */
 @Component
 public class ScriptRuleRunner {
 
@@ -66,7 +67,7 @@ public class ScriptRuleRunner {
     public void precompileGroovyRules() {
         int count = 0;
         for (RuleEntry rule : cache.rulesForTenant("default")) {
-            if (!"groovy".equals(rule.runtime()) || !"cloud".equals(rule.layer())) {
+            if (!isExecutableScriptRule(rule)) {
                 continue;
             }
             String body = bodyText(rule.body());
@@ -76,7 +77,7 @@ public class ScriptRuleRunner {
             }
         }
         if (count > 0) {
-            log.info("pre-compiled {} groovy rule(s)", count);
+            log.info("pre-compiled {} groovy/agent-groovy rule(s)", count);
         }
     }
 
@@ -89,7 +90,7 @@ public class ScriptRuleRunner {
         Map<String, Object> sessionData = preloadSession(matchCtx.sessionId());
 
         for (RuleEntry rule : cache.rulesForTenant(tenantId)) {
-            if (!"groovy".equals(rule.runtime()) || !"cloud".equals(rule.layer())) {
+            if (!isExecutableScriptRule(rule)) {
                 continue;
             }
             if (LegacyPolicyRules.isDeprecatedMetaRule(rule.ruleId())) {
@@ -189,7 +190,7 @@ public class ScriptRuleRunner {
             Map<String, Object> sessionData) {
         Map<String, L3RuleView> rules = new HashMap<>();
         for (RuleEntry e : cache.rulesForTenant(tenantId)) {
-            if (!"groovy".equals(e.runtime())) {
+            if (!"groovy".equals(e.runtime()) && !"agent-groovy".equals(e.runtime())) {
                 continue;
             }
             rules.put(
@@ -264,6 +265,23 @@ public class ScriptRuleRunner {
                 rule.enforceMode(),
                 rule.canaryPercent() > 0 ? rule.canaryPercent() : null,
                 rule.asyncActionConfig());
+    }
+
+    /**
+     * Whether this rule should be executed by the script runner.
+     *
+     * <p>Supports both cloud-layer {@code groovy} rules and agent-layer
+     * {@code agent-groovy} rules. Both use the same Groovy L3 executor with
+     * {@code decide(ctx)} → boolean semantics; the difference is that
+     * agent-groovy rules have access to session-aware ctx extensions
+     * (sessionHistory, sessionRiskScore, toolCallCount).
+     */
+    private static boolean isExecutableScriptRule(RuleEntry rule) {
+        if (rule == null || rule.runtime() == null || rule.layer() == null) {
+            return false;
+        }
+        return ("groovy".equals(rule.runtime()) && "cloud".equals(rule.layer()))
+                || ("agent-groovy".equals(rule.runtime()) && "agent".equals(rule.layer()));
     }
 
     private static String bodyText(Object body) {

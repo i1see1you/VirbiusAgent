@@ -36,6 +36,6 @@
     "canary_session_key" : "device_id",
     "dlp_vault_ttl_ms" : 1800000
   },
-  "artifact_revision" : 6,
-  "published_at" : "2026-07-07T03:15:38.564013Z"
+  "artifact_revision" : 9,
+  "published_at" : "2026-07-07T05:18:25.826541Z"
 }
