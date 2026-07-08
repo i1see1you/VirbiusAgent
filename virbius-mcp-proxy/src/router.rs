@@ -1,4 +1,10 @@
 /// JSON-RPC method router: routes MCP protocol methods to handlers.
+///
+/// In single-upstream mode, behavior is identical to the original 1:1 proxy.
+/// In multi-upstream mode:
+/// - `initialize` is forwarded to all upstreams concurrently
+/// - `tools/list` merges tools from all upstreams, prefixes conflicting names
+/// - `tools/call` routes to the correct upstream via `tool_routes`
 
 use serde_json::Value;
 use tracing::{debug, warn};
@@ -8,6 +14,10 @@ use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
 use crate::pipeline::{PipelineResult, SharedPipeline};
 use crate::session::{Session, SessionManager};
 use crate::upstream::UpstreamManager;
+
+/// Separator used for prefixed tool names in multi-upstream mode.
+/// Only applied when the same tool name exists on multiple upstreams.
+const TOOL_PREFIX_SEP: &str = "__";
 
 /// Process a single JSON-RPC request and return a response.
 ///
@@ -57,37 +67,72 @@ pub async fn route_request(
         _ => {
             // Transparent forward for all other methods
             if is_notification {
-                match upstream_mgr.get_or_connect(session_id).await {
-                    Ok(upstream) => {
-                        let _ = upstream.forward_notification(request).await;
+                if upstream_mgr.is_single_upstream() {
+                    match upstream_mgr.get_or_connect_single(session_id).await {
+                        Ok(upstream) => {
+                            let _ = upstream.forward_notification(request).await;
+                        }
+                        Err(e) => {
+                            warn!("upstream connect failed for notification: {e}");
+                        }
                     }
-                    Err(e) => {
-                        warn!("upstream connect failed for notification: {e}");
+                } else {
+                    // Multi-upstream: forward to all (best-effort)
+                    for name in upstream_mgr.upstream_names() {
+                        if let Ok(upstream) = upstream_mgr.get_or_connect(session_id, name).await {
+                            let _ = upstream.forward_notification(request).await;
+                        }
                     }
                 }
                 None
             } else {
-                match upstream_mgr.get_or_connect(session_id).await {
-                    Ok(upstream) => match upstream.forward(request).await {
-                        Ok(resp) => Some(resp),
+                if upstream_mgr.is_single_upstream() {
+                    match upstream_mgr.get_or_connect_single(session_id).await {
+                        Ok(upstream) => match upstream.forward(request).await {
+                            Ok(resp) => Some(resp),
+                            Err(e) => Some(jsonrpc_error(
+                                -32603,
+                                &id,
+                                &format!("upstream error: {e}"),
+                            )),
+                        },
                         Err(e) => Some(jsonrpc_error(
                             -32603,
                             &id,
-                            &format!("upstream error: {e}"),
+                            &format!("upstream connect error: {e}"),
                         )),
-                    },
-                    Err(e) => Some(jsonrpc_error(
+                    }
+                } else {
+                    // Multi-upstream: forward to first upstream that succeeds
+                    let mut last_err = None;
+                    for name in upstream_mgr.upstream_names() {
+                        match upstream_mgr.get_or_connect(session_id, name).await {
+                            Ok(upstream) => match upstream.forward(request).await {
+                                Ok(resp) => return Some(resp),
+                                Err(e) => {
+                                    last_err = Some(format!("upstream {name}: {e}"));
+                                }
+                            },
+                            Err(e) => {
+                                last_err = Some(format!("upstream {name} connect: {e}"));
+                            }
+                        }
+                    }
+                    Some(jsonrpc_error(
                         -32603,
                         &id,
-                        &format!("upstream connect error: {e}"),
-                    )),
+                        &format!("all upstreams failed: {}", last_err.unwrap_or_default()),
+                    ))
                 }
             }
         }
     }
 }
 
-/// Handle `initialize`: forward to upstream, inject Proxy capabilities, extract session.
+/// Handle `initialize`: forward to upstream(s), inject Proxy capabilities, extract session.
+///
+/// - Single-upstream: forward to the sole upstream (original behavior).
+/// - Multi-upstream: forward to ALL upstreams concurrently, merge capabilities.
 async fn handle_initialize(
     id: &Value,
     params: &Value,
@@ -109,63 +154,117 @@ async fn handle_initialize(
     );
     session_mgr.insert(session_id.to_string(), session);
 
-    // Get or create upstream connection for this session
-    let upstream = match upstream_mgr.get_or_connect(session_id).await {
-        Ok(u) => u,
-        Err(e) => {
+    if upstream_mgr.is_single_upstream() {
+        // ── Single-upstream mode (original behavior) ──
+        let upstream = match upstream_mgr.get_or_connect_single(session_id).await {
+            Ok(u) => u,
+            Err(e) => {
+                return Some(jsonrpc_error(
+                    -32603,
+                    id,
+                    &format!("upstream connect failed: {e}"),
+                ))
+            }
+        };
+
+        let forward_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "initialize",
+            "params": params,
+        });
+
+        match upstream.forward(&forward_req).await {
+            Ok(resp) => {
+                if let Some(mut s) = session_mgr.get(session_id) {
+                    s.mark_upstream_initialized("default");
+                    session_mgr.update(session_id.to_string(), s);
+                }
+                Some(inject_proxy_capabilities(resp))
+            }
+            Err(e) => Some(jsonrpc_error(
+                -32603,
+                id,
+                &format!("upstream initialize failed: {e}"),
+            )),
+        }
+    } else {
+        // ── Multi-upstream mode ──
+        let upstream_names = upstream_mgr.upstream_names();
+
+        // Forward initialize to all upstreams concurrently
+        let mut tasks = Vec::new();
+        for name in &upstream_names {
+            let name = name.to_string();
+            let sid = session_id.to_string();
+            let id_clone = id.clone();
+            let params_clone = params.clone();
+            let mgr_ref = upstream_mgr;
+            // We can't easily spawn async tasks that borrow upstream_mgr,
+            // so we connect sequentially (connections are cached after first call)
+            let connect_result = mgr_ref.get_or_connect(&sid, &name).await;
+            match connect_result {
+                Ok(upstream) => {
+                    let forward_req = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "id": &id_clone,
+                        "method": "initialize",
+                        "params": &params_clone,
+                    });
+                    tasks.push((name, upstream, forward_req));
+                }
+                Err(e) => {
+                    warn!("upstream {} connect failed during initialize: {}", name, e);
+                }
+            }
+        }
+
+        if tasks.is_empty() {
             return Some(jsonrpc_error(
                 -32603,
                 id,
-                &format!("upstream connect failed: {e}"),
-            ))
+                "all upstreams failed to connect during initialize",
+            ));
         }
-    };
 
-    // Forward initialize to upstream MCP Server
-    let forward_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "initialize",
-        "params": params,
-    });
+        // Forward to each upstream and collect results
+        let mut first_ok: Option<Value> = None;
+        let mut last_err: Option<String> = None;
 
-    match upstream.forward(&forward_req).await {
-        Ok(resp) => {
-            // Mark session as upstream-initialized
-            if let Some(mut s) = session_mgr.get(session_id) {
-                s.upstream_initialized = true;
-                session_mgr.update(session_id.to_string(), s);
-            }
-
-            // Inject Proxy capabilities into the response
-            let mut resp = resp;
-            if let Some(result) = resp.get_mut("result").and_then(|r| r.as_object_mut()) {
-                if let Some(caps) = result
-                    .get_mut("capabilities")
-                    .and_then(|c| c.as_object_mut())
-                {
-                    caps.insert(
-                        "virbiusProxy".to_string(),
-                        serde_json::json!({
-                            "securityPipeline": true,
-                            "licenseVerification": true,
-                            "engineEvaluate": true,
-                            "fastPath": true,
-                        }),
-                    );
+        for (name, upstream, forward_req) in &tasks {
+            match upstream.forward(forward_req).await {
+                Ok(resp) => {
+                    if let Some(mut s) = session_mgr.get(session_id) {
+                        s.mark_upstream_initialized(name);
+                        session_mgr.update(session_id.to_string(), s);
+                    }
+                    if first_ok.is_none() {
+                        first_ok = Some(resp);
+                    }
+                }
+                Err(e) => {
+                    warn!("upstream {} initialize failed: {}", name, e);
+                    last_err = Some(format!("{}: {}", name, e));
                 }
             }
-            Some(resp)
         }
-        Err(e) => Some(jsonrpc_error(
-            -32603,
-            id,
-            &format!("upstream initialize failed: {e}"),
-        )),
+
+        match first_ok {
+            Some(resp) => Some(inject_proxy_capabilities(resp)),
+            None => Some(jsonrpc_error(
+                -32603,
+                id,
+                &format!("all upstreams failed: {}", last_err.unwrap_or_default()),
+            )),
+        }
     }
 }
 
-/// Handle `tools/list`: forward to upstream, filter by License allowed_tools.
+/// Handle `tools/list`: forward to upstream(s), filter by License allowed_tools.
+///
+/// - Single-upstream: forward and filter (original behavior).
+/// - Multi-upstream: fetch from ALL upstreams concurrently, merge tool lists,
+///   prefix conflicting names, register routes, then filter.
 async fn handle_tools_list(
     id: &Value,
     session_id: &str,
@@ -183,55 +282,248 @@ async fn handle_tools_list(
         }
     };
 
-    let upstream = match upstream_mgr.get_or_connect(session_id).await {
-        Ok(u) => u,
-        Err(e) => {
+    if upstream_mgr.is_single_upstream() {
+        // ── Single-upstream mode (original behavior) ──
+        let upstream = match upstream_mgr.get_or_connect_single(session_id).await {
+            Ok(u) => u,
+            Err(e) => {
+                return Some(jsonrpc_error(
+                    -32603,
+                    id,
+                    &format!("upstream connect failed: {e}"),
+                ))
+            }
+        };
+
+        let forward_req = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/list",
+        });
+
+        match upstream.forward(&forward_req).await {
+            Ok(resp) => filter_tools_list(resp, &session),
+            Err(e) => Some(jsonrpc_error(
+                -32603,
+                id,
+                &format!("upstream tools/list failed: {e}"),
+            )),
+        }
+    } else {
+        // ── Multi-upstream mode ──
+        let upstream_names = upstream_mgr.upstream_names();
+
+        // Fetch tools/list from all upstreams, tracking which upstream
+        // each tool came from.
+        let mut tools_by_upstream: Vec<(String, Vec<Value>)> = Vec::new();
+        let mut last_err: Option<String> = None;
+
+        for name in &upstream_names {
+            let upstream = match upstream_mgr.get_or_connect(session_id, name).await {
+                Ok(u) => u,
+                Err(e) => {
+                    warn!("upstream {} connect failed for tools/list: {}", name, e);
+                    last_err = Some(format!("{}: {}", name, e));
+                    continue;
+                }
+            };
+
+            let forward_req = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/list",
+            });
+
+            match upstream.forward(&forward_req).await {
+                Ok(resp) => {
+                    if let Some(tools) = resp
+                        .get("result")
+                        .and_then(|r| r.get("tools"))
+                        .and_then(|t| t.as_array())
+                    {
+                        tools_by_upstream.push((name.to_string(), tools.clone()));
+                    }
+                }
+                Err(e) => {
+                    warn!("upstream {} tools/list failed: {}", name, e);
+                    last_err = Some(format!("{}: {}", name, e));
+                }
+            }
+        }
+
+        if tools_by_upstream.is_empty() && last_err.is_some() {
             return Some(jsonrpc_error(
                 -32603,
                 id,
-                &format!("upstream connect failed: {e}"),
-            ))
+                &format!("all upstreams failed: {}", last_err.unwrap()),
+            ));
         }
-    };
 
-    let forward_req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "method": "tools/list",
-    });
+        // Merge tools from all upstreams, prefix conflicting names,
+        // and register routes in upstream_mgr.
+        let merged_tools = merge_tools_from_upstreams(tools_by_upstream, upstream_mgr);
 
-    match upstream.forward(&forward_req).await {
-        Ok(resp) => {
-            // Filter tools by License allowed_tools
-            filter_tools_list(resp, &session)
-        }
-        Err(e) => Some(jsonrpc_error(
-            -32603,
-            id,
-            &format!("upstream tools/list failed: {e}"),
-        )),
+        let merged = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": {
+                "tools": merged_tools
+            }
+        });
+
+        filter_tools_list(merged, &session)
     }
 }
 
+/// Merge tools from multiple upstreams, prefixing conflicting names.
+///
+/// Returns the merged tool list and registers routes in `upstream_mgr`.
+fn merge_tools_from_upstreams(
+    tools_by_upstream: Vec<(String, Vec<Value>)>,
+    upstream_mgr: &UpstreamManager,
+) -> Vec<Value> {
+    use std::collections::HashMap;
+
+    // Count occurrences of each original tool name across upstreams
+    let mut name_counts: HashMap<String, u32> = HashMap::new();
+    for (upstream_name, tools) in &tools_by_upstream {
+        // Use a set to count each name only once per upstream
+        let mut seen_in_this_upstream = std::collections::HashSet::new();
+        for tool in tools {
+            let name = tool
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !name.is_empty() && seen_in_this_upstream.insert(name.clone()) {
+                *name_counts.entry(name).or_insert(0) += 1;
+            }
+        }
+        let _ = upstream_name; // suppress unused warning
+    }
+
+    // Clear old routes
+    upstream_mgr.clear_tool_routes();
+
+    let mut merged: Vec<Value> = Vec::new();
+
+    for (upstream_name, tools) in tools_by_upstream {
+        for tool in tools {
+            let original_name = tool
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if original_name.is_empty() {
+                continue;
+            }
+
+            let has_conflict = name_counts.get(&original_name).copied().unwrap_or(0) > 1;
+            let displayed_name = if has_conflict {
+                format!("{}{}{}", upstream_name, TOOL_PREFIX_SEP, original_name)
+            } else {
+                original_name.clone()
+            };
+
+            // Register route: displayed_name → (upstream_name, original_name)
+            upstream_mgr.register_tool_route(&displayed_name, &upstream_name, &original_name);
+
+            // Clone tool and update its name
+            let mut tool = tool;
+            if let Some(obj) = tool.as_object_mut() {
+                obj.insert("name".to_string(), Value::String(displayed_name.clone()));
+            }
+
+            // Inject upstream annotation for debugging
+            if let Some(obj) = tool.as_object_mut() {
+                obj.insert(
+                    "x-virbius-upstream".to_string(),
+                    Value::String(upstream_name.clone()),
+                );
+            }
+
+            merged.push(tool);
+        }
+    }
+
+    merged
+}
+
 /// Filter the tools/list response by License allowed_tools.
+///
+/// If the session has no License or `allowed_tools` is empty (meaning all tools
+/// are permitted), no filtering is applied. Otherwise, only tools whose `name`
+/// appears in `allowed_tools` are retained.
+///
+/// In multi-upstream mode, tool names may be prefixed (e.g., `fs__read_file`).
+/// The filter checks the **original** tool name (after stripping prefix) against
+/// the License allowlist.
 fn filter_tools_list(mut resp: Value, session: &Session) -> Option<Value> {
     // If session has no License, we still return tools (fallback policy will filter at call time)
     if !session.has_license() {
         return Some(resp);
     }
 
+    // Empty allowed_tools means all tools are allowed (License wildcard)
+    if session.allowed_tools.is_empty() {
+        return Some(resp);
+    }
+
     if let Some(result) = resp.get_mut("result").and_then(|r| r.as_object_mut()) {
         if let Some(tools) = result.get_mut("tools").and_then(|t| t.as_array_mut()) {
-            let _ = tools; // No filtering at list level for P0
+            let allowed = &session.allowed_tools;
+            tools.retain(|tool| {
+                let displayed_name = tool
+                    .get("name")
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("");
+
+                // Check both the displayed name and the original name (strip prefix).
+                // In single-upstream mode there's no prefix, so displayed == original.
+                let original_name = strip_tool_prefix(displayed_name);
+
+                let matched = allowed.contains(&displayed_name.to_string())
+                    || allowed.contains(&original_name.to_string());
+
+                if matched {
+                    return true;
+                }
+
+                // Also check x-virbius-upstream annotation for debugging
+                debug!(
+                    "tools/list filtered out: {} (original: {})",
+                    displayed_name, original_name
+                );
+                false
+            });
+            debug!(
+                "tools/list filtered: {} tools remaining after License allowlist",
+                tools.len()
+            );
         }
     }
     Some(resp)
+}
+
+/// Strip the upstream prefix from a tool name, if present.
+///
+/// `fs__read_file` → `read_file`
+/// `read_file` → `read_file` (no prefix)
+fn strip_tool_prefix(name: &str) -> &str {
+    match name.find(TOOL_PREFIX_SEP) {
+        Some(pos) => &name[pos + TOOL_PREFIX_SEP.len()..],
+        None => name,
+    }
 }
 
 /// Handle `tools/call`: run the security pipeline, then either:
 /// - For egress tools (curl/http_request/fetch): Proxy the HTTP request directly
 ///   with streaming response support (reqwest bytes_stream).
 /// - For other tools: Forward to upstream MCP Server.
+///
+/// In multi-upstream mode, the tool name is resolved via `tool_routes` to
+/// determine the correct upstream and the original tool name.
 async fn handle_tools_call(
     id: &Value,
     params: &Value,
@@ -253,7 +545,7 @@ async fn handle_tools_call(
         }
     };
 
-    let tool_name = params
+    let displayed_tool_name = params
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("");
@@ -262,7 +554,7 @@ async fn handle_tools_call(
         .cloned()
         .unwrap_or(Value::Object(serde_json::Map::new()));
 
-    if tool_name.is_empty() {
+    if displayed_tool_name.is_empty() {
         return Some(jsonrpc_error_simple(
             VirbiusErrorCode::SchemaViolation,
             id.clone(),
@@ -273,24 +565,77 @@ async fn handle_tools_call(
         ));
     }
 
-    // Run security pipeline
-    let result = pipeline.check_tool_call(&session, tool_name, &args).await;
+    // Resolve tool route: determine upstream_name and original_tool_name.
+    // In single-upstream mode, route_tool always returns the sole upstream.
+    let (upstream_name, original_tool_name) = match upstream_mgr.route_tool(displayed_tool_name) {
+        Some(route) => route,
+        None => {
+            // Tool not in routes. In multi-upstream mode, this means tools/list
+            // wasn't called or the tool doesn't exist. Try to use the displayed
+            // name as-is and pick the first upstream as best-effort.
+            if upstream_mgr.is_single_upstream() {
+                (upstream_mgr.upstream_names()[0].to_string(), displayed_tool_name.to_string())
+            } else {
+                // Try stripping a prefix in case the route wasn't registered
+                let stripped = strip_tool_prefix(displayed_tool_name);
+                if stripped != displayed_tool_name {
+                    // Has a prefix — try to find the upstream by the prefix
+                    let prefix_end = displayed_tool_name
+                        .find(TOOL_PREFIX_SEP)
+                        .unwrap_or(0);
+                    let possible_upstream = &displayed_tool_name[..prefix_end];
+                    let names = upstream_mgr.upstream_names();
+                    if names.iter().any(|n| *n == possible_upstream) {
+                        (possible_upstream.to_string(), stripped.to_string())
+                    } else {
+                        return Some(jsonrpc_error(
+                            -32602,
+                            id,
+                            &format!(
+                                "unknown tool '{}' — call tools/list first to discover available tools",
+                                displayed_tool_name
+                            ),
+                        ));
+                    }
+                } else {
+                    return Some(jsonrpc_error(
+                        -32602,
+                        id,
+                        &format!(
+                            "unknown tool '{}' — call tools/list first to discover available tools",
+                            displayed_tool_name
+                        ),
+                    ));
+                }
+            }
+        }
+    };
+
+    // Run security pipeline with the ORIGINAL tool name (before any prefix stripping).
+    // The License allowed_tools contains original names, not prefixed ones.
+    let result = pipeline.check_tool_call(&session, &original_tool_name, &args).await;
 
     match result {
-        PipelineResult::Allow { reason: _, .. } => {
+        PipelineResult::Allow { reason: _, risk_score, .. } => {
+            // Write back risk score from engine (if evaluated)
+            if let Some(score) = risk_score {
+                session.session_risk_score = score;
+            }
             // Increment call count
             session.increment_calls();
             session_mgr.update(session_id.to_string(), session.clone());
 
-            // Egress tools: Proxy HTTP request directly with streaming response
-            if crate::egress::is_egress_tool(tool_name) {
+            // Egress tools: Proxy HTTP request directly with streaming response.
+            // Check against the original tool name.
+            if crate::egress::is_egress_tool(&original_tool_name) {
                 return Some(
-                    proxy_egress_tool(id, tool_name, &args, egress_client, egress_hosts).await,
+                    proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts).await,
                 );
             }
 
-            // Non-egress tools: Forward to upstream MCP Server
-            let upstream = match upstream_mgr.get_or_connect(session_id).await {
+            // Non-egress tools: Forward to the resolved upstream.
+            // Use the ORIGINAL tool name (not prefixed) when forwarding.
+            let upstream = match upstream_mgr.get_or_connect(session_id, &upstream_name).await {
                 Ok(u) => u,
                 Err(e) => {
                     return Some(jsonrpc_error(
@@ -301,11 +646,23 @@ async fn handle_tools_call(
                 }
             };
 
+            // Build forwarded request with original tool name
+            let forward_params = if displayed_tool_name != original_tool_name {
+                // Replace the tool name in params with the original name
+                let mut p = params.clone();
+                if let Some(obj) = p.as_object_mut() {
+                    obj.insert("name".to_string(), Value::String(original_tool_name.clone()));
+                }
+                p
+            } else {
+                params.clone()
+            };
+
             let forward_req = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "method": "tools/call",
-                "params": params,
+                "params": forward_params,
             });
 
             match upstream.forward(&forward_req).await {
@@ -317,14 +674,22 @@ async fn handle_tools_call(
                 )),
             }
         }
-        PipelineResult::Deny { code, reason, .. } => Some(jsonrpc_error_simple(
-            code,
-            id.clone(),
-            tool_name,
-            &session.trace_id,
-            session.session_risk_score,
-            Some(&reason),
-        )),
+        PipelineResult::Deny { code, reason, risk_score, .. } => {
+            // Write back risk score from engine (if evaluated)
+            if let Some(score) = risk_score {
+                session.session_risk_score = score;
+            }
+            session_mgr.update(session_id.to_string(), session.clone());
+
+            Some(jsonrpc_error_simple(
+                code,
+                id.clone(),
+                &original_tool_name,
+                &session.trace_id,
+                session.session_risk_score,
+                Some(&reason),
+            ))
+        }
     }
 }
 
@@ -393,6 +758,28 @@ async fn proxy_egress_tool(
     }
 }
 
+/// Inject Virbius Proxy capabilities into an initialize response.
+fn inject_proxy_capabilities(mut resp: Value) -> Value {
+    if let Some(result) = resp.get_mut("result").and_then(|r| r.as_object_mut()) {
+        if let Some(caps) = result
+            .get_mut("capabilities")
+            .and_then(|c| c.as_object_mut())
+        {
+            caps.insert(
+                "virbiusProxy".to_string(),
+                serde_json::json!({
+                    "securityPipeline": true,
+                    "licenseVerification": true,
+                    "engineEvaluate": true,
+                    "fastPath": true,
+                    "multiUpstream": true,
+                }),
+            );
+        }
+    }
+    resp
+}
+
 /// Build a JSON-RPC error response (internal server error).
 fn jsonrpc_error(code: i32, id: &Value, message: &str) -> Value {
     serde_json::json!({
@@ -403,4 +790,124 @@ fn jsonrpc_error(code: i32, id: &Value, message: &str) -> Value {
             "message": message
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::Session;
+    use base64::Engine;
+
+    /// Helper: build a Session with the given allowed_tools in a fake JWT.
+    fn make_session_with_tools(tools: Vec<&str>) -> Session {
+        let payload = serde_json::json!({
+            "app_id": "test",
+            "allowed_tools": tools,
+        });
+        let payload_b64 =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let jwt = format!("header.{}.sig", payload_b64);
+        Session::from_meta(&serde_json::json!({ "app_id": "test", "license_jwt": jwt }))
+    }
+
+    fn make_session_no_license() -> Session {
+        Session::from_meta(&serde_json::json!({ "app_id": "test" }))
+    }
+
+    fn make_tools_list_response() -> Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "tools": [
+                    { "name": "read_file", "description": "Read" },
+                    { "name": "search", "description": "Search" },
+                    { "name": "execute_python", "description": "Exec" },
+                    { "name": "delete_file", "description": "Delete" }
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn test_filter_tools_list_with_license() {
+        let session = make_session_with_tools(vec!["read_file", "search"]);
+        let resp = make_tools_list_response();
+        let filtered = filter_tools_list(resp, &session).unwrap();
+
+        let tools = filtered["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 2);
+        let names: Vec<&str> = tools
+            .iter()
+            .map(|t| t["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"search"));
+        assert!(!names.contains(&"execute_python"));
+        assert!(!names.contains(&"delete_file"));
+    }
+
+    #[test]
+    fn test_filter_tools_list_no_license() {
+        let session = make_session_no_license();
+        let resp = make_tools_list_response();
+        let filtered = filter_tools_list(resp, &session).unwrap();
+
+        let tools = filtered["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 4); // No filtering without License
+    }
+
+    #[test]
+    fn test_filter_tools_list_empty_allowed() {
+        // License with empty allowed_tools = wildcard (all allowed)
+        let session = make_session_with_tools(vec![]);
+        let resp = make_tools_list_response();
+        let filtered = filter_tools_list(resp, &session).unwrap();
+
+        let tools = filtered["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 4); // No filtering for wildcard
+    }
+
+    #[test]
+    fn test_filter_tools_list_no_matching_tools() {
+        let session = make_session_with_tools(vec!["nonexistent_tool"]);
+        let resp = make_tools_list_response();
+        let filtered = filter_tools_list(resp, &session).unwrap();
+
+        let tools = filtered["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 0); // All filtered out
+    }
+
+    #[test]
+    fn test_filter_tools_list_prefixed_names() {
+        // In multi-upstream mode, tools may be prefixed.
+        // The filter should match against the original (stripped) name.
+        let session = make_session_with_tools(vec!["read_file"]);
+        let resp = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "tools": [
+                    { "name": "fs__read_file", "description": "Read from fs" },
+                    { "name": "backup__read_file", "description": "Read from backup" },
+                    { "name": "search", "description": "Search" }
+                ]
+            }
+        });
+        let filtered = filter_tools_list(resp, &session).unwrap();
+        let tools = filtered["result"]["tools"].as_array().unwrap();
+        // Both prefixed read_file variants should pass (original name matches)
+        // search should be filtered out (not in allowed_tools)
+        assert_eq!(tools.len(), 2);
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        assert!(names.contains(&"fs__read_file"));
+        assert!(names.contains(&"backup__read_file"));
+    }
+
+    #[test]
+    fn test_strip_tool_prefix() {
+        assert_eq!(strip_tool_prefix("read_file"), "read_file");
+        assert_eq!(strip_tool_prefix("fs__read_file"), "read_file");
+        assert_eq!(strip_tool_prefix("gh__create_issue"), "create_issue");
+    }
 }

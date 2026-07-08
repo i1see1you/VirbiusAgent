@@ -22,3 +22,4 @@ futures-util = "0.3"
 url = "2"
 axum = { version = "0.7", features = ["json"] }
 tokio-stream = "0.1"
+base64 = "0.22"

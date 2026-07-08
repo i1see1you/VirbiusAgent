@@ -22,12 +22,16 @@ pub enum PipelineResult {
     Allow {
         reason: String,
         rule_id: Option<String>,
+        /// Updated session risk score from the engine (if evaluated).
+        risk_score: Option<u32>,
     },
     /// Tool call is denied — return JSON-RPC error to Agent.
     Deny {
         code: VirbiusErrorCode,
         reason: String,
         rule_id: Option<String>,
+        /// Updated session risk score from the engine (if evaluated).
+        risk_score: Option<u32>,
     },
 }
 
@@ -36,6 +40,7 @@ impl PipelineResult {
         Self::Allow {
             reason: reason.to_string(),
             rule_id: None,
+            risk_score: None,
         }
     }
 
@@ -44,6 +49,7 @@ impl PipelineResult {
             code,
             reason: reason.to_string(),
             rule_id: None,
+            risk_score: None,
         }
     }
 }
@@ -253,6 +259,7 @@ impl SecurityPipeline {
                         code: VirbiusErrorCode::EngineBlocked,
                         reason: resp.reason.unwrap_or_else(|| "engine_blocked".to_string()),
                         rule_id: resp.rule_id,
+                        risk_score: Some(resp.session_risk_score),
                     };
                 }
 
@@ -266,10 +273,12 @@ impl SecurityPipeline {
                         Some("risk_threshold_exceeded"),
                     )
                     .await;
-                    return PipelineResult::deny(
-                        VirbiusErrorCode::RiskThreshold,
-                        "session risk score exceeded quota",
-                    );
+                    return PipelineResult::Deny {
+                        code: VirbiusErrorCode::RiskThreshold,
+                        reason: "session risk score exceeded quota".to_string(),
+                        rule_id: None,
+                        risk_score: Some(resp.session_risk_score),
+                    };
                 }
 
                 self.audit_tool_call(
@@ -283,6 +292,7 @@ impl SecurityPipeline {
                 PipelineResult::Allow {
                     reason: "engine".to_string(),
                     rule_id: resp.rule_id,
+                    risk_score: Some(resp.session_risk_score),
                 }
             }
             Err(e) => {

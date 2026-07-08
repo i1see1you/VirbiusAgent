@@ -5,9 +5,11 @@
 /// - Persists across TCP reconnects (within TTL)
 /// - Cleaned up by background task when TTL expires
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use base64::Engine;
 use dashmap::DashMap;
 use tracing::debug;
 
@@ -23,9 +25,13 @@ pub struct Session {
     pub license_jwt: String,
     pub trace_id: String,
     pub tool_call_count: u32,
-    pub upstream_initialized: bool,
+    /// Per-upstream initialization state: upstream_name → initialized.
+    pub upstream_initialized: HashMap<String, bool>,
     /// Current session risk score (updated by engine responses).
     pub session_risk_score: u32,
+    /// Tools allowed by the License (extracted from JWT payload).
+    /// Empty means all tools allowed (or no License).
+    pub allowed_tools: Vec<String>,
     /// Last active timestamp (for TTL cleanup).
     pub last_active: Instant,
     /// Creation timestamp.
@@ -63,6 +69,12 @@ impl Session {
             session_id
         };
 
+        let allowed_tools = if license_jwt.is_empty() {
+            Vec::new()
+        } else {
+            extract_allowed_tools_from_jwt(&license_jwt)
+        };
+
         Self {
             session_id,
             app_id,
@@ -70,8 +82,9 @@ impl Session {
             license_jwt,
             trace_id: uuid::Uuid::new_v4().to_string(),
             tool_call_count: 0,
-            upstream_initialized: false,
+            upstream_initialized: HashMap::new(),
             session_risk_score: 0,
+            allowed_tools,
             last_active: now,
             created_at: now,
         }
@@ -91,6 +104,61 @@ impl Session {
     pub fn touch(&mut self) {
         self.last_active = Instant::now();
     }
+
+    /// Check if a specific upstream has been initialized for this session.
+    pub fn is_upstream_initialized(&self, name: &str) -> bool {
+        self.upstream_initialized.get(name).copied().unwrap_or(false)
+    }
+
+    /// Mark an upstream as initialized for this session.
+    pub fn mark_upstream_initialized(&mut self, name: &str) {
+        self.upstream_initialized.insert(name.to_string(), true);
+    }
+}
+
+/// Decode the JWT payload (base64url) and extract `allowed_tools`.
+///
+/// This does **not** verify the signature — it is used only for display-level
+/// filtering in `tools/list`. The actual security enforcement happens at
+/// `tools/call` time via full License verification in the security pipeline.
+fn extract_allowed_tools_from_jwt(jwt: &str) -> Vec<String> {
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return Vec::new();
+    }
+
+    // Try URL-safe no-pad first, then standard with manual padding
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .or_else(|_| {
+            let mut s = parts[1].to_string();
+            match s.len() % 4 {
+                2 => s.push_str("=="),
+                3 => s.push_str("="),
+                _ => {}
+            }
+            base64::engine::general_purpose::STANDARD.decode(&s)
+        })
+        .unwrap_or_default();
+
+    if payload_bytes.is_empty() {
+        return Vec::new();
+    }
+
+    let claims: serde_json::Value = match serde_json::from_slice(&payload_bytes) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    claims
+        .get("allowed_tools")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Concurrent session manager keyed by session_id (String).
@@ -254,5 +322,69 @@ mod tests {
 
         // Should still be valid (touched at 15ms, TTL is 30ms)
         assert_eq!(mgr.cleanup_expired().len(), 0);
+    }
+
+    #[test]
+    fn test_extract_allowed_tools_from_jwt() {
+        // Construct a fake JWT: header.payload.signature
+        // Payload contains allowed_tools: ["read_file", "search"]
+        let payload = serde_json::json!({
+            "app_id": "test-agent",
+            "allowed_tools": ["read_file", "search"],
+            "risk_quota": 60,
+            "exp": 9999999999i64,
+        });
+        let payload_bytes = serde_json::to_vec(&payload).unwrap();
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload_bytes);
+        let jwt = format!("eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.{}.sig", payload_b64);
+
+        let tools = extract_allowed_tools_from_jwt(&jwt);
+        assert_eq!(tools, vec!["read_file", "search"]);
+    }
+
+    #[test]
+    fn test_extract_allowed_tools_empty_jwt() {
+        let tools = extract_allowed_tools_from_jwt("not-a-jwt");
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_extract_allowed_tools_no_tools_field() {
+        let payload = serde_json::json!({"app_id": "test"});
+        let payload_bytes = serde_json::to_vec(&payload).unwrap();
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload_bytes);
+        let jwt = format!("header.{}.sig", payload_b64);
+
+        let tools = extract_allowed_tools_from_jwt(&jwt);
+        assert!(tools.is_empty());
+    }
+
+    #[test]
+    fn test_session_allowed_tools_from_meta() {
+        // Build a JWT with allowed_tools
+        let payload = serde_json::json!({
+            "app_id": "test-agent",
+            "allowed_tools": ["read_file", "search", "execute_python"],
+            "risk_quota": 60,
+            "exp": 9999999999i64,
+        });
+        let payload_bytes = serde_json::to_vec(&payload).unwrap();
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload_bytes);
+        let jwt = format!("eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.{}.sig", payload_b64);
+
+        let meta = serde_json::json!({
+            "app_id": "test-agent",
+            "license_jwt": jwt,
+        });
+        let s = Session::from_meta(&meta);
+        assert!(s.has_license());
+        assert_eq!(s.allowed_tools, vec!["read_file", "search", "execute_python"]);
+    }
+
+    #[test]
+    fn test_session_no_license_has_empty_allowed_tools() {
+        let s = Session::from_meta(&serde_json::Value::Null);
+        assert!(!s.has_license());
+        assert!(s.allowed_tools.is_empty());
     }
 }

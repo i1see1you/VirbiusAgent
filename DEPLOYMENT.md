@@ -2,7 +2,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v3.2 |
+| 文档版本 | v3.3 |
 | 状态 | 草案 |
 | 关联 | [DESIGN.md](DESIGN.md)（索引） · [ARCHITECTURE.md](ARCHITECTURE.md) |
 
@@ -22,6 +22,10 @@
 | **Higress** (管层 Ingress) | 80/443 | 独立部署 / K8s | 南北向（入站） |
 | **Higress** (管层 Egress) | 8081 | 独立部署 / K8s | 南北向（出站） |
 | **MCP Server** (Python/Node) | 8080+ | 独立部署 / K8s | — |
+
+> **多上游支持**：MCP Proxy 支持同时连接多个 MCP Server（P1 新增），通过工具名路由 `tools/call`。
+> 单上游模式向下兼容（旧 `upstream_url` 配置自动归一化），多上游时冲突工具名自动加前缀 `{upstream}__{tool}`。
+> 详细方案见 [PROTOCOL.md §2.6.2](PROTOCOL.md#262-多上游支持multi-upstream)。
 | **virbius-engine** | 8082 | 云侧 | — |
 | **virbius-control** | 8080 | 云侧 | — |
 | **Falco** (核层观测) | 无（DaemonSet） | Agent 所在宿主机 | 旁路 |
@@ -153,7 +157,7 @@
 
 > SDK 模式下安全预检在 Agent 进程内完成，无额外进程开销。
 > `virbius-core` 通过 Rust FFI 导出 C ABI（`virbius_init` / `virbius_scan` / `virbius_reload`），可被非 Rust 语言调用。
-> 缺少管层（无限流/TLS）和核层（无 Falco 观测），需在需要时与方式 1 或方式 7 组合使用。
+> 缺少管层（无限流/TLS）和核层（无 Falco 观测），需在需要时与方式 1 或方式 2 组合使用。
 
 ---
 
@@ -171,7 +175,7 @@
 
 #### 8.3.2 四层安全覆盖
 
-| 层级 | 方式 1 (MCP Proxy) | 方式 7 (Higress) | 方式 3 (SDK) |
+| 层级 | 方式 1 (MCP Proxy) | 方式 2 (Higress) | 方式 3 (SDK) |
 |------|:------------------:|:------------------:|:------------:|
 | **端层 (Edge)** | ✅ Proxy 内嵌完整管线 | ❌ 远程 Agent 无 `virbius-core` | ✅ 进程内直接调用 |
 | **管层 (Gateway)** | ❌ 东西向不经 Higress | ✅ Higress 拦截南北向 | ❌ 无网关 |
@@ -182,7 +186,7 @@
 
 #### 8.3.3 安全能力对比
 
-| 安全能力 | 方式 1 (MCP Proxy) | 方式 7 (Higress) | 方式 3 (SDK) |
+| 安全能力 | 方式 1 (MCP Proxy) | 方式 2 (Higress) | 方式 3 (SDK) |
 |---------|:------------------:|:------------------:|:------------:|
 | **License 校验** | ✅ Proxy 内 `license::verify()` | ✅ Higress WASM 校验签名 | ✅ 进程内 `License::verify()` |
 | **工具白名单** | ✅ `precheck()` | ✅ WASM allowlist | ✅ `precheck()` |
@@ -197,11 +201,11 @@
 | **Falco 观测** | ✅ syscall/net/file | ❌ | ❌ |
 | **沙箱隔离 (P2)** | ✅ Proxy 可 posix_spawn + Landlock | ❌ | ✅ Agent 可直接 Landlock |
 
-> **方式 3 的独特价值**：SDK 方式是唯一能在 **prompt 层面** 拦截的方式——在 Agent 发送 LLM 请求前，进程内调用 `PromptGateway::enhance()` 完成宪法约束注入和 PII 脱敏。方式 1 和方式 7 只能拦截 `tools/call`，无法拦截 prompt。如果安全需求包含 Prompt 注入防护和 PII 脱敏，SDK 方式是唯一选择，或需在方式 1/7 基础上叠加方式 3。
+> **方式 3 的独特价值**：SDK 方式是唯一能在 **prompt 层面** 拦截的方式——在 Agent 发送 LLM 请求前，进程内调用 `PromptGateway::enhance()` 完成宪法约束注入和 PII 脱敏。方式 1 和方式 2 只能拦截 `tools/call`，无法拦截 prompt。如果安全需求包含 Prompt 注入防护和 PII 脱敏，SDK 方式是唯一选择，或需在方式 1/7 基础上叠加方式 3。
 
 #### 8.3.4 性能对比
 
-| 性能指标 | 方式 1 (MCP Proxy) | 方式 7 (Higress) | 方式 3 (SDK) |
+| 性能指标 | 方式 1 (MCP Proxy) | 方式 2 (Higress) | 方式 3 (SDK) |
 |---------|:------------------:|:------------------:|:------------:|
 | **预检延迟** | ~1-2ms（含 IPC） | ~3-5ms（含 HTTP + WASM） | **<0.5ms**（内存函数调用） |
 | **快速通道延迟** | ~2ms | ~5ms | **<0.5ms** |
@@ -254,11 +258,11 @@ Agent 是否在 K8s 集群内？
 │   │   │   └── 其他 → 方式 1 (MCP Proxy) ← 零代码 + 核层观测
 │   │   └── 否（存量框架）→ 方式 1 (MCP Proxy) ← 零代码接入
 │   └── 是否需要四层全覆盖？
-│       └── 是 → 方式 1 + 方式 7 组合 ← 纵深防御（见 §8.4）
+│       └── 是 → 方式 1 + 方式 2 组合 ← 纵深防御（见 §8.4）
 └── 否（远程/SaaS）
-    ├── 需要 TLS + 限流 → 方式 7 (Higress) ← 唯一选择
+    ├── 需要 TLS + 限流 → 方式 2 (Higress) ← 唯一选择
     └── 自研 Agent 可改代码 → 方式 3 (SDK) ← 端层深度安全
-                              + 方式 7 (Higress) ← 补管层能力
+                              + 方式 2 (Higress) ← 补管层能力
 ```
 
 ---
@@ -267,7 +271,7 @@ Agent 是否在 K8s 集群内？
 
 #### 8.4.1 拓扑
 
-当安全需求要求端管核云四层全部覆盖时，需将方式 1（MCP Proxy Sidecar）与方式 7（Higress Ingress）组合部署——远程流量经管层入集群，到达端层 Sidecar Agent Pod，核层在节点上观测，云层统一终判：
+当安全需求要求端管核云四层全部覆盖时，需将方式 1（MCP Proxy Sidecar）与方式 2（Higress Ingress）组合部署——远程流量经管层入集群，到达端层 Sidecar Agent Pod，核层在节点上观测，云层统一终判：
 
 ```
 远程 Agent (集群外)

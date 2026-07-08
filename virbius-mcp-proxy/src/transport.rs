@@ -154,16 +154,43 @@ pub fn create_router(state: AppState) -> Router {
 /// Returns a `text/event-stream` response:
 /// 1. First event: `endpoint` with the POST URL (`/messages/?session_id=xxx`)
 /// 2. Subsequent events: `message` with JSON-RPC responses
+///
+/// When the client disconnects (drops the SSE stream), a background monitoring
+/// task detects the dropped receiver and proactively cleans up:
+/// - SSE session channel removed from `sse_sessions`
+/// - Logical session removed from `session_mgr`
+/// - Upstream connection removed from `upstream_mgr`
 async fn handle_sse(State(state): State<AppState>) -> Response {
     let session_id = uuid::Uuid::new_v4().to_string();
 
     let (tx, rx) = mpsc::channel::<Value>(64);
 
-    state.sse_sessions.insert(session_id.clone(), tx);
+    state.sse_sessions.insert(session_id.clone(), tx.clone());
 
     let endpoint_url = format!("/messages/?session_id={}", session_id);
 
     debug!("SSE session created: {}", session_id);
+
+    // Spawn disconnection monitor: detects when the SSE receiver (held by the
+    // response stream) is dropped, then cleans up all per-session resources.
+    {
+        let mon_session_id = session_id.clone();
+        let mon_sse = state.sse_sessions.clone();
+        let mon_session_mgr = state.session_mgr.clone();
+        let mon_upstream_mgr = state.upstream_mgr.clone();
+        tokio::spawn(async move {
+            // tx.closed() completes when the Receiver (rx) is dropped,
+            // which happens when axum drops the SSE response (client disconnect).
+            tx.closed().await;
+            debug!(
+                "SSE session {} disconnected, cleaning up resources",
+                mon_session_id
+            );
+            mon_sse.remove(&mon_session_id);
+            mon_session_mgr.remove(&mon_session_id);
+            mon_upstream_mgr.remove(&mon_session_id);
+        });
+    }
 
     // Create stream: first the endpoint event, then message events from channel
     let endpoint_stream = futures_util::stream::once(async {

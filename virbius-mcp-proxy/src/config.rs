@@ -23,8 +23,19 @@ pub struct ProxySection {
     pub upstream_transport: String,
     #[serde(default = "default_upstream_sse_path")]
     pub upstream_sse_path: String,
+    #[serde(default)]
+    pub upstreams: Vec<UpstreamEntry>,
     #[serde(default = "default_session_ttl_secs")]
     pub session_ttl_secs: u64,
+}
+
+/// A single upstream MCP Server entry for multi-upstream mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpstreamEntry {
+    pub name: String,
+    pub url: String,
+    #[serde(default = "default_upstream_sse_path")]
+    pub sse_path: String,
 }
 
 fn default_listen() -> String {
@@ -50,6 +61,7 @@ impl Default for ProxySection {
             upstream_url: default_upstream(),
             upstream_transport: default_upstream_transport(),
             upstream_sse_path: default_upstream_sse_path(),
+            upstreams: Vec::new(),
             session_ttl_secs: default_session_ttl_secs(),
         }
     }
@@ -222,6 +234,20 @@ impl ProxyConfig {
         }
         if let Ok(v) = std::env::var("VIRBIUS_TRANSPORT") {
             cfg.proxy.listen = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_UPSTREAMS") {
+            if let Ok(entries) = serde_json::from_str::<Vec<UpstreamEntry>>(&v) {
+                cfg.proxy.upstreams = entries;
+            }
+        }
+
+        // Normalize: if upstreams array is empty, synthesize from single upstream fields
+        if cfg.proxy.upstreams.is_empty() && !cfg.proxy.upstream_url.is_empty() {
+            cfg.proxy.upstreams = vec![UpstreamEntry {
+                name: "default".to_string(),
+                url: cfg.proxy.upstream_url.clone(),
+                sse_path: cfg.proxy.upstream_sse_path.clone(),
+            }];
         }
 
         cfg

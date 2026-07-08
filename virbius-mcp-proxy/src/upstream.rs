@@ -1,10 +1,22 @@
-/// Upstream MCP client: connects to upstream MCP Server via SSE transport.
+/// Upstream MCP client: connects to upstream MCP Server(s) via SSE transport.
 ///
 /// Architecture:
-/// - `UpstreamClient` — one instance per downstream session, manages a single
-///   SSE connection to the upstream MCP Server.
-/// - `UpstreamManager` — owns a `DashMap<session_id, UpstreamClient>`, creating
-///   and cleaning up per-session upstream connections.
+/// - `UpstreamClient` — one instance per (session, upstream), manages a single
+///   SSE connection to one upstream MCP Server.
+/// - `UpstreamManager` — owns:
+///   - `entries: Vec<UpstreamEntry>` — static upstream configs
+///   - `connections: DashMap<(session_id, upstream_name), UpstreamClient>`
+///   - `tool_routes: DashMap<displayed_tool_name, (upstream_name, original_tool_name)>`
+///
+/// Single-upstream mode (`entries.len() == 1`) is a fast path:
+/// - No tool name prefixing
+/// - `get_or_connect_single(session_id)` delegates to the sole upstream
+/// - `route_tool()` always returns the single upstream
+///
+/// Multi-upstream mode (`entries.len() > 1`):
+/// - `tools/list` merges tools from all upstreams
+/// - Conflicting tool names are prefixed: `{upstream_name}__{tool_name}`
+/// - `tools/call` routes via `tool_routes` to the correct upstream
 ///
 /// SSE client protocol:
 /// 1. GET /sse to establish SSE long connection
@@ -24,6 +36,8 @@ use tokio::sync::{oneshot, Mutex as TokioMutex};
 use tracing::{debug, warn};
 
 use futures_util::StreamExt;
+
+use crate::config::UpstreamEntry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamConfig {
@@ -57,7 +71,7 @@ struct UpstreamState {
 /// Client for forwarding JSON-RPC requests to an upstream MCP Server via SSE.
 ///
 /// Each instance maintains a single SSE connection to the upstream.
-/// Created by `UpstreamManager` on a per-session basis.
+/// Created by `UpstreamManager` on a per-(session, upstream) basis.
 #[derive(Clone)]
 pub struct UpstreamClient {
     base_url: String,
@@ -267,83 +281,218 @@ impl UpstreamClient {
     }
 }
 
-/// Manages per-session upstream connections.
+/// Manages per-(session, upstream) connections and tool routing.
 ///
-/// Each downstream session gets its own `UpstreamClient` with an independent
-/// SSE connection to the upstream MCP Server. This ensures:
-/// - JSON-RPC id namespaces are isolated per session
-/// - One client's disconnect doesn't affect another
-/// - Upstream session_id (from FastMCP) is per-connection
+/// In single-upstream mode (`entries.len() == 1`), behavior is identical
+/// to the previous 1:1 model — no prefixing, no route lookups.
+///
+/// In multi-upstream mode, `tools/list` results are merged and conflicting
+/// tool names are prefixed with `{upstream_name}__`. `tools/call` resolves
+/// the tool name via `tool_routes` and forwards to the correct upstream.
 pub struct UpstreamManager {
-    base_url: String,
-    sse_path: String,
-    timeout: Duration,
-    /// Shared HTTP client (connection pool reuse across sessions)
+    /// Static upstream configurations.
+    entries: Vec<UpstreamEntry>,
+    /// Shared HTTP client (connection pool reuse across sessions).
     http: reqwest::Client,
-    /// session_id → UpstreamClient
-    connections: DashMap<String, UpstreamClient>,
+    timeout: Duration,
+    /// (session_id, upstream_name) → UpstreamClient
+    connections: DashMap<(String, String), UpstreamClient>,
+    /// displayed_tool_name → (upstream_name, original_tool_name)
+    ///
+    /// Populated during `tools/list` merge. Used by `tools/call` to route
+    /// to the correct upstream and strip any prefix before forwarding.
+    tool_routes: DashMap<String, (String, String)>,
 }
 
 impl UpstreamManager {
-    pub fn new(config: &UpstreamConfig) -> Self {
-        let timeout = Duration::from_secs(config.timeout_secs);
+    /// Create a multi-upstream manager from a list of entries.
+    pub fn new(entries: Vec<UpstreamEntry>, timeout_secs: u64) -> Self {
+        let timeout = Duration::from_secs(timeout_secs);
         let http = reqwest::Client::builder()
             .timeout(timeout)
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
         Self {
-            base_url: config.url.clone(),
-            sse_path: config.sse_path.clone(),
-            timeout,
+            entries,
             http,
+            timeout,
             connections: DashMap::new(),
+            tool_routes: DashMap::new(),
         }
     }
 
-    /// Get an existing upstream client for the session, or create a new one.
+    /// Backward-compatible constructor: create from a single `UpstreamConfig`.
     ///
-    /// On first call for a session, this creates a new `UpstreamClient` and
-    /// establishes the SSE connection (GET /sse handshake).
+    /// Internally wraps as a single-entry `Vec<UpstreamEntry>` with name "default".
+    pub fn new_single(config: &UpstreamConfig) -> Self {
+        let entry = UpstreamEntry {
+            name: "default".to_string(),
+            url: config.url.clone(),
+            sse_path: config.sse_path.clone(),
+        };
+        Self::new(vec![entry], config.timeout_secs)
+    }
+
+    /// Whether this manager is in single-upstream mode.
+    pub fn is_single_upstream(&self) -> bool {
+        self.entries.len() == 1
+    }
+
+    /// List of upstream names.
+    pub fn upstream_names(&self) -> Vec<&str> {
+        self.entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    /// Get the sole upstream name (single-upstream mode only).
+    fn single_name(&self) -> &str {
+        &self.entries[0].name
+    }
+
+    /// Get or create an upstream connection for a specific upstream.
+    ///
+    /// On first call for a (session, upstream) pair, creates a new
+    /// `UpstreamClient` and establishes the SSE connection.
     pub async fn get_or_connect(
         &self,
         session_id: &str,
+        upstream_name: &str,
     ) -> Result<UpstreamClient, UpstreamError> {
+        let key = (session_id.to_string(), upstream_name.to_string());
+
         // Fast path: already exists and connected
-        if let Some(client) = self.connections.get(session_id) {
+        if let Some(client) = self.connections.get(&key) {
             if client.is_connected() {
                 return Ok(client.clone());
             }
         }
 
+        // Find the upstream entry
+        let entry = self
+            .entries
+            .iter()
+            .find(|e| e.name == upstream_name)
+            .ok_or_else(|| UpstreamError::UnknownUpstream(upstream_name.to_string()))?;
+
         // Slow path: create or reconnect
         let config = UpstreamConfig {
-            url: self.base_url.clone(),
+            url: entry.url.clone(),
             transport: "sse".to_string(),
             timeout_secs: self.timeout.as_secs(),
-            sse_path: self.sse_path.clone(),
+            sse_path: entry.sse_path.clone(),
         };
 
         let client = UpstreamClient::with_http(config, self.http.clone());
         client.ensure_connected().await?;
-        self.connections
-            .insert(session_id.to_string(), client.clone());
-        debug!("upstream connection created for session: {}", session_id);
+        self.connections.insert(key, client.clone());
+        debug!(
+            "upstream connection created for session={}, upstream={}",
+            session_id, upstream_name
+        );
         Ok(client)
     }
 
-    /// Remove and drop the upstream connection for a session.
+    /// Convenience for single-upstream mode: connect to the sole upstream.
+    ///
+    /// In multi-upstream mode, returns an error.
+    pub async fn get_or_connect_single(
+        &self,
+        session_id: &str,
+    ) -> Result<UpstreamClient, UpstreamError> {
+        if !self.is_single_upstream() {
+            return Err(UpstreamError::MultiUpstreamMode);
+        }
+        self.get_or_connect(session_id, self.single_name()).await
+    }
+
+    /// Connect to all upstreams concurrently for a session.
+    ///
+    /// Used during `initialize` in multi-upstream mode.
+    pub async fn connect_all(&self, session_id: &str) -> Vec<Result<UpstreamClient, UpstreamError>> {
+        let names: Vec<String> = self.entries.iter().map(|e| e.name.clone()).collect();
+        let mut results = Vec::with_capacity(names.len());
+        for name in &names {
+            let r = self.get_or_connect(session_id, name).await;
+            results.push(r);
+        }
+        results
+    }
+
+    /// Register a tool route: maps the displayed tool name to its upstream
+    /// and original name.
+    pub fn register_tool_route(
+        &self,
+        displayed_name: &str,
+        upstream_name: &str,
+        original_name: &str,
+    ) {
+        self.tool_routes.insert(
+            displayed_name.to_string(),
+            (upstream_name.to_string(), original_name.to_string()),
+        );
+    }
+
+    /// Look up the route for a tool name.
+    ///
+    /// Returns `(upstream_name, original_tool_name)`.
+    /// In single-upstream mode, always returns the sole upstream with the
+    /// tool name unchanged.
+    pub fn route_tool(&self, displayed_name: &str) -> Option<(String, String)> {
+        if self.is_single_upstream() {
+            return Some((self.single_name().to_string(), displayed_name.to_string()));
+        }
+        self.tool_routes.get(displayed_name).map(|r| r.clone())
+    }
+
+    /// Clear all tool routes (e.g., before re-fetching tools/list).
+    pub fn clear_tool_routes(&self) {
+        self.tool_routes.clear();
+    }
+
+    /// Remove all upstream connections for a session.
     ///
     /// Called when a session expires (TTL cleanup) or is explicitly closed.
     pub fn remove(&self, session_id: &str) {
-        if let Some((_, _client)) = self.connections.remove(session_id) {
-            debug!("upstream connection removed for session: {}", session_id);
+        let keys_to_remove: Vec<(String, String)> = self
+            .connections
+            .iter()
+            .filter(|entry| entry.key().0 == session_id)
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in &keys_to_remove {
+            self.connections.remove(key);
+            debug!(
+                "upstream connection removed for session={}, upstream={}",
+                key.0, key.1
+            );
         }
     }
 
-    /// Number of active upstream connections.
+    /// Number of active upstream connections (across all sessions and upstreams).
     pub fn len(&self) -> usize {
         self.connections.len()
+    }
+
+    /// Remove all upstream connections whose SSE connection has been lost.
+    ///
+    /// Called by the background cleanup task to free resources from upstream
+    /// SSE connections that have been dropped by the upstream MCP Server.
+    pub fn cleanup_disconnected(&self) {
+        let to_remove: Vec<(String, String)> = self
+            .connections
+            .iter()
+            .filter(|entry| !entry.value().is_connected())
+            .map(|entry| entry.key().clone())
+            .collect();
+
+        for key in &to_remove {
+            self.connections.remove(key);
+            debug!(
+                "cleaned up disconnected upstream for session={}, upstream={}",
+                key.0, key.1
+            );
+        }
     }
 }
 
@@ -475,6 +624,8 @@ pub enum UpstreamError {
     UnsupportedTransport(String),
     Timeout,
     NotConnected,
+    UnknownUpstream(String),
+    MultiUpstreamMode,
 }
 
 impl std::fmt::Display for UpstreamError {
@@ -486,6 +637,8 @@ impl std::fmt::Display for UpstreamError {
             Self::UnsupportedTransport(t) => write!(f, "unsupported upstream transport: {t}"),
             Self::Timeout => write!(f, "upstream timeout"),
             Self::NotConnected => write!(f, "upstream not connected"),
+            Self::UnknownUpstream(name) => write!(f, "unknown upstream: {name}"),
+            Self::MultiUpstreamMode => write!(f, "operation requires single-upstream mode"),
         }
     }
 }
@@ -506,5 +659,172 @@ mod tests {
     fn test_construct_endpoint_url_trailing_slash() {
         let full = construct_endpoint_url("http://localhost:9091/", "/messages/?session_id=abc");
         assert_eq!(full, "http://localhost:9091/messages/?session_id=abc");
+    }
+
+    #[test]
+    fn test_cleanup_disconnected_removes_stale_connections() {
+        let entries = vec![UpstreamEntry {
+            name: "default".to_string(),
+            url: "http://127.0.0.1:59999".to_string(),
+            sse_path: "/sse".to_string(),
+        }];
+        let mgr = UpstreamManager::new(entries, 1);
+
+        // Manually insert a client whose `connected` flag is false.
+        let client_config = UpstreamConfig {
+            url: "http://127.0.0.1:59999".to_string(),
+            transport: "sse".to_string(),
+            timeout_secs: 1,
+            sse_path: "/sse".to_string(),
+        };
+        let disconnected_client = UpstreamClient::new(client_config);
+        assert!(!disconnected_client.is_connected());
+
+        mgr.connections
+            .insert(("stale-session".to_string(), "default".to_string()), disconnected_client);
+        assert_eq!(mgr.len(), 1);
+
+        // Cleanup should remove the disconnected client
+        mgr.cleanup_disconnected();
+        assert_eq!(mgr.len(), 0);
+    }
+
+    #[test]
+    fn test_cleanup_disconnected_keeps_connected() {
+        let entries = vec![UpstreamEntry {
+            name: "default".to_string(),
+            url: "http://127.0.0.1:59999".to_string(),
+            sse_path: "/sse".to_string(),
+        }];
+        let mgr = UpstreamManager::new(entries, 1);
+        assert_eq!(mgr.len(), 0);
+        mgr.cleanup_disconnected(); // Should be a no-op
+        assert_eq!(mgr.len(), 0);
+    }
+
+    #[test]
+    fn test_route_tool_single_upstream() {
+        let entries = vec![UpstreamEntry {
+            name: "default".to_string(),
+            url: "http://localhost:8080".to_string(),
+            sse_path: "/sse".to_string(),
+        }];
+        let mgr = UpstreamManager::new(entries, 30);
+        assert!(mgr.is_single_upstream());
+
+        // In single-upstream mode, route_tool always returns the sole upstream
+        let route = mgr.route_tool("read_file").unwrap();
+        assert_eq!(route.0, "default");
+        assert_eq!(route.1, "read_file");
+    }
+
+    #[test]
+    fn test_register_and_route_tool_multi_upstream() {
+        let entries = vec![
+            UpstreamEntry {
+                name: "fs".to_string(),
+                url: "http://localhost:8081".to_string(),
+                sse_path: "/sse".to_string(),
+            },
+            UpstreamEntry {
+                name: "gh".to_string(),
+                url: "http://localhost:8082".to_string(),
+                sse_path: "/sse".to_string(),
+            },
+        ];
+        let mgr = UpstreamManager::new(entries, 30);
+        assert!(!mgr.is_single_upstream());
+
+        // Register routes
+        mgr.register_tool_route("read_file", "fs", "read_file");
+        mgr.register_tool_route("gh__read_file", "gh", "read_file");
+        mgr.register_tool_route("create_issue", "gh", "create_issue");
+
+        // Route lookups
+        let r1 = mgr.route_tool("read_file").unwrap();
+        assert_eq!(r1.0, "fs");
+        assert_eq!(r1.1, "read_file");
+
+        let r2 = mgr.route_tool("gh__read_file").unwrap();
+        assert_eq!(r2.0, "gh");
+        assert_eq!(r2.1, "read_file");
+
+        let r3 = mgr.route_tool("create_issue").unwrap();
+        assert_eq!(r3.0, "gh");
+        assert_eq!(r3.1, "create_issue");
+
+        // Unknown tool
+        assert!(mgr.route_tool("unknown").is_none());
+
+        // Clear routes
+        mgr.clear_tool_routes();
+        assert!(mgr.route_tool("read_file").is_none());
+    }
+
+    #[test]
+    fn test_upstream_names() {
+        let entries = vec![
+            UpstreamEntry {
+                name: "fs".to_string(),
+                url: "http://localhost:8081".to_string(),
+                sse_path: "/sse".to_string(),
+            },
+            UpstreamEntry {
+                name: "gh".to_string(),
+                url: "http://localhost:8082".to_string(),
+                sse_path: "/sse".to_string(),
+            },
+        ];
+        let mgr = UpstreamManager::new(entries, 30);
+        let names = mgr.upstream_names();
+        assert_eq!(names, vec!["fs", "gh"]);
+    }
+
+    #[test]
+    fn test_remove_session_removes_all_upstreams() {
+        let entries = vec![
+            UpstreamEntry {
+                name: "fs".to_string(),
+                url: "http://127.0.0.1:59999".to_string(),
+                sse_path: "/sse".to_string(),
+            },
+            UpstreamEntry {
+                name: "gh".to_string(),
+                url: "http://127.0.0.1:59998".to_string(),
+                sse_path: "/sse".to_string(),
+            },
+        ];
+        let mgr = UpstreamManager::new(entries, 1);
+
+        // Insert disconnected clients for both upstreams
+        let cfg1 = UpstreamConfig {
+            url: "http://127.0.0.1:59999".to_string(),
+            transport: "sse".to_string(),
+            timeout_secs: 1,
+            sse_path: "/sse".to_string(),
+        };
+        let cfg2 = UpstreamConfig {
+            url: "http://127.0.0.1:59998".to_string(),
+            transport: "sse".to_string(),
+            timeout_secs: 1,
+            sse_path: "/sse".to_string(),
+        };
+        let cfg1_clone = cfg1.clone();
+        mgr.connections
+            .insert(("s1".to_string(), "fs".to_string()), UpstreamClient::new(cfg1));
+        mgr.connections
+            .insert(("s1".to_string(), "gh".to_string()), UpstreamClient::new(cfg2));
+        mgr.connections
+            .insert(("s2".to_string(), "fs".to_string()), UpstreamClient::new(cfg1_clone));
+
+        assert_eq!(mgr.len(), 3);
+
+        // Remove session s1 — should remove 2 connections
+        mgr.remove("s1");
+        assert_eq!(mgr.len(), 1);
+
+        // s2 should still have 1 connection
+        mgr.remove("s2");
+        assert_eq!(mgr.len(), 0);
     }
 }

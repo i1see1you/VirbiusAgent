@@ -2,7 +2,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v3.2 |
+| 文档版本 | v3.3 |
 | 状态 | 草案 |
 | 关联 | [DESIGN.md](DESIGN.md)（索引） · [ARCHITECTURE.md](ARCHITECTURE.md) |
 | 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
@@ -97,9 +97,9 @@ MCP 使用 JSON-RPC 2.0，传输层支持 stdio 和 SSE。Proxy 对每个 JSON-R
 
 | Method | 处理策略 | 说明 |
 |--------|---------|------|
-| `initialize` | 透传 + 注入 | 转发到上游 MCP Server，响应中注入 Proxy 能力声明 |
-| `tools/list` | 透传 + 过滤 | 转发获取工具列表，按 License allowed_tools 过滤后返回 Agent |
-| `tools/call` | **拦截** | 执行完整安全管线，allow 则转发，deny 则返回错误 |
+| `initialize` | 透传 + 注入 | 单上游：转发到上游 MCP Server。多上游：并发转发到所有上游，取首个成功响应。响应中注入 Proxy 能力声明（含 `multiUpstream: true`） |
+| `tools/list` | 透传 + 合并 + 过滤 | 单上游：转发获取工具列表。多上游：并发拉取所有上游工具列表，合并后冲突名称加前缀 `{upstream}__{tool}`。按 License allowed_tools 过滤后返回 Agent |
+| `tools/call` | **拦截** | 执行完整安全管线，allow 则转发，deny 则返回错误。多上游模式下通过工具名路由表解析目标上游 |
 | `resources/*` | 透传 | 不拦截 |
 | `prompts/*` | 透传 | 不拦截 |
 | `notifications/*` | 透传 | 单向通知，不拦截 |
@@ -191,7 +191,9 @@ pub struct Session {
     pub license_jwt: String,          // from initialize params._meta
     pub trace_id: String,             // per-request 或 per-session
     pub tool_call_count: u32,         // 冷启动 warmup 计数
-    pub upstream_initialized: bool,   // 上游 MCP Server 是否已 init
+    pub upstream_initialized: HashMap<String, bool>, // 各上游 MCP Server 是否已 init（key=upstream_name）
+    pub session_risk_score: u32,      // 会话累积风险分
+    pub allowed_tools: Vec<String>,   // License 允许的工具列表
 }
 ```
 
@@ -402,8 +404,21 @@ pub fn jsonrpc_error(code: VirbiusErrorCode, id: i64, data: Value) -> Value {
 
 [proxy]
 listen = "stdio"                    # stdio | tcp://0.0.0.0:9090
+
+# ── 单上游模式（向下兼容）──
+# 以下三个字段等价于 upstreams = [{ name = "default", url = "...", sse_path = "/sse" }]
 upstream_url = "http://mcp-server:8080"  # 真实 MCP Server 地址
 upstream_transport = "sse"          # stdio | sse
+upstream_sse_path = "/sse"
+
+# ── 多上游模式（P1 新增，与 upstream_url 二选一）──
+# 配置 upstreams 数组后，upstream_url 字段被忽略
+# 每个上游需指定唯一 name，用于工具名前缀和路由
+upstreams = [
+    { name = "filesystem", url = "http://fs-mcp:8081", sse_path = "/sse" },
+    { name = "github",     url = "http://gh-mcp:8082", sse_path = "/sse" },
+    { name = "database",   url = "http://db-mcp:8083", sse_path = "/sse" },
+]
 
 [security]
 control_base_url = "http://virbius-control:8080"
@@ -528,7 +543,7 @@ sample_rate = 1.0                   # 审计采样率
 > | 重定向跟随 | ✅（最多 5 跳） | — | 防止 SSRF via redirect |
 > | HTTPS | ✅ | — | Proxy 发起 TLS，Agent 不接触证书 |
 
-Sidecar 部署（K8s）：
+Sidecar 部署（K8s）—— 单上游：
 
 ```yaml
 spec:
@@ -548,6 +563,33 @@ spec:
     - name: VIRBIUS_ENGINE_URL
       value: "http://virbius-engine.default.svc:8082"
 ```
+
+Sidecar 部署（K8s）—— 多上游：
+
+```yaml
+spec:
+  containers:
+  - name: agent
+    image: my-agent:latest
+    env:
+    - name: MCP_SERVER_URL
+      value: "http://localhost:9090"  # 指向同 Pod 的 Proxy
+  - name: virbius-mcp-proxy
+    image: virbius-mcp-proxy:latest
+    env:
+    # 多上游：JSON 数组格式，每个上游需指定唯一 name
+    - name: VIRBIUS_UPSTREAMS
+      value: >-
+        [{"name":"filesystem","url":"http://fs-mcp.default.svc:8081","sse_path":"/sse"},{"name":"github","url":"http://gh-mcp.default.svc:8082","sse_path":"/sse"}]
+    - name: VIRBIUS_CONTROL_URL
+      value: "http://virbius-control.default.svc:8080"
+    - name: VIRBIUS_ENGINE_URL
+      value: "http://virbius-engine.default.svc:8082"
+```
+
+> **多上游配置说明**：配置 `VIRBIUS_UPSTREAMS` 后，`VIRBIUS_UPSTREAM_URL` 被忽略。
+> 每个上游需指定唯一 `name`，用于工具名冲突时加前缀（如 `filesystem__read_file`）。
+> 详细多上游方案见 [§2.6.2](#262-多上游支持multi-upstream)。
 
 本地进程部署（开发）：
 
@@ -676,4 +718,125 @@ impl SecurityPipeline {
     }
 }
 ```
+
+#### 2.6.2 多上游支持（Multi-Upstream）
+
+Proxy 支持同时连接多个 MCP Server，通过工具名路由 `tools/call` 请求到正确的上游。单上游模式是多上游的特例（`len() == 1`），所有旧配置自动归一化为单条目多上游。
+
+**设计原则**：
+- **向下兼容**：旧的 `upstream_url` / `VIRBIUS_UPSTREAM_URL` 配置自动归一化为 `upstreams = [{ name: "default", ... }]`
+- **仅冲突加前缀**：非冲突工具名保持原样，仅当多个上游存在同名工具时加前缀 `{upstream_name}__{tool_name}`
+- **安全管线用原始名**：License `allowed_tools` 匹配原始工具名（前缀剥离后），不要求 Agent 感知前缀
+- **转发恢复原始名**：Proxy 转发 `tools/call` 到上游时恢复原始工具名，上游 MCP Server 无感知
+
+**架构**：
+
+```
+Agent (任意 MCP Client)
+  |
+  | MCP 协议 (JSON-RPC 2.0)
+  v
++---------------------------------------------------+
+|  virbius-mcp-proxy (多上游模式)                    |
+|                                                   |
+|  +--------------------+                           |
+|  | JSON-RPC 路由       |                           |
+|  |  initialize  -> 并发转发所有上游                 |
+|  |  tools/list  -> 并发拉取 + 合并 + 前缀处理       |
+|  |  tools/call  -> 路由表解析 -> 转发目标上游       |
+|  +--------+---------+                             |
+|           |                                       |
+|  +--------v---------+                             |
+|  | UpstreamManager   |                             |
+|  |  entries: [fs, gh, db]                         |
+|  |  connections: (session, upstream) -> Client    |
+|  |  tool_routes: displayed_name -> (up, orig)     |
+|  +----+------+------+------+                      |
+|       |      |      |                             |
++-------|------|------|-----------------------------+
+        |      |      |
+        v      v      v
+    MCP Server A  MCP Server B  MCP Server C
+    (filesystem)  (github)      (database)
+    read_file     read_file      sql_query
+    search        create_issue   backup
+```
+
+**工具名冲突处理**：
+
+```
+上游 filesystem 返回: [read_file, search]
+上游 github     返回: [read_file, create_issue]
+
+合并结果（read_file 冲突，加前缀）:
+  [
+    { "name": "filesystem__read_file", "x-virbius-upstream": "filesystem" },
+    { "name": "search",                "x-virbius-upstream": "filesystem" },
+    { "name": "github__read_file",     "x-virbius-upstream": "github" },
+    { "name": "create_issue",          "x-virbius-upstream": "github" }
+  ]
+
+路由表:
+  filesystem__read_file -> (filesystem, read_file)
+  search                -> (filesystem, search)
+  github__read_file     -> (github, read_file)
+  create_issue          -> (github, create_issue)
+
+Agent 调用 tools/call { name: "github__read_file" }:
+  1. 路由表解析: upstream=github, original_name=read_file
+  2. 安全管线: 用 "read_file" 检查 License allowed_tools
+  3. 转发: 恢复 params.name = "read_file"，POST 到 github 上游
+```
+
+> **Agent 侧无感知**：Agent 通过 `tools/list` 获取带前缀的工具名，调用时使用带前缀的名称即可。Proxy 自动处理前缀剥离和上游路由。若 Agent 直接调用不带前缀的工具名且该名称无冲突，Proxy 也能正确路由。
+
+**配置归一化**：
+
+| 配置方式 | 等价多上游配置 |
+|---------|-------------|
+| `upstream_url = "http://mcp:8080"` | `upstreams = [{ name: "default", url: "http://mcp:8080", sse_path: "/sse" }]` |
+| `VIRBIUS_UPSTREAM_URL=http://mcp:8080` | 同上 |
+| `upstreams = [{ name = "fs", ... }]` | 直接使用（upstream_url 被忽略） |
+| `VIRBIUS_UPSTREAMS='[{"name":"fs",...}]'` | 直接使用 |
+
+**环境变量配置多上游**：
+
+```bash
+# JSON 数组格式
+export VIRBIUS_UPSTREAMS='[
+  {"name":"filesystem","url":"http://fs-mcp:8081","sse_path":"/sse"},
+  {"name":"github","url":"http://gh-mcp:8082","sse_path":"/sse"}
+]'
+```
+
+**会话与连接管理**：
+
+多上游模式下，每个 (session_id, upstream_name) 对维护独立的 SSE 连接：
+
+```rust
+// connections 索引: (session_id, upstream_name) -> UpstreamClient
+connections: DashMap<(String, String), UpstreamClient>
+
+// 会话 TTL 清理: remove(session_id) 清除该会话在所有上游上的连接
+// 断连清理: cleanup_disconnected() 扫描所有连接，移除断开的 SSE 连接
+```
+
+**initialize 响应注入**：
+
+```json
+{
+  "capabilities": {
+    "virbiusProxy": {
+      "securityPipeline": true,
+      "licenseVerification": true,
+      "engineEvaluate": true,
+      "fastPath": true,
+      "multiUpstream": true
+    }
+  }
+}
+```
+
+
+
 

@@ -1,15 +1,5 @@
 /// Entry point + CLI argument parsing for virbius-mcp-proxy.
 
-mod audit;
-mod config;
-mod egress;
-mod error;
-mod pipeline;
-mod router;
-mod session;
-mod transport;
-mod upstream;
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,13 +7,14 @@ use dashmap::DashMap;
 use tracing::{error, info};
 use virbius_core::EdgeInitConfig;
 
-use crate::audit::AuditSink;
-use crate::config::ProxyConfig;
-use crate::egress::EgressClient;
-use crate::pipeline::SecurityPipeline;
-use crate::session::SessionManager;
-use crate::transport::AppState;
-use crate::upstream::{UpstreamConfig, UpstreamManager};
+use virbius_mcp_proxy::audit::AuditSink;
+use virbius_mcp_proxy::config::ProxyConfig;
+use virbius_mcp_proxy::egress::EgressClient;
+use virbius_mcp_proxy::pipeline::SecurityPipeline;
+use virbius_mcp_proxy::router;
+use virbius_mcp_proxy::session::SessionManager;
+use virbius_mcp_proxy::transport::{self, AppState};
+use virbius_mcp_proxy::upstream::UpstreamManager;
 
 #[tokio::main]
 async fn main() {
@@ -67,14 +58,16 @@ async fn main() {
         audit.clone(),
     ));
 
-    // Create upstream manager (per-session upstream connections)
-    let upstream_config = UpstreamConfig {
-        url: cfg.proxy.upstream_url.clone(),
-        transport: cfg.proxy.upstream_transport.clone(),
-        timeout_secs: 30,
-        sse_path: cfg.proxy.upstream_sse_path.clone(),
-    };
-    let upstream_mgr = Arc::new(UpstreamManager::new(&upstream_config));
+    // Create upstream manager from normalized config (single or multi-upstream)
+    let upstream_mgr = Arc::new(UpstreamManager::new(cfg.proxy.upstreams.clone(), 30));
+    if upstream_mgr.is_single_upstream() {
+        info!("single-upstream mode");
+    } else {
+        info!(
+            "multi-upstream mode: {} upstreams",
+            upstream_mgr.upstream_names().len()
+        );
+    }
 
     // Create egress client for proxying tool calls (curl/http_request)
     // to external APIs with streaming response support
@@ -207,10 +200,14 @@ async fn run_sse(
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         loop {
             interval.tick().await;
+            // Clean up expired sessions and their upstream connections
             let expired = cleanup_mgr.cleanup_expired();
             for sid in &expired {
                 cleanup_upstream.remove(sid);
             }
+            // Also clean up upstream connections that have been disconnected
+            // (SSE stream lost) but whose sessions are still within TTL
+            cleanup_upstream.cleanup_disconnected();
             if !expired.is_empty() {
                 info!("cleaned up {} expired sessions", expired.len());
             }
