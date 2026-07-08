@@ -13,6 +13,7 @@ pub enum VirbiusErrorCode {
     RiskThreshold = -32008,
     OutputReviewBlocked = -32009,
     FallbackBlocked = -32010,
+    ChallengeRequired = -32011,
 }
 
 impl VirbiusErrorCode {
@@ -28,6 +29,7 @@ impl VirbiusErrorCode {
             Self::RiskThreshold => "risk_threshold",
             Self::OutputReviewBlocked => "output_review_blocked",
             Self::FallbackBlocked => "fallback_blocked",
+            Self::ChallengeRequired => "challenge_required",
         }
     }
 
@@ -39,7 +41,8 @@ impl VirbiusErrorCode {
             | Self::EngineBlocked
             | Self::RiskThreshold
             | Self::FallbackBlocked
-            | Self::OutputReviewBlocked => 403,
+            | Self::OutputReviewBlocked
+            | Self::ChallengeRequired => 403,
             Self::SchemaViolation => 400,
             Self::RateExceeded => 429,
         }

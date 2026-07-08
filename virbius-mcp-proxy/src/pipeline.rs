@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 
 use virbius_core::license::{License, LicenseError};
@@ -33,6 +34,14 @@ pub enum PipelineResult {
         /// Updated session risk score from the engine (if evaluated).
         risk_score: Option<u32>,
     },
+    /// Tool call requires a challenge — return JSON-RPC error with challenge_id.
+    Challenge {
+        challenge_id: String,
+        args_hash: String,
+        rule_id: Option<String>,
+        reason: String,
+        risk_score: u32,
+    },
 }
 
 impl PipelineResult {
@@ -52,6 +61,16 @@ impl PipelineResult {
             risk_score: None,
         }
     }
+
+    pub fn challenge(challenge_id: &str, args_hash: &str, reason: &str) -> Self {
+        Self::Challenge {
+            challenge_id: challenge_id.to_string(),
+            args_hash: args_hash.to_string(),
+            rule_id: None,
+            reason: reason.to_string(),
+            risk_score: 0,
+        }
+    }
 }
 
 /// Engine evaluate request body.
@@ -63,6 +82,7 @@ struct EvaluateRequest<'a> {
     tenant_id: &'a str,
     tool_name: &'a str,
     args: &'a Value,
+    args_json: String,
     license_risk_quota: u32,
 }
 
@@ -78,13 +98,17 @@ struct EvaluateResponse {
     risk_score_delta: i32,
     #[serde(default)]
     session_risk_score: u32,
+    #[serde(default)]
+    challenge_id: Option<String>,
+    #[serde(default)]
+    args_hash: Option<String>,
 }
 
 /// HTTP client for calling virbius-engine.
 pub struct EngineClient {
-    url: String,
-    http: reqwest::Client,
-    timeout: Duration,
+    pub(crate) url: String,
+    pub(crate) http: reqwest::Client,
+    pub(crate) timeout: Duration,
 }
 
 impl EngineClient {
@@ -241,6 +265,7 @@ impl SecurityPipeline {
             tenant_id: &session.tenant_id,
             tool_name,
             args,
+            args_json: serde_json::to_string(args).unwrap_or_default(),
             license_risk_quota: risk_quota,
         };
 
@@ -260,6 +285,24 @@ impl SecurityPipeline {
                         reason: resp.reason.unwrap_or_else(|| "engine_blocked".to_string()),
                         rule_id: resp.rule_id,
                         risk_score: Some(resp.session_risk_score),
+                    };
+                }
+
+                if resp.effective_action == "challenge" {
+                    self.audit_tool_call(
+                        session,
+                        tool_name,
+                        "challenge",
+                        resp.rule_id.as_deref(),
+                        resp.reason.as_deref(),
+                    )
+                    .await;
+                    return PipelineResult::Challenge {
+                        challenge_id: resp.challenge_id.unwrap_or_default(),
+                        args_hash: resp.args_hash.unwrap_or_default(),
+                        rule_id: resp.rule_id.clone(),
+                        reason: resp.reason.unwrap_or_else(|| "challenge_required".to_string()),
+                        risk_score: resp.session_risk_score,
                     };
                 }
 
@@ -398,6 +441,51 @@ impl SecurityPipeline {
         }
     }
 
+    /// Check if a challenge token is present in the request headers/meta.
+    ///
+    /// The token is passed as `X-Virbius-Challenge-Token` HTTP header or
+    /// `_meta.challenge_token` in the JSON-RPC params.
+    pub fn extract_challenge_token(meta: &Value) -> Option<String> {
+        meta.get("challenge_token")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    }
+
+    /// Verify a challenge token with the Engine.
+    pub async fn verify_challenge_token(
+        &self,
+        token: &str,
+        tool_name: &str,
+        args: &Value,
+        session: &Session,
+    ) -> Result<bool, EngineError> {
+        let args_json = serde_json::to_string(args).unwrap_or_default();
+        let args_hash = sha256_hex(&format!("{}:{}", tool_name, args_json));
+        let verify_req = serde_json::json!({
+            "token": token,
+            "tool_name": tool_name,
+            "args_hash": args_hash,
+            "session_id": session.session_id,
+        });
+        let url = self.engine.url.replace("/v1/evaluate", "/v1/challenge/verify");
+        let resp = self
+            .engine
+            .http
+            .post(&url)
+            .json(&verify_req)
+            .timeout(self.engine.timeout)
+            .send()
+            .await
+            .map_err(EngineError::Http)?;
+
+        if !resp.status().is_success() {
+            return Ok(false);
+        }
+
+        let result: serde_json::Value = resp.json().await.map_err(EngineError::Http)?;
+        Ok(result.get("valid").and_then(|v| v.as_bool()).unwrap_or(false))
+    }
+
     /// Determine if this call qualifies for the fast path.
     fn is_fast_path(&self, session: &Session, pre: &PrecheckResult, tool_name: &str) -> bool {
         if !self.fast_path.enabled {
@@ -437,3 +525,22 @@ impl SecurityPipeline {
 }
 
 pub type SharedPipeline = Arc<SecurityPipeline>;
+
+/// Compute SHA-256 hex digest of the input string.
+fn sha256_hex(input: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let result = hasher.finalize();
+    format!("sha256:{}", hex::encode(result))
+}
+
+/// Minimal hex encoding (avoids adding `hex` crate dependency).
+mod hex {
+    pub fn encode(bytes: &[u8]) -> String {
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            s.push_str(&format!("{:02x}", b));
+        }
+        s
+    }
+}

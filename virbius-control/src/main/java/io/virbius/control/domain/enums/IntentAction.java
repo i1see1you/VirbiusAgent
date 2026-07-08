@@ -3,7 +3,7 @@ package io.virbius.control.domain.enums;
 public enum IntentAction {
     ALLOW("allow"),
     DENY("deny"),
-    CAPTCHA("captcha"),
+    CHALLENGE("challenge"),
     REVIEW("review");
 
     private final String value;
@@ -25,14 +25,14 @@ public enum IntentAction {
                 return a;
             }
         }
-        throw new IllegalArgumentException("intent_action must be allow, deny, captcha, or review");
+        throw new IllegalArgumentException("intent_action must be allow, deny, challenge, or review");
     }
 
     public static IntentAction defaultForRisk(int riskScore) {
         return switch (io.virbius.policy.IntentAction.defaultForRisk(riskScore)) {
             case "allow" -> ALLOW;
             case "deny" -> DENY;
-            case "captcha" -> CAPTCHA;
+            case "challenge" -> CHALLENGE;
             default -> REVIEW;
         };
     }

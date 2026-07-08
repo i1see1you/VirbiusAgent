@@ -24,7 +24,7 @@ public class AuditCenterService {
         out.put("db_count", dbEvents.size());
         out.put(
                 "note",
-                "tb_audit_events stores review/block/captcha and sampled allow events. "
+                "tb_audit_events stores review/block/challenge and sampled allow events. "
                         + "Unsampled allow requests are archived as JSONL files only.");
         return out;
     }

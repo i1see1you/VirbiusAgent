@@ -150,14 +150,14 @@ if hits and #hits > 0 then
             max_risk_score = merged.max_risk_score,
         })
     end
-    if merged.effective_action == "captcha" and merged.primary then
+    if merged.effective_action == "challenge" and merged.primary then
         return json_exit(428, {
             code = "POLICY_CAPTCHA",
-            message = "captcha required by gateway access list",
+            message = "challenge required by gateway access list",
             trace_id = trace_id,
             reason_code = merged.primary.reason_code,
             rule_id = merged.primary.rule_id,
-            effective_action = "captcha",
+            effective_action = "challenge",
             max_risk_score = merged.max_risk_score,
         })
     end
@@ -230,14 +230,14 @@ if out and out.effective_action == "block" then
         max_risk_score = out.max_risk_score,
     })
 end
-if out and out.effective_action == "captcha" then
+if out and out.effective_action == "challenge" then
     return json_exit(428, {
         code = "POLICY_CAPTCHA",
-        message = "captcha required by virbius policy",
+        message = "challenge required by virbius policy",
         trace_id = trace_id,
         reason_code = out.reason_code,
         rule_id = out.rule_id,
-        effective_action = "captcha",
+        effective_action = "challenge",
         max_risk_score = out.max_risk_score,
     })
 end

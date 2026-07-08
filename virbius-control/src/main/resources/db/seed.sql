@@ -315,7 +315,7 @@ INSERT INTO tb_rule_history (
                   reason_code, risk_score, intent_action, scope_json, body_json,
     rollout_state, canary_percent, effective_from, modified_at)
 SELECT 'default', 'rl_rate_user_1h', 1, 'poc-default', 'gateway', 'lua',
-    'GW_USER_RATE_1H', 80, 'captcha', '{"bind_scope":"global"}',
+    'GW_USER_RATE_1H', 80, 'challenge', '{"bind_scope":"global"}',
     '-- virbius:generated v1
 function decide(ctx)
   return getCumulative(''user_req_1h'') >= 120
@@ -328,7 +328,7 @@ INSERT INTO tb_rule_history (
                   reason_code, risk_score, intent_action, scope_json, body_json,
     rollout_state, canary_percent, effective_from, modified_at)
 SELECT 'default', 'rl_rate_app_1h', 1, 'poc-default', 'gateway', 'lua',
-    'GW_APP_RATE_1H', 85, 'captcha', '{"bind_scope":"service","bind_ref":{"app_ids":["beta","medical-prod"]}}',
+    'GW_APP_RATE_1H', 85, 'challenge', '{"bind_scope":"service","bind_ref":{"app_ids":["beta","medical-prod"]}}',
     '-- virbius:generated v1
 function decide(ctx)
   return getCumulative(''app_req_1h'') >= 500

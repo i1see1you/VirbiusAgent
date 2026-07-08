@@ -18,4 +18,6 @@ public record EvaluateRequestDto(
         String routeUri,
         String upstreamId,
         String consumerId,
-        String apiKeyGroup) {}
+        String apiKeyGroup,
+        String toolName,
+        String argsJson) {}

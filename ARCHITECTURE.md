@@ -2,7 +2,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v3.2 |
+| 文档版本 | v3.3 |
 | 状态 | 草案 |
 | 关联 | [DESIGN.md](DESIGN.md)（索引） · [PROTOCOL.md](PROTOCOL.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [ROADMAP.md](ROADMAP.md) |
 | 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
@@ -166,7 +166,7 @@ virbius-control 签发 License（JWT 签名）：
 │  └─────────┴─────────┴─────────┴─────────┴─────────┘    │
 ├─────────────────────────────────────────────────────────┤
 │  第三层：基础设施层                                       │
-│  Landlock沙箱 + 命名空间隔离 + eBPF过滤 + TEE(金融级)    │
+│  Landlock沙箱 + 命名空间隔离 + eBPF过滤   │
 │  (§2.3 + §2.4 + §4 + §2.3.1)                            │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -221,7 +221,6 @@ virbius-control 签发 License（JWT 签名）：
 | 不可信代码沙箱 | gVisor runsc 预热池 | §2.4 | P2 |
 | 内核观测 | Falco eBPF + plugin 降级链 | §4 | P0 |
 | 内核阻断 | Tetragon enforcer | §4 | P2 |
-| 硬件安全根 | SGX/SEV-SNP TEE + 远程证明 | [§11](ROADMAP.md) P2 | P2(金融级) |
 
 
 ---

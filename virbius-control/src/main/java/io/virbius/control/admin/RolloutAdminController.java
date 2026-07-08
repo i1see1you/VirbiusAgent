@@ -11,6 +11,8 @@ import io.virbius.control.service.RolloutDashboardService;
 import io.virbius.control.service.RolloutService;
 import io.virbius.control.audit.AuditCenterService;
 import io.virbius.control.audit.AuditIngestService;
+import io.virbius.control.audit.TraceIngestService;
+import io.virbius.control.audit.TraceQueryService;
 import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,6 +35,8 @@ public class RolloutAdminController {
     private final AuditIngestService auditIngestService;
     private final AuditCenterService auditCenterService;
     private final DeployRolloutRepository deployRolloutRepo;
+    private final TraceQueryService traceQueryService;
+    private final TraceIngestService traceIngestService;
 
     public RolloutAdminController(
             RolloutService rolloutService,
@@ -40,13 +44,17 @@ public class RolloutAdminController {
             RolloutDashboardService dashboardService,
             AuditIngestService auditIngestService,
             AuditCenterService auditCenterService,
-            DeployRolloutRepository deployRolloutRepo) {
+            DeployRolloutRepository deployRolloutRepo,
+            TraceQueryService traceQueryService,
+            TraceIngestService traceIngestService) {
         this.rolloutService = rolloutService;
         this.policyRepository = policyRepository;
         this.dashboardService = dashboardService;
         this.auditIngestService = auditIngestService;
         this.auditCenterService = auditCenterService;
         this.deployRolloutRepo = deployRolloutRepo;
+        this.traceQueryService = traceQueryService;
+        this.traceIngestService = traceIngestService;
     }
 
     @PatchMapping("/rules/{ruleId}/rollout")
@@ -210,5 +218,37 @@ public class RolloutAdminController {
             throw new BusinessException(423,
                     "Active machine canary deployment in progress. Please wait for it to complete or rollback before operating rule rollout.");
         }
+    }
+
+    // ── Agent decision chain trace endpoints ──
+
+    @GetMapping("/trace/session/{sessionId}/timeline")
+    public ApiResult<List<Map<String, Object>>> traceSessionTimeline(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("sessionId") String sessionId) {
+        return ApiResult.ok(traceQueryService.sessionTimeline(tenantId, sessionId));
+    }
+
+    @GetMapping("/trace/{traceId}/chain")
+    public ApiResult<List<Map<String, Object>>> traceChain(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("traceId") String traceId) {
+        return ApiResult.ok(traceQueryService.traceChain(tenantId, traceId));
+    }
+
+    @GetMapping("/trace/search")
+    public ApiResult<List<Map<String, Object>>> traceSearch(
+            @PathVariable("tenantId") String tenantId,
+            @RequestParam(value = "tool_name", required = false) String toolName,
+            @RequestParam(value = "step_type", required = false) String stepType,
+            @RequestParam(value = "tool_decision", required = false) String toolDecision,
+            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        return ApiResult.ok(traceQueryService.search(tenantId, toolName, stepType, toolDecision, limit));
+    }
+
+    @GetMapping("/trace/ingest-status")
+    public ApiResult<Map<String, Object>> traceIngestStatus(
+            @PathVariable("tenantId") String tenantId) {
+        return ApiResult.ok(traceIngestService.status());
     }
 }

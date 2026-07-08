@@ -231,7 +231,7 @@ CREATE TABLE tb_rule_metrics_1m (
     canary_percent      INTEGER,
     cnt_review          INTEGER NOT NULL DEFAULT 0,
     cnt_block           INTEGER NOT NULL DEFAULT 0,
-    cnt_captcha         INTEGER NOT NULL DEFAULT 0,
+    cnt_challenge         INTEGER NOT NULL DEFAULT 0,
     cnt_allow           INTEGER NOT NULL DEFAULT 0,
     cnt_total_requests  INTEGER NOT NULL DEFAULT 0,
     cnt_degraded        INTEGER NOT NULL DEFAULT 0,

@@ -8,4 +8,6 @@ public record EvaluateResponseDto(
         String reasonCode,
         String traceId,
         boolean degraded,
-        String enforceMode) {}
+        String enforceMode,
+        String challengeId,
+        String argsHash) {}

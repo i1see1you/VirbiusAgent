@@ -33,19 +33,27 @@ public class ProtoMapper {
                 null,
                 null,
                 null,
-                null);
+                null,
+                proto.getToolName(),
+                proto.getArgsJson());
     }
 
     public EvaluateResponse toProto(EvaluateResponseDto dto) {
-        return EvaluateResponse.newBuilder()
+        var builder = EvaluateResponse.newBuilder()
                 .setEffectiveAction(dto.effectiveAction())
                 .setMaxRiskScore(dto.maxRiskScore())
                 .setRuleId(dto.ruleId())
                 .setRuleRevision(dto.ruleRevision())
                 .setReasonCode(dto.reasonCode())
                 .setTraceId(dto.traceId())
-                .setDegraded(dto.degraded())
-                .build();
+                .setDegraded(dto.degraded());
+        if (dto.challengeId() != null) {
+            builder.setChallengeId(dto.challengeId());
+        }
+        if (dto.argsHash() != null) {
+            builder.setArgsHash(dto.argsHash());
+        }
+        return builder.build();
     }
 
     public SignalDto toDto(Signal proto) {

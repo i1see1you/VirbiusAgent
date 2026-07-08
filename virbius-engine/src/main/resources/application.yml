@@ -25,6 +25,9 @@ virbius:
     redis:
       match-cache-ttl-sec: 60
       match-cache-max-entries: 200000
+  challenge:
+    ttl-seconds: ${VIRBIUS_CHALLENGE_TTL:300}
+    token-ttl-seconds: ${VIRBIUS_CHALLENGE_TOKEN_TTL:600}
   grpc:
     port: ${VIRBIUS_GRPC_PORT:50051}
   audit:

@@ -57,7 +57,7 @@ public final class ActionMerge {
         String action =
                 switch (intent) {
                     case IntentAction.DENY -> effective ? "block" : "review";
-                    case IntentAction.CAPTCHA -> effective ? "captcha" : "review";
+                    case IntentAction.CHALLENGE -> effective ? "challenge" : "review";
                     case IntentAction.REVIEW -> "review";
                     default -> IntentAction.ALLOW;
                 };

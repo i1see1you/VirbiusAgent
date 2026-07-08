@@ -11,5 +11,6 @@ pub mod error;
 pub mod pipeline;
 pub mod router;
 pub mod session;
+pub mod trace_collector;
 pub mod transport;
 pub mod upstream;

@@ -95,6 +95,12 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config VirbiusConfig, log wra
 	// Extract MCP session and tool info from headers
 	toolName := ctx.Header().Get("x-mcp-tool-name")
 	sessionID := ctx.Header().Get("x-mcp-session-id")
+	challengeToken := ctx.Header().Get("x-virbius-challenge-token")
+
+	// If a challenge token is present, verify it before allowing
+	if challengeToken != "" && toolName != "" && config.Evaluate {
+		return verifyChallengeToken(ctx, config, log, toolName, sessionID, challengeToken)
+	}
 
 	if toolName == "" {
 		// Not a tools/call request — transparent forward
@@ -219,6 +225,8 @@ func callEngine(ctx wrapper.HttpContext, config VirbiusConfig, log wrapper.Log, 
 			EffectiveAction string `json:"effective_action"`
 			RuleID          string `json:"rule_id"`
 			Reason          string `json:"reason"`
+			ChallengeID     string `json:"challenge_id"`
+			ArgsHash        string `json:"args_hash"`
 		}
 		if err := json.Unmarshal(responseBody, &resp); err != nil {
 			log.Warnf("virbius-wasm: engine response parse error: %v", err)
@@ -229,6 +237,13 @@ func callEngine(ctx wrapper.HttpContext, config VirbiusConfig, log wrapper.Log, 
 		if resp.EffectiveAction == "block" {
 			log.Infof("virbius-wasm: engine blocked tool=%s rule=%s reason=%s", toolName, resp.RuleID, resp.Reason)
 			_ = denyRequest(ctx, log, "engine_blocked", toolName, resp.Reason)
+			proxywasm.ResumeHttpRequest()
+			return
+		}
+
+		if resp.EffectiveAction == "challenge" {
+			log.Infof("virbius-wasm: engine challenge required tool=%s rule=%s challenge_id=%s", toolName, resp.RuleID, resp.ChallengeID)
+			_ = challengeRequest(ctx, log, toolName, resp.ChallengeID, resp.ArgsHash, resp.Reason)
 			proxywasm.ResumeHttpRequest()
 			return
 		}
@@ -280,4 +295,93 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+// --- Challenge Handling ---
+
+// verifyChallengeToken calls the Engine /v1/challenge/verify endpoint to verify
+// a one-time-use challenge token. If valid, the request is allowed; otherwise,
+// a 403 error is returned.
+func verifyChallengeToken(ctx wrapper.HttpContext, config VirbiusConfig, log wrapper.Log, toolName, sessionID, token string) types.Action {
+	verifyReq := map[string]interface{}{
+		"token":       token,
+		"tool_name":   toolName,
+		"session_id":  sessionID,
+		"args_hash":   "", // Engine looks up from token record
+	}
+	body, _ := json.Marshal(verifyReq)
+
+	err := config.HTTPClient.Post("/v1/challenge/verify", [][2]string{
+		{"Content-Type", "application/json"},
+	}, body, func(statusCode int, responseHeaders http.Header, responseBody []byte) {
+		if statusCode != http.StatusOK {
+			log.Warnf("virbius-wasm: challenge verify failed: %d %s", statusCode, string(responseBody))
+			_ = denyRequest(ctx, log, "challenge_token_invalid", toolName, "challenge token invalid or expired")
+			proxywasm.ResumeHttpRequest()
+			return
+		}
+
+		var result struct {
+			Valid       bool   `json:"valid"`
+			ChallengeID string `json:"challenge_id"`
+			Reason      string `json:"reason"`
+		}
+		if err := json.Unmarshal(responseBody, &result); err != nil {
+			log.Warnf("virbius-wasm: challenge verify response parse error: %v", err)
+			_ = denyRequest(ctx, log, "challenge_token_invalid", toolName, "challenge verify response error")
+			proxywasm.ResumeHttpRequest()
+			return
+		}
+
+		if !result.Valid {
+			log.Infof("virbius-wasm: challenge token invalid: tool=%s reason=%s", toolName, result.Reason)
+			_ = denyRequest(ctx, log, "challenge_token_invalid", toolName, "challenge token invalid: "+result.Reason)
+			proxywasm.ResumeHttpRequest()
+			return
+		}
+
+		log.Infof("virbius-wasm: challenge token verified: tool=%s challenge=%s", toolName, result.ChallengeID)
+		// Remove the challenge token header before forwarding to upstream
+		ctx.Header().Del("x-virbius-challenge-token")
+		proxywasm.ResumeHttpRequest()
+	}, uint32(config.EngineTimeoutMs))
+
+	if err != nil {
+		log.Warnf("virbius-wasm: challenge verify call failed: %v", err)
+		if config.FailMode == "closed" {
+			return denyRequest(ctx, log, "challenge_verify_error", toolName, "challenge verify service unavailable")
+		}
+		return types.ActionContinue
+	}
+
+	return types.ActionPause
+}
+
+// challengeRequest sends a JSON-RPC error -32011 (challenge_required) response
+// with the challenge_id so the Agent can poll for approval.
+func challengeRequest(ctx wrapper.HttpContext, log wrapper.Log, toolName, challengeID, argsHash, reason string) types.Action {
+	if reason == "" {
+		reason = "challenge_required"
+	}
+	errBody := fmt.Sprintf(`{
+		"jsonrpc": "2.0",
+		"error": {
+			"code": -32011,
+			"message": "challenge_required",
+			"data": {
+				"tool_name": "%s",
+				"challenge_id": "%s",
+				"args_hash": "%s",
+				"reason": "%s",
+				"http_analog": 403
+			}
+		}
+	}`, toolName, challengeID, argsHash, reason)
+
+	if err := proxywasm.SendHttpResponseWithDetail(http.StatusForbidden, "virbius-gateway", [][2]string{
+		{"Content-Type", "application/json"},
+	}, []byte(errBody), -1); err != nil {
+		log.Errorf("virbius-wasm: failed to send challenge response: %v", err)
+	}
+	return types.ActionContinue
 }

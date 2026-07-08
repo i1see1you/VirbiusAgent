@@ -39,6 +39,7 @@ use crate::egress::EgressClient;
 use crate::pipeline::SharedPipeline;
 use crate::router;
 use crate::session::SessionManager;
+use crate::trace_collector::SharedTraceCollector;
 use crate::upstream::UpstreamManager;
 
 // ─── Stdio Transport ─────────────────────────────────────────
@@ -134,6 +135,7 @@ pub struct AppState {
     pub egress_client: EgressClient,
     pub egress_hosts: Arc<Vec<String>>,
     pub public_key_pem: Arc<String>,
+    pub trace_collector: SharedTraceCollector,
     /// SSE sessions: session_id → channel to push JSON-RPC responses
     pub sse_sessions: Arc<DashMap<String, mpsc::Sender<Value>>>,
 }
@@ -244,6 +246,7 @@ async fn handle_post_message(
             &state_clone.egress_client,
             &state_clone.egress_hosts,
             &state_clone.public_key_pem,
+            &state_clone.trace_collector,
         )
         .await;
 
@@ -284,6 +287,7 @@ async fn handle_simple_post(
         &state.egress_client,
         &state.egress_hosts,
         &state.public_key_pem,
+        &state.trace_collector,
     )
     .await;
 

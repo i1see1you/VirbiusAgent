@@ -38,7 +38,7 @@
       const cards = [
         ['review (24h)', t.review ?? 0],
         ['block (24h)', t.block ?? 0],
-        ['captcha (24h)', t.captcha ?? 0],
+        ['challenge (24h)', t.challenge ?? 0],
         ['total requests', t.total_requests ?? 0],
         ['hit_rate', t.hit_rate != null ? fmtPct(t.hit_rate) : 'N/A'],
         ['review_rate', t.review_rate != null ? fmtPct(t.review_rate) : 'N/A']
@@ -48,12 +48,12 @@
       ).join('');
     }
 
-    function renderMiniBar(review, block, captcha, allow) {
-      const total = Math.max(review + block + captcha + allow, 1);
+    function renderMiniBar(review, block, challenge, allow) {
+      const total = Math.max(review + block + challenge + allow, 1);
       const segs = [
         { n: review, c: '#fbbf24' },
         { n: block, c: '#ef4444' },
-        { n: captcha, c: '#a855f7' },
+        { n: challenge, c: '#a855f7' },
         { n: allow, c: '#22c55e' }
       ];
       return '<div class="bar-cell">' + segs.map(s => {
@@ -98,7 +98,7 @@
         { label: 'total_requests', data: merged.map(p => p.total_requests ?? 0), yAxisID: 'y', borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.2, pointRadius: 0 },
         { label: 'review',  data: merged.map(p => p.review ?? 0),  yAxisID: 'y1', borderColor: '#fbbf24', tension: 0.2, pointRadius: 0 },
         { label: 'block',   data: merged.map(p => p.block ?? 0),   yAxisID: 'y1', borderColor: '#ef4444', tension: 0.2, pointRadius: 0 },
-        { label: 'captcha', data: merged.map(p => p.captcha ?? 0), yAxisID: 'y1', borderColor: '#a855f7', tension: 0.2, pointRadius: 0 },
+        { label: 'challenge', data: merged.map(p => p.challenge ?? 0), yAxisID: 'y1', borderColor: '#a855f7', tension: 0.2, pointRadius: 0 },
         { label: 'allow',   data: merged.map(p => p.allow ?? 0),   yAxisID: 'y1', borderColor: '#22c55e', tension: 0.2, pointRadius: 0 },
       ];
       if (roChart) {

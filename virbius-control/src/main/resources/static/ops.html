@@ -207,6 +207,38 @@
     .toast.toast-err { background: #fee2e2; color: #991b1b; border-left: 4px solid #dc2626; }
     .toast.toast-warn { background: #fef3c7; color: #92400e; border-left: 4px solid #d97706; }
     .toast.toast-info { background: #0f172a; color: #e2e8f0; border-left: 4px solid #475569; }
+    /* ── Trace visualization ── */
+    .trace-chain-group { margin-bottom: 1.25rem; padding: 0.75rem; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; }
+    .trace-chain { display: flex; flex-direction: column; gap: 0; }
+    .trace-step-card { padding: 0.5rem 0.75rem; border-radius: 6px; background: #fff; border: 1px solid #e2e8f0; margin: 0.2rem 0; }
+    .trace-step-card.tool_call { border-left: 3px solid #2563eb; }
+    .trace-step-card.tool_result { border-left: 3px solid #16a34a; }
+    .trace-step-card.input { border-left: 3px solid #8b5cf6; }
+    .trace-step-card.reasoning { border-left: 3px solid #f59e0b; }
+    .trace-step-card.output { border-left: 3px solid #64748b; }
+    .trace-step-header { display: flex; align-items: center; gap: 0.35rem; }
+    .trace-step-icon { font-size: 1rem; }
+    .trace-step-type { font-weight: 600; font-size: 0.85rem; color: #334155; }
+    .trace-step-seq { font-size: 0.75rem; color: #94a3b8; margin-left: auto; }
+    .trace-step-body { margin-top: 0.2rem; font-size: 0.8rem; color: #475569; }
+    .trace-step-meta { color: #64748b; }
+    .trace-step-badges { display: flex; gap: 0.3rem; margin-top: 0.2rem; }
+    .trace-decision { font-size: 0.7rem; padding: 0.1rem 0.35rem; border-radius: 3px; }
+    .trace-decision.allow { background: #dcfce7; color: #166534; }
+    .trace-decision.block { background: #fee2e2; color: #991b1b; }
+    .trace-decision.challenge { background: #fef3c7; color: #92400e; }
+    .trace-risk { font-size: 0.7rem; padding: 0.1rem 0.35rem; border-radius: 3px; }
+    .trace-risk.risk-low { background: #dcfce7; color: #166534; }
+    .trace-risk.risk-mid { background: #fef3c7; color: #92400e; }
+    .trace-risk.risk-high { background: #fee2e2; color: #991b1b; }
+    .trace-status { font-size: 0.7rem; padding: 0.1rem 0.35rem; border-radius: 3px; background: #e2e8f0; color: #334155; }
+    .trace-status.success { background: #dcfce7; color: #166534; }
+    .trace-status.error { background: #fee2e2; color: #991b1b; }
+    .trace-step-hash { font-family: ui-monospace, monospace; font-size: 0.7rem; color: #94a3b8; margin-top: 0.15rem; }
+    .trace-step-time { font-size: 0.72rem; color: #94a3b8; margin-top: 0.15rem; }
+    .trace-arrow-down { text-align: center; color: #cbd5e1; font-size: 0.85rem; line-height: 1; }
+    .trace-row { cursor: pointer; }
+    .trace-row:hover { background: #eff6ff !important; }
   </style>
   <script src="vendor/chartjs/chart.umd.min.js"></script>
   <link rel="stylesheet" href="vendor/highlightjs/styles/atom-one-dark.min.css">
@@ -243,6 +275,8 @@
         <button type="button" class="nav-item" data-tab="rollout"><span class="nav-icon">🚀</span><span class="nav-label" data-i18n="nav.rollout">策略上线</span></button>
         <button type="button" class="nav-item" data-tab="audit-center"><span class="nav-icon">🔍</span><span class="nav-label" data-i18n="nav.audit-center">审计中心</span></button>
         <button type="button" class="nav-item" data-tab="monitor"><span class="nav-icon">📈</span><span class="nav-label" data-i18n="nav.monitor">监控中心</span></button>
+<button type="button" class="nav-item" data-tab="challenge"><span class="nav-icon">🔐</span><span class="nav-label" data-i18n="nav.challenge">审批队列</span></button>
+        <button type="button" class="nav-item" data-tab="trace"><span class="nav-icon">🧬</span><span class="nav-label">决策链路</span></button>
       </nav>
     </aside>
 
@@ -521,7 +555,7 @@
           <select id="fIntent">
             <option value="deny">deny</option>
             <option value="allow">allow</option>
-            <option value="captcha">captcha</option>
+            <option value="challenge">challenge</option>
             <option value="review">review</option>
           </select>
         </label>
@@ -852,7 +886,7 @@
 
   <div id="panel-audit-center" class="panel card">
     <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="ac.title">审计中心</h2>
-    <p class="hint" data-i18n-html="ac.desc">按 <code>trace_id</code> 查询 <code>tb_audit_events</code>（review/block/captcha 及采样命中的 allow 事件）。未采样的 allow 请求仅归档为 JSONL，不在此查询。</p>
+    <p class="hint" data-i18n-html="ac.desc">按 <code>trace_id</code> 查询 <code>tb_audit_events</code>（review/block/challenge 及采样命中的 allow 事件）。未采样的 allow 请求仅归档为 JSONL，不在此查询。</p>
     <div class="row">
       <label>trace_id <input id="acTraceId" placeholder="输入 trace_id" style="min-width:22rem" autocomplete="off" /></label>
       <button type="button" id="acSearch" data-i18n="ac.btn-search">查询</button>
@@ -903,7 +937,7 @@
           <th data-i18n="monitor.ranking-header-hits">命中</th>
           <th data-i18n="monitor.ranking-header-block">拦截</th>
           <th data-i18n="monitor.ranking-header-review">复审</th>
-          <th>captcha</th>
+          <th>challenge</th>
           <th data-i18n="monitor.ranking-header-hit-rate">命中率</th>
           <th data-i18n="monitor.ranking-header-block-rate">拦截率</th>
           <th data-i18n="monitor.kpi-total-requests">总请求</th>
@@ -951,6 +985,84 @@
     </div>
   </div>
 
+  <div id="panel-challenge" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="challenge.title">审批队列</h2>
+    <p class="hint" data-i18n-html="challenge.desc">高风险工具调用被 <code>challenge</code> 规则拦截后进入此队列。审批通过后生成一次性 token，Agent 凭 token 重试调用。</p>
+    <div class="row" style="align-items:center;margin-bottom:0.5rem">
+      <span class="kpi-card"><span class="label">待审批</span><span class="value" id="chPendingCount">0</span></span>
+      <button type="button" class="secondary" id="chRefresh" data-i18n="challenge.btn-refresh">刷新</button>
+    </div>
+    <table class="data-table" style="width:100%">
+      <thead><tr>
+        <th>Challenge ID</th>
+        <th data-i18n="challenge.header-tool">工具</th>
+        <th data-i18n="challenge.header-risk">风险</th>
+        <th data-i18n="challenge.header-rule">规则</th>
+        <th>Session</th>
+        <th data-i18n="challenge.header-created">创建时间</th>
+        <th data-i18n="challenge.header-expires">过期时间</th>
+        <th data-i18n="challenge.header-actions">操作</th>
+      </tr></thead>
+      <tbody id="chQueueBody">
+        <tr><td colspan="8" class="empty-state">No pending challenges</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div id="panel-trace" class="panel card">
+    <h2 style="margin:0 0 0.5rem;font-size:1rem">Agent 决策链路追踪</h2>
+    <p class="hint">追踪 Agent 完整决策链路：输入 → 推理 → 工具调用 → 工具结果 → 输出。点击搜索结果行查看完整 Session 链路时间线。</p>
+
+    <div class="row" style="margin-bottom:0.75rem">
+      <input id="traceSearchTool" placeholder="工具名" size="14" />
+      <select id="traceSearchType">
+        <option value="">全部类型</option>
+        <option value="input">input</option>
+        <option value="reasoning">reasoning</option>
+        <option value="tool_call">tool_call</option>
+        <option value="tool_result">tool_result</option>
+        <option value="output">output</option>
+      </select>
+      <select id="traceSearchDecision">
+        <option value="">全部决策</option>
+        <option value="allow">allow</option>
+        <option value="block">block</option>
+        <option value="challenge">challenge</option>
+      </select>
+      <input id="traceSearchLimit" type="number" value="50" min="1" max="500" size="5" />
+      <button type="button" id="btnTraceSearch">搜索</button>
+      <button type="button" class="secondary" id="btnTraceRefresh">刷新</button>
+    </div>
+
+    <table class="data-table" style="width:100%;margin-bottom:1.5rem">
+      <thead><tr>
+        <th>Trace ID</th>
+        <th>Session</th>
+        <th>类型</th>
+        <th>工具</th>
+        <th>决策</th>
+        <th>风险</th>
+        <th>耗时</th>
+        <th>时间</th>
+      </tr></thead>
+      <tbody id="traceSearchBody">
+        <tr><td colspan="8" class="empty-state">点击「搜索」查看决策链路</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin:1rem 0 0.5rem;font-size:0.95rem">
+      Session 时间线 · <code id="traceTimelineSession">—</code>
+    </h3>
+    <div id="traceTimelineContainer" style="min-height:4rem">
+      <p class="hint">点击上方搜索结果行查看完整链路</p>
+    </div>
+
+    <div class="rollout-section">
+      <h3>Ingest 健康状态</h3>
+      <div id="traceIngestStatus"></div>
+    </div>
+  </div>
+
       </div>
       <pre id="log"></pre>
     </div>
@@ -970,6 +1082,8 @@
   <script src="js/ops-audit.js"></script>
   <script src="js/ops-tenants.js"></script>
   <script src="js/ops-monitor.js"></script>
+  <script src="js/ops-challenge.js"></script>
+  <script src="js/ops-trace.js"></script>
   <script src="js/ops-nav.js"></script>
 
   <!-- Version input modal for deploy prepare -->

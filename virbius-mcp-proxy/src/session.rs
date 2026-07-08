@@ -36,6 +36,10 @@ pub struct Session {
     pub last_active: Instant,
     /// Creation timestamp.
     pub created_at: Instant,
+    /// Monotonic step counter for trace chain (incremented per tool_call).
+    pub step_seq: u32,
+    /// Last step_id in the trace chain (for parent linking).
+    pub last_step_id: Option<String>,
 }
 
 impl Session {
@@ -87,6 +91,8 @@ impl Session {
             allowed_tools,
             last_active: now,
             created_at: now,
+            step_seq: 0,
+            last_step_id: None,
         }
     }
 
@@ -98,6 +104,17 @@ impl Session {
     /// Increment the tool call count (for warmup detection).
     pub fn increment_calls(&mut self) {
         self.tool_call_count += 1;
+    }
+
+    /// Allocate the next step sequence number for trace chain.
+    pub fn next_step_seq(&mut self) -> u32 {
+        self.step_seq += 1;
+        self.step_seq
+    }
+
+    /// Record the last step_id for parent linking in the trace chain.
+    pub fn set_last_step_id(&mut self, step_id: String) {
+        self.last_step_id = Some(step_id);
     }
 
     /// Update last_active to now.

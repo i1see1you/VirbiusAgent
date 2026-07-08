@@ -69,6 +69,9 @@
       if (tab === 'tenants') {
         loadTenantsPage().catch(e => log(e.message, 'err'));
       }
+      if (tab === 'trace') {
+        loadTraceIngestStatus();
+      }
     }
 
     document.getElementById('btnSidebarToggle').onclick = () => {
@@ -113,5 +116,11 @@
 
     document.getElementById('tenantId').addEventListener('change', () =>
       reloadAll().catch(e => log(e.message, 'err')));
+
+    // Trace panel handlers
+    const btnTraceSearch = document.getElementById('btnTraceSearch');
+    if (btnTraceSearch) btnTraceSearch.onclick = () => loadTraceSearch();
+    const btnTraceRefresh = document.getElementById('btnTraceRefresh');
+    if (btnTraceRefresh) btnTraceRefresh.onclick = () => loadTraceSearch();
 
     reloadAll().catch(e => log(e.message, 'err'));

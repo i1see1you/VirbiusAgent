@@ -6,7 +6,7 @@ public final class IntentAction {
 
     public static final String ALLOW = "allow";
     public static final String DENY = "deny";
-    public static final String CAPTCHA = "captcha";
+    public static final String CHALLENGE = "challenge";
     public static final String REVIEW = "review";
 
     private IntentAction() {}
@@ -34,7 +34,7 @@ public final class IntentAction {
     public static int priority(String intent) {
         return switch (normalize(intent, 0)) {
             case DENY -> 100;
-            case CAPTCHA -> 50;
+            case CHALLENGE -> 50;
             case REVIEW -> 30;
             default -> 0;
         };
@@ -45,6 +45,6 @@ public final class IntentAction {
     }
 
     private static boolean isKnown(String v) {
-        return ALLOW.equals(v) || DENY.equals(v) || CAPTCHA.equals(v) || REVIEW.equals(v);
+        return ALLOW.equals(v) || DENY.equals(v) || CHALLENGE.equals(v) || REVIEW.equals(v);
     }
 }

@@ -366,6 +366,7 @@ fn build_tool_annotations(tool_name: &str, license: &License) -> Option<Value> {
 | -32008 | `risk_threshold` | session_risk_score 超过 License risk_quota | 403 |
 | -32009 | `output_review_blocked` | 输出审查阻断(P1) | 403 |
 | -32010 | `fallback_blocked` | Fallback 策略通用阻断 | 403 |
+| -32011 | `challenge_required` | 高风险操作需人工审批（challenge 流程） | 403 |
 
 ```rust
 // virbius-mcp-proxy/src/error.rs
@@ -382,6 +383,7 @@ pub enum VirbiusErrorCode {
     RiskThreshold        = -32008,
     OutputReviewBlocked  = -32009,
     FallbackBlocked      = -32010,
+    ChallengeRequired    = -32011,
 }
 
 pub fn jsonrpc_error(code: VirbiusErrorCode, id: i64, data: Value) -> Value {
@@ -396,6 +398,123 @@ pub fn jsonrpc_error(code: VirbiusErrorCode, id: i64, data: Value) -> Value {
     })
 }
 ```
+
+---
+
+### Challenge 流程（-32011 `challenge_required`）
+
+当 Engine 返回 `effective_action = "challenge"` 时，表示该工具调用需要人工审批才能执行。Challenge 支持双路径：**Inline**（即时确认）和 **Dashboard**（异步运营台审批）。
+
+#### 流程时序
+
+```
+Agent                 Proxy/Gateway          Engine                Control Dashboard
+  |                        |                    |                        |
+  |--- tools/call -------->|                    |                        |
+  |                        |--- /v1/evaluate -->|                        |
+  |                        |<-- {action:        |                        |
+  |                        |      "challenge",  |                        |
+  |                        |      challenge_id, |                        |
+  |                        |      args_hash} ---|                        |
+  |<-- error -32011 -------|                    |                        |
+  |    {challenge_id,      |                    |                        |
+  |     args_hash}         |                    |                        |
+  |                        |                    |                        |
+  | (Agent 轮询 challenge 状态)                 |                        |
+  |--- GET /v1/challenge/{id}/status ---------->|                        |
+  |<-- {status: "pending"} ---------------------|                        |
+  |                        |                    |                        |
+  |                        |                    |<-- approve/reject -----|
+  |                        |                    |    (运营台审批)         |
+  |                        |                    |                        |
+  |--- GET /v1/challenge/{id}/status ---------->|                        |
+  |<-- {status: "approved",                     |                        |
+  |     token: "vct_xxx"} ----------------------|                        |
+  |                        |                    |                        |
+  |--- tools/call -------->|                    |                        |
+  |   (_meta.challenge_token: "vct_xxx")        |                        |
+  |                        |--- /v1/challenge/verify -->|                |
+  |                        |<-- {valid: true} ---------|                 |
+  |                        |--- (forward to upstream)   |                |
+  |<-- result -------------|                    |                        |
+```
+
+#### 错误响应格式（-32011）
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 42,
+  "error": {
+    "code": -32011,
+    "message": "challenge_required",
+    "data": {
+      "tool_name": "delete_file",
+      "challenge_id": "ch_a1b2c3d4e5f6a7b8",
+      "args_hash": "sha256:abc123...",
+      "rule_id": "RL_HIGH_RISK_FILE_OPS",
+      "reason": "high_risk_operation",
+      "trace_id": "uuid-xxx",
+      "session_risk_score": 75,
+      "http_analog": 403
+    }
+  }
+}
+```
+
+#### 重试格式（带 challenge token）
+
+Agent 在收到审批通过后，重试原始 `tools/call` 请求，在 `_meta` 中附带 `challenge_token`：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 43,
+  "method": "tools/call",
+  "params": {
+    "name": "delete_file",
+    "arguments": { "path": "/data/important.txt" },
+    "_meta": {
+      "challenge_token": "vct_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+    }
+  }
+}
+```
+
+Proxy/Gateway 收到带 `challenge_token` 的请求后：
+1. 调用 Engine `POST /v1/challenge/verify` 验证 token（一次性使用）
+2. 验证通过则转发到上游 MCP Server（移除 `_meta.challenge_token`）
+3. 验证失败返回 `-32011` 错误
+
+> **Gateway (WASM) 路径**：通过 HTTP Header `X-Virbius-Challenge-Token` 传递 token，而非 `_meta`。
+
+#### Engine Challenge API
+
+| Method | Path | 说明 |
+|--------|------|------|
+| `GET` | `/v1/challenge/{id}/status` | 查询 challenge 状态（pending/approved/rejected/expired） |
+| `POST` | `/v1/challenge/{id}/approve` | 审批通过，生成一次性 token（运营台调用） |
+| `POST` | `/v1/challenge/{id}/reject` | 审批拒绝（运营台调用） |
+| `POST` | `/v1/challenge/verify` | 验证 token 有效性（Proxy/Gateway 调用） |
+| `GET` | `/v1/challenges?tenant_id=default&status=pending` | 列出待审批 challenge（运营台队列） |
+
+#### 路径选择配置
+
+Challenge 路径（Inline vs Dashboard）由以下配置决定：
+
+1. **ToolPolicy**（`virbius-core/src/manifest.rs`）：每个工具可声明 `challenge_method`（`inline` | `dashboard` | `auto`）
+2. **Rule body_json**：规则可覆盖 `challenge_method`
+3. **Agent `initialize._meta`**：Agent 可声明 `challenge_methods: ["inline", "dashboard"]` 表示支持的确认方式
+4. **Engine 配置**（`application.yml`）：`virbius.challenge.ttl-seconds` 和 `virbius.challenge.token-ttl-seconds`
+
+默认 `auto`：Engine 根据 Agent 声明的能力选择路径。若 Agent 支持 `inline`，优先使用 Inline；否则使用 Dashboard。
+
+#### 安全保证
+
+- **Token 一次性使用**：验证后立即标记为 `used`，二次使用返回 `valid=false`
+- **Args 绑定**：Token 与原始请求的 `tool_name` + `args_hash` 绑定，不可跨请求复用
+- **TTL 限制**：Challenge 记录默认 300s 过期，Token 默认 600s 过期
+- **审计追踪**：所有 challenge 操作（创建/审批/拒绝/验证）均记录审计日志
 
 **配置**：
 
@@ -831,12 +950,92 @@ connections: DashMap<(String, String), UpstreamClient>
       "licenseVerification": true,
       "engineEvaluate": true,
       "fastPath": true,
-      "multiUpstream": true
+      "multiUpstream": true,
+      "traceCollector": true
     }
   }
 }
 ```
 
+#### 2.6.3 决策链路追踪（Trace Collector）
 
+MCP Proxy 内置 `TraceCollector` 模块，在 `tools/call` 请求生命周期的两个关键点采集 trace 事件，异步写入 Redis Stream `virbius:trace`，由 Control 侧 `TraceIngestService` 消费入库。
 
+**采集点**：
+
+| 采集点 | event_type | 时机 | 记录内容 |
+|--------|-----------|------|---------|
+| `tool_call` | `tool_call` | 安全管线检查通过后、转发上游前 | tool_name, arguments, step_id, parent_step_id |
+| `tool_result` | `tool_result` | 上游返回后、响应 Agent 前 | tool_name, result, is_error, duration_ms |
+
+**步骤追踪**：
+
+每个 Session 维护 `step_seq`（递增序号）和 `last_step_id`（上一步 ID），新步骤的 `parent_step_id` 自动设为 `last_step_id`，构建因果链：
+
+```
+step-001 (tool_call: read_file)
+  └── step-002 (tool_result: read_file)
+       └── step-003 (tool_call: write_file)
+            └── step-004 (tool_result: write_file)
+```
+
+**TraceEvent 格式**：
+
+```json
+{
+  "trace_id": "550e8400-e29b-41d4-a716-446655440000",
+  "session_id": "sess_abc123",
+  "parent_step_id": "step-001",
+  "step_id": "step-002",
+  "step_seq": 2,
+  "event_type": "tool_call",
+  "tool_name": "read_file",
+  "arguments": { "path": "/etc/hosts" },
+  "result": null,
+  "is_error": false,
+  "error_message": null,
+  "duration_ms": null,
+  "tenant_id": "tenant-001",
+  "timestamp": "2026-07-08T12:00:00.123Z"
+}
+```
+
+**配置**（`config.toml`）：
+
+```toml
+[trace]
+enabled = true          # 默认 true
+redis_url = "redis://127.0.0.1:6379"
+stream_key = "virbius:trace"
+max_fields_len = 32768  # 单字段最大长度（字节），超长截断
+```
+
+**Redis Stream 写入**：
+
+```
+XADD virbius:trace * \
+  trace_id 550e8400-... \
+  session_id sess_abc123 \
+  step_id step-002 \
+  parent_step_id step-001 \
+  step_seq 2 \
+  event_type tool_call \
+  tool_name read_file \
+  arguments '{"path":"/etc/hosts"}' \
+  tenant_id tenant-001 \
+  timestamp 2026-07-08T12:00:00.123Z
+```
+
+**Control 侧消费**：
+
+`TraceIngestService` 使用 `XREADGROUP` 消费 `virbius:trace`，通过 `JdbcTemplate` 幂等写入 `tb_agent_trace` 表，检查点（last delivered ID）持久化在 `tb_trace_ingest_checkpoint`。
+
+**REST API**：
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/admin/tenants/{tenantId}/trace/session/{sessionId}/timeline` | Session 时间线（按 step_seq 排序） |
+| GET | `/api/v1/admin/tenants/{tenantId}/trace/trace/{traceId}` | Trace 因果链（parent_step_id 递归） |
+| GET | `/api/v1/admin/tenants/{tenantId}/trace/search?toolName=&sessionId=&limit=` | 搜索 |
+| GET | `/api/v1/admin/tenants/{tenantId}/trace/ingest/status` | Ingest 健康状态（pending/lag） |
 

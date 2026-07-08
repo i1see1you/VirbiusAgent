@@ -21,6 +21,8 @@ message EvaluateRequest {
   string user_id = 9;
   string device_id = 10;
   map<string, string> vars = 11;
+  string tool_name = 12;       // tool being called (for challenge binding)
+  string args_json = 13;      // serialized tool args (for challenge args_hash)
 }
 
 message Signal {
@@ -30,20 +32,22 @@ message Signal {
   double score = 4;
   string reason_code = 5;
   string layer = 6;
-  string intent_action = 7;   // allow | deny | captcha | review
+  string intent_action = 7;   // allow | deny | challenge | review
   string enforce_mode = 8;
   optional int32 canary_percent = 9;   // optional; 0 = unset
 }
 
 // 对外扁平响应（与 HTTP EvaluateResponseDto / gateway-agent 对齐）
 message EvaluateResponse {
-  string effective_action = 1;  // allow | block | captcha | review
+  string effective_action = 1;  // allow | block | challenge | review
   int32 max_risk_score = 2;
   string rule_id = 3;
   int32 rule_revision = 4;
   string reason_code = 5;
   string trace_id = 6;
   bool degraded = 7;
+  string challenge_id = 8;     // populated when effective_action == "challenge"
+  string args_hash = 9;        // SHA-256 of tool_name:args_json (for challenge binding)
 }
 
 message EngineDecision {

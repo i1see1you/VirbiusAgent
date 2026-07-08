@@ -254,7 +254,7 @@ local function intent_priority(intent)
     intent = string.lower(intent)
     if intent == "deny" then
         return 100
-    elseif intent == "captcha" then
+    elseif intent == "challenge" then
         return 50
     elseif intent == "review" then
         return 30
@@ -272,7 +272,7 @@ end
 local function normalize_intent(intent, risk_score)
     if intent and intent ~= "" then
         intent = string.lower(intent)
-        if intent == "allow" or intent == "deny" or intent == "captcha" or intent == "review" then
+        if intent == "allow" or intent == "deny" or intent == "challenge" or intent == "review" then
             return intent
         end
     end
@@ -364,8 +364,8 @@ function _M.merge_actions(hits, session_id)
     local effective_action = "allow"
     if intent == "deny" then
         effective_action = effective and "block" or "review"
-    elseif intent == "captcha" then
-        effective_action = effective and "captcha" or "review"
+    elseif intent == "challenge" then
+        effective_action = effective and "challenge" or "review"
     elseif intent == "review" then
         effective_action = "review"
     end

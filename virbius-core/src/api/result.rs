@@ -6,7 +6,7 @@ pub enum EffectiveAction {
     Allow,
     Block,
     Review,
-    Captcha,
+    Challenge,
 }
 
 impl EffectiveAction {
@@ -14,7 +14,7 @@ impl EffectiveAction {
         match s.trim().to_ascii_lowercase().as_str() {
             "block" => Self::Block,
             "review" => Self::Review,
-            "captcha" => Self::Captcha,
+            "challenge" => Self::Challenge,
             _ => Self::Allow,
         }
     }

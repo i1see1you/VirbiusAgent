@@ -13,6 +13,7 @@ use crate::egress::EgressClient;
 use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
 use crate::pipeline::{PipelineResult, SharedPipeline};
 use crate::session::{Session, SessionManager};
+use crate::trace_collector::{SharedTraceCollector, TraceEvent};
 use crate::upstream::UpstreamManager;
 
 /// Separator used for prefixed tool names in multi-upstream mode.
@@ -32,6 +33,7 @@ pub async fn route_request(
     egress_client: &EgressClient,
     egress_hosts: &[String],
     public_key_pem: &str,
+    trace_collector: &SharedTraceCollector,
 ) -> Option<Value> {
     let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let id = request.get("id").cloned().unwrap_or(Value::Null);
@@ -61,6 +63,7 @@ pub async fn route_request(
                 pipeline,
                 egress_client,
                 egress_hosts,
+                trace_collector,
             )
             .await
         }
@@ -533,6 +536,7 @@ async fn handle_tools_call(
     pipeline: &SharedPipeline,
     egress_client: &EgressClient,
     egress_hosts: &[String],
+    trace_collector: &SharedTraceCollector,
 ) -> Option<Value> {
     let mut session = match session_mgr.get(session_id) {
         Some(s) => s,
@@ -611,6 +615,109 @@ async fn handle_tools_call(
         }
     };
 
+    // Check for challenge token in _meta (retry after approval)
+    let meta = params.get("_meta").unwrap_or(&Value::Null);
+    let challenge_token = pipeline.extract_challenge_token(meta);
+
+    // If a challenge token is present, verify it before running the pipeline
+    if let Some(token) = &challenge_token {
+        match pipeline.verify_challenge_token(token, &original_tool_name, &args, &session).await {
+            Ok(true) => {
+                // Token verified — bypass pipeline, allow directly
+                debug!("challenge token verified, allowing tool call: tool={}", original_tool_name);
+                session.increment_calls();
+                session_mgr.update(session_id.to_string(), session.clone());
+
+                // Forward to upstream (same as Allow path)
+                if crate::egress::is_egress_tool(&original_tool_name) {
+                    return Some(
+                        proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts).await,
+                    );
+                }
+
+                let upstream = match upstream_mgr.get_or_connect(session_id, &upstream_name).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        return Some(jsonrpc_error(
+                            -32603,
+                            id,
+                            &format!("upstream connect failed: {e}"),
+                        ))
+                    }
+                };
+
+                let forward_params = if displayed_tool_name != original_tool_name {
+                    let mut p = params.clone();
+                    if let Some(obj) = p.as_object_mut() {
+                        obj.insert("name".to_string(), Value::String(original_tool_name.clone()));
+                    }
+                    p
+                } else {
+                    params.clone()
+                };
+
+                // Strip challenge_token from _meta before forwarding
+                let mut forward_req = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "method": "tools/call",
+                    "params": forward_params,
+                });
+                if let Some(obj) = forward_req.get_mut("params").and_then(|p| p.as_object_mut()) {
+                    if let Some(m) = obj.get_mut("_meta").and_then(|m| m.as_object_mut()) {
+                        m.remove("challenge_token");
+                    }
+                }
+
+                match upstream.forward(&forward_req).await {
+                    Ok(resp) => return Some(resp),
+                    Err(e) => return Some(jsonrpc_error(
+                        -32603,
+                        id,
+                        &format!("upstream tools/call failed: {e}"),
+                    )),
+                }
+            }
+            Ok(false) => {
+                return Some(jsonrpc_error_simple(
+                    VirbiusErrorCode::ChallengeRequired,
+                    id.clone(),
+                    &original_tool_name,
+                    &session.trace_id,
+                    session.session_risk_score,
+                    Some("challenge token invalid or expired"),
+                ));
+            }
+            Err(e) => {
+                warn!("challenge token verify error: {e}");
+                // Fail-closed: deny if verify endpoint is unavailable
+                return Some(jsonrpc_error_simple(
+                    VirbiusErrorCode::ChallengeRequired,
+                    id.clone(),
+                    &original_tool_name,
+                    &session.trace_id,
+                    session.session_risk_score,
+                    Some("challenge verify service unavailable"),
+                ));
+            }
+        }
+    }
+
+    // ── Trace: record tool_call event (before pipeline) ──
+    let tool_call_step_id = uuid::Uuid::new_v4().to_string();
+    let parent_step_id = session.last_step_id.clone();
+    let step_seq = session.next_step_seq();
+    let trace_event = TraceEvent::tool_call(
+        &session,
+        &tool_call_step_id,
+        parent_step_id.as_deref(),
+        step_seq,
+        &original_tool_name,
+        &args,
+    );
+    trace_collector.record(trace_event).await;
+    let trace_start = std::time::Instant::now();
+
     // Run security pipeline with the ORIGINAL tool name (before any prefix stripping).
     // The License allowed_tools contains original names, not prefixed ones.
     let result = pipeline.check_tool_call(&session, &original_tool_name, &args).await;
@@ -623,14 +730,32 @@ async fn handle_tools_call(
             }
             // Increment call count
             session.increment_calls();
+            session.set_last_step_id(tool_call_step_id.clone());
             session_mgr.update(session_id.to_string(), session.clone());
+
+            // ── Trace: update tool_call with decision ──
+            let tc_event = TraceEvent::tool_call(
+                &session, &tool_call_step_id, parent_step_id.as_deref(), step_seq,
+                &original_tool_name, &args,
+            ).with_decision("allow", None, None, risk_score);
+            trace_collector.record(tc_event).await;
 
             // Egress tools: Proxy HTTP request directly with streaming response.
             // Check against the original tool name.
             if crate::egress::is_egress_tool(&original_tool_name) {
-                return Some(
-                    proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts).await,
+                let resp = proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts).await;
+                // ── Trace: record tool_result ──
+                let duration_ms = trace_start.elapsed().as_millis() as u64;
+                let result_step_id = uuid::Uuid::new_v4().to_string();
+                let result_seq = session.next_step_seq();
+                let tr_event = TraceEvent::tool_result(
+                    &session, &result_step_id, &tool_call_step_id, result_seq,
+                    "success", duration_ms, &resp,
                 );
+                trace_collector.record(tr_event).await;
+                session.set_last_step_id(result_step_id);
+                session_mgr.update(session_id.to_string(), session);
+                return Some(resp);
             }
 
             // Non-egress tools: Forward to the resolved upstream.
@@ -666,12 +791,39 @@ async fn handle_tools_call(
             });
 
             match upstream.forward(&forward_req).await {
-                Ok(resp) => Some(resp),
-                Err(e) => Some(jsonrpc_error(
-                    -32603,
-                    id,
-                    &format!("upstream tools/call failed: {e}"),
-                )),
+                Ok(resp) => {
+                    // ── Trace: record tool_result ──
+                    let duration_ms = trace_start.elapsed().as_millis() as u64;
+                    let result_step_id = uuid::Uuid::new_v4().to_string();
+                    let result_seq = session.next_step_seq();
+                    let tr_event = TraceEvent::tool_result(
+                        &session, &result_step_id, &tool_call_step_id, result_seq,
+                        "success", duration_ms, &resp,
+                    );
+                    trace_collector.record(tr_event).await;
+                    session.set_last_step_id(result_step_id);
+                    session_mgr.update(session_id.to_string(), session);
+                    Some(resp)
+                }
+                Err(e) => {
+                    // ── Trace: record tool_result error ──
+                    let duration_ms = trace_start.elapsed().as_millis() as u64;
+                    let result_step_id = uuid::Uuid::new_v4().to_string();
+                    let result_seq = session.next_step_seq();
+                    let err_val = serde_json::json!({"error": e.to_string()});
+                    let tr_event = TraceEvent::tool_result(
+                        &session, &result_step_id, &tool_call_step_id, result_seq,
+                        "error", duration_ms, &err_val,
+                    );
+                    trace_collector.record(tr_event).await;
+                    session.set_last_step_id(result_step_id);
+                    session_mgr.update(session_id.to_string(), session);
+                    Some(jsonrpc_error(
+                        -32603,
+                        id,
+                        &format!("upstream tools/call failed: {e}"),
+                    ))
+                }
             }
         }
         PipelineResult::Deny { code, reason, risk_score, .. } => {
@@ -681,6 +833,13 @@ async fn handle_tools_call(
             }
             session_mgr.update(session_id.to_string(), session.clone());
 
+            // ── Trace: update tool_call with deny decision ──
+            let tc_event = TraceEvent::tool_call(
+                &session, &tool_call_step_id, parent_step_id.as_deref(), step_seq,
+                &original_tool_name, &args,
+            ).with_decision("block", None, Some(&reason), risk_score);
+            trace_collector.record(tc_event).await;
+
             Some(jsonrpc_error_simple(
                 code,
                 id.clone(),
@@ -689,6 +848,39 @@ async fn handle_tools_call(
                 session.session_risk_score,
                 Some(&reason),
             ))
+        }
+        PipelineResult::Challenge { challenge_id, args_hash, rule_id, reason, risk_score } => {
+            // Write back risk score from engine
+            session.session_risk_score = risk_score;
+            session_mgr.update(session_id.to_string(), session.clone());
+
+            // ── Trace: update tool_call with challenge decision ──
+            let tc_event = TraceEvent::tool_call(
+                &session, &tool_call_step_id, parent_step_id.as_deref(), step_seq,
+                &original_tool_name, &args,
+            ).with_decision("challenge", rule_id.as_deref(), Some(&reason), Some(risk_score));
+            trace_collector.record(tc_event).await;
+
+            // Return JSON-RPC error -32011 with challenge details
+            let data = serde_json::json!({
+                "tool_name": original_tool_name,
+                "rule_id": rule_id,
+                "trace_id": session.trace_id,
+                "session_risk_score": risk_score,
+                "http_analog": 403,
+                "challenge_id": challenge_id,
+                "args_hash": args_hash,
+                "reason": reason,
+            });
+            Some(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {
+                    "code": VirbiusErrorCode::ChallengeRequired as i32,
+                    "message": VirbiusErrorCode::ChallengeRequired.message(),
+                    "data": data
+                }
+            }))
         }
     }
 }

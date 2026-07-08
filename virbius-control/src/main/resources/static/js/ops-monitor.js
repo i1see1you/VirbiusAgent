@@ -143,7 +143,7 @@
       { label: 'allow', data: filtered.map(p => p.allow || 0), backgroundColor: 'rgba(34,197,94,0.7)', borderColor: '#22c55e', borderWidth: 1 },
       { label: 'review', data: filtered.map(p => p.review || 0), backgroundColor: 'rgba(251,191,36,0.7)', borderColor: '#fbbf24', borderWidth: 1 },
       { label: 'block', data: filtered.map(p => p.block || 0), backgroundColor: 'rgba(239,68,68,0.7)', borderColor: '#ef4444', borderWidth: 1 },
-      { label: 'captcha', data: filtered.map(p => p.captcha || 0), backgroundColor: 'rgba(168,85,247,0.7)', borderColor: '#a855f7', borderWidth: 1 },
+      { label: 'challenge', data: filtered.map(p => p.challenge || 0), backgroundColor: 'rgba(168,85,247,0.7)', borderColor: '#a855f7', borderWidth: 1 },
     ];
     if (monTrafficChart) {
       monTrafficChart.data.labels = labels;
@@ -285,7 +285,7 @@
         '<td>' + fmtNum(r.total_hits) + '</td>' +
         '<td>' + fmtNum(r.block) + '</td>' +
         '<td>' + fmtNum(r.review) + '</td>' +
-        '<td>' + fmtNum(r.captcha) + '</td>' +
+        '<td>' + fmtNum(r.challenge) + '</td>' +
         '<td>' + fmtPct(r.hit_rate) + '</td>' +
         '<td>' + fmtPct(r.block_rate) + '</td>' +
         '<td>' + fmtNum(r.total_requests) + '</td>' +

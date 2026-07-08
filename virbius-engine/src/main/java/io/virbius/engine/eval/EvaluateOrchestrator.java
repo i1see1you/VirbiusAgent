@@ -1,6 +1,7 @@
 package io.virbius.engine.eval;
 
 import io.virbius.engine.audit.AuditWriter;
+import io.virbius.engine.challenge.ChallengeService;
 import io.virbius.policy.MatchContext;
 import java.util.ArrayList;
 import java.util.List;
@@ -14,16 +15,19 @@ public class EvaluateOrchestrator {
     private final PromptRunner promptRunner;
     private final AuditWriter auditWriter;
     private final PolicyMerger policyMerger;
+    private final ChallengeService challengeService;
 
     public EvaluateOrchestrator(
             ScriptRuleRunner scriptRuleRunner,
             PromptRunner promptRunner,
             AuditWriter auditWriter,
-            PolicyMerger policyMerger) {
+            PolicyMerger policyMerger,
+            ChallengeService challengeService) {
         this.scriptRuleRunner = scriptRuleRunner;
         this.promptRunner = promptRunner;
         this.auditWriter = auditWriter;
         this.policyMerger = policyMerger;
+        this.challengeService = challengeService;
     }
 
     public EvaluateResponseDto evaluate(EvaluateRequestDto req) {
@@ -57,6 +61,24 @@ public class EvaluateOrchestrator {
 
         auditWriter.write(req, decision, primaryRuleId, primaryRevision, reasonCode, degraded);
 
+        // Compute args hash for challenge binding
+        String toolName = req.toolName() != null ? req.toolName() : "";
+        String argsJson = req.argsJson() != null ? req.argsJson() : "";
+        String argsHash = ChallengeService.computeArgsHash(toolName, argsJson);
+
+        // If effective_action is "challenge", create a challenge record in Redis
+        String challengeId = null;
+        if ("challenge".equalsIgnoreCase(decision.effectiveAction())) {
+            challengeId = challengeService.createChallenge(
+                    req.tenantId() != null ? req.tenantId() : "default",
+                    req.sessionId() != null ? req.sessionId() : "",
+                    toolName,
+                    argsHash,
+                    primaryRuleId,
+                    reasonCode,
+                    decision.maxRiskScore());
+        }
+
         return new EvaluateResponseDto(
                 decision.effectiveAction(),
                 decision.maxRiskScore(),
@@ -65,6 +87,8 @@ public class EvaluateOrchestrator {
                 reasonCode,
                 req.traceId(),
                 degraded,
-                decision.enforceMode());
+                decision.enforceMode(),
+                challengeId,
+                argsHash);
     }
 }

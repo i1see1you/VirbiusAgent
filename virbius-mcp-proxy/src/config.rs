@@ -11,6 +11,8 @@ pub struct ProxyConfig {
     pub security: SecuritySection,
     #[serde(default)]
     pub audit: AuditSection,
+    #[serde(default)]
+    pub trace: TraceSection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +195,7 @@ impl Default for ProxyConfig {
             proxy: ProxySection::default(),
             security: SecuritySection::default(),
             audit: AuditSection::default(),
+            trace: TraceSection::default(),
         }
     }
 }
@@ -231,6 +234,9 @@ impl ProxyConfig {
         }
         if let Ok(v) = std::env::var("VIRBIUS_REDIS_URL") {
             cfg.audit.redis_url = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_TRACE_REDIS_URL") {
+            cfg.trace.redis_url = v;
         }
         if let Ok(v) = std::env::var("VIRBIUS_TRANSPORT") {
             cfg.proxy.listen = v;
@@ -305,3 +311,28 @@ pub const HIGH_RISK_TOOLS: &[&str] = &[
     "sql_query",
     "database_query",
 ];
+
+/// Trace collection configuration (decision chain audit).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceSection {
+    /// Redis URL for trace stream. If empty, reuses audit.redis_url.
+    /// Format: host:port (raw TCP, same as audit sink).
+    #[serde(default)]
+    pub redis_url: String,
+    /// Enable/disable trace collection.
+    #[serde(default = "default_trace_enabled")]
+    pub enabled: bool,
+}
+
+fn default_trace_enabled() -> bool {
+    true
+}
+
+impl Default for TraceSection {
+    fn default() -> Self {
+        Self {
+            redis_url: String::new(),
+            enabled: default_trace_enabled(),
+        }
+    }
+}

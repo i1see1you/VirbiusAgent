@@ -372,8 +372,8 @@ public class RuleSimulateService {
         if ("deny".equalsIgnoreCase(intent)) {
             return "block";
         }
-        if ("captcha".equalsIgnoreCase(intent)) {
-            return "captcha";
+        if ("challenge".equalsIgnoreCase(intent)) {
+            return "challenge";
         }
         return intent != null ? intent.toLowerCase(Locale.ROOT) : "review";
     }

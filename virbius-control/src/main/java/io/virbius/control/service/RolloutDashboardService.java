@@ -19,7 +19,7 @@ public class RolloutDashboardService {
         List<Map<String, Object>> series = jdbc.query(
                 """
                 SELECT minute_bucket, rollout_state, canary_percent,
-                       cnt_review, cnt_block, cnt_captcha, cnt_allow, cnt_total_requests
+                       cnt_review, cnt_block, cnt_challenge, cnt_allow, cnt_total_requests
                 FROM tb_rule_metrics_1m
                 WHERE tenant_id = ? AND rule_id = ?
                   AND minute_bucket >= datetime('now', ?)
@@ -30,7 +30,7 @@ public class RolloutDashboardService {
                     row.put("bucket", rs.getString("minute_bucket"));
                     row.put("review", rs.getInt("cnt_review"));
                     row.put("block", rs.getInt("cnt_block"));
-                    row.put("captcha", rs.getInt("cnt_captcha"));
+                    row.put("challenge", rs.getInt("cnt_challenge"));
                     row.put("allow", rs.getInt("cnt_allow"));
                     row.put("total_requests", rs.getInt("cnt_total_requests"));
                     return row;
@@ -44,7 +44,7 @@ public class RolloutDashboardService {
                 SELECT strftime('%Y-%m-%d %H:%M:00', intercepted_at) AS bucket,
                        SUM(CASE WHEN effective_action = 'review'  THEN 1 ELSE 0 END) AS review,
                        SUM(CASE WHEN effective_action = 'block'   THEN 1 ELSE 0 END) AS block,
-                       SUM(CASE WHEN effective_action = 'captcha' THEN 1 ELSE 0 END) AS captcha,
+                       SUM(CASE WHEN effective_action = 'challenge' THEN 1 ELSE 0 END) AS challenge,
                        SUM(CASE WHEN effective_action = 'allow'   THEN 1 ELSE 0 END) AS allow,
                        COUNT(*) AS total_requests
                 FROM tb_audit_events
@@ -58,7 +58,7 @@ public class RolloutDashboardService {
                     row.put("bucket", rs.getString("bucket"));
                     row.put("review", rs.getInt("review"));
                     row.put("block", rs.getInt("block"));
-                    row.put("captcha", rs.getInt("captcha"));
+                    row.put("challenge", rs.getInt("challenge"));
                     row.put("allow", rs.getInt("allow"));
                     row.put("total_requests", rs.getInt("total_requests"));
                     return row;
@@ -72,24 +72,24 @@ public class RolloutDashboardService {
         out.put("series_1m", series1m);
         int review = 0;
         int block = 0;
-        int captcha = 0;
+        int challenge = 0;
         int allow = 0;
         int total = 0;
         for (Map<String, Object> row : series) {
             review += (int) row.get("review");
             block += (int) row.get("block");
-            captcha += (int) row.get("captcha");
+            challenge += (int) row.get("challenge");
             allow += (int) row.get("allow");
             total += (int) row.get("total_requests");
         }
         Map<String, Object> totals = new LinkedHashMap<>();
         totals.put("review", review);
         totals.put("block", block);
-        totals.put("captcha", captcha);
+        totals.put("challenge", challenge);
         totals.put("allow", allow);
         totals.put("total_requests", total);
         if (total > 0) {
-            totals.put("hit_rate", (review + block + captcha) / (double) total);
+            totals.put("hit_rate", (review + block + challenge) / (double) total);
             totals.put("review_rate", review / (double) total);
             totals.put("block_rate", block / (double) total);
         }
@@ -257,7 +257,7 @@ public class RolloutDashboardService {
                 SELECT minute_bucket,
                        SUM(cnt_review) AS cnt_review,
                        SUM(cnt_block) AS cnt_block,
-                       SUM(cnt_captcha) AS cnt_captcha,
+                       SUM(cnt_challenge) AS cnt_challenge,
                        SUM(cnt_allow) AS cnt_allow,
                        SUM(cnt_total_requests) AS cnt_total_requests
                 FROM tb_rule_metrics_1m
@@ -271,7 +271,7 @@ public class RolloutDashboardService {
                     row.put("bucket", rs.getString("minute_bucket"));
                     row.put("review", rs.getInt("cnt_review"));
                     row.put("block", rs.getInt("cnt_block"));
-                    row.put("captcha", rs.getInt("cnt_captcha"));
+                    row.put("challenge", rs.getInt("cnt_challenge"));
                     row.put("allow", rs.getInt("cnt_allow"));
                     row.put("total_requests", rs.getInt("cnt_total_requests"));
                     return row;
@@ -284,7 +284,7 @@ public class RolloutDashboardService {
                 SELECT strftime('%Y-%m-%d %H:%M:00', intercepted_at) AS bucket,
                        SUM(CASE WHEN effective_action = 'review'  THEN 1 ELSE 0 END) AS review,
                        SUM(CASE WHEN effective_action = 'block'   THEN 1 ELSE 0 END) AS block,
-                       SUM(CASE WHEN effective_action = 'captcha' THEN 1 ELSE 0 END) AS captcha,
+                       SUM(CASE WHEN effective_action = 'challenge' THEN 1 ELSE 0 END) AS challenge,
                        SUM(CASE WHEN effective_action = 'allow'   THEN 1 ELSE 0 END) AS allow,
                        COUNT(*) AS total_requests
                 FROM tb_audit_events
@@ -298,7 +298,7 @@ public class RolloutDashboardService {
                     row.put("bucket", rs.getString("bucket"));
                     row.put("review", rs.getInt("review"));
                     row.put("block", rs.getInt("block"));
-                    row.put("captcha", rs.getInt("captcha"));
+                    row.put("challenge", rs.getInt("challenge"));
                     row.put("allow", rs.getInt("allow"));
                     row.put("total_requests", rs.getInt("total_requests"));
                     return row;
@@ -308,22 +308,22 @@ public class RolloutDashboardService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("series", series);
         out.put("series_1m", series1m);
-        int review = 0, block = 0, captcha = 0, allow = 0, total = 0;
+        int review = 0, block = 0, challenge = 0, allow = 0, total = 0;
         for (Map<String, Object> row : series) {
             review += (int) row.get("review");
             block += (int) row.get("block");
-            captcha += (int) row.get("captcha");
+            challenge += (int) row.get("challenge");
             allow += (int) row.get("allow");
             total += (int) row.get("total_requests");
         }
         Map<String, Object> totals = new LinkedHashMap<>();
         totals.put("review", review);
         totals.put("block", block);
-        totals.put("captcha", captcha);
+        totals.put("challenge", challenge);
         totals.put("allow", allow);
         totals.put("total_requests", total);
         if (total > 0) {
-            totals.put("hit_rate", (review + block + captcha) / (double) total);
+            totals.put("hit_rate", (review + block + challenge) / (double) total);
             totals.put("review_rate", review / (double) total);
             totals.put("block_rate", block / (double) total);
         }

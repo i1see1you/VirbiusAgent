@@ -13,6 +13,7 @@ use virbius_mcp_proxy::egress::EgressClient;
 use virbius_mcp_proxy::pipeline::SecurityPipeline;
 use virbius_mcp_proxy::router;
 use virbius_mcp_proxy::session::SessionManager;
+use virbius_mcp_proxy::trace_collector::TraceCollector;
 use virbius_mcp_proxy::transport::{self, AppState};
 use virbius_mcp_proxy::upstream::UpstreamManager;
 
@@ -47,6 +48,19 @@ async fn main() {
         &cfg.audit.redis_url,
         cfg.audit.sample_rate,
     ));
+
+    // Create trace collector (decision chain audit)
+    let trace_redis_url = if cfg.trace.redis_url.is_empty() {
+        cfg.audit.redis_url.as_str()
+    } else {
+        cfg.trace.redis_url.as_str()
+    };
+    let trace_collector = Arc::new(TraceCollector::new(trace_redis_url));
+    if trace_collector.enabled() {
+        info!("trace collector enabled");
+    } else {
+        info!("trace collector disabled (no redis_url)");
+    }
 
     // Create security pipeline
     let pipeline = Arc::new(SecurityPipeline::new(
@@ -87,6 +101,7 @@ async fn main() {
             egress_client,
             egress_hosts,
             pubkey_pem,
+            trace_collector,
         )
         .await;
     } else if listen.starts_with("tcp://") || listen.starts_with("http://") {
@@ -102,6 +117,7 @@ async fn main() {
             egress_client,
             egress_hosts,
             pubkey_pem,
+            trace_collector,
         )
         .await;
     } else {
@@ -124,6 +140,7 @@ async fn run_stdio(
     egress_client: EgressClient,
     egress_hosts: Vec<String>,
     pubkey_pem: String,
+    trace_collector: Arc<TraceCollector>,
 ) {
     info!("stdio transport mode");
     let (transport, _writer_handle) = transport::StdioTransport::new();
@@ -142,6 +159,7 @@ async fn run_stdio(
                 let egress_hosts = egress_hosts.clone();
                 let pubkey_pem = pubkey_pem.clone();
                 let session_id = session_id.clone();
+                let trace_collector = trace_collector.clone();
 
                 tokio::spawn(async move {
                     if let Some(response) = router::route_request(
@@ -153,6 +171,7 @@ async fn run_stdio(
                         &egress_client,
                         &egress_hosts,
                         &pubkey_pem,
+                        &trace_collector,
                     )
                     .await
                     {
@@ -190,6 +209,7 @@ async fn run_sse(
     egress_client: EgressClient,
     egress_hosts: Vec<String>,
     pubkey_pem: String,
+    trace_collector: Arc<TraceCollector>,
 ) {
     info!("SSE/HTTP transport mode on {}", addr);
 
@@ -221,6 +241,7 @@ async fn run_sse(
         egress_client,
         egress_hosts: Arc::new(egress_hosts),
         public_key_pem: Arc::new(pubkey_pem),
+        trace_collector,
         sse_sessions: Arc::new(DashMap::new()),
     };
 

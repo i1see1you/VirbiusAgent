@@ -23,7 +23,7 @@ pub fn in_canary_bucket(session_id: Option<&str>, percent: i32) -> bool {
 fn intent_priority(intent: &str) -> i32 {
     match intent.trim().to_ascii_lowercase().as_str() {
         "deny" => 100,
-        "captcha" => 50,
+        "challenge" => 50,
         "review" => 30,
         _ => 0,
     }
@@ -107,9 +107,9 @@ pub fn merge(hits: &[RuleHit], session_id: Option<&str>) -> EnforceResult {
                 "review"
             }
         }
-        "captcha" => {
+        "challenge" => {
             if effective {
-                "captcha"
+                "challenge"
             } else {
                 "review"
             }

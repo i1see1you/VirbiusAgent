@@ -46,7 +46,7 @@ public class MetricsRollupJob {
                        rollout_state, canary_percent,
                        SUM(CASE WHEN effective_action = 'review' THEN 1 ELSE 0 END) AS cnt_review,
                        SUM(CASE WHEN effective_action = 'block' THEN 1 ELSE 0 END) AS cnt_block,
-                       SUM(CASE WHEN effective_action = 'captcha' THEN 1 ELSE 0 END) AS cnt_captcha,
+                       SUM(CASE WHEN effective_action = 'challenge' THEN 1 ELSE 0 END) AS cnt_challenge,
                        SUM(CASE WHEN effective_action = 'allow' THEN %s ELSE 0 END) AS cnt_allow,
                        SUM(CASE WHEN effective_action = 'allow' THEN %s ELSE 1 END) AS cnt_total_requests,
                        SUM(CASE WHEN degraded = 1 THEN 1 ELSE 0 END) AS cnt_degraded
@@ -58,7 +58,7 @@ public class MetricsRollupJob {
 
         String columns =
                 "tenant_id, rule_id, minute_bucket, rollout_state, canary_percent,"
-                        + " cnt_review, cnt_block, cnt_captcha, cnt_allow, cnt_total_requests, cnt_degraded";
+                        + " cnt_review, cnt_block, cnt_challenge, cnt_allow, cnt_total_requests, cnt_degraded";
 
         if (dialect.isMysql()) {
             return "INSERT INTO tb_rule_metrics_1m (" + columns + ") " + select
@@ -67,7 +67,7 @@ public class MetricsRollupJob {
                     + "   canary_percent = VALUES(canary_percent),"
                     + "   cnt_review = VALUES(cnt_review),"
                     + "   cnt_block = VALUES(cnt_block),"
-                    + "   cnt_captcha = VALUES(cnt_captcha),"
+                    + "   cnt_challenge = VALUES(cnt_challenge),"
                     + "   cnt_allow = VALUES(cnt_allow),"
                     + "   cnt_total_requests = VALUES(cnt_total_requests),"
                     + "   cnt_degraded = VALUES(cnt_degraded)";
@@ -78,7 +78,7 @@ public class MetricsRollupJob {
                     + "   canary_percent = excluded.canary_percent,"
                     + "   cnt_review = excluded.cnt_review,"
                     + "   cnt_block = excluded.cnt_block,"
-                    + "   cnt_captcha = excluded.cnt_captcha,"
+                    + "   cnt_challenge = excluded.cnt_challenge,"
                     + "   cnt_allow = excluded.cnt_allow,"
                     + "   cnt_total_requests = excluded.cnt_total_requests,"
                     + "   cnt_degraded = excluded.cnt_degraded";
