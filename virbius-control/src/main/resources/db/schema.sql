@@ -467,7 +467,7 @@ CREATE INDEX IF NOT EXISTS idx_tb_constitution_templates_lookup
 
 -- Challenge approval audit trail (primary storage is Redis, this is for persistence/analytics)
 CREATE TABLE IF NOT EXISTS tb_challenge_audit (
-    id              BIGINT       PRIMARY KEY AUTO_INCREMENT,
+    id              BIGINT       PRIMARY KEY ,
     challenge_id    VARCHAR(32)  NOT NULL UNIQUE,
     tenant_id       VARCHAR(64)  NOT NULL DEFAULT 'default',
     session_id      VARCHAR(128) NOT NULL,
@@ -497,7 +497,7 @@ CREATE INDEX IF NOT EXISTS idx_challenge_tool
 
 -- Agent decision chain trace (input → reasoning → tool_call → tool_result → output)
 CREATE TABLE IF NOT EXISTS tb_agent_trace (
-    id               BIGINT       PRIMARY KEY AUTO_INCREMENT,
+    id               BIGINT       PRIMARY KEY ,
     trace_id         VARCHAR(128) NOT NULL,
     session_id       VARCHAR(128) NOT NULL,
     tenant_id        VARCHAR(64)  NOT NULL,

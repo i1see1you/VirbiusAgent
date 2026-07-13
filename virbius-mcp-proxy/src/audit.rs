@@ -1,14 +1,14 @@
-/// Audit event reporting to Redis Stream (best-effort, non-blocking).
+/// Audit event reporting to Redis Stream or Kafka (best-effort, non-blocking).
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-const AUDIT_STREAM_KEY: &str = "virbius:audit:stream";
+const AUDIT_REDIS_STREAM_KEY: &str = "virbius:audit:stream";
 const AUDIT_QUEUE_SIZE: usize = 512;
+const KAFKA_TIMEOUT_SECS: u64 = 5;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
@@ -52,41 +52,50 @@ impl AuditEvent {
     }
 }
 
-/// Async audit sink: writes events to a Redis Stream via a background task.
+/// Backend type for audit event delivery.
+#[derive(Debug, Clone)]
+pub enum AuditBackend {
+    Disabled,
+    Redis { url: String },
+    Kafka { brokers: String, topic: String },
+}
+
+/// Async audit sink: writes events to a configurable backend via a background task.
 pub struct AuditSink {
     sender: Option<mpsc::Sender<AuditEvent>>,
     sample_rate: f64,
 }
 
 impl AuditSink {
-    pub fn new(redis_url: &str, sample_rate: f64) -> Self {
-        if redis_url.is_empty() {
-            debug!("audit sink disabled: no redis_url configured");
-            return Self {
-                sender: None,
-                sample_rate,
-            };
-        }
+    pub fn new(backend: AuditBackend, sample_rate: f64) -> Self {
+        let sender = match backend {
+            AuditBackend::Disabled => {
+                debug!("audit sink disabled");
+                None
+            }
+            AuditBackend::Redis { url } => {
+                let (tx, rx) = mpsc::channel::<AuditEvent>(AUDIT_QUEUE_SIZE);
+                tokio::spawn(async move {
+                    redis_audit_worker(url, rx).await;
+                });
+                Some(tx)
+            }
+            AuditBackend::Kafka { brokers, topic } => {
+                let (tx, rx) = mpsc::channel::<AuditEvent>(AUDIT_QUEUE_SIZE);
+                tokio::spawn(async move {
+                    kafka_audit_worker(brokers, topic, rx).await;
+                });
+                Some(tx)
+            }
+        };
 
-        let (tx, rx) = mpsc::channel::<AuditEvent>(AUDIT_QUEUE_SIZE);
-        let url = redis_url.to_string();
-        tokio::spawn(async move {
-            audit_worker(url, rx).await;
-        });
-
-        Self {
-            sender: Some(tx),
-            sample_rate,
-        }
+        Self { sender, sample_rate }
     }
 
-    /// Send an audit event (best-effort, non-blocking).
     pub async fn report(&self, event: AuditEvent) {
-        // Sampling: always sample blocks, sample allows at sample_rate
         if event.action == "allow" && rand_sample() > self.sample_rate {
             return;
         }
-
         if let Some(ref tx) = self.sender {
             if tx.try_send(event).is_err() {
                 warn!("audit queue full, dropping event");
@@ -99,15 +108,16 @@ impl AuditSink {
     }
 }
 
-async fn audit_worker(redis_url: String, mut rx: mpsc::Receiver<AuditEvent>) {
-    debug!("audit worker started, redis={}", redis_url);
+pub type SharedAuditSink = Arc<AuditSink>;
 
-    // We use a simple TCP Redis client for minimal dependencies.
-    // For production, replace with a proper Redis client crate.
+// ─── Redis worker ───────────────────────────────────────────────────────
+
+async fn redis_audit_worker(url: String, mut rx: mpsc::Receiver<AuditEvent>) {
+    debug!("audit redis worker started");
     loop {
-        match tokio::net::TcpStream::connect(&redis_url).await {
+        match tokio::net::TcpStream::connect(&url).await {
             Ok(stream) => {
-                use tokio::io::{AsyncWriteExt, AsyncBufReadExt, BufReader};
+                use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
                 let (reader, mut writer) = stream.into_split();
                 let mut reader = BufReader::new(reader);
                 let mut line = String::new();
@@ -120,24 +130,21 @@ async fn audit_worker(redis_url: String, mut rx: mpsc::Receiver<AuditEvent>) {
                             continue;
                         }
                     };
-                    // XADD virbius:audit:stream * data '<json>'
                     let cmd = format!(
                         "XADD {} * data '{}'\r\n",
-                        AUDIT_STREAM_KEY,
+                        AUDIT_REDIS_STREAM_KEY,
                         json.replace('\'', "\\'")
                     );
                     if writer.write_all(cmd.as_bytes()).await.is_err() {
                         warn!("audit redis write failed, reconnecting...");
                         break;
                     }
-                    // Read response (best-effort)
                     line.clear();
                     let _ = reader.read_line(&mut line).await;
                 }
             }
             Err(e) => {
                 warn!("audit redis connect failed: {e}, retrying in 5s...");
-                // Drain pending events to avoid infinite backlog
                 while rx.try_recv().is_ok() {}
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
@@ -145,8 +152,53 @@ async fn audit_worker(redis_url: String, mut rx: mpsc::Receiver<AuditEvent>) {
     }
 }
 
+// ─── Kafka worker ──────────────────────────────────────────────────────
+
+async fn kafka_audit_worker(
+    brokers: String,
+    topic: String,
+    mut rx: mpsc::Receiver<AuditEvent>,
+) {
+    debug!("audit kafka worker started, brokers={}", brokers);
+
+    let producer: rdkafka::producer::FutureProducer = match rdkafka::config::ClientConfig::new()
+        .set("bootstrap.servers", &brokers)
+        .set("message.timeout.ms", "5000")
+        .set("queue.buffering.max.ms", "10")
+        .create()
+    {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("audit kafka producer creation failed: {e}, disabling audit");
+            while rx.recv().await.is_some() {} // drain
+            return;
+        }
+    };
+
+    while let Some(event) = rx.recv().await {
+        let json = match serde_json::to_string(&event) {
+            Ok(j) => j,
+            Err(e) => {
+                warn!("audit serialize error: {e}");
+                continue;
+            }
+        };
+        let key = &event.tenant_id;
+        let fut = producer.send(
+            rdkafka::producer::FutureRecord::to(&topic)
+                .key(key)
+                .payload(&json),
+            Duration::from_secs(KAFKA_TIMEOUT_SECS),
+        );
+        if let Err((e, _)) = fut.await {
+            warn!("audit kafka send failed: {e}");
+        }
+    }
+}
+
+// ─── Sampling ──────────────────────────────────────────────────────────
+
 fn rand_sample() -> f64 {
-    // Simple pseudo-random without external dependency
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
     let mut h = DefaultHasher::new();
@@ -157,5 +209,3 @@ fn rand_sample() -> f64 {
         .hash(&mut h);
     (h.finish() as f64 / u64::MAX as f64).fract()
 }
-
-pub type SharedAuditSink = Arc<AuditSink>;

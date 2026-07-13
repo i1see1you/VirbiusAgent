@@ -14,9 +14,10 @@ mod manifest;
 mod matcher;
 mod runtime;
 mod sync;
-mod trace;
+pub mod trace;
 mod upload;
 pub mod license;
+pub mod mcp;
 pub mod precheck;
 pub mod prompt_gateway;
 #[cfg(target_os = "linux")]
@@ -29,6 +30,7 @@ pub use api::{
 pub use license::{License, LicenseClaims, LicenseError};
 pub use manifest::ToolPolicy;
 pub use precheck::{precheck, PrecheckResult, ToolCall};
+pub use mcp::{execute as mcp_execute, McpToolCall, ToolResult as McpToolResult};
 pub use sync::EdgeInitConfig;
 
 use std::ffi::{CStr, CString};

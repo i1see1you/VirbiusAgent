@@ -1,8 +1,8 @@
 /// Decision chain trace collector: records tool_call and tool_result events
-/// to a Redis Stream for async ingestion by the Control plane.
+/// to Redis Stream or Kafka for async ingestion by the Control plane.
 ///
-/// Events are sent via a background tokio task using a simple TCP Redis client
-/// (same pattern as audit.rs). The collector is best-effort and non-blocking.
+/// Events are sent via a background tokio task. The collector is best-effort
+/// and non-blocking.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -12,10 +12,10 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-const TRACE_STREAM_KEY: &str = "virbius:trace:stream";
+const TRACE_REDIS_STREAM_KEY: &str = "virbius:trace:stream";
 const TRACE_QUEUE_SIZE: usize = 1024;
+const KAFKA_TIMEOUT_SECS: u64 = 5;
 
-/// Type of trace step in the decision chain.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StepType {
@@ -38,7 +38,6 @@ impl StepType {
     }
 }
 
-/// A single trace event representing one step in the Agent decision chain.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceEvent {
     pub trace_id: String,
@@ -52,10 +51,8 @@ pub struct TraceEvent {
     pub scene: String,
     pub user_id: Option<String>,
     pub device_id: Option<String>,
-    // input-specific
     pub input_role: Option<String>,
     pub input_content_hash: Option<String>,
-    // tool_call-specific
     pub tool_name: Option<String>,
     pub tool_args_hash: Option<String>,
     pub tool_args: Option<Value>,
@@ -63,11 +60,9 @@ pub struct TraceEvent {
     pub rule_id: Option<String>,
     pub reason_code: Option<String>,
     pub risk_score: Option<u32>,
-    // tool_result-specific
     pub tool_status: Option<String>,
     pub tool_duration_ms: Option<u64>,
     pub tool_result_preview: Option<String>,
-    // content
     pub content_size: Option<usize>,
     pub content_sampled: bool,
     pub dlp_masked: bool,
@@ -75,7 +70,6 @@ pub struct TraceEvent {
 }
 
 impl TraceEvent {
-    /// Build a tool_call trace event.
     pub fn tool_call(
         session: &crate::session::Session,
         step_id: &str,
@@ -118,7 +112,6 @@ impl TraceEvent {
         }
     }
 
-    /// Build a tool_result trace event.
     pub fn tool_result(
         session: &crate::session::Session,
         step_id: &str,
@@ -166,7 +159,6 @@ impl TraceEvent {
         }
     }
 
-    /// Set the decision info on a tool_call event (called after pipeline evaluation).
     pub fn with_decision(
         mut self,
         decision: &str,
@@ -182,29 +174,44 @@ impl TraceEvent {
     }
 }
 
-/// Async trace sink: writes events to a Redis Stream via a background task.
+/// Backend type for trace event delivery.
+#[derive(Debug, Clone)]
+pub enum TraceBackend {
+    Disabled,
+    Redis { url: String },
+    Kafka { brokers: String, topic: String },
+}
+
 pub struct TraceCollector {
     sender: Option<mpsc::Sender<TraceEvent>>,
 }
 
 impl TraceCollector {
-    /// Create a new TraceCollector. If `redis_url` is empty, tracing is disabled.
-    pub fn new(redis_url: &str) -> Self {
-        if redis_url.is_empty() {
-            debug!("trace collector disabled: no redis_url configured");
-            return Self { sender: None };
-        }
+    pub fn new(backend: TraceBackend) -> Self {
+        let sender = match backend {
+            TraceBackend::Disabled => {
+                debug!("trace collector disabled");
+                None
+            }
+            TraceBackend::Redis { url } => {
+                let (tx, rx) = mpsc::channel::<TraceEvent>(TRACE_QUEUE_SIZE);
+                tokio::spawn(async move {
+                    redis_trace_worker(url, rx).await;
+                });
+                Some(tx)
+            }
+            TraceBackend::Kafka { brokers, topic } => {
+                let (tx, rx) = mpsc::channel::<TraceEvent>(TRACE_QUEUE_SIZE);
+                tokio::spawn(async move {
+                    kafka_trace_worker(brokers, topic, rx).await;
+                });
+                Some(tx)
+            }
+        };
 
-        let (tx, rx) = mpsc::channel::<TraceEvent>(TRACE_QUEUE_SIZE);
-        let url = redis_url.to_string();
-        tokio::spawn(async move {
-            trace_worker(url, rx).await;
-        });
-
-        Self { sender: Some(tx) }
+        Self { sender }
     }
 
-    /// Send a trace event (best-effort, non-blocking).
     pub async fn record(&self, event: TraceEvent) {
         if let Some(ref tx) = self.sender {
             if tx.try_send(event).is_err() {
@@ -213,18 +220,19 @@ impl TraceCollector {
         }
     }
 
-    /// Check if tracing is enabled.
     pub fn enabled(&self) -> bool {
         self.sender.is_some()
     }
 }
 
-/// Background worker that writes trace events to a Redis Stream.
-async fn trace_worker(redis_url: String, mut rx: mpsc::Receiver<TraceEvent>) {
-    debug!("trace worker started, redis={}", redis_url);
+pub type SharedTraceCollector = Arc<TraceCollector>;
 
+// ─── Redis worker ───────────────────────────────────────────────────────
+
+async fn redis_trace_worker(url: String, mut rx: mpsc::Receiver<TraceEvent>) {
+    debug!("trace redis worker started");
     loop {
-        match tokio::net::TcpStream::connect(&redis_url).await {
+        match tokio::net::TcpStream::connect(&url).await {
             Ok(stream) => {
                 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
                 let (reader, mut writer) = stream.into_split();
@@ -239,24 +247,21 @@ async fn trace_worker(redis_url: String, mut rx: mpsc::Receiver<TraceEvent>) {
                             continue;
                         }
                     };
-                    // XADD virbius:trace:stream * data '<json>'
                     let cmd = format!(
                         "XADD {} * data '{}'\r\n",
-                        TRACE_STREAM_KEY,
+                        TRACE_REDIS_STREAM_KEY,
                         json.replace('\'', "\\'")
                     );
                     if writer.write_all(cmd.as_bytes()).await.is_err() {
                         warn!("trace redis write failed, reconnecting...");
                         break;
                     }
-                    // Read response (best-effort)
                     line.clear();
                     let _ = reader.read_line(&mut line).await;
                 }
             }
             Err(e) => {
                 warn!("trace redis connect failed: {e}, retrying in 5s...");
-                // Drain pending events to avoid infinite backlog
                 while rx.try_recv().is_ok() {}
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
@@ -264,7 +269,52 @@ async fn trace_worker(redis_url: String, mut rx: mpsc::Receiver<TraceEvent>) {
     }
 }
 
-/// Compute SHA-256 hex digest of the input string.
+// ─── Kafka worker ──────────────────────────────────────────────────────
+
+async fn kafka_trace_worker(
+    brokers: String,
+    topic: String,
+    mut rx: mpsc::Receiver<TraceEvent>,
+) {
+    debug!("trace kafka worker started, brokers={}", brokers);
+
+    let producer: rdkafka::producer::FutureProducer = match rdkafka::config::ClientConfig::new()
+        .set("bootstrap.servers", &brokers)
+        .set("message.timeout.ms", "5000")
+        .set("queue.buffering.max.ms", "10")
+        .create()
+    {
+        Ok(p) => p,
+        Err(e) => {
+            warn!("trace kafka producer creation failed: {e}, disabling trace");
+            while rx.recv().await.is_some() {}
+            return;
+        }
+    };
+
+    while let Some(event) = rx.recv().await {
+        let json = match serde_json::to_string(&event) {
+            Ok(j) => j,
+            Err(e) => {
+                warn!("trace serialize error: {e}");
+                continue;
+            }
+        };
+        let key = &event.tenant_id;
+        let fut = producer.send(
+            rdkafka::producer::FutureRecord::to(&topic)
+                .key(key)
+                .payload(&json),
+            Duration::from_secs(KAFKA_TIMEOUT_SECS),
+        );
+        if let Err((e, _)) = fut.await {
+            warn!("trace kafka send failed: {e}");
+        }
+    }
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────
+
 fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
@@ -272,7 +322,6 @@ fn sha256_hex(input: &str) -> String {
     format!("sha256:{}", hex_encode(&result))
 }
 
-/// Minimal hex encoding.
 fn hex_encode(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -280,5 +329,3 @@ fn hex_encode(bytes: &[u8]) -> String {
     }
     s
 }
-
-pub type SharedTraceCollector = Arc<TraceCollector>;

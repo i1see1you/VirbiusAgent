@@ -2,32 +2,44 @@ package io.virbius.engine.eval;
 
 import io.virbius.engine.audit.AuditWriter;
 import io.virbius.engine.challenge.ChallengeService;
+import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
+import io.virbius.engine.eval.StiTaintDetector.TaintResult;
 import io.virbius.policy.MatchContext;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class EvaluateOrchestrator {
+
+    private static final Logger log = LoggerFactory.getLogger(EvaluateOrchestrator.class);
 
     private final ScriptRuleRunner scriptRuleRunner;
     private final PromptRunner promptRunner;
     private final AuditWriter auditWriter;
     private final PolicyMerger policyMerger;
     private final ChallengeService challengeService;
+    private final PromptInjectionDetector injectionDetector;
+    private final StiTaintDetector taintDetector;
 
     public EvaluateOrchestrator(
             ScriptRuleRunner scriptRuleRunner,
             PromptRunner promptRunner,
             AuditWriter auditWriter,
             PolicyMerger policyMerger,
-            ChallengeService challengeService) {
+            ChallengeService challengeService,
+            PromptInjectionDetector injectionDetector,
+            StiTaintDetector taintDetector) {
         this.scriptRuleRunner = scriptRuleRunner;
         this.promptRunner = promptRunner;
         this.auditWriter = auditWriter;
         this.policyMerger = policyMerger;
         this.challengeService = challengeService;
+        this.injectionDetector = injectionDetector;
+        this.taintDetector = taintDetector;
     }
 
     public EvaluateResponseDto evaluate(EvaluateRequestDto req) {
@@ -35,6 +47,25 @@ public class EvaluateOrchestrator {
         List<SignalDto> signals = new ArrayList<>();
         if (req.priorSignals() != null) {
             signals.addAll(req.priorSignals());
+        }
+
+        // --- P1.1: Prompt Injection Detection (before existing rules) ---
+        InjectionDetectionResult injectionResult = injectionDetector.detect(req.content());
+        if (injectionResult.hit()) {
+            log.info("prompt injection detected: tenant={} session={} pattern={} riskDelta={}",
+                    req.tenantId(), req.sessionId(),
+                    injectionResult.matchedPattern(), injectionResult.riskDelta());
+            signals.add(new SignalDto(
+                    "PROMPT_INJECTION",
+                    1,
+                    "cloud",
+                    "cloud",
+                    injectionResult.riskDelta(),
+                    injectionResult.matchedPattern(),
+                    "deny",
+                    "full",
+                    null,
+                    null));
         }
 
         MatchContext matchCtx = MatchContext.withBind(
@@ -90,5 +121,33 @@ public class EvaluateOrchestrator {
                 decision.enforceMode(),
                 challengeId,
                 argsHash);
+    }
+
+    /**
+     * P1.2: Evaluate a tool return value for STI Taint (prompt injection in tool results).
+     *
+     * <p>Called by MCP Proxy after a tool completes, before returning the result to the Agent.
+     */
+    public ToolResultResponseDto evaluateToolResult(ToolResultRequestDto req) {
+        TaintResult result = taintDetector.detect(
+                req.toolName(),
+                req.toolResult(),
+                req.sessionRiskScore());
+
+        String action = result.action();
+        String reason = result.auditDetail() != null ? result.auditDetail() : action;
+
+        if (result.tainted()) {
+            log.info("STI taint detected: tenant={} session={} tool={} action={} pattern={}",
+                    req.tenantId(), req.sessionId(), req.toolName(),
+                    action, result.detectedPattern());
+        }
+
+        return new ToolResultResponseDto(
+                action,
+                result.sanitizedResult(),
+                result.detectedPattern(),
+                reason,
+                req.traceId());
     }
 }

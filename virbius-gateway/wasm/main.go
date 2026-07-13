@@ -18,6 +18,7 @@ import (
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/wrapper"
 	"github.com/tetratelabs/proxy-wasm-go-sdk/proxywasm"
 	"github.com/tetratelabs/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/virbius/virbius-expr"
 )
 
 func main() {
@@ -31,17 +32,24 @@ func main() {
 
 // --- Configuration ---
 
+// ExpressionRule pairs a compiled expression IR with its action binding.
+type ExpressionRule struct {
+	Expression expr.Expression    `json:"expression"`
+	Action     expr.ActionBinding `json:"action"`
+}
+
 type VirbiusConfig struct {
-	TenantID        string   `json:"tenant_id"`
-	Evaluate        bool     `json:"evaluate"`
-	EngineURL       string   `json:"engine_url"`
-	EngineTimeoutMs uint32   `json:"engine_timeout_ms"`
-	ToolRateLimit   int      `json:"tool_rate_limit"`
-	FastPathTools   []string `json:"fast_path_tools"`
-	Allowlist       []string `json:"tool_allowlist"`
-	LicenseVerify   bool     `json:"license_verify"`
-	TLS             bool     `json:"tls"`
-	FailMode        string   `json:"fail_mode"`
+	TenantID        string           `json:"tenant_id"`
+	Evaluate        bool             `json:"evaluate"`
+	EngineURL       string           `json:"engine_url"`
+	EngineTimeoutMs uint32           `json:"engine_timeout_ms"`
+	ToolRateLimit   int              `json:"tool_rate_limit"`
+	FastPathTools   []string         `json:"fast_path_tools"`
+	Allowlist       []string         `json:"tool_allowlist"`
+	Expressions     []ExpressionRule `json:"expressions,omitempty"`
+	LicenseVerify   bool             `json:"license_verify"`
+	TLS             bool             `json:"tls"`
+	FailMode        string           `json:"fail_mode"`
 	RedisClient     wrapper.RedisClient
 	HTTPClient      wrapper.HttpClient
 }
@@ -114,6 +122,14 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config VirbiusConfig, log wra
 		return denyRequest(ctx, log, "not_in_allowlist", toolName, "tool not in allowlist")
 	}
 
+	// 1b. Expression evaluation — lightweight edge rules before engine call
+	if len(config.Expressions) > 0 {
+		result := evalExpressions(config.Expressions, toolName, sessionID, path, config.TenantID, log)
+		if result != nil {
+			return *result
+		}
+	}
+
 	// 2. Rate limiting via Redis (async)
 	if config.ToolRateLimit > 0 && sessionID != "" {
 		rateKey := fmt.Sprintf("tool:%s:session:%s", toolName, sessionID)
@@ -177,9 +193,20 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config VirbiusConfig, body []byt
 	toolName := rpcMsg.Params.Name
 	log.Infof("virbius-wasm: extracted tool_name from body: %s", toolName)
 
+	path := ctx.Path()
+	sessionID := ctx.Header().Get("x-mcp-session-id")
+
 	// 1. Tool allowlist check
 	if len(config.Allowlist) > 0 && !contains(config.Allowlist, toolName) {
 		return denyRequest(ctx, log, "not_in_allowlist", toolName, "tool not in allowlist")
+	}
+
+	// 1b. Expression evaluation
+	if len(config.Expressions) > 0 {
+		result := evalExpressions(config.Expressions, toolName, sessionID, path, config.TenantID, log)
+		if result != nil {
+			return *result
+		}
 	}
 
 	// 2. Fast path
@@ -193,6 +220,46 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config VirbiusConfig, body []byt
 	}
 
 	return types.ActionContinue
+}
+
+// --- Expression Evaluation ---
+
+// evalExpressions evaluates all compiled expression rules against the request context.
+// Returns a deny/challenge action if any expression matches, nil otherwise.
+func evalExpressions(rules []ExpressionRule, toolName, sessionID, path, tenantID string, log wrapper.Log) *types.Action {
+	ctx := map[string]any{
+		"tool_name":  toolName,
+		"session_id": sessionID,
+		"path":       path,
+		"tenant_id":  tenantID,
+	}
+
+	for _, rule := range rules {
+		result, err := expr.Eval(&rule.Expression, ctx)
+		if err != nil {
+			log.Warnf("virbius-wasm: expr eval error rule=%s: %v", rule.Action.ExprID, err)
+			continue
+		}
+		if !result {
+			continue
+		}
+
+		log.Infof("virbius-wasm: expr match rule=%s action=%s reason=%s",
+			rule.Action.ExprID, rule.Action.Action, rule.Action.Reason)
+
+		switch rule.Action.Action {
+		case "block":
+			action := denyRequest(nil, log, rule.Action.RuleID, toolName, rule.Action.Reason)
+			return &action
+		case "challenge":
+			action := challengeRequest(nil, log, toolName, rule.Action.ExprID, "", rule.Action.Reason)
+			return &action
+		case "review":
+			// Review mode: log and allow (engine will decide)
+			log.Infof("virbius-wasm: expr review rule=%s", rule.Action.ExprID)
+		}
+	}
+	return nil
 }
 
 // --- Engine Call ---

@@ -171,9 +171,19 @@ impl Default for FailoverConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditSection {
     #[serde(default)]
+    pub backend: String,
+    #[serde(default)]
     pub redis_url: String,
+    #[serde(default)]
+    pub kafka_brokers: String,
+    #[serde(default = "default_audit_kafka_topic")]
+    pub kafka_topic: String,
     #[serde(default = "default_sample_rate")]
     pub sample_rate: f64,
+}
+
+fn default_audit_kafka_topic() -> String {
+    "virbius-audit-events".to_string()
 }
 
 fn default_sample_rate() -> f64 {
@@ -183,7 +193,10 @@ fn default_sample_rate() -> f64 {
 impl Default for AuditSection {
     fn default() -> Self {
         Self {
+            backend: String::new(),
             redis_url: String::new(),
+            kafka_brokers: String::new(),
+            kafka_topic: default_audit_kafka_topic(),
             sample_rate: default_sample_rate(),
         }
     }
@@ -235,8 +248,26 @@ impl ProxyConfig {
         if let Ok(v) = std::env::var("VIRBIUS_REDIS_URL") {
             cfg.audit.redis_url = v;
         }
+        if let Ok(v) = std::env::var("VIRBIUS_AUDIT_BACKEND") {
+            cfg.audit.backend = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_AUDIT_KAFKA_BROKERS") {
+            cfg.audit.kafka_brokers = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_AUDIT_KAFKA_TOPIC") {
+            cfg.audit.kafka_topic = v;
+        }
         if let Ok(v) = std::env::var("VIRBIUS_TRACE_REDIS_URL") {
             cfg.trace.redis_url = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_TRACE_BACKEND") {
+            cfg.trace.backend = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_TRACE_KAFKA_BROKERS") {
+            cfg.trace.kafka_brokers = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_TRACE_KAFKA_TOPIC") {
+            cfg.trace.kafka_topic = v;
         }
         if let Ok(v) = std::env::var("VIRBIUS_TRANSPORT") {
             cfg.proxy.listen = v;
@@ -285,6 +316,25 @@ impl ProxyConfig {
             _ => FallbackPolicy::MinimumPrivilege,
         }
     }
+
+    /// Return effective trace redis URL (falls back to audit redis_url).
+    pub fn trace_redis_url(&self) -> &str {
+        if self.trace.redis_url.is_empty() {
+            &self.audit.redis_url
+        } else {
+            &self.trace.redis_url
+        }
+    }
+
+    /// Check if audit should use Kafka backend.
+    pub fn audit_use_kafka(&self) -> bool {
+        self.audit.backend == "kafka" && !self.audit.kafka_brokers.is_empty()
+    }
+
+    /// Check if trace should use Kafka backend.
+    pub fn trace_use_kafka(&self) -> bool {
+        self.trace.backend == "kafka" && !self.trace.kafka_brokers.is_empty()
+    }
 }
 
 /// Fallback strategy when no License is provided.
@@ -315,13 +365,23 @@ pub const HIGH_RISK_TOOLS: &[&str] = &[
 /// Trace collection configuration (decision chain audit).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceSection {
+    #[serde(default)]
+    pub backend: String,
     /// Redis URL for trace stream. If empty, reuses audit.redis_url.
     /// Format: host:port (raw TCP, same as audit sink).
     #[serde(default)]
     pub redis_url: String,
+    #[serde(default)]
+    pub kafka_brokers: String,
+    #[serde(default = "default_trace_kafka_topic")]
+    pub kafka_topic: String,
     /// Enable/disable trace collection.
     #[serde(default = "default_trace_enabled")]
     pub enabled: bool,
+}
+
+fn default_trace_kafka_topic() -> String {
+    "virbius-trace-events".to_string()
 }
 
 fn default_trace_enabled() -> bool {
@@ -331,7 +391,10 @@ fn default_trace_enabled() -> bool {
 impl Default for TraceSection {
     fn default() -> Self {
         Self {
+            backend: String::new(),
             redis_url: String::new(),
+            kafka_brokers: String::new(),
+            kafka_topic: default_trace_kafka_topic(),
             enabled: default_trace_enabled(),
         }
     }

@@ -30,20 +30,8 @@ public class CompilerCli implements Runnable {
     @Option(
             names = {"-g", "--gateway"},
             defaultValue = "higress",
-            description = "gateway backend when --target=gateway: higress | apisix | openresty | all")
+            description = "gateway backend when --target=gateway: higress | apisix")
     private String gateway;
-
-    @Option(
-            names = {"--deploy-layout"},
-            defaultValue = "staged",
-            description = "openresty path layout: staged | control-data (VIRBIUS_DATA_DIR/gateway)")
-    private String deployLayout;
-
-    @Option(
-            names = {"--deploy-prefix"},
-            defaultValue = "/etc/virbius",
-            description = "deploy root for lists_file / scene_registry_file in effective JSON")
-    private String deployPrefix;
 
     private final ObjectMapper json = new ObjectMapper();
     private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory());
@@ -70,23 +58,16 @@ public class CompilerCli implements Runnable {
             if ("gateway".equals(t) || "all".equals(t)) {
                 count += compileLayerRules(root, output, "gateway");
                 Path gwDir = output.resolve("gateway");
-                String gw = gateway == null ? "apisix" : gateway.trim().toLowerCase(Locale.ROOT);
-                if ("higress".equals(gw) || "all".equals(gw)) {
+                String gw = gateway == null ? "higress" : gateway.trim().toLowerCase(Locale.ROOT);
+                if ("higress".equals(gw)) {
                     Path higressDir = gwDir.resolve("higress");
                     int crdCount = HigressCrdEmitter.emit(root, higressDir, json);
                     System.out.println("gateway higress CRDs: " + crdCount);
-                }
-                if ("apisix".equals(gw) || "all".equals(gw)) {
+                } else if ("apisix".equals(gw)) {
                     GatewayApisixEmitter.emitService(root, gwDir, json);
                     GatewayApisixEmitter.emitSceneRegistry(root, gwDir, json);
                     int routeCount = GatewayApisixEmitter.emitRoutes(root, gwDir, json);
                     System.out.println("gateway apisix routes: " + routeCount);
-                }
-                if ("openresty".equals(gw) || "all".equals(gw)) {
-                    VirbiusConfigMerger.DeployLayout layout =
-                            VirbiusConfigMerger.parseLayout(deployLayout);
-                    int orCount = GatewayOpenrestyEmitter.emit(root, gwDir, json, deployPrefix, layout);
-                    System.out.println("gateway openresty routes: " + orCount);
                 }
             }
             if ("edge".equals(t)) {

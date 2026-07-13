@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -103,6 +104,16 @@ public final class HigressCrdEmitter {
             alNode.forEach(v -> allowlist.add(v.asText()));
         }
         config.put("tool_allowlist", allowlist);
+
+        // Expression rules (pre-compiled IR from control plane)
+        JsonNode exprNode = virbius.path("expressions");
+        if (exprNode.isArray() && exprNode.size() > 0) {
+            List<Map<String, Object>> expressions = new ArrayList<>();
+            for (JsonNode exprEntry : exprNode) {
+                expressions.add(jsonNodeToMap(exprEntry));
+            }
+            config.put("expressions", expressions);
+        }
 
         config.put("license_verify", virbius.path("license_verify").asBoolean(true));
         config.put("tls", virbius.path("tls").asBoolean(true));
@@ -244,9 +255,45 @@ public final class HigressCrdEmitter {
         return new McpRoute(name, host, port, pathPrefix);
     }
 
-    // --- YAML Writer ---
+    // --- Helpers ---
 
-    private static void writeYaml(Path file, Map<String, Object> doc, ObjectMapper json) throws IOException {
+    /**
+     * Recursively convert a JsonNode tree to a plain Java Map/List structure
+     * suitable for YAML serialization.
+     */
+    private static Object jsonNodeToValue(JsonNode node) {
+        if (node == null || node.isNull()) return null;
+        if (node.isTextual()) return node.asText();
+        if (node.isBoolean()) return node.asBoolean();
+        if (node.isInt()) return node.asInt();
+        if (node.isLong()) return node.asLong();
+        if (node.isFloat() || node.isDouble()) return node.asDouble();
+        if (node.isArray()) {
+            List<Object> list = new ArrayList<>();
+            for (JsonNode child : node) {
+                list.add(jsonNodeToValue(child));
+            }
+            return list;
+        }
+        if (node.isObject()) {
+            return jsonNodeToMap(node);
+        }
+        return node.asText();
+    }
+
+    private static Map<String, Object> jsonNodeToMap(JsonNode node) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        Iterator<String> fields = node.fieldNames();
+        while (fields.hasNext()) {
+            String key = fields.next();
+            map.put(key, jsonNodeToValue(node.get(key)));
+        }
+        return map;
+    }
+
+	// --- YAML Writer ---
+
+	private static void writeYaml(Path file, Map<String, Object> doc, ObjectMapper json) throws IOException {
         ObjectMapper yaml = new ObjectMapper(
                 new YAMLFactory()
                         .enable(YAMLGenerator.Feature.MINIMIZE_QUOTES)

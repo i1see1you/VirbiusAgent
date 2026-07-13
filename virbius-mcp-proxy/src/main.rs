@@ -7,13 +7,13 @@ use dashmap::DashMap;
 use tracing::{error, info};
 use virbius_core::EdgeInitConfig;
 
-use virbius_mcp_proxy::audit::AuditSink;
+use virbius_mcp_proxy::audit::{AuditBackend, AuditSink};
 use virbius_mcp_proxy::config::ProxyConfig;
 use virbius_mcp_proxy::egress::EgressClient;
 use virbius_mcp_proxy::pipeline::SecurityPipeline;
 use virbius_mcp_proxy::router;
 use virbius_mcp_proxy::session::SessionManager;
-use virbius_mcp_proxy::trace_collector::TraceCollector;
+use virbius_mcp_proxy::trace_collector::{TraceBackend, TraceCollector};
 use virbius_mcp_proxy::transport::{self, AppState};
 use virbius_mcp_proxy::upstream::UpstreamManager;
 
@@ -43,23 +43,44 @@ async fn main() {
         cfg.proxy.session_ttl_secs,
     )));
 
-    // Create audit sink
-    let audit = Arc::new(AuditSink::new(
-        &cfg.audit.redis_url,
-        cfg.audit.sample_rate,
-    ));
-
-    // Create trace collector (decision chain audit)
-    let trace_redis_url = if cfg.trace.redis_url.is_empty() {
-        cfg.audit.redis_url.as_str()
+    // Create audit sink (Redis or Kafka)
+    let audit_backend = if cfg.audit_use_kafka() {
+        info!("audit backend: kafka (topic={})", cfg.audit.kafka_topic);
+        AuditBackend::Kafka {
+            brokers: cfg.audit.kafka_brokers.clone(),
+            topic: cfg.audit.kafka_topic.clone(),
+        }
+    } else if !cfg.audit.redis_url.is_empty() {
+        info!("audit backend: redis ({})", cfg.audit.redis_url);
+        AuditBackend::Redis {
+            url: cfg.audit.redis_url.clone(),
+        }
     } else {
-        cfg.trace.redis_url.as_str()
+        AuditBackend::Disabled
     };
-    let trace_collector = Arc::new(TraceCollector::new(trace_redis_url));
+    let audit = Arc::new(AuditSink::new(audit_backend, cfg.audit.sample_rate));
+
+    // Create trace collector (Redis or Kafka)
+    let trace_backend = if cfg.trace_use_kafka() {
+        info!("trace backend: kafka (topic={})", cfg.trace.kafka_topic);
+        TraceBackend::Kafka {
+            brokers: cfg.trace.kafka_brokers.clone(),
+            topic: cfg.trace.kafka_topic.clone(),
+        }
+    } else {
+        let trace_redis = cfg.trace_redis_url().to_string();
+        if !trace_redis.is_empty() {
+            info!("trace backend: redis ({})", trace_redis);
+            TraceBackend::Redis { url: trace_redis }
+        } else {
+            TraceBackend::Disabled
+        }
+    };
+    let trace_collector = Arc::new(TraceCollector::new(trace_backend));
     if trace_collector.enabled() {
         info!("trace collector enabled");
     } else {
-        info!("trace collector disabled (no redis_url)");
+        info!("trace collector disabled");
     }
 
     // Create security pipeline

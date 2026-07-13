@@ -58,6 +58,14 @@ virbius:
       Copyright Violation: prompt-copyright
       Jailbreak: prompt-jailbreak
 
+  guard-detect:
+    injection-enabled: ${VIRBIUS_INJECTION_DETECT_ENABLED:true}
+    taint-enabled: ${VIRBIUS_TAINT_DETECT_ENABLED:true}
+    timeout-ms: ${VIRBIUS_GUARD_LLM_TIMEOUT_MS:5000}
+    fail-open: true
+    taint-min-content-length: 512
+    taint-max-content-length: 8192
+
 audit:
   publish:
     async: true

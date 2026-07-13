@@ -44,6 +44,14 @@ audit:
     kafka:
       topic: virbius-audit-events
 
+trace:
+  ingest:
+    enabled: true
+    backend: kafka
+    kafka:
+      topic: virbius-trace-events
+      group-id: virbius-trace-ingest
+
 management:
   endpoints:
     web:

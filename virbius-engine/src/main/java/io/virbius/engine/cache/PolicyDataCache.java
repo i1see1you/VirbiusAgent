@@ -1,5 +1,6 @@
 package io.virbius.engine.cache;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.virbius.groovy.l3.ScriptEnvironment;
 import io.virbius.policy.ValueSource;
@@ -45,6 +46,7 @@ public class PolicyDataCache {
         }
     }
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record ListBlock(
             @JsonProperty("list_name") String listName,
             String dimension,
