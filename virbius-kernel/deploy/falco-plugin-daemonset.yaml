@@ -35,6 +35,9 @@ spec:
             - name: falco-rules
               mountPath: /etc/falco/falco_rules.local.yaml
               subPath: falco_rules.local.yaml
+            - name: falco-rules-d
+              mountPath: /etc/falco/falco_rules.d
+              readOnly: true
             - name: agent-logs
               mountPath: /var/log/virbius
               readOnly: true
@@ -53,6 +56,19 @@ spec:
               port: 8765
             initialDelaySeconds: 5
             periodSeconds: 5
+        - name: config-subscriber
+          image: virbius-kernel-config-subscriber:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: VIRBIUS_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: virbius-redis-credentials
+                  key: url
+                  optional: true
+          volumeMounts:
+            - name: falco-rules-d
+              mountPath: /etc/falco/falco_rules.d
       volumes:
         - name: falco-config
           configMap:
@@ -60,6 +76,8 @@ spec:
         - name: falco-rules
           configMap:
             name: falco-plugin-config
+        - name: falco-rules-d
+          emptyDir: {}
         - name: agent-logs
           hostPath:
             path: /var/log/virbius

@@ -104,8 +104,11 @@ public class DeployRolloutService {
         boolean doEngine = layer == null || layer.isBlank() || "cloud".equalsIgnoreCase(layer);
         boolean doGateway = layer == null || layer.isBlank() || "gateway".equalsIgnoreCase(layer);
         boolean doEdge = layer == null || layer.isBlank() || "edge".equalsIgnoreCase(layer);
+        boolean doFalco = layer != null && "falco".equalsIgnoreCase(layer);
         String effectiveLayer;
-        if (doEngine && doGateway && doEdge) {
+        if (doFalco) {
+            effectiveLayer = "falco";
+        } else if (doEngine && doGateway && doEdge) {
             effectiveLayer = "cloud+gateway+edge";
         } else if (doEngine && doGateway) {
             effectiveLayer = "cloud+gateway";
@@ -146,17 +149,19 @@ public class DeployRolloutService {
             long stableEdgeRev = 0L;
             long canaryEdgeRev = 0L;
             if (doEdge) {
-                // Snapshot existing edge-manifest.json as stable backup (if any)
                 Map<String, String> stablePaths = artifactService.snapshotStableEdge(tenantId);
-                // Write canary manifest from current rules
                 Map<String, String> canaryPaths = artifactService.writeEdgeForPool(tenantId, "canary");
-                // If no prior stable manifest existed, write stable from current rules too
                 if (stablePaths.isEmpty()) {
                     artifactService.writeEdgeForPool(tenantId, "stable");
                 }
                 stableEdgeRev = 1L;
                 canaryEdgeRev = canaryPaths.isEmpty() ? 0L : 1L;
             }
+
+            long stableFalcoRev = 0L;
+            long canaryFalcoRev = doFalco
+                    ? artifactWriter.writeFalcoCanary(tenantId, "prepare")
+                    : stableFalcoRev;
 
             String deployId = UUID.randomUUID().toString().replace("-", "");
             String now = DTF.format(Instant.now());
@@ -168,6 +173,7 @@ public class DeployRolloutService {
                     canaryEngineRev, stableEngineRev,
                     canaryGatewayRev, stableGatewayRev,
                     canaryEdgeRev, stableEdgeRev,
+                    canaryFalcoRev, stableFalcoRev,
                     ladder, null, null, null,
                     operator, description);
 
@@ -179,6 +185,7 @@ public class DeployRolloutService {
                     canaryEngineRev, stableEngineRev,
                     canaryGatewayRev, stableGatewayRev,
                     canaryEdgeRev, stableEdgeRev,
+                    canaryFalcoRev, stableFalcoRev,
                     targetVersion, null, now);
             pointerStore.writePointer(pointer);
             pointerStore.notifyChange(tenantId, deployId, "prepare");
@@ -229,6 +236,11 @@ public class DeployRolloutService {
                 if (next >= 100) {
                     toState = DeployRolloutState.FULL.value();
                     toPercent = 100;
+                    // Promote falco canary → full when reaching full rollout
+                    if (rollout.canaryFalcoRevision() != null && rollout.canaryFalcoRevision() > 0
+                            && rollout.canaryFalcoRevision() != rollout.stableFalcoRevision()) {
+                        artifactWriter.promoteFalcoToStable(tenantId, rollout.canaryFalcoRevision());
+                    }
                 } else {
                     toState = DeployRolloutState.CANARY.value();
                     toPercent = next;
@@ -257,6 +269,7 @@ public class DeployRolloutService {
                         currentPtr.canaryEngineRevision(), currentPtr.stableEngineRevision(),
                         currentPtr.canaryGatewayRevision(), currentPtr.stableGatewayRevision(),
                         currentPtr.canaryEdgeRevision(), currentPtr.stableEdgeRevision(),
+                        currentPtr.canaryFalcoRevision(), currentPtr.stableFalcoRevision(),
                         currentPtr.targetVersion(), currentPtr.prevVersion(), now);
                 pointerStore.writePointer(updated);
                 pointerStore.notifyChange(tenantId, deployId, toState);
@@ -304,6 +317,7 @@ public class DeployRolloutService {
                         currentPtr.canaryEngineRevision(), currentPtr.stableEngineRevision(),
                         currentPtr.canaryGatewayRevision(), currentPtr.stableGatewayRevision(),
                         currentPtr.canaryEdgeRevision(), currentPtr.stableEdgeRevision(),
+                        currentPtr.canaryFalcoRevision(), currentPtr.stableFalcoRevision(),
                         currentPtr.targetVersion(), currentPtr.prevVersion(), now);
                 pointerStore.writePointer(updated);
                 pointerStore.notifyChange(tenantId, deployId, "pause");
@@ -450,6 +464,11 @@ public class DeployRolloutService {
                     engineStore.updatePointer(tenantId, newPtr);
                     engineStore.notifyReload(tenantId, rollout.canaryEngineRevision());
                 }
+            }
+
+            // Promote falco canary → stable
+            if (rollout.canaryFalcoRevision() != null && rollout.canaryFalcoRevision() > 0) {
+                artifactWriter.promoteFalcoToStable(tenantId, rollout.canaryFalcoRevision());
             }
 
             // Promote edge canary: remove stable, rename canary → stable

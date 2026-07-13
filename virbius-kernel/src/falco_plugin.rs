@@ -446,6 +446,10 @@ watchers:
   - name: virbius_audit
     plugin_name: virbius-audit
 
+rules_file:
+  - /etc/falco/falco_rules.local.yaml
+  - /etc/falco/falco_rules.d/*.yaml
+
 stdout_output:
   enabled: false
 file_output:

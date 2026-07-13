@@ -1530,6 +1530,53 @@ eBPF 程序 (bpf_get_current_cgroup_id()=98765)
 
 > **删除原设计的 sidecar 模式**：sidecar 模式自相矛盾——Falco 也需 eBPF 特权，Landlock 不能由 sidecar 应用到其他容器（必须在 Pod spec 中声明）。serverless 环境下 Landlock profile 通过 mutating admission webhook 注入 Pod spec。
 
+### 4.8 自定义 Falco 规则管理
+
+Falco 规则通过云层控制面统一管理，复用 `tb_rules` / `tb_rules_current` 表（`layer='falco'`, `runtime='falco'`），无需独立表。
+
+#### 4.8.1 规则格式
+
+`body` 字段为 JSON：
+
+```json
+{
+  "condition": "evt.type=open and fd.name contains /etc/shadow",
+  "output": "Shadow file accessed by %proc.name (pid=%proc.pid)",
+  "priority": "CRITICAL",
+  "tags": ["filesystem", "security"]
+}
+```
+
+| 字段 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `condition` | string | Falco 条件表达式 | `evt.num > 0` |
+| `output` | string | 告警输出模板 | `Falco rule triggered (rule=...)` |
+| `priority` | string | 取自规则行的 `reason_code`，未填时默认 `WARNING` | `WARNING` |
+| `tags` | string[] | 标签数组（可选） | 空 |
+
+#### 4.8.2 灰度部署
+
+复用 deploy-rollout 状态机（`PENDING → CANARY → FULL → FINALIZED`），使用节点标签 `virbius-falco-canary=true` 区分 canary/stable 池：
+
+```
+virbius-control
+  +-- FalcoConfigBuilder    读取 tb_rules_current(layer='falco') → 生成 Falco YAML
+  +-- FalcoArtifactStore    Redis 存储规则 YAML + Stream 通知
+  +-- DeployRolloutService  状态机编排
+  |
+  +-- Redis Stream
+      +-- :canary  → canary Falco 节点
+      +-- :full     → stable Falco 节点
+
+Falco 节点 Pod 内：
+  config-subscriber (Rust sidecar)
+    Redis Stream 消费 → 写 /etc/falco/falco_rules.d/{tenant}-{target}.yaml → SIGHUP 重载
+```
+
+#### 4.8.3 示例
+
+详见 [README.md](#快速开始) 或 ops.html 前端操作界面。
+
 ---
 
 ## 5. 云层 — 统一策略大脑

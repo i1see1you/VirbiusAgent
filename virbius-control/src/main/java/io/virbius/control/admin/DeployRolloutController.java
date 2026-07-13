@@ -97,8 +97,8 @@ public class DeployRolloutController {
         }
 
         // Per-layer diffs based on staging; filter by layer if specified
-        List<String> targetLayers = layerFilter.isBlank()
-                ? List.of("cloud", "gateway", "edge")
+                List<String> targetLayers = layerFilter.isBlank()
+                ? List.of("cloud", "gateway", "edge", "falco")
                 : List.of(layerFilter);
         Map<String, Object> layers = new LinkedHashMap<>();
         for (String layer : targetLayers) {
@@ -309,6 +309,8 @@ public class DeployRolloutController {
         m.put("stable_gateway_revision", r.stableGatewayRevision());
         m.put("canary_edge_revision", r.canaryEdgeRevision());
         m.put("stable_edge_revision", r.stableEdgeRevision());
+        m.put("canary_falco_revision", r.canaryFalcoRevision());
+        m.put("stable_falco_revision", r.stableFalcoRevision());
         m.put("canary_ladder", r.canaryLadder());
         m.put("started_at", r.startedAt());
         m.put("updated_at", r.updatedAt());

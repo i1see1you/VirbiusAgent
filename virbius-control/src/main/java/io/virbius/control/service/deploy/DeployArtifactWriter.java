@@ -28,16 +28,22 @@ public class DeployArtifactWriter {
     private final PublishService publishService;
     private final RedisGatewayArtifactBlobStore gatewayBlobStore;
     private final ArtifactService artifactService;
+    private final FalcoConfigBuilder falcoConfigBuilder;
+    private final FalcoArtifactStore falcoStore;
 
     public DeployArtifactWriter(
             RedisEngineArtifactStore engineStore,
             PublishService publishService,
             RedisGatewayArtifactBlobStore gatewayBlobStore,
-            ArtifactService artifactService) {
+            ArtifactService artifactService,
+            FalcoConfigBuilder falcoConfigBuilder,
+            FalcoArtifactStore falcoStore) {
         this.engineStore = engineStore;
         this.publishService = publishService;
         this.gatewayBlobStore = gatewayBlobStore;
         this.artifactService = artifactService;
+        this.falcoConfigBuilder = falcoConfigBuilder;
+        this.falcoStore = falcoStore;
     }
 
     public long writeEngineCanary(String tenantId, String policyVersion, String deployId) {
@@ -70,6 +76,35 @@ public class DeployArtifactWriter {
         } catch (Exception ex) {
             throw new IllegalStateException(
                     "failed to write gateway canary artifact: " + ex.getMessage(), ex);
+        }
+    }
+
+    public long writeFalcoCanary(String tenantId, String deployId) {
+        try {
+            String rulesYaml = falcoConfigBuilder.buildRulesYaml(tenantId);
+            long revision = falcoStore.nextRevision(tenantId);
+            falcoStore.putSnapshot(tenantId, revision, rulesYaml);
+            falcoStore.publishRuleUpdate(tenantId, revision, "canary");
+            log.info("falco canary artifact written tenant={} revision={} deploy={}",
+                    tenantId, revision, deployId);
+            return revision;
+        } catch (Exception ex) {
+            throw new IllegalStateException(
+                    "failed to write falco canary artifact: " + ex.getMessage(), ex);
+        }
+    }
+
+    public void promoteFalcoToStable(String tenantId, long canaryRevision) {
+        try {
+            String rulesYaml = falcoStore.getSnapshot(tenantId, canaryRevision)
+                    .orElseThrow(() -> new IllegalStateException("falco canary artifact not found: " + canaryRevision));
+            falcoStore.putSnapshot(tenantId, canaryRevision, rulesYaml);
+            falcoStore.updatePointer(tenantId, canaryRevision, 0);
+            falcoStore.publishRuleUpdate(tenantId, canaryRevision, "full");
+            log.info("falco promoted to stable tenant={} revision={}", tenantId, canaryRevision);
+        } catch (Exception ex) {
+            throw new IllegalStateException(
+                    "failed to promote falco to stable: " + ex.getMessage(), ex);
         }
     }
 }

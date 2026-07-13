@@ -26,7 +26,8 @@
     const LAYER_RUNTIMES = {
       cloud: ['prompt', 'groovy'],
       gateway: ['lua'],
-      edge: ['lua-dsl', 'dlp-dsl']
+      edge: ['lua-dsl', 'dlp-dsl'],
+      falco: ['falco']
     };
 
     function field(obj, ...keys) {
@@ -197,7 +198,8 @@
     const LAYER_LABELS = {
       gateway: __('layer.gateway'),
       cloud: __('layer.cloud'),
-      edge: __('layer.edge')
+      edge: __('layer.edge'),
+      falco: 'Falco'
     };
 
     function formatMatchHeaders(h) {

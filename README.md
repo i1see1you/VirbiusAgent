@@ -33,6 +33,42 @@ Agent 安全防护工具 — 端管核云四层架构。
 - **P1**：增强观测（STI Taint + 自定义 Falco 插件 + 人工审批 + 决策链路追踪）
 - **P2**：阻断（hands）（seccomp-notify + Landlock + gVisor + Tetragon enforcer）
 
+## 自定义 Falco 规则
+
+自定义 Falco 规则通过运营台统一管理，支持灰度部署。
+
+### 规则格式
+
+保存于 `tb_rules`（`layer='falco'`, `runtime='falco'`），`body` 字段为 JSON：
+
+```json
+{
+  "condition": "evt.type=open and fd.name contains /etc/shadow",
+  "output": "Shadow file accessed by %proc.name (pid=%proc.pid)",
+  "priority": "CRITICAL",
+  "tags": ["filesystem", "security"]
+}
+```
+
+### 示例
+
+1. **检测容器内 curl 外连**：
+```json
+{"condition":"evt.type=execve and proc.name=curl and container.id != host","output":"Container outbound curl (cmd=%proc.cmdline)","priority":"WARNING","tags":["network","container"]}
+```
+
+2. **检测 SSH 暴破**：
+```json
+{"condition":"evt.type=connect and fd.sport=22 and evt.count > 5 in 60s","output":"SSH brute force from %fd.sip","priority":"CRITICAL","tags":["network","ssh"]}
+```
+
+### 部署流程
+
+1. 打开运营台 → 规则 → 🦅 falco → 新建规则 → 填写 body JSON → 保存
+2. 左侧菜单 → 策略上线 → 🦅 准备 Falco → 确认版本号 → 灰度推进到完结
+
+详见 [ARCHITECTURE.md §4.8](ARCHITECTURE.md#48-自定义-falco-规则管理)。
+
 ## License
 
 MIT

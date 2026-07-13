@@ -270,6 +270,7 @@
             <button type="button" class="nav-sub active" data-layer="cloud"><span class="nav-label" data-i18n="nav.cloud">云 cloud</span></button>
             <button type="button" class="nav-sub" data-layer="gateway"><span class="nav-label" data-i18n="nav.gateway">管 gateway</span></button>
             <button type="button" class="nav-sub" data-layer="edge"><span class="nav-label" data-i18n="nav.edge">端 edge</span></button>
+            <button type="button" class="nav-sub" data-layer="falco"><span class="nav-label">🦅 falco</span></button>
           </div>
         </div>
         <button type="button" class="nav-item" data-tab="rollout"><span class="nav-icon">🚀</span><span class="nav-label" data-i18n="nav.rollout">策略上线</span></button>
@@ -776,6 +777,7 @@
         <button type="button" id="drPrepareEngine" data-i18n="rollout.btn-prepare-engine">📦 准备 Engine</button>
         <button type="button" id="drPrepareGateway" class="secondary" data-i18n="rollout.btn-prepare-gateway">📦 准备 Gateway</button>
         <button type="button" id="drPrepareEdge" class="secondary" data-i18n="rollout.btn-prepare-edge">📡 准备 Edge</button>
+        <button type="button" id="drPrepareFalco" class="secondary" style="background:#9333ea" data-i18n="rollout.btn-prepare-falco">🦅 准备 Falco</button>
         <button type="button" id="drPrepareAll" class="secondary" style="background:#6366f1" data-i18n="rollout.btn-prepare-all">🚀 全部部署</button>
         <button type="button" id="drUpgrade" class="secondary" data-i18n="rollout.btn-upgrade">⬆ 升级</button>
         <button type="button" id="drPause" class="secondary" style="background:#f59e0b" data-i18n="rollout.btn-pause">⏸ 暂停</button>
@@ -787,7 +789,7 @@
         <div id="drActiveInfo" class="hint" data-i18n="rollout.no-active-deploy">无进行中的部署</div>
         <div id="drActiveDetail" style="display:none">
           <table id="drActiveTable">
-            <thead><tr><th data-i18n="rollout.header-id">ID</th><th data-i18n="rollout.header-status">状态</th><th data-i18n="rollout.header-bundle">Bundle</th><th data-i18n="rollout.header-canary">canary%</th><th data-i18n="rollout.header-engine-canary">Engine 灰度</th><th data-i18n="rollout.header-engine-stable">Engine 稳定</th><th data-i18n="rollout.header-gw-canary">Gateway 灰度</th><th data-i18n="rollout.header-gw-stable">Gateway 稳定</th><th data-i18n="rollout.header-edge-canary">Edge 灰度</th><th data-i18n="rollout.header-edge-stable">Edge 稳定</th><th data-i18n="rollout.header-operator">操作者</th><th data-i18n="rollout.header-notes">备注</th></tr></thead>
+            <thead><tr><th data-i18n="rollout.header-id">ID</th><th data-i18n="rollout.header-status">状态</th><th data-i18n="rollout.header-bundle">Bundle</th><th data-i18n="rollout.header-canary">canary%</th><th data-i18n="rollout.header-engine-canary">Engine 灰度</th><th data-i18n="rollout.header-engine-stable">Engine 稳定</th><th data-i18n="rollout.header-gw-canary">Gateway 灰度</th><th data-i18n="rollout.header-gw-stable">Gateway 稳定</th><th data-i18n="rollout.header-edge-canary">Edge 灰度</th><th data-i18n="rollout.header-edge-stable">Edge 稳定</th><th data-i18n="rollout.header-falco-canary">Falco 灰度</th><th data-i18n="rollout.header-falco-stable">Falco 稳定</th><th data-i18n="rollout.header-operator">操作者</th><th data-i18n="rollout.header-notes">备注</th></tr></thead>
             <tbody></tbody>
           </table>
           <h4 style="margin:0.5rem 0 0.25rem;font-size:0.85rem" data-i18n="rollout.node-dist">节点分布</h4>

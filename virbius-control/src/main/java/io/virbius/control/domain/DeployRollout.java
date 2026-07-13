@@ -22,6 +22,8 @@ public record DeployRollout(
         Long stableGatewayRevision,
         Long canaryEdgeRevision,
         Long stableEdgeRevision,
+        Long canaryFalcoRevision,
+        Long stableFalcoRevision,
         List<Integer> canaryLadder,
         Instant startedAt,
         Instant updatedAt,

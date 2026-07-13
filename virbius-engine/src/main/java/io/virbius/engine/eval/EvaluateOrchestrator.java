@@ -6,6 +6,7 @@ import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
 import io.virbius.engine.eval.StiTaintDetector.TaintResult;
 import io.virbius.policy.MatchContext;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
@@ -43,7 +44,14 @@ public class EvaluateOrchestrator {
     }
 
     public EvaluateResponseDto evaluate(EvaluateRequestDto req) {
-        Map<String, String> vars = req.vars() != null ? req.vars() : Map.of();
+        // A1: Inject tool_name / tool_session_key as vars for cumulative aggregation
+        String toolName = req.toolName() != null ? req.toolName() : "";
+        String sessionId = req.sessionId() != null ? req.sessionId() : "";
+        Map<String, String> vars = new HashMap<>(req.vars() != null ? req.vars() : Map.of());
+        vars.put("tool_name", toolName);
+        if (!toolName.isEmpty() && !sessionId.isEmpty()) {
+            vars.put("tool_session_key", "tool:" + toolName + "-session:" + sessionId);
+        }
         List<SignalDto> signals = new ArrayList<>();
         if (req.priorSignals() != null) {
             signals.addAll(req.priorSignals());
@@ -92,8 +100,23 @@ public class EvaluateOrchestrator {
 
         auditWriter.write(req, decision, primaryRuleId, primaryRevision, reasonCode, degraded);
 
+        // A1: Auto-ingest cumulative counters (configuration-driven, after rule evaluation)
+        try {
+            scriptRuleRunner.ingestCumulatives(
+                    req.tenantId() != null ? req.tenantId() : "default", matchCtx);
+        } catch (Exception e) {
+            log.warn("cumulative ingest failed: {}", e.getMessage());
+        }
+
+        // A1: Record tool call in session state (for session-level toolCallCount)
+        try {
+            scriptRuleRunner.recordToolCall(sessionId, toolName, req.argsJson(),
+                    !"block".equalsIgnoreCase(decision.effectiveAction()));
+        } catch (Exception e) {
+            log.warn("recordToolCall failed: {}", e.getMessage());
+        }
+
         // Compute args hash for challenge binding
-        String toolName = req.toolName() != null ? req.toolName() : "";
         String argsJson = req.argsJson() != null ? req.argsJson() : "";
         String argsHash = ChallengeService.computeArgsHash(toolName, argsJson);
 

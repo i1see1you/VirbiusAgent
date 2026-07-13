@@ -16,7 +16,7 @@ public class SessionStatePreloader {
     private static final Logger log = LoggerFactory.getLogger(SessionStatePreloader.class);
     private static final String KEY_HISTORY = "session:%s:tool_history";
     private static final String KEY_RISK = "session:%s:risk_score";
-    private static final String KEY_COUNT = "session:%s:tool_count:%s";
+    private static final String KEY_TOOL_COUNTS = "session:%s:tool_counts";
     private static final int MAX_HISTORY = 50;
 
     private final JedisPool jedisPool;
@@ -35,13 +35,17 @@ public class SessionStatePreloader {
             String historyKey = KEY_HISTORY.formatted(sessionId);
             String riskKey = KEY_RISK.formatted(sessionId);
 
+            String toolCountsKey = KEY_TOOL_COUNTS.formatted(sessionId);
+
             Pipeline pipe = jedis.pipelined();
             var historyFuture = pipe.lrange(historyKey, 0, 9);
             var riskFuture = pipe.get(riskKey);
+            var toolCountsFuture = pipe.hgetAll(toolCountsKey);
             pipe.sync();
 
             List<String> historyRaw = historyFuture.get();
             String riskRaw = riskFuture.get();
+            Map<String, String> toolCountsRaw = toolCountsFuture.get();
 
             List<Map<String, Object>> history = new ArrayList<>();
             if (historyRaw != null) {
@@ -59,10 +63,19 @@ public class SessionStatePreloader {
                 try { riskScore = Integer.parseInt(riskRaw); } catch (NumberFormatException ignored) {}
             }
 
+            Map<String, Long> toolCounts = new HashMap<>();
+            if (toolCountsRaw != null) {
+                for (var entry : toolCountsRaw.entrySet()) {
+                    try {
+                        toolCounts.put(entry.getKey(), Long.parseLong(entry.getValue()));
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+
             return Map.of(
                 "history", history,
                 "riskScore", riskScore,
-                "toolCounts", Map.of()
+                "toolCounts", toolCounts
             );
         } catch (Exception e) {
             log.error("Failed to preload session state: {}", e.getMessage());
@@ -75,7 +88,7 @@ public class SessionStatePreloader {
         try (Jedis jedis = jedisPool.getResource()) {
             Pipeline pipe = jedis.pipelined();
             String historyKey = KEY_HISTORY.formatted(sessionId);
-            String countKey = KEY_COUNT.formatted(sessionId, toolName);
+            String countsKey = KEY_TOOL_COUNTS.formatted(sessionId);
 
             Map<String, Object> entry = new HashMap<>();
             entry.put("tool_name", toolName);
@@ -91,8 +104,8 @@ public class SessionStatePreloader {
                 log.warn("Failed to serialize session history entry: {}", e.getMessage());
             }
 
-            pipe.incr(countKey);
-            pipe.expire(countKey, 3600);
+            pipe.hincrBy(countsKey, toolName != null ? toolName : "", 1);
+            pipe.expire(countsKey, 3600);
             pipe.sync();
         } catch (Exception e) {
             log.error("Failed to record tool call: {}", e.getMessage());

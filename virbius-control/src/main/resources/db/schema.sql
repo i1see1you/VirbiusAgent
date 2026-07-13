@@ -385,6 +385,8 @@ CREATE TABLE IF NOT EXISTS tb_deploy_rollout (
     stable_gateway_revision BIGINT,
     canary_edge_revision   BIGINT,
     stable_edge_revision   BIGINT,
+    canary_falco_revision  BIGINT,
+    stable_falco_revision  BIGINT,
     canary_ladder          TEXT         NOT NULL DEFAULT '[5,20,50,100]',
     started_at             TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at             TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,

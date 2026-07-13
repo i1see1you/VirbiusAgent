@@ -22,6 +22,8 @@ public record DeployRolloutPointer(
         long stableGatewayRevision,
         long canaryEdgeRevision,
         long stableEdgeRevision,
+        long canaryFalcoRevision,
+        long stableFalcoRevision,
         String targetVersion,
         String prevVersion,
         String updatedAt) {
@@ -37,6 +39,8 @@ public record DeployRolloutPointer(
         out.put("stable_gateway_revision", String.valueOf(stableGatewayRevision));
         out.put("canary_edge_revision", String.valueOf(canaryEdgeRevision));
         out.put("stable_edge_revision", String.valueOf(stableEdgeRevision));
+        out.put("canary_falco_revision", String.valueOf(canaryFalcoRevision));
+        out.put("stable_falco_revision", String.valueOf(stableFalcoRevision));
         out.put("target_version", nullSafe(targetVersion));
         out.put("prev_version", nullSafe(prevVersion));
         out.put("updated_at", nullSafe(updatedAt));
@@ -62,6 +66,8 @@ public record DeployRolloutPointer(
                 parseLong(hash.get("stable_gateway_revision")),
                 parseLong(hash.get("canary_edge_revision")),
                 parseLong(hash.get("stable_edge_revision")),
+                parseLong(hash.get("canary_falco_revision")),
+                parseLong(hash.get("stable_falco_revision")),
                 hash.getOrDefault("target_version", ""),
                 hash.getOrDefault("prev_version", ""),
                 hash.getOrDefault("updated_at", ""));

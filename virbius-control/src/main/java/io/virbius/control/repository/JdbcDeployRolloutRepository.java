@@ -35,8 +35,9 @@ public class JdbcDeployRolloutRepository implements DeployRolloutRepository {
                     canary_engine_revision, stable_engine_revision,
                     canary_gateway_revision, stable_gateway_revision,
                     canary_edge_revision, stable_edge_revision,
+                    canary_falco_revision, stable_falco_revision,
                     canary_ladder, started_at, updated_at, finalized_at, operator, note
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 r.deployId(),
                 r.tenantId(),
@@ -52,6 +53,8 @@ public class JdbcDeployRolloutRepository implements DeployRolloutRepository {
                 r.stableGatewayRevision(),
                 r.canaryEdgeRevision(),
                 r.stableEdgeRevision(),
+                r.canaryFalcoRevision(),
+                r.stableFalcoRevision(),
                 ladderJson,
                 TimeHelper.nowIso(),
                 TimeHelper.nowIso(),
@@ -196,6 +199,8 @@ public class JdbcDeployRolloutRepository implements DeployRolloutRepository {
                 nullableLong(rs, "stable_gateway_revision"),
                 nullableLong(rs, "canary_edge_revision"),
                 nullableLong(rs, "stable_edge_revision"),
+                nullableLong(rs, "canary_falco_revision"),
+                nullableLong(rs, "stable_falco_revision"),
                 ladder,
                 TimeHelper.parseInstant(rs.getString("started_at")),
                 TimeHelper.parseInstant(rs.getString("updated_at")),

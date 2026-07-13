@@ -2,7 +2,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v3.3 |
+| 文档版本 | v3.5 |
 | 状态 | 草案 |
 | 关联 | [README.md](README.md) |
 | 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
@@ -945,9 +945,13 @@ HSET session:{id}:risk_breakdown \
 # 上次更新时间（用于时间衰减计算）
 SET session:{id}:risk_last_update "2026-07-08T12:00:00Z"
 
-# 工具调用计数（用于 tool_weight 计算）
-HINCRBY session:{id}:tool_count read_file 1
-HINCRBY session:{id}:tool_count write_file 1
+# 工具调用计数（Redis Hash，用于 tool_weight 计算）
+HINCRBY session:{id}:tool_counts read_file 1
+HINCRBY session:{id}:tool_counts write_file 1
+EXPIRE session:{id}:tool_counts 3600
+
+# 一次性读取全部工具计数（HGETALL）
+HGETALL session:{id}:tool_counts
 ```
 
 ---
@@ -1506,6 +1510,140 @@ max_output_length = 4096            # 最大输出长度
 | **输出审查（本节）** | Agent 最终响应 | Agent 汇总后、返回用户前 | DLP + 小模型 + 规则 |
 
 > 两者覆盖不同阶段，形成从工具返回到最终输出的完整审查链路。
+
+---
+
+### 13.9 累计计数器 Engine 侧 Ingest（A1）
+
+> **状态**：✅ 已完成
+
+#### 13.9.1 背景
+
+P0 已实现管层（OpenResty Lua）的累计计数器自动写入（配置驱动），但 MCP Proxy → Engine 路径缺少对应的 ingest 能力。A1 补齐这一缺口，使云层 Engine 在每次工具调用评估后自动写入累计计数器，实现与管层对等的双层计数。
+
+#### 13.9.2 两层计数架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  端层 (MCP Proxy)                                             │
+│  ├── session 内存计数 (total_call_count, tool_call_count)     │
+│  ├── 循环检测 (fingerprint 去重)                              │
+│  └── 熔断 (cooldown, circuit breaker)                         │
+│           │ POST /v1/evaluate                                 │
+│           ▼                                                   │
+│  云层 (Engine)                                                │
+│  ├── 累计计数器 (CounterStore.ingest)  ← A1 新增             │
+│  │   └── 配置驱动：遍历 tb_cumulative 定义，零硬编码          │
+│  ├── Session 状态写入 (recordToolCall)  ← A1 修复             │
+│  │   └── Redis Hash: session:{id}:tool_counts                 │
+│  └── Groovy L3 规则评估 (读取累计 + session 状态)             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 13.9.3 配置驱动的 Ingest
+
+**核心原则**：不硬编码任何累计名称或参数，完全由 `tb_cumulative` 表配置驱动。
+
+**Ingest 流程**（`ScriptRuleRunner.ingestCumulatives`）：
+
+```
+EvaluateOrchestrator.evaluate()
+  │
+  ├── 1. 注入 vars: tool_name, tool_session_key
+  │      tool_session_key = "tool:{toolName}-session:{sessionId}"
+  │
+  ├── 2. 构建 MatchContext (含 vars)
+  │
+  ├── 3. 规则评估 (ScriptRuleRunner.run)
+  │      └── Groovy 规则可通过 ctx.getCumulative() 读取累计
+  │
+  ├── 4. PolicyMerger 决策
+  │
+  ├── 5. ingestCumulatives()  ← A1 核心
+  │      ├── 遍历 PolicyDataCache.cumulatives
+  │      ├── ValueResolver.resolve(dimension, valueSource, matchCtx)
+  │      └── CounterStore.ingest(tenant, name, value, window, kind, zone, +1)
+  │
+  └── 6. recordToolCall()  ← A1 修复
+         └── SessionStatePreloader.recordToolCall()
+```
+
+**配置示例**（`tb_cumulative` 表）：
+
+```sql
+INSERT INTO tb_cumulative (
+    cumulative_name, dimension, window_minutes, window_kind, timezone
+) VALUES (
+    'tool_call_per_tool_session',
+    'var:tool_session_key',   -- 引用注入的复合 key
+    60,                        -- 60 分钟滚动窗口
+    'rolling',
+    'UTC'
+);
+```
+
+Groovy 规则引用：
+
+```groovy
+// Groovy L3 规则：工具调用频率熔断
+def count = getCumulative('tool_call_per_tool_session')
+if (count >= 20) {
+    return [action: 'block', reason: 'tool_call_loop_detected']
+}
+return [action: 'allow']
+```
+
+#### 13.9.4 SessionStatePreloader Hash 存储改造
+
+**改造前（独立 key）**：
+
+```
+INCR session:{id}:tool_count:read_file   → 3
+INCR session:{id}:tool_count:write_file  → 5
+# preload() 无法读取：不知道 session 调用过哪些工具
+# 只能用 KEYS session:{id}:tool_count:* — 生产禁用
+```
+
+**改造后（Redis Hash）**：
+
+```
+HINCRBY session:{id}:tool_counts read_file 1
+HINCRBY session:{id}:tool_counts write_file 1
+EXPIRE session:{id}:tool_counts 3600
+
+# preload() 一次性读取全部
+HGETALL session:{id}:tool_counts  → {read_file: 3, write_file: 5}
+```
+
+**优势**：
+
+| 维度 | 独立 Key | Redis Hash |
+|------|---------|------------|
+| `preload()` 读取 | ❌ 无法枚举工具名 | ✅ `HGETALL` 一次读取 |
+| TTL 管理 | N 个 key 各自 EXPIRE | 1 次 EXPIRE |
+| 内存效率 | N × dictEntry + SDS | ziplist 编码（≤128 field） |
+| Key 空间 | 1000 session × 20 tool = 20K keys | 1000 keys |
+
+#### 13.9.5 上下文变量注入
+
+`EvaluateOrchestrator.evaluate()` 在构建 `MatchContext` 前注入以下变量：
+
+| 变量名 | 值 | 用途 |
+|--------|-----|------|
+| `tool_name` | `req.toolName()` | 供 `var:tool_name` dimension 解析 |
+| `tool_session_key` | `tool:{toolName}-session:{sessionId}` | 供 `var:tool_session_key` dimension 解析 |
+
+这些变量在 `MatchContext.vars` 中，可被 `ValueResolver` 的 `VAR` kind 和 `var:` dimension 解析。
+
+#### 13.9.6 组件修改清单
+
+| 组件 | 修改 | 说明 |
+|------|------|------|
+| `EvaluateOrchestrator` | 注入 vars + 调用 ingest/record | 入口编排，确保规则评估后写入 |
+| `ScriptRuleRunner` | 新增 `ingestCumulatives()` | 遍历累计定义，配置驱动写入 |
+| `ScriptRuleRunner` | 新增 `recordToolCall()` | 委托 SessionStatePreloader |
+| `SessionStatePreloader` | `preload()` 修复 | 新增 `HGETALL` 读取 toolCounts |
+| `SessionStatePreloader` | `recordToolCall()` 改造 | `HINCRBY` 替代 `INCR` |
 
 ---
 

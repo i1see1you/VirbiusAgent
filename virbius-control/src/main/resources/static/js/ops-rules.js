@@ -102,6 +102,9 @@ end`;
       if (runtime === 'dlp-dsl') {
         return JSON.stringify(defaultDlpBody(), null, 2);
       }
+      if (runtime === 'falco') {
+        return JSON.stringify({ condition: 'evt.num > 0', output: 'Falco rule triggered', priority: 'WARNING', tags: [] }, null, 2);
+      }
       return JSON.stringify({ list_type: 'deny', keywords: [] }, null, 2);
     }
 
@@ -168,6 +171,10 @@ end`;
 
     function isDlpRuntime(runtime) {
       return runtime === 'dlp-dsl';
+    }
+
+    function isFalcoRuntime(runtime) {
+      return runtime === 'falco';
     }
 
     function isEdgeFormRuntime(runtime) {
@@ -725,6 +732,13 @@ end`;
 
     function syncEditorModeUiInner() {
       const runtime = currentEditorRuntime();
+      if (isFalcoRuntime(runtime)) {
+        document.getElementById('simpleConditionPanel').style.display = 'none';
+        document.getElementById('edgeDslPanel').style.display = 'none';
+        document.getElementById('dlpDslPanel').style.display = 'none';
+        document.getElementById('fBody').style.display = '';
+        return;
+      }
       if (isPromptRuntime(runtime)) {
         document.getElementById('simpleConditionPanel').style.display = 'none';
         document.getElementById('edgeDslPanel').style.display = 'none';
@@ -1244,7 +1258,21 @@ end`;
         document.getElementById('fBody').style.display = '';
       }
       syncBindScopeUi(runtime);
-      if (scriptRt) {
+      if (isFalcoRuntime(runtime)) {
+        document.getElementById('conditionAuthoringRow').style.display = 'none';
+        document.getElementById('simpleConditionPanel').style.display = 'none';
+        document.getElementById('scriptWizardRow').style.display = 'none';
+        document.getElementById('scriptSnippetRow').style.display = 'none';
+        document.getElementById('scriptValidateRow').style.display = 'none';
+        document.getElementById('simulateFixtureRow').style.display = 'none';
+        document.getElementById('chkEnableSimulateWrap').style.display = 'none';
+        document.getElementById('bindScopeRow').style.display = 'none';
+        document.getElementById('bindScopeHint').style.display = 'none';
+        document.getElementById('asyncWrap').style.display = 'none';
+        document.getElementById('fBody').style.display = '';
+        clearScriptValidateMsg();
+        document.getElementById('simulatePanel').style.display = 'none';
+      } else if (scriptRt) {
         fillWizardListSelect();
         fillWizardCumSelect();
         syncWizardFields();
@@ -1422,6 +1450,9 @@ end`;
         }
         syncEditorModeUi();
         syncDlpIntentReadonly();
+      } else if (isFalcoRuntime(r.runtime)) {
+        document.getElementById('fEditorMode').value = 'advanced';
+        syncEditorModeUi();
       } else if (!isPromptRuntime(r.runtime)) {
         await parseBodyIntoForm(r.layer, r.runtime, script);
       } else {

@@ -72,6 +72,9 @@
         drPrepareEdge: rollout
           ? { enabled: false, hint: __('dr.hint-active-engine') }
           : { enabled: true, hint: __('dr.hint-start-edge') },
+        drPrepareFalco: rollout
+          ? { enabled: false, hint: __('dr.hint-active-engine') }
+          : { enabled: true, hint: __('dr.hint-start-falco') },
         drPrepareAll: rollout
           ? { enabled: false, hint: __('dr.hint-active-engine') }
           : { enabled: true, hint: __('dr.hint-start-all') },
@@ -126,6 +129,8 @@
         <td>${r.stable_gateway_revision || '-'}</td>
         <td>${r.canary_edge_revision || '-'}</td>
         <td>${r.stable_edge_revision || '-'}</td>
+        <td>${r.canary_falco_revision || '-'}</td>
+        <td>${r.stable_falco_revision || '-'}</td>
         <td>${esc(r.operator)}</td>
         <td>${esc(r.note)}</td>
       </tr>`;
@@ -164,6 +169,18 @@
           }
         }
         // Edge status card (no heartbeats, show pool strategy info)
+        // Falco status card
+        const hasFalco = r.canary_falco_revision > 0 || r.stable_falco_revision > 0;
+        if (hasFalco) {
+          parts.push(`<div class="kpi-card" style="border-color:#9333ea"><div class="label">Falco</div><div class="value">🦅 ` + __('dr.falco-label') + `</div>`);
+          if (r.canary_falco_revision > 0 && r.canary_falco_revision !== r.stable_falco_revision) {
+            parts.push(`<span class="tag" style="background:#16a34a;color:#fff">` + __('dr.canary-label', pct) + `</span>`);
+          } else {
+            parts.push(`<span class="tag" style="background:#9333ea;color:#fff">` + __('dr.stable-falco') + `</span>`);
+          }
+          parts.push(`</div>`);
+        }
+
         const hasEdge = r.canary_edge_revision > 0 || r.stable_edge_revision > 0;
         if (hasEdge) {
           parts.push(`<div class="kpi-card" style="border-color:#818cf8"><div class="label">Edge</div><div class="value">` + __('dr.edge-by-device') + `</div>`);
@@ -366,6 +383,7 @@
       document.getElementById('drPrepareEngine').addEventListener('click', () => drOpenVersionModal('cloud', __('dr.prepare-engine')));
       document.getElementById('drPrepareGateway').addEventListener('click', () => drOpenVersionModal('gateway', __('dr.prepare-gateway')));
       document.getElementById('drPrepareEdge').addEventListener('click', () => drOpenVersionModal('edge', __('dr.prepare-edge')));
+      document.getElementById('drPrepareFalco').addEventListener('click', () => drOpenVersionModal('falco', __('dr.prepare-falco')));
       document.getElementById('drPrepareAll').addEventListener('click', () => drOpenVersionModal('', __('dr.prepare-all')));
 
       document.getElementById('drVersionCancel').addEventListener('click', drCloseVersionModal);

@@ -15,6 +15,7 @@ import io.virbius.policy.CumulativeWindow;
 import io.virbius.policy.GatewayListRedisMatcher;
 import io.virbius.policy.IntentAction;
 import io.virbius.policy.MatchContext;
+import io.virbius.policy.ValueResolver;
 import io.virbius.policy.ValueSource;
 import jakarta.annotation.PostConstruct;
 import java.time.Instant;
@@ -119,6 +120,65 @@ public class ScriptRuleRunner {
             }
         }
         return syncSignals;
+    }
+
+    /**
+     * A1: Auto-ingest cumulative counters for this request.
+     *
+     * <p>Iterates over all configured cumulative definitions for the tenant,
+     * resolves the aggregation value from {@link MatchContext}, and writes
+     * a +1 delta to {@link CounterStore}. This is the cloud-side counterpart
+     * of the gateway Lua ingest — configuration-driven, zero hardcoding.
+     *
+     * <p>Must be called <em>after</em> rule evaluation so that the current
+     * request is not counted in its own evaluation window.
+     */
+    public void ingestCumulatives(String tenantId, MatchContext matchCtx) {
+        if (counterStore.isEmpty()) {
+            return;
+        }
+        CounterStore store = counterStore.get();
+        PolicyDataCache.TenantPolicyData data = policyData.get(tenantId);
+        Map<String, ScriptEnvironment.CumulativeDefinition> cumulatives = data.cumulatives();
+        if (cumulatives == null || cumulatives.isEmpty()) {
+            return;
+        }
+        for (var entry : cumulatives.entrySet()) {
+            ScriptEnvironment.CumulativeDefinition def = entry.getValue();
+            Optional<String> value = ValueResolver.resolve(
+                    def.dimension(), def.valueSource(), matchCtx);
+            if (value.isPresent()) {
+                try {
+                    ZoneId zone = ZoneId.of(def.timezone() != null ? def.timezone() : "UTC");
+                    store.ingest(
+                            tenantId,
+                            def.cumulativeName(),
+                            value.get(),
+                            def.windowMinutes(),
+                            def.windowKind(),
+                            zone,
+                            1L);
+                } catch (Exception e) {
+                    log.warn("cumulative ingest failed tenant={} cum={} : {}",
+                            tenantId, def.cumulativeName(), e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * A1: Record a tool call in the session state (history + per-tool count).
+     *
+     * <p>Delegates to {@link SessionStatePreloader#recordToolCall} which
+     * writes to Redis session-scoped keys. The per-tool counts are stored
+     * in a Redis Hash so that {@code preload()} can read them back in a
+     * single {@code HGETALL}.
+     */
+    public void recordToolCall(String sessionId, String toolName, String args, boolean allowed) {
+        if (sessionStatePreloader == null) {
+            return;
+        }
+        sessionStatePreloader.recordToolCall(sessionId, toolName, args, allowed);
     }
 
     @SuppressWarnings("unchecked")

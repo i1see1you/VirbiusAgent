@@ -13,6 +13,7 @@ class DeployRolloutPointerTest {
                 "t1", "d1", "canary", 20,
                 101L, 100L, 201L, 200L,
                 301L, 300L,
+                401L, 400L,
                 "v2", "v1", "2026-06-18T10:00:00Z");
 
         Map<String, String> hash = original.toRedisHash();
@@ -29,6 +30,8 @@ class DeployRolloutPointerTest {
         assertEquals(200, restored.stableGatewayRevision());
         assertEquals(301, restored.canaryEdgeRevision());
         assertEquals(300, restored.stableEdgeRevision());
+        assertEquals(401, restored.canaryFalcoRevision());
+        assertEquals(400, restored.stableFalcoRevision());
         assertEquals("v2", restored.targetVersion());
         assertEquals("v1", restored.prevVersion());
     }
@@ -53,7 +56,7 @@ class DeployRolloutPointerTest {
     void nullFieldsBecomeEmptyString() {
         var p = new DeployRolloutPointer(
                 "t1", "d1", null, 0,
-                0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0,
                 null, null, null);
 
         Map<String, String> hash = p.toRedisHash();
