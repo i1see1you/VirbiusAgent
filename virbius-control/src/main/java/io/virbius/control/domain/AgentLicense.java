@@ -14,6 +14,9 @@ public class AgentLicense {
     private Instant issuedAt;
     private String status;
     private String signature;
+    private String agentName;
+    private String description;
+    private String agentAid;
 
     public AgentLicense() {}
 
@@ -46,4 +49,13 @@ public class AgentLicense {
 
     public String getSignature() { return signature; }
     public void setSignature(String signature) { this.signature = signature; }
+
+    public String getAgentName() { return agentName; }
+    public void setAgentName(String agentName) { this.agentName = agentName; }
+
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
+
+    public String getAgentAid() { return agentAid; }
+    public void setAgentAid(String agentAid) { this.agentAid = agentAid; }
 }

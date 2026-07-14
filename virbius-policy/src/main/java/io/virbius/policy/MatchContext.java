@@ -17,7 +17,8 @@ public record MatchContext(
         String routeUri,
         String upstreamId,
         String consumerId,
-        String apiKeyGroup) {
+        String apiKeyGroup,
+        String toolName) {
 
     public MatchContext {
         vars = vars != null ? Map.copyOf(vars) : Map.of();
@@ -33,7 +34,7 @@ public record MatchContext(
             String sessionId,
             Map<String, String> vars) {
         return new MatchContext(
-                content, userId, deviceId, clientIp, sessionId, vars, Map.of(), Map.of(), null, null, null, null, null);
+                content, userId, deviceId, clientIp, sessionId, vars, Map.of(), Map.of(), null, null, null, null, null, null);
     }
 
     public static MatchContext withBind(
@@ -58,7 +59,20 @@ public record MatchContext(
                 routeUri,
                 null,
                 null,
+                null,
                 null);
+    }
+
+    public static MatchContext forToolCall(
+            String content,
+            String userId,
+            String deviceId,
+            String clientIp,
+            String sessionId,
+            Map<String, String> vars,
+            String toolName) {
+        return new MatchContext(
+                content, userId, deviceId, clientIp, sessionId, vars, Map.of(), Map.of(), null, null, null, null, null, toolName);
     }
 
     public Map<String, String> varsOrEmpty() {

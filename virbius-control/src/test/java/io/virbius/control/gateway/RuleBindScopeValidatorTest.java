@@ -10,18 +10,10 @@ import org.junit.jupiter.api.Test;
 
 class RuleBindScopeValidatorTest {
 
-    private static final Map<String, Object> SCENE_METADATA = Map.of(
-            "scene_registry",
-            Map.of(
-                    "version",
-                    1,
-                    "scenes",
-                    Map.of(
-                            "beta_chat", Map.of("app_id", "beta", "default", true),
-                            "beta_sse", Map.of("app_id", "beta", "default", false))));
+    private static final Map<String, Object> METADATA = Map.of();
 
     @Test
-    void acceptsSceneInRegistry() {
+    void acceptsValidToolName() {
         UpsertRuleRequest req = new UpsertRuleRequest(
                 "r1",
                 "poc-default",
@@ -30,17 +22,17 @@ class RuleBindScopeValidatorTest {
                 "X",
                 100,
                 "deny",
-                Map.of("bind_scope", "route", "bind_ref", Map.of("scenes", List.of("beta_chat"))),
+                Map.of("bind_scope", "tool", "bind_ref", Map.of("tool_names", List.of("read_file"))),
                 Map.of(),
                 null,
                 null,
                 null,
                 null);
-        assertDoesNotThrow(() -> RuleBindScopeValidator.validateRouteScenes(req, SCENE_METADATA));
+        assertDoesNotThrow(() -> RuleBindScopeValidator.validateToolScope(req, METADATA));
     }
 
     @Test
-    void rejectsUnknownScene() {
+    void rejectsInvalidToolName() {
         UpsertRuleRequest req = new UpsertRuleRequest(
                 "r1",
                 "poc-default",
@@ -49,7 +41,7 @@ class RuleBindScopeValidatorTest {
                 "X",
                 100,
                 "deny",
-                Map.of("bind_scope", "route", "bind_ref", Map.of("scenes", List.of("unknown"))),
+                Map.of("bind_scope", "tool", "bind_ref", Map.of("tool_names", List.of("UPPERCASE"))),
                 Map.of(),
                 null,
                 null,
@@ -57,78 +49,18 @@ class RuleBindScopeValidatorTest {
                 null);
         assertThrows(
                 IllegalArgumentException.class,
-                () -> RuleBindScopeValidator.validateRouteScenes(req, SCENE_METADATA));
-    }
-
-    @Test
-    void rejectsEmptyScenes() {
-        UpsertRuleRequest req = new UpsertRuleRequest(
-                "r1",
-                "poc-default",
-                "cloud",
-                "groovy",
-                "X",
-                100,
-                "deny",
-                Map.of("bind_scope", "route", "bind_ref", Map.of()),
-                Map.of(),
-                null,
-                null,
-                null,
-                null);
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> RuleBindScopeValidator.validateRouteScenes(req, SCENE_METADATA));
-    }
-
-    @Test
-    void acceptsWildcardSceneWithoutRegistryCheck() {
-        UpsertRuleRequest req = new UpsertRuleRequest(
-                "r1",
-                "poc-default",
-                "cloud",
-                "groovy",
-                "X",
-                100,
-                "deny",
-                Map.of("bind_scope", "route", "bind_ref", Map.of("scenes", List.of("*"))),
-                Map.of(),
-                null,
-                null,
-                null,
-                null);
-        assertDoesNotThrow(() -> RuleBindScopeValidator.validateRouteScenes(req, SCENE_METADATA));
+                () -> RuleBindScopeValidator.validateToolScope(req, METADATA));
     }
 
     @Test
     void skipsWhenNoScope() {
         UpsertRuleRequest req = new UpsertRuleRequest(
                 "r1", "poc-default", "cloud", "groovy", "X", 100, "deny", null, Map.of(), null, null, null, null);
-        assertDoesNotThrow(() -> RuleBindScopeValidator.validateRouteScenes(req, SCENE_METADATA));
+        assertDoesNotThrow(() -> RuleBindScopeValidator.validateToolScope(req, METADATA));
     }
 
     @Test
-    void acceptsMultipleScenes() {
-        UpsertRuleRequest req = new UpsertRuleRequest(
-                "r1",
-                "poc-default",
-                "cloud",
-                "groovy",
-                "X",
-                100,
-                "deny",
-                Map.of("bind_scope", "route", "bind_ref",
-                        Map.of("scenes", List.of("beta_chat", "beta_sse"))),
-                Map.of(),
-                null,
-                null,
-                null,
-                null);
-        assertDoesNotThrow(() -> RuleBindScopeValidator.validateRouteScenes(req, SCENE_METADATA));
-    }
-
-    @Test
-    void edgeServiceBindRequiresKnownAppId() {
+    void edgeServiceBindRequiresAppIds() {
         UpsertRuleRequest req = new UpsertRuleRequest(
                 "edge_r1",
                 "poc-default",
@@ -137,7 +69,7 @@ class RuleBindScopeValidatorTest {
                 "X",
                 100,
                 "deny",
-                Map.of("bind_scope", "service", "bind_ref", Map.of("app_ids", List.of("unknown-app"))),
+                Map.of("bind_scope", "service", "bind_ref", Map.of()),
                 Map.of("list_type", "deny", "keywords", List.of("x")),
                 null,
                 null,
@@ -145,11 +77,11 @@ class RuleBindScopeValidatorTest {
                 null);
         assertThrows(
                 IllegalArgumentException.class,
-                () -> RuleBindScopeValidator.validateRouteScenes(req, SCENE_METADATA));
+                () -> RuleBindScopeValidator.validateToolScope(req, METADATA));
     }
 
     @Test
-    void edgeRouteBindRejected() {
+    void edgeToolBindForwardedAsGlobal() {
         UpsertRuleRequest req = new UpsertRuleRequest(
                 "edge_r2",
                 "poc-default",
@@ -158,14 +90,12 @@ class RuleBindScopeValidatorTest {
                 "X",
                 100,
                 "deny",
-                Map.of("bind_scope", "route", "bind_ref", Map.of("scenes", List.of("beta_chat"))),
+                Map.of("bind_scope", "tool", "bind_ref", Map.of("tool_names", List.of("read_file"))),
                 Map.of("list_type", "deny", "keywords", List.of("x")),
                 null,
                 null,
                 null,
                 null);
-        assertThrows(
-                IllegalArgumentException.class,
-                () -> RuleBindScopeValidator.validateRouteScenes(req, SCENE_METADATA));
+        assertDoesNotThrow(() -> RuleBindScopeValidator.validateToolScope(req, METADATA));
     }
 }

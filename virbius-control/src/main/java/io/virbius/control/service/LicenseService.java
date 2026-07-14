@@ -46,11 +46,13 @@ public class LicenseService {
     public Map<String, Object> issueLicense(
             String tenantId,
             String appId,
+            String agentName,
             List<String> allowedTools,
             List<String> allowedScenes,
             int riskQuota,
             int toolRateLimit,
-            long expirySeconds) {
+            long expirySeconds,
+            String description) {
 
         // Ensure tenant has a signing key pair
         String encPrivKey = repo.getActiveEncryptedPrivateKey(tenantId)
@@ -63,9 +65,14 @@ public class LicenseService {
 
         byte[] signingKey = signer.decryptPrivateKey(encPrivKey);
 
+        String agentAid = buildAgentAid(tenantId, appId);
+
         AgentLicense license = new AgentLicense();
         license.setAppId(appId);
         license.setTenantId(tenantId);
+        license.setAgentName(agentName);
+        license.setDescription(description);
+        license.setAgentAid(agentAid);
         license.setAllowedTools(allowedTools);
         license.setAllowedScenes(allowedScenes);
         license.setRiskQuota(riskQuota);
@@ -83,16 +90,23 @@ public class LicenseService {
         log.info("issued license {} for app {} tenant {} (quota={}, rate={}, tools={})",
                 licenseId, appId, tenantId, riskQuota, toolRateLimit, allowedTools);
 
-        return Map.of(
-                "license_id", licenseId,
-                "app_id", appId,
-                "tenant_id", tenantId,
-                "jwt", jwt,
-                "expiry", license.getExpiry().toString(),
-                "allowed_tools", allowedTools,
-                "allowed_scenes", allowedScenes,
-                "risk_quota", riskQuota,
-                "tool_rate_limit", toolRateLimit);
+        return Map.ofEntries(
+                Map.entry("license_id", licenseId),
+                Map.entry("app_id", appId),
+                Map.entry("tenant_id", tenantId),
+                Map.entry("agent_name", agentName),
+                Map.entry("agent_aid", agentAid),
+                Map.entry("jwt", jwt),
+                Map.entry("expiry", license.getExpiry().toString()),
+                Map.entry("allowed_tools", allowedTools),
+                Map.entry("allowed_scenes", allowedScenes),
+                Map.entry("risk_quota", riskQuota),
+                Map.entry("tool_rate_limit", toolRateLimit));
+    }
+
+    private static String buildAgentAid(String tenantId, String appId) {
+        String serial = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
+        return String.format("aid:cn:org:%s:agent:%s-%s", tenantId, appId, serial);
     }
 
     /**

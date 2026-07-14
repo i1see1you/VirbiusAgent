@@ -1,10 +1,6 @@
 package io.virbius.engine.api;
 
-import io.virbius.engine.eval.EvaluateOrchestrator;
-import io.virbius.engine.eval.EvaluateRequestDto;
-import io.virbius.engine.eval.EvaluateResponseDto;
-import io.virbius.engine.eval.ToolResultRequestDto;
-import io.virbius.engine.eval.ToolResultResponseDto;
+import io.virbius.engine.eval.*;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
@@ -28,5 +24,11 @@ public class EvaluateHttpController {
     @PostMapping("/v1/evaluate/tool-result")
     public ToolResultResponseDto evaluateToolResult(@RequestBody ToolResultRequestDto request) {
         return orchestrator.evaluateToolResult(request);
+    }
+
+    /** P1.3: LLM-based injection detection endpoint for memory writes. */
+    @PostMapping("/v1/memory/check")
+    public MemoryCheckResponseDto checkMemory(@RequestBody MemoryCheckRequestDto request) {
+        return orchestrator.checkMemory(request);
     }
 }

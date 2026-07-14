@@ -39,6 +39,9 @@ public class JdbcLicenseRepository implements LicenseRepository {
         lic.setIssuedAt(issued != null ? issued.toInstant() : null);
         lic.setStatus(rs.getString("status"));
         lic.setSignature(rs.getString("signature"));
+        lic.setAgentName(rs.getString("agent_name"));
+        lic.setDescription(rs.getString("description"));
+        lic.setAgentAid(rs.getString("agent_aid"));
         return lic;
     }
 
@@ -48,8 +51,9 @@ public class JdbcLicenseRepository implements LicenseRepository {
                 """
                 INSERT INTO tb_agent_licenses
                     (license_id, tenant_id, app_id, allowed_tools, allowed_scenes,
-                     risk_quota, tool_rate_limit, expiry, issued_at, status, signature, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     risk_quota, tool_rate_limit, expiry, issued_at, status, signature,
+                     created_by, agent_name, description, agent_aid)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 licenseId,
                 license.getTenantId(),
@@ -62,7 +66,10 @@ public class JdbcLicenseRepository implements LicenseRepository {
                 Timestamp.from(license.getIssuedAt() != null ? license.getIssuedAt() : Instant.now()),
                 license.getStatus() != null ? license.getStatus() : "active",
                 license.getSignature(),
-                "system");
+                "system",
+                license.getAgentName() != null ? license.getAgentName() : "",
+                license.getDescription() != null ? license.getDescription() : "",
+                license.getAgentAid() != null ? license.getAgentAid() : "");
     }
 
     @Override
@@ -70,7 +77,8 @@ public class JdbcLicenseRepository implements LicenseRepository {
         List<AgentLicense> rows = jdbc.query(
                 """
                 SELECT app_id, tenant_id, allowed_tools, allowed_scenes, risk_quota,
-                       tool_rate_limit, expiry, issued_at, status, signature
+                       tool_rate_limit, expiry, issued_at, status, signature,
+                       agent_name, description, agent_aid
                 FROM tb_agent_licenses
                 WHERE tenant_id = ? AND app_id = ? AND status = 'active'
                 ORDER BY issued_at DESC LIMIT 1
@@ -85,7 +93,8 @@ public class JdbcLicenseRepository implements LicenseRepository {
     public List<AgentLicense> listByTenant(String tenantId, String status) {
         String sql = """
                 SELECT app_id, tenant_id, allowed_tools, allowed_scenes, risk_quota,
-                       tool_rate_limit, expiry, issued_at, status, signature
+                       tool_rate_limit, expiry, issued_at, status, signature,
+                       agent_name, description, agent_aid
                 FROM tb_agent_licenses
                 WHERE tenant_id = ?
                 """;

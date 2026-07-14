@@ -39,6 +39,8 @@ fn make_license(allowed_tools: Vec<&str>, risk_quota: u32) -> (SigningKey, Strin
     let claims = LicenseClaims {
         app_id: "test-agent".into(),
         tenant_id: "tenant-1".into(),
+        agent_name: "Test Agent".into(),
+        agent_aid: "aid:cn:org:tenant-1:agent:test-agent-abc123".into(),
         allowed_tools: allowed_tools.into_iter().map(String::from).collect(),
         allowed_scenes: vec!["code_review".into()],
         risk_quota,
@@ -173,6 +175,8 @@ fn e2e_deny_expired_license() {
     let claims = LicenseClaims {
         app_id: "expired-agent".into(),
         tenant_id: "tenant-1".into(),
+        agent_name: "Expired Agent".into(),
+        agent_aid: "aid:cn:org:tenant-1:agent:expired-agent-abc123".into(),
         allowed_tools: vec!["read_file".into()],
         allowed_scenes: vec![],
         risk_quota: 60,
@@ -206,6 +210,8 @@ fn e2e_license_revocation() {
     let claims = LicenseClaims {
         app_id: "revocation-test-agent".into(),
         tenant_id: "tenant-1".into(),
+        agent_name: "Revocation Test Agent".into(),
+        agent_aid: "aid:cn:org:tenant-1:agent:revocation-test-abc123".into(),
         allowed_tools: vec!["read_file".into()],
         allowed_scenes: vec![],
         risk_quota: 60,

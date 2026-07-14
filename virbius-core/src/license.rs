@@ -12,6 +12,10 @@ pub struct LicenseClaims {
     pub app_id: String,
     pub tenant_id: String,
     #[serde(default)]
+    pub agent_name: String,
+    #[serde(default)]
+    pub agent_aid: String,
+    #[serde(default)]
     pub allowed_tools: Vec<String>,
     #[serde(default)]
     pub allowed_scenes: Vec<String>,
@@ -144,6 +148,8 @@ mod tests {
         let claims = LicenseClaims {
             app_id: "test-agent".into(),
             tenant_id: "tenant-1".into(),
+            agent_name: "Test Agent".into(),
+            agent_aid: "aid:cn:org:tenant-1:agent:test-agent-abc123".into(),
             allowed_tools: vec!["read_file".into(), "search".into()],
             allowed_scenes: vec![],
             risk_quota: 60,
@@ -176,6 +182,8 @@ mod tests {
         let claims = LicenseClaims {
             app_id: "test-agent".into(),
             tenant_id: "tenant-1".into(),
+            agent_name: "Test Agent".into(),
+            agent_aid: "aid:cn:org:tenant-1:agent:test-agent-abc123".into(),
             allowed_tools: vec![],
             allowed_scenes: vec![],
             risk_quota: 60,

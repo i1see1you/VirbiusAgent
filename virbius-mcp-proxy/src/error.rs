@@ -14,6 +14,7 @@ pub enum VirbiusErrorCode {
     OutputReviewBlocked = -32009,
     FallbackBlocked = -32010,
     ChallengeRequired = -32011,
+    MemoryWriteBlocked = -32012,
 }
 
 impl VirbiusErrorCode {
@@ -30,6 +31,7 @@ impl VirbiusErrorCode {
             Self::OutputReviewBlocked => "output_review_blocked",
             Self::FallbackBlocked => "fallback_blocked",
             Self::ChallengeRequired => "challenge_required",
+            Self::MemoryWriteBlocked => "memory_write_blocked",
         }
     }
 
@@ -42,7 +44,8 @@ impl VirbiusErrorCode {
             | Self::RiskThreshold
             | Self::FallbackBlocked
             | Self::OutputReviewBlocked
-            | Self::ChallengeRequired => 403,
+            | Self::ChallengeRequired
+            | Self::MemoryWriteBlocked => 403,
             Self::SchemaViolation => 400,
             Self::RateExceeded => 429,
         }

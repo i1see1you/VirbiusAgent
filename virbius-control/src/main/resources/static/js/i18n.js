@@ -615,13 +615,13 @@
 
       // Gw scope options
       'gw.scope.global': 'global（租户内全流量）',
-      'gw.scope.route': 'route（Scene 匹配）',
+      'gw.scope.tool': 'tool（工具匹配）',
       'gw.scope.service': 'service（app_ids）',
       'gw.scope.edge-global': 'global（全部 App manifest）',
       'gw.scope.edge-service': 'service（指定 app_ids）',
 
       // Bind scope hint
-      'gw.scope-hint': 'Route：按 scene 精确匹配（scenes 须已在 SceneRegistry 中注册）。Service 绑 <code>app_ids</code>（来自 context_bindings 的 <code>app_id</code>）。<strong>端 edge</strong>：仅 <code>global</code> / <code>service(app_ids)</code>；发布时按 App 拆 manifest，SDK 不做运行时 bind。',
+      'gw.scope-hint': 'Tool 绑 <code>tool_names</code>（可选）和 <code>app_ids</code>（可选）。Service 绑 <code>app_ids</code>（来自 context_bindings 的 <code>app_id</code>）。<strong>端 edge</strong>：仅 <code>global</code> / <code>service(app_ids)</code>；发布时按 App 拆 manifest，SDK 不做运行时 bind。',
 
       // Groovy hint
       'hint.groovy': 'Groovy 脚本实现 <code>decide(ctx)</code>，返回 <code>true</code>（命中）/ <code>false</code>（未命中）。可用 <code>ctx.listMatch(name)</code>、<code>ctx.listMatch(name, value)</code>、<code>ctx.getCumulative(name)</code>、<code>ctx.var(\'logical\')</code>。命中后 intent / risk / reason / enforce 取自规则行。',
@@ -1256,13 +1256,13 @@
 
       // Gw scope options
       'gw.scope.global': 'global (all tenant traffic)',
-      'gw.scope.route': 'route (Scene match)',
+      'gw.scope.tool': 'tool (tool name match)',
       'gw.scope.service': 'service (app_ids)',
       'gw.scope.edge-global': 'global (all App manifests)',
       'gw.scope.edge-service': 'service (specific app_ids)',
 
       // Bind scope hint
-      'gw.scope-hint': 'Route: exact scene match (scenes must be registered in SceneRegistry). Service binds <code>app_ids</code> (from context_bindings <code>app_id</code>). <strong>Edge</strong>: <code>global</code> / <code>service(app_ids)</code> only; per-App manifest on publish, SDK does not do runtime bind.',
+      'gw.scope-hint': 'Tool binds <code>tool_names</code> (optional) and <code>app_ids</code> (optional). Service binds <code>app_ids</code> (from context_bindings <code>app_id</code>). <strong>Edge</strong>: <code>global</code> / <code>service(app_ids)</code> only; per-App manifest on publish, SDK does not do runtime bind.',
 
       // Groovy hint
       'hint.groovy': 'Groovy script implements <code>decide(ctx)</code>, returns <code>true</code> (hit) / <code>false</code> (no hit). Available: <code>ctx.listMatch(name)</code>, <code>ctx.listMatch(name, value)</code>, <code>ctx.getCumulative(name)</code>, <code>ctx.var(\'logical\')</code>. intent/risk/reason/enforce come from the rule definition.',

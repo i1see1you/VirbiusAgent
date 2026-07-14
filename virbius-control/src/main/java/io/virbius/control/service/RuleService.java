@@ -117,7 +117,7 @@ public class RuleService {
                         tenantId, bundleId, RuleBindScopeValidator.defaultBundleVersion())
                 .map(b -> b.metadata() != null ? b.metadata() : Map.<String, Object>of())
                 .orElse(Map.of());
-        RuleBindScopeValidator.validateRouteScenes(req, bundleMetadata);
+        RuleBindScopeValidator.validateToolScope(req, bundleMetadata);
         RuleRevision saved = store.upsertRule(tenantId, draft);
         return RuleResponseMapper.toDetail(saved);
     }

@@ -62,6 +62,12 @@ audit:
     batch-size: 256
     consumer-group: virbius-audit-ingest
 
+virbius.audit.hash-chain:
+  enabled: ${VIRBIUS_AUDIT_HASH_CHAIN_ENABLED:true}
+  verify-enabled: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_ENABLED:true}
+  verify-interval-ms: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_INTERVAL:3600000}
+  verify-batch-size: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_BATCH:10000}
+
 rollout:
   metrics:
     rollup-ms: 60000

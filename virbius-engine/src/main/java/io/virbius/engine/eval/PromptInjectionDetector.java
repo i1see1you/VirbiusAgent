@@ -3,7 +3,6 @@ package io.virbius.engine.eval;
 import io.virbius.engine.config.GuardDetectProperties;
 import io.virbius.engine.config.PromptLlmProperties;
 import io.virbius.engine.eval.PromptAuditJsonParser.PromptAuditResult;
-import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -11,11 +10,14 @@ import org.springframework.stereotype.Component;
 /**
  * Detects prompt injection / jailbreak attempts in user input.
  *
- * <p>Uses a two-tier strategy:
+ * <p>Uses a single-tier strategy:
  * <ol>
- *   <li><b>Regex pre-filter</b>: fast pattern matching for known injection markers</li>
  *   <li><b>LLM detection</b>: qwen3guard:0.6b model for semantic injection detection</li>
  * </ol>
+ *
+ * <p>The qwen3guard model provides superior semantic detection compared to regex
+ * pattern matching, covering injection variants, obfuscation, and novel attack
+ * patterns that fixed regex rules cannot capture.
  *
  * <p>Reuses {@link PromptLlmClient} and {@link PromptAuditJsonParser} from the existing
  * prompt runtime infrastructure, but with an injection-specific system prompt.
@@ -24,16 +26,6 @@ import org.springframework.stereotype.Component;
 public class PromptInjectionDetector {
 
     private static final Logger log = LoggerFactory.getLogger(PromptInjectionDetector.class);
-
-    private static final Pattern[] INJECTION_MARKERS = {
-        Pattern.compile("(?i)ignore\\s+(previous|above|prior)\\s+instructions"),
-        Pattern.compile("(?i)you\\s+are\\s+now\\s+(DAN|developer\\s+mode|jailbreak)"),
-        Pattern.compile("(?i)forget\\s+(everything|all|previous)"),
-        Pattern.compile("(?i)disregard\\s+(prior|above|previous)"),
-        Pattern.compile("(?i)<\\s*system\\s*>|<\\s*instruction\\s*>"),
-        Pattern.compile("(?i)system\\s*prompt|reveal\\s+your\\s+instructions"),
-        Pattern.compile("(?i)act\\s+as\\s+(if\\s+you\\s+(have|are)|a\\s+different)"),
-    };
 
     private final GuardDetectProperties guardProps;
     private final PromptLlmProperties llmProps;
@@ -65,16 +57,7 @@ public class PromptInjectionDetector {
             return InjectionDetectionResult.clean();
         }
 
-        // 1. Regex pre-filter for fast detection
-        for (Pattern p : INJECTION_MARKERS) {
-            if (p.matcher(text).find()) {
-                String pattern = p.pattern();
-                log.info("injection regex hit: pattern={}", pattern);
-                return new InjectionDetectionResult(true, pattern, 30, "regex_match:" + pattern);
-            }
-        }
-
-        // 2. LLM-based semantic detection via qwen3guard
+        // LLM-based semantic detection via qwen3guard
         String prompt = buildInjectionPrompt(text);
         PromptLlmClient.CompleteResult result = llmClient.completeDetail(prompt);
 
@@ -115,7 +98,7 @@ public class PromptInjectionDetector {
      * Detection result for prompt injection.
      *
      * @param hit whether injection was detected
-     * @param matchedPattern the pattern that matched (regex pattern or LLM-detected category)
+     * @param matchedPattern the pattern that matched (LLM-detected category)
      * @param riskDelta risk score increment to apply to the session
      * @param auditDetail detail string for audit logging
      */

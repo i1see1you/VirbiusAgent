@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+##[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
     #[serde(default)]
     pub proxy: ProxySection,
@@ -13,6 +13,8 @@ pub struct ProxyConfig {
     pub audit: AuditSection,
     #[serde(default)]
     pub trace: TraceSection,
+    #[serde(default)]
+    pub memory: MemorySection,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -209,6 +211,7 @@ impl Default for ProxyConfig {
             security: SecuritySection::default(),
             audit: AuditSection::default(),
             trace: TraceSection::default(),
+            memory: MemorySection::default(),
         }
     }
 }
@@ -396,6 +399,34 @@ impl Default for TraceSection {
             kafka_brokers: String::new(),
             kafka_topic: default_trace_kafka_topic(),
             enabled: default_trace_enabled(),
+        }
+    }
+}
+
+/// Memory Interceptor configuration (proxy-side override).
+///
+/// This section is optional; the primary configuration is in the
+/// edge manifest (virbius-core SdkConfig).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemorySection {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_memory_max_entry_size")]
+    pub max_entry_size: usize,
+    #[serde(default)]
+    pub tool_patterns: Vec<String>,
+}
+
+fn default_memory_max_entry_size() -> usize {
+    4096
+}
+
+impl Default for MemorySection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_entry_size: default_memory_max_entry_size(),
+            tool_patterns: vec![],
         }
     }
 }

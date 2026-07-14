@@ -14,28 +14,35 @@ class BindScopeTest {
     }
 
     @Test
-    void routeSceneExactMatch() {
-        MatchContext ctx = MatchContext.withBind("hi", "u1", null, null, null, null, "chat", null);
-        assertTrue(BindScope.matches("route", java.util.Map.of("scenes", java.util.List.of("chat")), ctx));
-        assertFalse(BindScope.matches("route", java.util.Map.of("scenes", java.util.List.of("sse")), ctx));
+    void toolExactMatch() {
+        MatchContext ctx = MatchContext.forToolCall("hi", "u1", null, null, null, java.util.Map.of("app_id", "test"), "read_file");
+        assertTrue(BindScope.matches("tool", java.util.Map.of("tool_names", java.util.List.of("read_file")), ctx));
+        assertFalse(BindScope.matches("tool", java.util.Map.of("tool_names", java.util.List.of("write_file")), ctx));
     }
 
     @Test
-    void routeSceneWildcard() {
-        MatchContext ctx = MatchContext.withBind("hi", "u1", null, null, null, null, "any_scene", null);
-        assertTrue(BindScope.matches("route", java.util.Map.of("scenes", java.util.List.of("*")), ctx));
+    void toolWildcard() {
+        MatchContext ctx = MatchContext.forToolCall("hi", "u1", null, null, null, java.util.Map.of("app_id", "test"), "any_tool");
+        assertTrue(BindScope.matches("tool", java.util.Map.of("tool_names", java.util.List.of("*")), ctx));
     }
 
     @Test
-    void routeSceneNoScenes() {
-        MatchContext ctx = MatchContext.withBind("hi", "u1", null, null, null, null, "chat", null);
-        assertFalse(BindScope.matches("route", java.util.Map.of(), ctx));
+    void toolNoToolNamesPassesIfNoAppIds() {
+        MatchContext ctx = MatchContext.forToolCall("hi", "u1", null, null, null, java.util.Map.of("app_id", "test"), "read_file");
+        assertTrue(BindScope.matches("tool", java.util.Map.of(), ctx));
     }
 
     @Test
-    void routeSceneMissingContextScene() {
-        MatchContext ctx = MatchContext.withBind("hi", "u1", null, null, null, null, "", null);
-        assertFalse(BindScope.matches("route", java.util.Map.of("scenes", java.util.List.of("chat")), ctx));
+    void toolMissingContextToolName() {
+        MatchContext ctx = MatchContext.forToolCall("hi", "u1", null, null, null, java.util.Map.of("app_id", "test"), "");
+        assertTrue(BindScope.matches("tool", java.util.Map.of(), ctx));
+    }
+
+    @Test
+    void toolWithAppIdsFilter() {
+        MatchContext ctx = MatchContext.forToolCall("hi", "u1", null, null, null, java.util.Map.of("app_id", "medical-prod"), "read_file");
+        assertTrue(BindScope.matches("tool", java.util.Map.of("tool_names", java.util.List.of("read_file"), "app_ids", java.util.List.of("beta", "medical-prod")), ctx));
+        assertFalse(BindScope.matches("tool", java.util.Map.of("tool_names", java.util.List.of("read_file"), "app_ids", java.util.List.of("beta")), ctx));
     }
 
     @Test

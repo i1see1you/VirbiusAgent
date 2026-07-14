@@ -12,8 +12,13 @@ import io.virbius.control.domain.TenantRolloutPolicy;
 import io.virbius.control.script.ScriptRuleBodies;
 import io.virbius.control.policy.BindScopeExport;
 import io.virbius.control.gateway.DlpRuleValidator;
+import io.virbius.policy.BindScope;
 import io.virbius.policy.EdgeManifestFilter;
-import io.virbius.policy.SceneRegistry;
+
+
+
+
+
 import io.virbius.control.policy.RuleBodyRefs;
 import io.virbius.control.repository.CumulativeRepository;
 import io.virbius.control.repository.EdgeArtifactMetaRepository;
@@ -184,13 +189,11 @@ public class ArtifactService {
 
     Map<String, String> writeEdgeWithPool(String tenantId, Map<String, Object> bundleMetadata, String pool) {
         try {
-            SceneRegistry registry =
-                    io.virbius.control.gateway.SceneRegistryHelper.parseRegistry(bundleMetadata);
             List<RuleRevision> allRules = listEdgeRulesInExecutionPlane(tenantId);
             List<Map<String, Object>> scopes = allRules.stream()
                     .map(r -> r.scope() != null ? r.scope() : Map.<String, Object>of())
                     .toList();
-            List<String> appIds = EdgeManifestFilter.collectAppIds(registry, scopes);
+            List<String> appIds = EdgeManifestFilter.collectAppIds(scopes);
 
             Map<String, String> paths = new LinkedHashMap<>();
             java.nio.file.Path edgeBase = dataDir.resolve("edge");
@@ -198,7 +201,7 @@ public class ArtifactService {
 
             if (appIds.isEmpty()) {
                 log.warn(
-                        "skip edge manifests for tenant={}: scene_registry has no app_id",
+                        "skip edge manifests for tenant={}: no service-bind app_ids",
                         tenantId);
                 return paths;
             }
@@ -206,7 +209,7 @@ public class ArtifactService {
             for (String appId : appIds) {
                 java.nio.file.Path dir = edgeBase.resolve(tenantId).resolve(appId);
                 java.nio.file.Files.createDirectories(dir);
-                List<RuleRevision> filtered = filterEdgeRulesForApp(allRules, appId, registry);
+                List<RuleRevision> filtered = filterEdgeRulesForApp(allRules, appId);
                 String filename = "canary".equals(pool)
                         ? "edge-manifest-canary.json"
                         : "edge-manifest.json";
@@ -459,11 +462,11 @@ public class ArtifactService {
     }
 
     private List<RuleRevision> filterEdgeRulesForApp(
-            List<RuleRevision> rules, String appId, SceneRegistry registry) {
+            List<RuleRevision> rules, String appId) {
         List<RuleRevision> out = new ArrayList<>();
         for (RuleRevision rule : rules) {
             Map<String, Object> scope = rule.scope() != null ? rule.scope() : Map.of();
-            if (EdgeManifestFilter.includesForApp(scope, appId, registry)) {
+            if (EdgeManifestFilter.includesForApp(scope, appId)) {
                 out.add(rule);
             }
         }
@@ -482,6 +485,7 @@ public class ArtifactService {
         }
         root.put("rules", buildEdgeRuleBlocks(rules));
         root.put("dlp_rules", buildDlpRuleBlocks(rules));
+        root.put("tool_policies", buildToolPolicyBlocks(rules, appId));
 
         Map<String, Object> sdk = new LinkedHashMap<>();
         if (!auditIngestUrl.isBlank()) {
@@ -525,20 +529,16 @@ public class ArtifactService {
     /** Package-visible for unit tests. */
     List<Map<String, Object>> buildEdgeRuleBlocksForApp(
             String tenantId, String appId, Map<String, Object> bundleMetadata) {
-        SceneRegistry registry =
-                io.virbius.control.gateway.SceneRegistryHelper.parseRegistry(bundleMetadata);
         List<RuleRevision> filtered =
-                filterEdgeRulesForApp(listEdgeRulesInExecutionPlane(tenantId), appId, registry);
+                filterEdgeRulesForApp(listEdgeRulesInExecutionPlane(tenantId), appId);
         return buildEdgeRuleBlocks(filtered);
     }
 
     /** Package-visible for unit tests. */
     List<Map<String, Object>> buildDlpRuleBlocksForApp(
             String tenantId, String appId, Map<String, Object> bundleMetadata) {
-        SceneRegistry registry =
-                io.virbius.control.gateway.SceneRegistryHelper.parseRegistry(bundleMetadata);
         List<RuleRevision> filtered =
-                filterEdgeRulesForApp(listEdgeRulesInExecutionPlane(tenantId), appId, registry);
+                filterEdgeRulesForApp(listEdgeRulesInExecutionPlane(tenantId), appId);
         return buildDlpRuleBlocks(filtered);
     }
 
@@ -588,5 +588,53 @@ public class ArtifactService {
             block.put("body", rule.body());
         }
         return block;
+    }
+
+    private List<Map<String, Object>> buildToolPolicyBlocks(List<RuleRevision> rules, String appId) {
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        for (RuleRevision rule : rules) {
+            Map<String, Object> scope = rule.scope() != null ? rule.scope() : Map.of();
+            if (!BindScope.TOOL.equals(BindScope.scopeFromRuleScope(scope))) {
+                continue;
+            }
+            Map<String, Object> ref = BindScope.bindRefFromScope(scope);
+            Object toolNames = ref.get("tool_names");
+            if (!(toolNames instanceof List<?> names) || names.isEmpty()) {
+                continue;
+            }
+            List<String> appIds = EdgeManifestFilter.appIdsFromBindRef(ref);
+            if (!appIds.isEmpty() && !appIds.contains(appId)) {
+                continue;
+            }
+            for (Object raw : names) {
+                if (raw == null) continue;
+                String tn = String.valueOf(raw).trim();
+                if (tn.isEmpty() || "*".equals(tn)) continue;
+                Map<String, Object> entry = new LinkedHashMap<>();
+                entry.put("tool_name", tn);
+                if (rule.body() != null) {
+                    try {
+                        String bodyStr = rule.body() instanceof String s ? s : mapper.writeValueAsString(rule.body());
+                        @SuppressWarnings("unchecked")
+                        Map<String, Object> bodyMap = mapper.readValue(bodyStr, Map.class);
+                        if (bodyMap.containsKey("sandbox_type")) {
+                            entry.put("sandbox_type", bodyMap.get("sandbox_type"));
+                        }
+                        if (bodyMap.containsKey("timeout_ms")) {
+                            entry.put("timeout_ms", bodyMap.get("timeout_ms"));
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+                if (!entry.containsKey("sandbox_type")) {
+                    entry.put("sandbox_type", "subprocess");
+                }
+                if (!entry.containsKey("timeout_ms")) {
+                    entry.put("timeout_ms", 30000);
+                }
+                blocks.add(entry);
+            }
+        }
+        return blocks;
     }
 }

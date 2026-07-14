@@ -108,6 +108,7 @@ public class RuleSimulateService {
                 routeUri,
                 null,
                 null,
+                null,
                 null);
 
         boolean bindMatched = BindScope.matches(

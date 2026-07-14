@@ -83,6 +83,21 @@ pub struct SdkConfig {
     /// Tools that are exempt from output PII masking (e.g. query_idcard, kyc_verify).
     #[serde(default)]
     pub pii_exempt_tools: Vec<String>,
+    /// Whether Memory Interceptor is enabled.
+    #[serde(default)]
+    pub memory_interceptor_enabled: bool,
+    /// Whether to desensitize PII when writing to Agent memory.
+    #[serde(default = "default_true")]
+    pub memory_desensitize_on_write: bool,
+    /// Whether to call Engine for LLM-based injection detection on memory writes.
+    #[serde(default = "default_true")]
+    pub memory_detect_injection_on_write: bool,
+    /// Maximum size (in bytes) for a single memory entry.
+    #[serde(default = "default_memory_max_entry_size")]
+    pub memory_max_entry_size: usize,
+    /// Tool name prefixes that are recognized as memory write operations.
+    #[serde(default = "default_memory_tool_patterns")]
+    pub memory_tool_patterns: Vec<String>,
 }
 
 fn default_dlp_vault_ttl() -> u64 {
@@ -103,6 +118,29 @@ fn default_queue_max() -> usize {
 }
 fn default_session_key() -> String {
     "device_id".into()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_memory_max_entry_size() -> usize {
+    4096
+}
+
+fn default_memory_tool_patterns() -> Vec<String> {
+    vec![
+        "memory_save".into(),
+        "memory_write".into(),
+        "memory_store".into(),
+        "vector_store".into(),
+        "vector_add".into(),
+        "embedding_store".into(),
+        "embedding_add".into(),
+        "save_memory".into(),
+        "store_memory".into(),
+        "recall_save".into(),
+    ]
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

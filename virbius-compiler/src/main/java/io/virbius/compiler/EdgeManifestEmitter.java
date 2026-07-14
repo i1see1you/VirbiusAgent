@@ -3,7 +3,6 @@ package io.virbius.compiler;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.virbius.policy.EdgeManifestFilter;
-import io.virbius.policy.SceneRegistry;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -23,13 +22,12 @@ public final class EdgeManifestEmitter {
 
     public static Map<String, Object> buildManifest(JsonNode root, String appId) {
         String tenantId = root.path("tenant_id").asText("default");
-        SceneRegistry registry = SceneRegistry.parse(metadataMap(root));
         List<Map<String, Object>> allRules = collectEdgeRules(root);
         List<Map<String, Object>> allDlpRules = collectDlpRules(root);
         List<Map<String, Object>> rules =
-                appId == null ? allRules : filterRulesForApp(allRules, appId, registry);
+                appId == null ? allRules : filterRulesForApp(allRules, appId);
         List<Map<String, Object>> dlpRules =
-                appId == null ? allDlpRules : filterRulesForApp(allDlpRules, appId, registry);
+                appId == null ? allDlpRules : filterRulesForApp(allDlpRules, appId);
 
         Map<String, Object> manifest = new LinkedHashMap<>();
         manifest.put("tenant_id", tenantId);
@@ -48,15 +46,14 @@ public final class EdgeManifestEmitter {
     /** Writes {@code {output}/{tenant}/{app_id}/edge-manifest.json} for each app; tenant-wide if no apps. */
     public static Map<String, Path> writeAll(Path outputDir, JsonNode root, ObjectMapper json) throws IOException {
         String tenantId = root.path("tenant_id").asText("default");
-        SceneRegistry registry = SceneRegistry.parse(metadataMap(root));
         List<Map<String, Object>> allRules = collectEdgeRules(root);
         List<Map<String, Object>> scopes = scopesFromRules(root);
-        List<String> appIds = EdgeManifestFilter.collectAppIds(registry, scopes);
+        List<String> appIds = EdgeManifestFilter.collectAppIds(scopes);
 
         Map<String, Path> written = new LinkedHashMap<>();
         if (appIds.isEmpty()) {
             throw new IllegalStateException(
-                    "scene_registry with at least one app_id required to emit edge manifests");
+                    "at least one service-scoped app_id required to emit edge manifests");
         }
         for (String appId : appIds) {
             Path dir = outputDir.resolve(tenantId).resolve(appId);
@@ -126,14 +123,14 @@ public final class EdgeManifestEmitter {
     }
 
     static List<Map<String, Object>> filterRulesForApp(
-            List<Map<String, Object>> rules, String appId, SceneRegistry registry) {
+            List<Map<String, Object>> rules, String appId) {
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map<String, Object> rule : rules) {
             @SuppressWarnings("unchecked")
             Map<String, Object> scope = rule.get("scope") instanceof Map<?, ?> m
                     ? (Map<String, Object>) m
                     : Map.of();
-            if (EdgeManifestFilter.includesForApp(scope, appId, registry)) {
+            if (EdgeManifestFilter.includesForApp(scope, appId)) {
                 out.add(rule);
             }
         }

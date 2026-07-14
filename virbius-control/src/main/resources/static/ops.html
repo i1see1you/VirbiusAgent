@@ -636,17 +636,17 @@
         <label>bind_scope
           <select id="fBindScope">
             <option value="global" data-i18n="gw.scope.global">global（租户内全流量）</option>
-            <option value="route" data-i18n="gw.scope.route">route（Scene 匹配）</option>
+            <option value="tool" data-i18n="gw.scope.tool">tool（工具匹配）</option>
             <option value="service" data-i18n="gw.scope.service">service（app_ids）</option>
           </select>
         </label>
-        <label id="bindSceneWrap" style="display:none">scenes <input id="fBindScenes" placeholder="chat, sse" style="min-width:12rem" /></label>
+        <label id="bindToolWrap" style="display:none">tool_names <input id="fBindTools" placeholder="read_file, write_file" style="min-width:12rem" /></label>
       </div>
       <div class="row" id="bindServiceWrap" style="display:none">
         <label>app_ids <input id="fBindAppIds" placeholder="beta, medical-prod" style="min-width:18rem" /></label>
       </div>
       <p id="bindScopeHint" class="hint" style="display:none;margin:0 0 0.5rem" data-i18n-html="gw.scope-hint">
-        Route：按 scene 精确匹配（scenes 须已在 SceneRegistry 中注册）。Service 绑 <code>app_ids</code>（来自 context_bindings 的 <code>app_id</code>）。<strong>端 edge</strong>：仅 <code>global</code> / <code>service(app_ids)</code>；发布时按 App 拆 manifest，SDK 不做运行时 bind。
+        Tool 绑 <code>tool_names</code>（可选）和 <code>app_ids</code>（可选）。Service 绑 <code>app_ids</code>（来自 context_bindings 的 <code>app_id</code>）。<strong>端 edge</strong>：仅 <code>global</code> / <code>service(app_ids)</code>；发布时按 App 拆 manifest，SDK 不做运行时 bind。
       </p>
       <div id="conditionAuthoringRow" class="row" style="display:none;flex-wrap:wrap;align-items:center;gap:0.75rem">
         <label><span data-i18n="rules.editor-mode">编辑模式</span>

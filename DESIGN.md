@@ -586,8 +586,8 @@ if session_risk > 30: 提升审计采样率
 |---------|-------------------|------|------|
 | 工具权限边界 | 端层 allowlist + JSON Schema + tool_policies | P0 | ✅ 已完成 |
 | 输入安全 | Prompt Gateway（宪法注入 + PII 脱敏） | P0 | ✅ 已完成 |
-| Prompt 注入检测 | qwen3guard 小模型 | P1 | 待实现（详见 [§13.1](#131-prompt-注入检测)） |
-| 工具返回值检测 | STI Taint 语义审计 | P1 | 待实现（详见 [§13.2](#132-sti-taint-语义审计)） |
+| Prompt 注入检测 | qwen3guard 小模型 | P1 | ✅ 已完成（详见 [§13.1](#131-prompt-注入检测)） |
+| 工具返回值检测 | STI Taint 语义审计 | P1 | ✅ 已完成（详见 [§13.2](#132-sti-taint-语义审计)） |
 | 会话风险 | Redis session risk + 自适应模型 | P0/P1 | P0 ✅ / P1 待实现（详见 [§13.3](#133-session-risk-自适应模型)） |
 | 运行时观测 | Falco eBPF + plugin 降级链 + 决策链路追踪 | P0/P1 | P0 ✅ / P1 待实现（详见 [§13.4](#134-自定义-virbius-audit-falco-插件--falco-规则库扩充)） |
 | 高风险审批 | Challenge 全链路（create → approve → token verify） | P1 | ✅ 已完成 |
@@ -603,11 +603,12 @@ if session_risk > 30: 提升审计采样率
 
 ## 13. P1 功能详细设计方案
 
-> 本章覆盖安全保障对照表中所有 P1 阶段功能的详细设计。已完成项（高风险审批 ✅、决策链路追踪 ✅）引用现有文档，未完成项给出完整设计方案。
+> 本章覆盖安全保障对照表中所有 P1 阶段功能的详细设计。已实现项（高风险审批 ✅、决策链路追踪 ✅、Prompt 注入检测 ✅、STI Taint ✅）引用现有代码及文档，未完成项给出完整设计方案。
 
-### 13.1 Prompt 注侵检测
+### 13.1 Prompt 注入检测
 
-> **已有设计**：[ARCHITECTURE.md §2.8.7](ARCHITECTURE.md#287-prompt-入侵检测prompt-runtime-重新定位) 已包含完整设计。以下为补充的技术实现细节。
+> **实现位置**：`virbius-engine/src/main/java/io/virbius/engine/eval/PromptInjectionDetector.java`
+> **已有设计**：[ARCHITECTURE.md §2.8.7](ARCHITECTURE.md#287-prompt-入侵检测prompt-runtime-重新定位) 已包含完整设计。本节为现有实现说明。
 
 #### 13.1.1 架构定位
 
@@ -690,7 +691,8 @@ public record DetectionResult(
 
 ### 13.2 STI Taint 语义审计
 
-> **已有设计**：[ARCHITECTURE.md §5.4](ARCHITECTURE.md#54-语义审计--sti-协议) 已包含 STI 协议概述。以下为 Taint 维度的完整实现设计。
+> **实现位置**：`virbius-engine/src/main/java/io/virbius/engine/eval/StiTaintDetector.java`
+> **已有设计**：[ARCHITECTURE.md §5.4](ARCHITECTURE.md#54-语义审计--sti-协议) 已包含 STI 协议概述。以下为现有实现说明。
 
 #### 13.2.1 设计目标
 

@@ -41,11 +41,13 @@ public class LicenseAdminController {
         return ApiResult.ok(licenseService.issueLicense(
                 tenantId,
                 body.appId(),
+                body.agentName(),
                 body.allowedTools(),
                 body.allowedScenes() != null ? body.allowedScenes() : List.of(),
                 body.riskQuota() > 0 ? body.riskQuota() : 60,
                 body.toolRateLimit() > 0 ? body.toolRateLimit() : 50,
-                body.expirySeconds() > 0 ? body.expirySeconds() : 86400L));
+                body.expirySeconds() > 0 ? body.expirySeconds() : 86400L,
+                body.description() != null ? body.description() : ""));
     }
 
     @PostMapping("/{licenseId}/revoke")
@@ -79,11 +81,13 @@ public class LicenseAdminController {
 
     public record IssueLicenseRequest(
             String appId,
+            String agentName,
             List<String> allowedTools,
             List<String> allowedScenes,
             int riskQuota,
             int toolRateLimit,
-            long expirySeconds) {}
+            long expirySeconds,
+            String description) {}
 
     public record RevokeRequest(String reason) {}
 }

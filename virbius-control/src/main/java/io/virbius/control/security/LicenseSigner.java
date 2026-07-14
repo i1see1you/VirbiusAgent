@@ -48,6 +48,8 @@ public class LicenseSigner {
             Map<String, Object> claims = Map.of(
                     "app_id", license.getAppId(),
                     "tenant_id", license.getTenantId(),
+                    "agent_name", license.getAgentName() != null ? license.getAgentName() : "",
+                    "agent_aid", license.getAgentAid() != null ? license.getAgentAid() : "",
                     "allowed_tools", license.getAllowedTools() != null ? license.getAllowedTools() : List.of(),
                     "allowed_scenes", license.getAllowedScenes() != null ? license.getAllowedScenes() : List.of(),
                     "risk_quota", license.getRiskQuota(),

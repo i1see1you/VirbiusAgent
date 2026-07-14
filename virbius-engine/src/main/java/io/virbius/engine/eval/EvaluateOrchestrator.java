@@ -168,9 +168,40 @@ public class EvaluateOrchestrator {
 
         return new ToolResultResponseDto(
                 action,
-                result.sanitizedResult(),
                 result.detectedPattern(),
                 reason,
                 req.traceId());
+    }
+
+    /**
+     * P1.3: LLM-based injection detection for memory writes.
+     *
+     * <p>Called by MCP Proxy after local Memory Interceptor checks (size, credentials, PII)
+     * pass, to perform semantic injection detection on the content being written.
+     *
+     * <p>Delegates to PromptInjectionDetector for the actual LLM detection.
+     */
+    public MemoryCheckResponseDto checkMemory(MemoryCheckRequestDto req) {
+        InjectionDetectionResult result = injectionDetector.detect(req.getContent());
+
+        if (result.hit()) {
+            log.info("memory injection detected: tenant={} session={} tool={} pattern={}",
+                    req.getTenantId(), req.getSessionId(), req.getToolName(), result.matchedPattern());
+            return MemoryCheckResponseDto.builder()
+                    .allowed(false)
+                    .blockReason(result.matchedPattern())
+                    .riskScore(result.riskDelta())
+                    .model("qwen3guard:0.6b")
+                    .metadata("llm_injection_detected")
+                    .build();
+        }
+
+        return MemoryCheckResponseDto.builder()
+                .allowed(true)
+                .blockReason(null)
+                .riskScore(0)
+                .model("qwen3guard:0.6b")
+                .metadata(null)
+                .build();
     }
 }

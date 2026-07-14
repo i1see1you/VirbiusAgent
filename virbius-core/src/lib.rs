@@ -19,6 +19,7 @@ pub mod license;
 pub mod mcp;
 pub mod precheck;
 pub mod prompt_gateway;
+pub mod memory_interceptor;
 #[cfg(target_os = "linux")]
 mod sandbox;
 
@@ -26,6 +27,9 @@ pub use api::{
     DesensitizeInResult, DesensitizeOutResult, DlpHit, EffectiveAction, OutputMaskResult, RuleHit,
     ScanContext, ScanOutcome, TraceIdSource, VirbiusEdge, VirbiusError,
     mask_pii_output,
+};
+pub use memory_interceptor::{
+    CredentialPattern, MemoryContext, MemoryInterceptor, MemoryPolicies, MemoryWriteResult,
 };
 pub use license::{License, LicenseClaims, LicenseError};
 pub use manifest::ToolPolicy;
@@ -466,6 +470,8 @@ mod c_abi_tests {
         let claims = LicenseClaims {
             app_id: "test-agent".into(),
             tenant_id: "tenant-1".into(),
+            agent_name: "Test Agent".into(),
+            agent_aid: "aid:cn:org:tenant-1:agent:test-agent-abc123".into(),
             allowed_tools: vec!["read_file".into(), "search".into()],
             allowed_scenes: vec![],
             risk_quota: 60,

@@ -118,7 +118,7 @@ end`;
     function setRuleEditorReadOnly(disabled) {
       const ro = !!disabled;
       ['fReason', 'fRisk', 'fIntent', 'fBody', 'fRuleId', 'fRuntime',
-        'fBindScope', 'fBindScenes', 'fBindAppIds', 'fEdgeListType', 'fEdgeKeywords',
+        'fBindScope', 'fBindTools', 'fBindAppIds', 'fEdgeListType', 'fEdgeKeywords',
         'fDlpEntityType', 'fDlpPattern', 'fDlpMaskTemplate', 'fDlpPriority',
         'fIsAsync', 'fActionType', 'fActionStreamKey', 'fActionWebhookUrl', 'fActionMessage', 'fAsyncActionConfig',
         'fBindUpstream', 'fBindConsumer', 'fBindApiKeyGroup',
@@ -1317,7 +1317,7 @@ end`;
         ? '<option value="global">' + __('gw.scope.edge-global') + '</option>'
           + '<option value="service">' + __('gw.scope.edge-service') + '</option>'
         : '<option value="global">' + __('gw.scope.global') + '</option>'
-          + '<option value="route">' + __('gw.scope.route') + '</option>'
+          + '<option value="tool">' + __('gw.scope.tool') + '</option>'
           + '<option value="service">' + __('gw.scope.service') + '</option>';
       sel.value = [...sel.options].some(o => o.value === current) ? current : 'global';
     }
@@ -1325,9 +1325,9 @@ end`;
     function syncBindScopeFieldsUi() {
       const bs = document.getElementById('fBindScope').value || 'global';
       const edge = isEdgeFormRuntime(currentEditorRuntime());
-      const route = !edge && bs === 'route';
+      const tool = !edge && bs === 'tool';
       const service = bs === 'service';
-      document.getElementById('bindSceneWrap').style.display = route ? '' : 'none';
+      document.getElementById('bindToolWrap').style.display = tool ? '' : 'none';
       document.getElementById('bindServiceWrap').style.display = service ? '' : 'none';
     }
 
@@ -1344,14 +1344,16 @@ end`;
     function buildRuleScope() {
       const runtime = currentEditorRuntime();
       const bs = document.getElementById('fBindScope').value || 'global';
-      if (isEdgeFormRuntime(runtime) && bs === 'route') {
+      if (isEdgeFormRuntime(runtime) && bs === 'tool') {
         return { bind_scope: 'global' };
       }
       const scope = { bind_scope: bs };
       const ref = {};
-      if (bs === 'route') {
-        const scenes = document.getElementById('fBindScenes').value.split(',').map(s => s.trim()).filter(Boolean);
-        if (scenes.length) ref.scenes = scenes;
+      if (bs === 'tool') {
+        const tools = document.getElementById('fBindTools').value.split(',').map(s => s.trim()).filter(Boolean);
+        if (tools.length) ref.tool_names = tools;
+        const ids = document.getElementById('fBindAppIds').value.split(',').map(s => s.trim()).filter(Boolean);
+        if (ids.length) ref.app_ids = ids;
       } else if (bs === 'service') {
         const ids = document.getElementById('fBindAppIds').value.split(',').map(s => s.trim()).filter(Boolean);
         if (ids.length) ref.app_ids = ids;
@@ -1365,12 +1367,12 @@ end`;
       const runtime = currentEditorRuntime();
       syncBindScopeOptions(runtime);
       let bs = s.bind_scope || 'global';
-      if (isEdgeFormRuntime(runtime) && bs === 'route') {
+      if (isEdgeFormRuntime(runtime) && bs === 'tool') {
         bs = 'global';
       }
       document.getElementById('fBindScope').value = bs;
       const ref = s.bind_ref || {};
-      document.getElementById('fBindScenes').value = Array.isArray(ref.scenes) ? ref.scenes.join(', ') : '';
+      document.getElementById('fBindTools').value = Array.isArray(ref.tool_names) ? ref.tool_names.join(', ') : '';
       document.getElementById('fBindAppIds').value = Array.isArray(ref.app_ids) ? ref.app_ids.join(', ') : '';
       syncBindScopeFieldsUi();
     }
@@ -1652,7 +1654,7 @@ end`;
     function initRuleFormDirtyTracking() {
       const tracked = [
         'fRuleId', 'fRuntime', 'fReason', 'fRisk', 'fIntent', 'fBody',
-        'fBindScope', 'fBindScenes', 'fBindAppIds',
+        'fBindScope', 'fBindTools', 'fBindAppIds',
         'fEdgeListType', 'fEdgeKeywords',
         'fDlpEntityType', 'fDlpPattern', 'fDlpMaskTemplate', 'fDlpPriority',
         'fIsAsync', 'fActionType', 'fActionStreamKey', 'fActionWebhookUrl', 'fActionMessage',

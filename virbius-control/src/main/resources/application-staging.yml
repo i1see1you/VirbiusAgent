@@ -1,7 +1,7 @@
 spring:
   datasource:
     url: ${VIRBIUS_JDBC_URL}
-    driver-class-name: com.mysql.cj.jdbc.Driver
+    driver-class-name: org.mariadb.jdbc.Driver
     username: ${VIRBIUS_JDBC_USER}
     password: ${VIRBIUS_JDBC_PASSWORD}
     hikari:

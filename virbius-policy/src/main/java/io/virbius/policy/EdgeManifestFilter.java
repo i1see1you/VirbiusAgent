@@ -9,18 +9,16 @@ import java.util.Set;
 
 /**
  * Compile-time edge manifest partitioning by {@code bind_scope} + {@code app_id}.
- * See docs/DESIGN.md §11.4 (service {@code app_ids}); runtime matching is not used on edge SDK.
+ * See docs/DESIGN.md §11.4 (service {@code app_ids}, tool {@code tool_names+app_ids});
+ * runtime matching is not used on edge SDK.
  */
 public final class EdgeManifestFilter {
 
     private EdgeManifestFilter() {}
 
-    /** Union of scene-registry apps and {@code service} bind {@code app_ids} on edge rules. */
-    public static List<String> collectAppIds(SceneRegistry registry, List<Map<String, Object>> ruleScopes) {
+    /** Collect app_ids from service-bind rules only (tool scope app_ids pulled directly). */
+    public static List<String> collectAppIds(List<Map<String, Object>> ruleScopes) {
         Set<String> ids = new LinkedHashSet<>();
-        if (registry != null) {
-            ids.addAll(registry.appIds());
-        }
         if (ruleScopes != null) {
             for (Map<String, Object> scope : ruleScopes) {
                 if (BindScope.SERVICE.equals(BindScope.scopeFromRuleScope(scope))) {
@@ -32,7 +30,7 @@ public final class EdgeManifestFilter {
     }
 
     /** Whether an edge rule belongs in the manifest compiled for {@code appId}. */
-    public static boolean includesForApp(Map<String, Object> scope, String appId, SceneRegistry registry) {
+    public static boolean includesForApp(Map<String, Object> scope, String appId) {
         if (appId == null || appId.isBlank()) {
             return false;
         }
@@ -40,7 +38,7 @@ public final class EdgeManifestFilter {
         Map<String, Object> ref = BindScope.bindRefFromScope(scope);
         return switch (bind) {
             case BindScope.SERVICE -> matchesServiceApp(ref, appId);
-            case BindScope.ROUTE -> matchesRouteForApp(ref, appId, registry);
+            case BindScope.TOOL -> matchesToolForApp(ref, appId);
             default -> true;
         };
     }
@@ -53,43 +51,15 @@ public final class EdgeManifestFilter {
         return appIds.contains(appId);
     }
 
-    private static boolean matchesRouteForApp(Map<String, Object> ref, String appId, SceneRegistry registry) {
+    private static boolean matchesToolForApp(Map<String, Object> ref, String appId) {
         if (ref == null || ref.isEmpty()) {
-            return false;
+            return true;
         }
-        Object scenesObj = ref.get("scenes");
-        if (!(scenesObj instanceof List<?> scenes) || scenes.isEmpty()) {
-            return false;
+        List<String> appIds = appIdsFromBindRef(ref);
+        if (appIds.isEmpty()) {
+            return true;
         }
-        for (Object raw : scenes) {
-            if (raw == null) {
-                continue;
-            }
-            String sceneId = String.valueOf(raw).trim();
-            if (sceneId.isEmpty()) {
-                continue;
-            }
-            if ("*".equals(sceneId)) {
-                return true;
-            }
-            String owner = appIdForScene(registry, sceneId);
-            if (appId.equals(owner)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static String appIdForScene(SceneRegistry registry, String sceneId) {
-        if (registry == null || sceneId == null) {
-            return null;
-        }
-        for (SceneRegistry.SceneEntry entry : registry.scenes()) {
-            if (sceneId.equals(entry.sceneId())) {
-                return entry.appId();
-            }
-        }
-        return null;
+        return appIds.contains(appId);
     }
 
     @SuppressWarnings("unchecked")

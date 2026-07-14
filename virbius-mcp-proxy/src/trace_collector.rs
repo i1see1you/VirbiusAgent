@@ -24,6 +24,7 @@ pub enum StepType {
     ToolCall,
     ToolResult,
     Output,
+    MemoryWrite,
 }
 
 impl StepType {
@@ -34,6 +35,7 @@ impl StepType {
             Self::ToolCall => "tool_call",
             Self::ToolResult => "tool_result",
             Self::Output => "output",
+            Self::MemoryWrite => "memory_write",
         }
     }
 }

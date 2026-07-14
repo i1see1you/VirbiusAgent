@@ -12,14 +12,16 @@ public class AuditEventIngestor {
 
     private final JdbcTemplate jdbc;
     private final SqlDialectConfig dialect;
+    private final HashChainOrchestrator hashChain;
     private final ObjectMapper mapper = new ObjectMapper();
 
     private final String insertIgnorePrefix;
     private final String hourExpr;
 
-    public AuditEventIngestor(JdbcTemplate jdbc, SqlDialectConfig dialect) {
+    public AuditEventIngestor(JdbcTemplate jdbc, SqlDialectConfig dialect, HashChainOrchestrator hashChain) {
         this.jdbc = jdbc;
         this.dialect = dialect;
+        this.hashChain = hashChain;
         if (dialect.isMysql()) {
             this.insertIgnorePrefix = "INSERT IGNORE";
             this.hourExpr = "DATE_FORMAT(NOW(), '%Y-%m-%d %H:00:00')";
@@ -42,14 +44,19 @@ public class AuditEventIngestor {
             String eventId = str(event.get("event_id"));
             if (eventId.isBlank()) {
                 eventId = traceId + ":" + str(event.get("rule_id")) + ":" + str(event.get("intercepted_at"));
+                event.put("event_id", eventId);
             }
+
+            hashChain.chain(tenantId, event);
+
             String insertSql = insertIgnorePrefix
                     + " INTO tb_audit_events ("
                     + "  event_id, trace_id, trace_id_source, tenant_id, scene, layer,"
                     + "  rule_id, rule_revision, reason_code, effective_action, max_risk_score,"
                     + "  rollout_state, canary_percent, in_canary_bucket, degraded, sampled_allow,"
-                    + "  sample_rate_allow, intercepted_at, user_id, device_id"
-                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    + "  sample_rate_allow, intercepted_at, user_id, device_id,"
+                    + "  audit_seq, prev_hash, curr_hash"
+                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
             int updated = jdbc.update(insertSql,
                     eventId,
                     traceId,
@@ -70,7 +77,10 @@ public class AuditEventIngestor {
                     doubleOrNull(event.get("sample_rate_allow")),
                     str(event.get("intercepted_at")),
                     str(event.get("user_id")),
-                    str(event.get("device_id")));
+                    str(event.get("device_id")),
+                    longVal(event.get("audit_seq")),
+                    str(event.get("prev_hash")),
+                    str(event.get("curr_hash")));
             if (updated == 0) {
                 return IngestResult.duplicated();
             }
@@ -131,6 +141,17 @@ public class AuditEventIngestor {
 
     private static String str(Object o) {
         return o == null ? "" : o.toString();
+    }
+
+    private static long longVal(Object o) {
+        if (o instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return Long.parseLong(str(o));
+        } catch (Exception e) {
+            return 0L;
+        }
     }
 
     private static int intVal(Object o) {

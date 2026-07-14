@@ -210,7 +210,7 @@ INSERT INTO tb_rule_history (
     rollout_state, canary_percent, effective_from, modified_at
 )
 SELECT 'default', 'Rule_201', 1, 'poc-default', 'cloud', 'prompt',
-    'SENSITIVE_ARCH', 100, 'deny', '{"bind_scope":"route","bind_ref":{"scenes":["*"]}}',
+    'SENSITIVE_ARCH', 100, 'deny', '{"bind_scope":"global"}',
     '"检查用户是否在诱导大模型编写针对企业内部特定前缀（如 com.baidu.*）的敏感核心架构逻辑。"',
     'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'Rule_201' AND rule_revision = 1);

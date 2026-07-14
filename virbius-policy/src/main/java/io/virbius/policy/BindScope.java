@@ -7,12 +7,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-/** Gateway rule binding: global / service / route. See docs/DESIGN.md §11.4 */
+/** Rule binding: global / service / tool. See docs/DESIGN.md §11.4 */
 public final class BindScope {
 
     public static final String GLOBAL = "global";
     public static final String SERVICE = "service";
-    public static final String ROUTE = "route";
+    public static final String TOOL = "tool";
 
     private BindScope() {}
 
@@ -71,7 +71,7 @@ public final class BindScope {
         String scope = bindScope != null ? bindScope.trim().toLowerCase(Locale.ROOT) : GLOBAL;
         return switch (scope) {
             case SERVICE -> matchesService(bindRef, ctx);
-            case ROUTE -> matchesRoute(bindRef, ctx);
+            case TOOL -> matchesTool(bindRef, ctx);
             default -> true;
         };
     }
@@ -96,24 +96,30 @@ public final class BindScope {
         return false;
     }
 
-    private static boolean matchesRoute(JsonNode ref, MatchContext ctx) {
-        if (ref == null) {
-            return false;
-        }
-        List<String> scenes = stringList(ref.get("scenes"));
-        if (scenes.isEmpty()) {
-            return false;
-        }
-        String scene = ctx.scene();
-        if (scene == null || scene.isBlank()) {
-            return false;
-        }
-        for (String s : scenes) {
-            if ("*".equals(s) || scene.equals(s)) {
-                return true;
+    private static boolean matchesTool(JsonNode ref, MatchContext ctx) {
+        if (ref != null) {
+            List<String> toolNames = stringList(ref.get("tool_names"));
+            if (!toolNames.isEmpty()) {
+                String toolName = ctx.toolName();
+                if (toolName == null || toolName.isBlank()) {
+                    return false;
+                }
+                if (toolNames.stream().noneMatch(t -> "*".equals(t) || toolName.equals(t))) {
+                    return false;
+                }
+            }
+            List<String> appIds = stringList(ref.get("app_ids"));
+            if (!appIds.isEmpty()) {
+                String appId = ctx.vars() != null ? ctx.vars().get("app_id") : null;
+                if (appId == null || appId.isBlank()) {
+                    return false;
+                }
+                if (appIds.stream().noneMatch(id -> appId.equals(id))) {
+                    return false;
+                }
             }
         }
-        return false;
+        return true;
     }
 
     /** Validates URI pattern grammar shared by gateway.routes and scene_registry.uris. */

@@ -104,6 +104,31 @@ struct EvaluateResponse {
     args_hash: Option<String>,
 }
 
+/// Engine memory check request body (LLM-based injection detection).
+#[derive(Debug, Serialize)]
+struct MemoryCheckRequest<'a> {
+    trace_id: &'a str,
+    session_id: &'a str,
+    app_id: &'a str,
+    tenant_id: &'a str,
+    content: &'a str,
+    tool_name: &'a str,
+}
+
+/// Engine memory check response body.
+#[derive(Debug, Deserialize)]
+struct MemoryCheckResponse {
+    allowed: bool,
+    #[serde(default)]
+    block_reason: Option<String>,
+    #[serde(default)]
+    risk_score: Option<i32>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    metadata: Option<String>,
+}
+
 /// HTTP client for calling virbius-engine.
 pub struct EngineClient {
     pub(crate) url: String,
@@ -449,6 +474,43 @@ impl SecurityPipeline {
         meta.get("challenge_token")
             .and_then(|v| v.as_str())
             .map(String::from)
+    }
+
+    /// Check a memory write with the Engine (LLM-based injection detection).
+    ///
+    /// Called by the router after local Memory Interceptor checks pass.
+    pub async fn check_memory(
+        &self,
+        session: &Session,
+        tool_name: &str,
+        content: &str,
+    ) -> Result<MemoryCheckResponse, EngineError> {
+        let req = MemoryCheckRequest {
+            trace_id: &session.trace_id,
+            session_id: &session.session_id,
+            app_id: &session.app_id,
+            tenant_id: &session.tenant_id,
+            content,
+            tool_name,
+        };
+        let url = self.engine.url.replace("/v1/evaluate", "/v1/memory/check");
+        let resp = self
+            .engine
+            .http
+            .post(&url)
+            .json(&req)
+            .timeout(self.engine.timeout)
+            .send()
+            .await
+            .map_err(EngineError::Http)?;
+
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(EngineError::Status(status, body));
+        }
+
+        resp.json::<MemoryCheckResponse>().await.map_err(EngineError::Http)
     }
 
     /// Verify a challenge token with the Engine.

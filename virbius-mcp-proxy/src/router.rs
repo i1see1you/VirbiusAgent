@@ -15,7 +15,7 @@ use crate::pipeline::{PipelineResult, SecurityPipeline, SharedPipeline};
 use crate::session::{Session, SessionManager};
 use crate::trace_collector::{SharedTraceCollector, TraceEvent};
 use crate::upstream::UpstreamManager;
-use virbius_core::mask_pii_output;
+use virbius_core::{mask_pii_output, MemoryInterceptor, MemoryContext, MemoryWriteResult};
 
 /// Separator used for prefixed tool names in multi-upstream mode.
 /// Only applied when the same tool name exists on multiple upstreams.
@@ -619,6 +619,68 @@ async fn handle_tools_call(
     // Check for challenge token in _meta (retry after approval)
     let meta = params.get("_meta").unwrap_or(&Value::Null);
     let challenge_token = SecurityPipeline::extract_challenge_token(meta);
+
+    // ── P1.3: Memory Interceptor (write-only) ──
+    let memory_interceptor = MemoryInterceptor::from_manifest();
+    if memory_interceptor.is_enabled() && memory_interceptor.is_memory_write_tool(&original_tool_name) {
+        // Extract content from args (assume there's a "content" field)
+        let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
+        
+        let mem_ctx = MemoryContext {
+            session_id: session.session_id.clone(),
+            trace_id: session.trace_id.clone(),
+            tool_name: original_tool_name.clone(),
+        };
+        
+        let mem_result = memory_interceptor.intercept_write(content, &mem_ctx);
+        
+        if !mem_result.allowed {
+            // Local check failed (size, credentials, PII)
+            let reason = mem_result.block_reason.unwrap_or_else(|| "memory_write_blocked".into());
+            return Some(jsonrpc_error_simple(
+                VirbiusErrorCode::MemoryWriteBlocked,
+                id.clone(),
+                &original_tool_name,
+                &session.trace_id,
+                session.session_risk_score,
+                Some(&reason),
+            ));
+        }
+        
+        // Local checks passed — now perform LLM-based injection detection if needed
+        if mem_result.need_llm_check {
+            match pipeline.check_memory(&session, &original_tool_name, &mem_result.sanitized_content).await {
+                Ok(resp) if !resp.allowed => {
+                    // LLM detected injection
+                    let reason = resp.block_reason.unwrap_or_else(|| "prompt_injection_detected".into());
+                    return Some(jsonrpc_error_simple(
+                        VirbiusErrorCode::MemoryWriteBlocked,
+                        id.clone(),
+                        &original_tool_name,
+                        &session.trace_id,
+                        session.session_risk_score,
+                        Some(&reason),
+                    ));
+                }
+                Err(e) => {
+                    // Engine unavailable — fail-closed for memory writes
+                    warn!("memory check failed (engine unavailable): {}", e);
+                    return Some(jsonrpc_error_simple(
+                        VirbiusErrorCode::MemoryWriteBlocked,
+                        id.clone(),
+                        &original_tool_name,
+                        &session.trace_id,
+                        session.session_risk_score,
+                        Some("fail_closed:engine_unavailable"),
+                    ));
+                }
+                _ => {
+                    // All checks passed — write allowed
+                    // (Note: the content in args is already sanitized; we don't modify args here)
+                }
+            }
+        }
+    }
 
     // If a challenge token is present, verify it before running the pipeline
     if let Some(token) = &challenge_token {

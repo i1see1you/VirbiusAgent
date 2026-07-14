@@ -215,9 +215,10 @@
       const s = scope || {};
       const bs = s.bind_scope || 'global';
       const ref = s.bind_ref || {};
-      if (bs === 'route') {
-        const scenes = Array.isArray(ref.scenes) ? ref.scenes.join(', ') : '';
-        return scenes ? `route:${scenes}` : 'route';
+      if (bs === 'tool') {
+        const tools = Array.isArray(ref.tool_names) ? ref.tool_names.join(', ') : '';
+        const ids = Array.isArray(ref.app_ids) ? ref.app_ids.join(', ') : '';
+        return (tools || ids) ? `tool:${tools || '*'}` + (ids ? ` [${ids}]` : '') : 'tool';
       }
       if (bs === 'service') {
         const ids = Array.isArray(ref.app_ids) ? ref.app_ids.join(', ') : '';

@@ -39,13 +39,13 @@ class PromptRunnerBindTest {
 
     @Test
     void skipsLlmWhenNoBindMatchedPromptRules() {
-        RuleEntry routeOnly = promptRule(
+        RuleEntry toolOnly = promptRule(
                 "Rule_201",
-                Map.of("bind_scope", "route", "bind_ref", Map.of("scenes", List.of("sse"))));
-        when(cache.rulesForTenant("default")).thenReturn(List.of(routeOnly));
+                Map.of("bind_scope", "tool", "bind_ref", Map.of("tool_names", List.of("write_file"))));
+        when(cache.rulesForTenant("default")).thenReturn(List.of(toolOnly));
 
-        MatchContext ctx = MatchContext.withBind(
-                "hello", null, null, null, "sess", Map.of(), "chat", "/v1/chat/completions");
+        MatchContext ctx = MatchContext.forToolCall(
+                "hello", null, null, null, "sess", Map.of("app_id", "test"), "read_file");
 
         List<SignalDto> signals = runner.run("default", ctx);
 
@@ -56,15 +56,15 @@ class PromptRunnerBindTest {
     @Test
     void triggersRuleByJsonCategoryMapping() {
         RuleEntry global = promptRule("Rule_202", Map.of("bind_scope", "global"));
-        RuleEntry routeChat = promptRule(
+        RuleEntry toolChat = promptRule(
                 "Rule_201",
-                Map.of("bind_scope", "route", "bind_ref", Map.of("scenes", List.of("chat"))));
-        when(cache.rulesForTenant("default")).thenReturn(List.of(global, routeChat));
+                Map.of("bind_scope", "tool", "bind_ref", Map.of("tool_names", List.of("read_file"))));
+        when(cache.rulesForTenant("default")).thenReturn(List.of(global, toolChat));
         when(llmClient.complete(anyString()))
                 .thenReturn("{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Jailbreak\"}");
 
-        MatchContext ctx = MatchContext.withBind(
-                "hack me", null, null, null, "sess", Map.of(), "chat", "/v1/chat/completions");
+        MatchContext ctx = MatchContext.forToolCall(
+                "hack me", null, null, null, "sess", Map.of("app_id", "test"), "read_file");
 
         List<SignalDto> signals = runner.run("default", ctx);
 
@@ -79,8 +79,8 @@ class PromptRunnerBindTest {
         when(llmClient.complete(anyString()))
                 .thenReturn("Safety: Unsafe\nCategories: Violent");
 
-        MatchContext ctx = MatchContext.withBind(
-                "kill", null, null, null, "sess", Map.of(), "chat", "/v1/chat/completions");
+        MatchContext ctx = MatchContext.forToolCall(
+                "kill", null, null, null, "sess", Map.of("app_id", "test"), "read_file");
 
         List<SignalDto> signals = runner.run("default", ctx);
 
@@ -95,8 +95,8 @@ class PromptRunnerBindTest {
         when(llmClient.complete(anyString()))
                 .thenReturn("{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"UnknownCategory\"}");
 
-        MatchContext ctx = MatchContext.withBind(
-                "test", null, null, null, "sess", Map.of(), "chat", "/v1/chat/completions");
+        MatchContext ctx = MatchContext.forToolCall(
+                "test", null, null, null, "sess", Map.of("app_id", "test"), "read_file");
 
         List<SignalDto> signals = runner.run("default", ctx);
 

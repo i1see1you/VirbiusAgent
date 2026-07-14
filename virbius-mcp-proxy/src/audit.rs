@@ -50,6 +50,32 @@ impl AuditEvent {
             timestamp,
         }
     }
+
+    pub fn memory_write(
+        session: &crate::session::Session,
+        tool_name: &str,
+        action: &str,
+        rule_id: Option<&str>,
+        reason: Option<&str>,
+        pii_found: bool,
+        risk_score: Option<i32>,
+    ) -> Self {
+        let timestamp = chrono::Utc::now().to_rfc3339();
+        Self {
+            trace_id: session.trace_id.clone(),
+            layer: "edge".to_string(),
+            event_type: "memory_write".to_string(),
+            tool_name: tool_name.to_string(),
+            action: action.to_string(),
+            rule_id: rule_id.map(String::from),
+            reason: reason.map(String::from),
+            session_id: session.session_id.clone(),
+            app_id: session.app_id.clone(),
+            tenant_id: session.tenant_id.clone(),
+            session_risk_score: session.session_risk_score,
+            timestamp,
+        }
+    }
 }
 
 /// Backend type for audit event delivery.
