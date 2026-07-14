@@ -15,7 +15,7 @@ use crate::manifest;
 use crate::sync::EdgeInitConfig;
 use std::time::Duration;
 
-pub use crate::dlp::{DesensitizeInResult, DesensitizeOutResult, DlpHit};
+pub use crate::dlp::{DesensitizeInResult, DesensitizeOutResult, DlpHit, OutputMaskResult};
 
 /// Edge L0 SDK entry point (idiomatic Rust).
 #[derive(Debug, Default, Clone, Copy)]
@@ -123,6 +123,46 @@ fn session_id_from_context(ctx: &ScanContext) -> Option<String> {
         None,
     )
     .map(|s| s.to_string())
+}
+
+/// Mask PII in tool output (irreversible).
+///
+/// Checks the global `pii_exempt_tools` list — if `tool_name` is present,
+/// the content is returned unmodified with `exempt = true`.
+///
+/// Otherwise, loads DLP rules from the manifest and applies irreversible
+/// masking (`[REDACTED:ENTITY_TYPE]`) to any detected PII entities.
+///
+/// This is the primary entry point for MCP Proxy to mask tool return values.
+pub fn mask_pii_output(content: &str, tool_name: &str, session_id: Option<&str>) -> OutputMaskResult {
+    let manifest = manifest::load();
+
+    // Check exempt tools
+    if manifest
+        .sdk_config
+        .pii_exempt_tools
+        .iter()
+        .any(|t| t == tool_name)
+    {
+        return OutputMaskResult {
+            text: content.to_string(),
+            masked: false,
+            hits: vec![],
+            exempt: true,
+        };
+    }
+
+    // Check if masking is enabled
+    if !manifest.sdk_config.output_pii_masking_enabled {
+        return OutputMaskResult {
+            text: content.to_string(),
+            masked: false,
+            hits: vec![],
+            exempt: false,
+        };
+    }
+
+    dlp::mask_pii(content, &manifest.dlp_rules, session_id)
 }
 
 fn to_outcome(engine_result: engine::ScanEngineResult) -> ScanOutcome {

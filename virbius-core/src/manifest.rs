@@ -19,12 +19,17 @@ pub struct DlpRuleBody {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DlpRule {
     pub rule_id: String,
+    #[allow(dead_code)]
     pub rule_revision: i32,
+    #[allow(dead_code)]
     pub reason_code: String,
+    #[allow(dead_code)]
     pub risk_score: i32,
+    #[allow(dead_code)]
     pub intent_action: String,
     pub enforce_mode: String,
     #[serde(default)]
+    #[allow(dead_code)]
     pub rollout_state: String,
     pub canary_percent: Option<i32>,
     #[serde(default)]
@@ -72,6 +77,12 @@ pub struct SdkConfig {
     pub canary_session_key: String,
     #[serde(default = "default_dlp_vault_ttl")]
     pub dlp_vault_ttl_ms: u64,
+    /// Whether output PII masking is enabled for tool return values.
+    #[serde(default)]
+    pub output_pii_masking_enabled: bool,
+    /// Tools that are exempt from output PII masking (e.g. query_idcard, kyc_verify).
+    #[serde(default)]
+    pub pii_exempt_tools: Vec<String>,
 }
 
 fn default_dlp_vault_ttl() -> u64 {
@@ -144,6 +155,7 @@ pub struct EdgeManifest {
     pub dlp_rules: Vec<DlpRule>,
     pub sdk_config: SdkConfig,
     pub tool_policies: Vec<ToolPolicy>,
+    #[allow(dead_code)]
     pub landlock_profiles: Vec<LandlockProfile>,
 }
 
@@ -231,10 +243,6 @@ fn app_id_matches(manifest_app_id: &str, cfg: &crate::sync::EdgeInitConfig) -> b
     }
     let expected = &cfg.app_id;
     !expected.is_empty() && !manifest_app_id.is_empty() && expected == manifest_app_id
-}
-
-pub fn manifest_path() -> std::path::PathBuf {
-    crate::sync::EdgeInitConfig::resolve().manifest_path()
 }
 
 pub fn effective_sdk_config() -> SdkConfig {

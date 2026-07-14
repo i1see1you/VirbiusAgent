@@ -1,5 +1,4 @@
 #![allow(
-    dead_code,
     clippy::not_unsafe_ptr_arg_deref,
     clippy::too_many_arguments
 )]
@@ -24,8 +23,9 @@ pub mod prompt_gateway;
 mod sandbox;
 
 pub use api::{
-    DesensitizeInResult, DesensitizeOutResult, DlpHit, EffectiveAction, RuleHit, ScanContext,
-    ScanOutcome, TraceIdSource, VirbiusEdge, VirbiusError,
+    DesensitizeInResult, DesensitizeOutResult, DlpHit, EffectiveAction, OutputMaskResult, RuleHit,
+    ScanContext, ScanOutcome, TraceIdSource, VirbiusEdge, VirbiusError,
+    mask_pii_output,
 };
 pub use license::{License, LicenseClaims, LicenseError};
 pub use manifest::ToolPolicy;
@@ -587,10 +587,8 @@ mod c_abi_tests {
         );
         assert_eq!(out.allowed, 1);
         assert!(out.reason.is_null());
-        unsafe {
-            assert!(!out.sandbox_type.is_null());
-            virbius_free_string(out.sandbox_type as *mut c_char);
-        }
+        assert!(!out.sandbox_type.is_null());
+        virbius_free_string(out.sandbox_type as *mut c_char);
     }
 
     #[test]

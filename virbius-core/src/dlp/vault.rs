@@ -4,8 +4,10 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub struct TokenEntry {
+    #[allow(dead_code)]
     pub entity_type: String,
     pub plaintext: String,
+    #[allow(dead_code)]
     pub rule_id: String,
 }
 
@@ -35,17 +37,6 @@ pub fn store(trace_id: &str, token: String, entry: TokenEntry, ttl: Duration) {
         });
     session.expires_at = Instant::now() + ttl;
     session.tokens.insert(token, entry);
-}
-
-pub fn get(trace_id: &str, token: &str) -> Option<TokenEntry> {
-    if trace_id.is_empty() {
-        return None;
-    }
-    let mut guard = vault().lock().expect("vault lock");
-    purge_expired(&mut guard);
-    guard
-        .get(trace_id)
-        .and_then(|s| s.tokens.get(token).cloned())
 }
 
 pub fn session_tokens(trace_id: &str) -> HashMap<String, TokenEntry> {

@@ -11,10 +11,11 @@ use tracing::{debug, warn};
 
 use crate::egress::EgressClient;
 use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
-use crate::pipeline::{PipelineResult, SharedPipeline};
+use crate::pipeline::{PipelineResult, SecurityPipeline, SharedPipeline};
 use crate::session::{Session, SessionManager};
 use crate::trace_collector::{SharedTraceCollector, TraceEvent};
 use crate::upstream::UpstreamManager;
+use virbius_core::mask_pii_output;
 
 /// Separator used for prefixed tool names in multi-upstream mode.
 /// Only applied when the same tool name exists on multiple upstreams.
@@ -617,7 +618,7 @@ async fn handle_tools_call(
 
     // Check for challenge token in _meta (retry after approval)
     let meta = params.get("_meta").unwrap_or(&Value::Null);
-    let challenge_token = pipeline.extract_challenge_token(meta);
+    let challenge_token = SecurityPipeline::extract_challenge_token(meta);
 
     // If a challenge token is present, verify it before running the pipeline
     if let Some(token) = &challenge_token {
@@ -743,7 +744,9 @@ async fn handle_tools_call(
             // Egress tools: Proxy HTTP request directly with streaming response.
             // Check against the original tool name.
             if crate::egress::is_egress_tool(&original_tool_name) {
-                let resp = proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts).await;
+                let mut resp = proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts).await;
+                // ── Output PII masking ──
+                mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
                 // ── Trace: record tool_result ──
                 let duration_ms = trace_start.elapsed().as_millis() as u64;
                 let result_step_id = uuid::Uuid::new_v4().to_string();
@@ -791,7 +794,9 @@ async fn handle_tools_call(
             });
 
             match upstream.forward(&forward_req).await {
-                Ok(resp) => {
+                Ok(mut resp) => {
+                    // ── Output PII masking ──
+                    mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
                     // ── Trace: record tool_result ──
                     let duration_ms = trace_start.elapsed().as_millis() as u64;
                     let result_step_id = uuid::Uuid::new_v4().to_string();
@@ -982,6 +987,45 @@ fn jsonrpc_error(code: i32, id: &Value, message: &str) -> Value {
             "message": message
         }
     })
+}
+
+/// Apply output PII masking to a JSON-RPC tool call response.
+///
+/// Navigates `resp.result.content[]` and masks PII in any `text` field.
+/// If the tool is in the exempt list, or masking is disabled, the response
+/// is returned unmodified.
+fn mask_pii_in_response(resp: &mut Value, tool_name: &str, session_id: &str) {
+    // Navigate to resp.result.content (array)
+    let Some(result) = resp.get_mut("result") else {
+        return;
+    };
+    let Some(content_arr) = result.get_mut("content").and_then(|c| c.as_array_mut()) else {
+        return;
+    };
+
+    let mut any_masked = false;
+    for item in content_arr.iter_mut() {
+        // Only mask text-type content items
+        if item.get("type").and_then(|t| t.as_str()) != Some("text") {
+            continue;
+        }
+        if let Some(text) = item.get_mut("text").and_then(|t| t.as_str().map(|s| s.to_string())) {
+            let mask_result = mask_pii_output(&text, tool_name, Some(session_id));
+            if mask_result.masked {
+                any_masked = true;
+                if let Some(text_field) = item.get_mut("text") {
+                    *text_field = Value::String(mask_result.text);
+                }
+            }
+        }
+    }
+
+    if any_masked {
+        debug!(
+            "output PII masked for tool '{}' in session '{}'",
+            tool_name, session_id
+        );
+    }
 }
 
 #[cfg(test)]

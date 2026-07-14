@@ -147,7 +147,7 @@ impl EngineClient {
 }
 
 #[derive(Debug)]
-enum EngineError {
+pub enum EngineError {
     Http(reqwest::Error),
     Status(u16, String),
 }
@@ -531,7 +531,7 @@ fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
     let result = hasher.finalize();
-    format!("sha256:{}", hex::encode(result))
+    format!("sha256:{}", hex::encode(&result))
 }
 
 /// Minimal hex encoding (avoids adding `hex` crate dependency).
