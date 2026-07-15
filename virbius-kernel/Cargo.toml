@@ -3,7 +3,7 @@ name = "virbius-kernel"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "VirbiusAgent kernel layer: Falco deployment, Tetragon detection, mode fallback"
+description = "VirbiusAgent kernel layer: Falco deployment, mode detection, fallback"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

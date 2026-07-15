@@ -167,6 +167,57 @@ pub struct LandlockProfile {
     pub exec_paths: Vec<String>,
 }
 
+/// gVisor sandbox configuration for untrusted code execution (P2).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GvisorConfig {
+    /// Path to the runsc binary.
+    #[serde(default = "default_runsc_path")]
+    pub runsc_path: String,
+    /// Root filesystem path for the container.
+    #[serde(default = "default_rootfs_path")]
+    pub rootfs_path: String,
+    /// Minimum number of warm containers per language.
+    #[serde(default = "default_min_warm")]
+    pub min_warm: usize,
+    /// Maximum number of idle containers per language.
+    #[serde(default = "default_max_idle")]
+    pub max_idle: usize,
+    /// Memory limit per container in bytes.
+    #[serde(default = "default_gvisor_mem_limit")]
+    pub memory_limit_bytes: u64,
+    /// CPU quota (number of CPUs).
+    #[serde(default = "default_cpu_quota")]
+    pub cpu_quota: f64,
+    /// Whether network access is disabled inside the container.
+    #[serde(default = "default_true")]
+    pub network_disabled: bool,
+    /// Execution timeout in milliseconds.
+    #[serde(default = "default_gvisor_timeout_ms")]
+    pub exec_timeout_ms: u64,
+}
+
+fn default_runsc_path() -> String {
+    "/usr/local/bin/runsc".into()
+}
+fn default_rootfs_path() -> String {
+    "/opt/virbius/rootfs".into()
+}
+fn default_min_warm() -> usize {
+    2
+}
+fn default_max_idle() -> usize {
+    5
+}
+fn default_gvisor_mem_limit() -> u64 {
+    256 * 1024 * 1024
+}
+fn default_cpu_quota() -> f64 {
+    1.0
+}
+fn default_gvisor_timeout_ms() -> u64 {
+    30000
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct EdgeManifestFile {
     #[serde(default)]
@@ -183,6 +234,8 @@ struct EdgeManifestFile {
     tool_policies: Vec<ToolPolicy>,
     #[serde(default)]
     landlock_profiles: Vec<LandlockProfile>,
+    #[serde(default)]
+    gvisor_config: GvisorConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +248,8 @@ pub struct EdgeManifest {
     pub tool_policies: Vec<ToolPolicy>,
     #[allow(dead_code)]
     pub landlock_profiles: Vec<LandlockProfile>,
+    #[allow(dead_code)]
+    pub gvisor_config: GvisorConfig,
 }
 
 static MANIFEST: OnceLock<RwLock<EdgeManifest>> = OnceLock::new();
@@ -209,6 +264,7 @@ fn manifest_lock() -> &'static RwLock<EdgeManifest> {
             sdk_config: SdkConfig::default(),
             tool_policies: Vec::new(),
             landlock_profiles: Vec::new(),
+            gvisor_config: GvisorConfig::default(),
         })
     })
 }
@@ -245,6 +301,7 @@ fn read_manifest() -> EdgeManifest {
                 sdk_config: parsed.sdk_config,
                 tool_policies: parsed.tool_policies,
                 landlock_profiles: parsed.landlock_profiles,
+                gvisor_config: parsed.gvisor_config,
             };
         }
         eprintln!(
@@ -265,6 +322,7 @@ fn read_manifest() -> EdgeManifest {
         sdk_config: SdkConfig::default(),
         tool_policies: Vec::new(),
         landlock_profiles: Vec::new(),
+        gvisor_config: GvisorConfig::default(),
     }
 }
 

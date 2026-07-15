@@ -18,6 +18,7 @@
       'nav.cloud': '云 cloud',
       'nav.gateway': '管 gateway',
       'nav.edge': '端 edge',
+      'nav.kernel': '核 kernel',
       'nav.collapse': '折叠菜单',
       'nav.expand': '展开菜单',
 
@@ -562,6 +563,7 @@
       'layer.gateway': '网关 Gateway',
       'layer.cloud': '引擎 Engine',
       'layer.edge': '端 Edge',
+      'layer.kernel': '核 Kernel',
 
       // Rollout state labels
       'ro-state.draft': 'draft',
@@ -638,6 +640,10 @@
       // DLP DSL hint
       'hint.dlp-dsl': '端 DLP 脱敏规则：检测 PII 实体并替换占位符（<code>dry_run</code> 仅检测不脱敏）。<code>intent_action</code> 固定 <code>allow</code>，不参与 ActionMerge。',
 
+// Sandbox hints
+'hint.landlock': 'Landlock 文件路径隔离规则：指定工具可读/写/执行的路径白名单（glob 模式）。每个规则绑定一个 <code>tool_name</code>，在 P2 沙箱执行时由内核 Landlock 强制限制。',
+'hint.gvisor': 'gVisor 不可信代码沙箱配置：指定容器运行时参数（内存/CPU/网络/超时）。首个 <code>full</code> 状态的规则生效，用于 <code>execute_python</code> / <code>shell</code> 等不可信代码执行工具。',
+
       // Rules hint
       'hint.rules': '新建规则默认为 <code>draft</code>（不进执行面）；保存后请到左侧「<strong>策略上线</strong>」点 <code>上线</code> 进入 <code>dry_run</code> 观测。停用后可 <code>恢复草稿</code> 再编辑。管/云 <code>prompt</code> / <code>lua</code> / <code>groovy</code> 可配 <code>bind_scope</code>（含 Route）；<strong>端 edge</strong> 用关键词表单 + <code>global</code> / <code>service(app_ids)</code>。',
     },
@@ -659,6 +665,7 @@
       'nav.cloud': 'cloud',
       'nav.gateway': 'gateway',
       'nav.edge': 'edge',
+      'nav.kernel': 'kernel',
       'nav.collapse': 'Collapse menu',
       'nav.expand': 'Expand menu',
 
@@ -1203,6 +1210,7 @@
       'layer.gateway': 'Gateway',
       'layer.cloud': 'Engine',
       'layer.edge': 'Edge',
+      'layer.kernel': 'Kernel',
 
       // Rollout state labels
       'ro-state.draft': 'draft',
@@ -1278,6 +1286,10 @@
 
       // DLP DSL hint
       'hint.dlp-dsl': 'Edge DLP masking rule: detects PII entities and replaces placeholders (<code>dry_run</code> detects only, does not mask). <code>intent_action</code> is fixed to <code>allow</code>, does not participate in ActionMerge.',
+
+// Sandbox hints
+'hint.landlock': 'Landlock file-path isolation rule: specifies allowed read/write/exec path globs for a tool. Enforced by kernel Landlock during P2 sandboxed execution.',
+'hint.gvisor': 'gVisor untrusted-code sandbox config: specifies container runtime params (memory/CPU/network/timeout). First rule in <code>full</code> state takes effect for execute_python/shell tools.',
 
       // Rules hint
       'hint.rules': 'New rules default to <code>draft</code> (not in execution plane); after saving, go to "<strong>Rollout</strong>" on the left and click <code>Publish</code> to enter <code>dry_run</code> for observation. After disabling, click <code>Restore Draft</code> to edit again. Gateway/Cloud <code>prompt</code> / <code>lua</code> / <code>groovy</code> support <code>bind_scope</code> (including Route); <strong>Edge</strong> uses keyword form + <code>global</code> / <code>service(app_ids)</code>.',

@@ -3,7 +3,6 @@ use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelMode {
-    Tetragon,
     FalcoEbpf,
     FalcoUserspace,
     FalcoPlugin,
@@ -13,7 +12,6 @@ pub enum KernelMode {
 impl KernelMode {
     pub fn as_str(&self) -> &'static str {
         match self {
-            KernelMode::Tetragon => "tetragon",
             KernelMode::FalcoEbpf => "falco-ebpf",
             KernelMode::FalcoUserspace => "falco-userspace",
             KernelMode::FalcoPlugin => "falco-plugin",
@@ -21,8 +19,10 @@ impl KernelMode {
         }
     }
 
+    /// Kernel-level enforcement is handled by the edge layer (Landlock + gVisor).
+    /// The kernel layer is observation-only.
     pub fn has_enforcement(&self) -> bool {
-        matches!(self, KernelMode::Tetragon)
+        false
     }
 
     pub fn has_observation(&self) -> bool {
@@ -30,7 +30,7 @@ impl KernelMode {
     }
 
     pub fn uses_ebpf(&self) -> bool {
-        matches!(self, KernelMode::Tetragon | KernelMode::FalcoEbpf)
+        matches!(self, KernelMode::FalcoEbpf)
     }
 }
 
@@ -42,7 +42,6 @@ pub struct KernelInfo {
     pub has_cap_bpf: bool,
     pub has_cap_sys_admin: bool,
     pub has_cap_sys_ptrace: bool,
-    pub has_kprobe_override: bool,
     pub is_root: bool,
 }
 
@@ -61,7 +60,6 @@ pub fn detect_full() -> KernelInfo {
     let has_cap_perfmon = cap_eff & (1u64 << 38) != 0;
     let has_cap_sys_ptrace = cap_eff & (1u64 << 19) != 0;
     let has_caps = is_root || has_cap_sys_admin || (has_cap_bpf && has_cap_perfmon);
-    let has_kprobe_override = check_kprobe_override();
 
     let mode = if !has_caps && !has_cap_sys_ptrace {
         KernelMode::FalcoPlugin
@@ -70,12 +68,6 @@ pub fn detect_full() -> KernelInfo {
             KernelMode::FalcoUserspace
         } else {
             KernelMode::FalcoPlugin
-        }
-    } else if has_kprobe_override && (is_root || has_cap_sys_admin) {
-        if std::env::var("VIRBIUS_KERNEL_MODE").as_deref() == Ok("tetragon") {
-            KernelMode::Tetragon
-        } else {
-            KernelMode::FalcoEbpf
         }
     } else {
         KernelMode::FalcoEbpf
@@ -88,7 +80,6 @@ pub fn detect_full() -> KernelInfo {
         has_cap_bpf,
         has_cap_sys_admin,
         has_cap_sys_ptrace,
-        has_kprobe_override,
         is_root,
     }
 }
@@ -140,24 +131,6 @@ fn btf_available() -> bool {
     path.exists() && path.metadata().map(|m| m.len() > 0).unwrap_or(false)
 }
 
-fn check_kprobe_override() -> bool {
-    if let Ok(raw) = fs::read_to_string("/proc/config.gz") {
-        return raw.contains("CONFIG_BPF_KPROBE_OVERRIDE=y");
-    }
-    if let Ok(version) = fs::read_to_string("/proc/sys/kernel/osrelease") {
-        let version = version.trim();
-        let config_path = format!("/boot/config-{}", version);
-        if let Ok(config) = fs::read_to_string(&config_path) {
-            for line in config.lines() {
-                if line.starts_with("CONFIG_BPF_KPROBE_OVERRIDE=") {
-                    return line == "CONFIG_BPF_KPROBE_OVERRIDE=y";
-                }
-            }
-        }
-    }
-    false
-}
-
 pub fn format_info(info: &KernelInfo) -> String {
     serde_json::json!({
         "mode": info.mode.as_str(),
@@ -166,7 +139,6 @@ pub fn format_info(info: &KernelInfo) -> String {
         "has_cap_bpf": info.has_cap_bpf,
         "has_cap_sys_admin": info.has_cap_sys_admin,
         "has_cap_sys_ptrace": info.has_cap_sys_ptrace,
-        "has_kprobe_override": info.has_kprobe_override,
         "is_root": info.is_root,
     }).to_string()
 }
@@ -185,7 +157,6 @@ mod tests {
 
     #[test]
     fn test_kernel_mode_str() {
-        assert_eq!(KernelMode::Tetragon.as_str(), "tetragon");
         assert_eq!(KernelMode::FalcoPlugin.as_str(), "falco-plugin");
         assert_eq!(KernelMode::Disabled.as_str(), "disabled");
     }
@@ -198,7 +169,6 @@ mod tests {
 
     #[test]
     fn test_uses_ebpf() {
-        assert!(KernelMode::Tetragon.uses_ebpf());
         assert!(KernelMode::FalcoEbpf.uses_ebpf());
         assert!(!KernelMode::FalcoPlugin.uses_ebpf());
     }

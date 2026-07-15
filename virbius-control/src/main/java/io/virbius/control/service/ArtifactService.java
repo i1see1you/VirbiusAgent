@@ -486,6 +486,8 @@ public class ArtifactService {
         root.put("rules", buildEdgeRuleBlocks(rules));
         root.put("dlp_rules", buildDlpRuleBlocks(rules));
         root.put("tool_policies", buildToolPolicyBlocks(rules, appId));
+        root.put("landlock_profiles", buildLandlockProfiles(tenantId));
+        root.put("gvisor_config", buildGvisorConfig(tenantId));
 
         Map<String, Object> sdk = new LinkedHashMap<>();
         if (!auditIngestUrl.isBlank()) {
@@ -636,5 +638,63 @@ public class ArtifactService {
             }
         }
         return blocks;
+    }
+
+    /**
+     * Build landlock_profiles array for the edge manifest from sandbox layer rules
+     * with runtime='landlock'. Each rule's body_json contains:
+     * { "tool_name": "read_file", "read_paths": [...], "write_paths": [...], "exec_paths": [...] }
+     */
+    private List<Map<String, Object>> buildLandlockProfiles(String tenantId) {
+        List<Map<String, Object>> profiles = new ArrayList<>();
+        for (RuleRevision rule : registryRepo.listCurrentRules(tenantId, "sandbox")) {
+            if (!RolloutStateHelper.inExecutionPlane(rule)) continue;
+            if (!"landlock".equals(rule.runtime())) continue;
+            try {
+                String bodyStr = rule.body() instanceof String s ? s : mapper.writeValueAsString(rule.body());
+                @SuppressWarnings("unchecked")
+                Map<String, Object> body = mapper.readValue(bodyStr, Map.class);
+                Map<String, Object> profile = new LinkedHashMap<>();
+                profile.put("tool_name", body.getOrDefault("tool_name", ""));
+                profile.put("read_paths", body.getOrDefault("read_paths", List.of()));
+                profile.put("write_paths", body.getOrDefault("write_paths", List.of()));
+                profile.put("exec_paths", body.getOrDefault("exec_paths", List.of()));
+                profiles.add(profile);
+            } catch (Exception e) {
+                log.warn("failed to parse landlock rule body for {}: {}", rule.ruleId(), e.getMessage());
+            }
+        }
+        return profiles;
+    }
+
+    /**
+     * Build gvisor_config object for the edge manifest from sandbox layer rules
+     * with runtime='gvisor'. The first matching rule in execution plane is used.
+     * Body JSON contains: { "runsc_path": "...", "memory_limit_bytes": ..., ... }
+     */
+    private Map<String, Object> buildGvisorConfig(String tenantId) {
+        for (RuleRevision rule : registryRepo.listCurrentRules(tenantId, "sandbox")) {
+            if (!RolloutStateHelper.inExecutionPlane(rule)) continue;
+            if (!"gvisor".equals(rule.runtime())) continue;
+            try {
+                String bodyStr = rule.body() instanceof String s ? s : mapper.writeValueAsString(rule.body());
+                @SuppressWarnings("unchecked")
+                Map<String, Object> body = mapper.readValue(bodyStr, Map.class);
+                Map<String, Object> config = new LinkedHashMap<>();
+                config.put("runsc_path", body.getOrDefault("runsc_path", "/usr/local/bin/runsc"));
+                config.put("rootfs_path", body.getOrDefault("rootfs_path", "/opt/virbius/rootfs"));
+                config.put("min_warm", body.getOrDefault("min_warm", 2));
+                config.put("max_idle", body.getOrDefault("max_idle", 5));
+                config.put("memory_limit_bytes", body.getOrDefault("memory_limit_bytes", 268435456L));
+                config.put("cpu_quota", body.getOrDefault("cpu_quota", 1.0));
+                config.put("network_disabled", body.getOrDefault("network_disabled", true));
+                config.put("exec_timeout_ms", body.getOrDefault("exec_timeout_ms", 30000L));
+                return config;
+            } catch (Exception e) {
+                log.warn("failed to parse gvisor rule body for {}: {}", rule.ruleId(), e.getMessage());
+            }
+        }
+        // Return empty config if no gvisor rule exists — edge SDK uses defaults.
+        return Map.of();
     }
 }

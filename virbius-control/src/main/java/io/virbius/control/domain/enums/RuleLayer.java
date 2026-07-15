@@ -5,7 +5,8 @@ public enum RuleLayer {
     GATEWAY("gateway"),
     CLOUD("cloud"),
     AGENT("agent"),
-    FALCO("falco");
+    FALCO("falco"),
+    SANDBOX("sandbox");
 
     private final String value;
 

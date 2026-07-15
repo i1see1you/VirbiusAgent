@@ -58,8 +58,6 @@
 |------|------|
 | Landlock + drop caps 沙箱 | 文件路径限制 + capabilities 丢弃 + ABI 版本适配 |
 | gVisor 预热池 | 不可信代码执行沙箱 |
-| Tetragon 检测 + 降级逻辑（detect_mode） | 内核能力自动检测 + 模式选择 |
-| Tetragon enforcer（eBPF 可用时） | 宿主级 enforcement 叠加 |
 | eBPF 自定义观测程序（execveat + IPv6） | 补充 Falco 内置规则 |
 | 端到端红队测试 | 安全验证 |
 
@@ -69,7 +67,7 @@
 |------|-----------|------------|---------|
 | P0 | Falco + access log + Redis 审计 + STI + Prompt Gateway | HTTP 403 + License + allowlist + 计数 + schema + risk 断连 | 身份管控 + 提示增强 |
 | P1 | STI Taint + Prompt 入侵检测 + virbius-audit 插件 + 审计完整性 + 决策链路追踪 | 人工审批 + 自适应 risk + 记忆管控 | 记忆管控 + prompt 越狱检测 + 决策链路可视化 |
-| P2 | Tetragon observe | Landlock + gVisor + Tetragon enforcer + TEE | syscall 级阻断|
+| P2 | eBPF 自定义观测 | Landlock + gVisor + TEE | syscall 级隔离 |
 
 ---
 

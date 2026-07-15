@@ -105,6 +105,26 @@ end`;
       if (runtime === 'falco') {
         return JSON.stringify({ condition: 'evt.num > 0', output: 'Falco rule triggered', priority: 'WARNING', tags: [] }, null, 2);
       }
+      if (runtime === 'landlock') {
+        return JSON.stringify({
+          tool_name: 'read_file',
+          read_paths: ['/tmp/data/*', '/usr/lib/*'],
+          write_paths: [],
+          exec_paths: ['/usr/bin/cat', '/usr/bin/head']
+        }, null, 2);
+      }
+      if (runtime === 'gvisor') {
+        return JSON.stringify({
+          runsc_path: '/usr/local/bin/runsc',
+          rootfs_path: '/opt/virbius/rootfs',
+          min_warm: 2,
+          max_idle: 5,
+          memory_limit_bytes: 268435456,
+          cpu_quota: 1.0,
+          network_disabled: true,
+          exec_timeout_ms: 30000
+        }, null, 2);
+      }
       return JSON.stringify({ list_type: 'deny', keywords: [] }, null, 2);
     }
 
@@ -173,9 +193,29 @@ end`;
       return runtime === 'dlp-dsl';
     }
 
-    function isFalcoRuntime(runtime) {
-      return runtime === 'falco';
-    }
+function isFalcoRuntime(runtime) {
+return runtime === 'falco';
+}
+
+function isSandboxRuntime(runtime) {
+return runtime === 'landlock' || runtime === 'gvisor';
+}
+
+function isKernelRuntime(runtime) {
+return isFalcoRuntime(runtime) || isSandboxRuntime(runtime);
+}
+
+function kernelLayerForRuntime(runtime) {
+if (runtime === 'falco') return 'falco';
+if (runtime === 'landlock' || runtime === 'gvisor') return 'sandbox';
+return currentLayer;
+}
+
+function effectiveLayerForNewRule() {
+const rt = document.getElementById('fRuntime') ? document.getElementById('fRuntime').value : '';
+if (currentLayer === 'kernel') return kernelLayerForRuntime(rt);
+return currentLayer;
+}
 
     function isEdgeFormRuntime(runtime) {
       return isEdgeDslRuntime(runtime) || isDlpRuntime(runtime);
@@ -593,7 +633,7 @@ end`;
     function getHighlightLanguage(runtime) {
       if (runtime === 'lua') return 'lua';
       if (runtime === 'groovy') return 'groovy';
-      if (runtime === 'lua-dsl' || runtime === 'dlp-dsl') return 'json';
+      if (runtime === 'lua-dsl' || runtime === 'dlp-dsl' || isKernelRuntime(runtime)) return 'json';
       return null;
     }
 
@@ -652,7 +692,7 @@ end`;
 
     async function validateScriptBody(showLog) {
       const runtime = isNewRule ? document.getElementById('fRuntime').value : editRuleMeta.runtime;
-      const layer = isNewRule ? currentLayer : editRuleMeta.layer;
+      const layer = isNewRule ? effectiveLayerForNewRule() : editRuleMeta.layer;
       let body = await resolveBodyForSave();
       const data = await admin('/rules/validate-script', {
         method: 'POST',
@@ -715,6 +755,11 @@ end`;
           throw new Error(__('rules.body-json-invalid'));
         }
       }
+      if (isSandboxRuntime(runtime) || isFalcoRuntime(runtime)) {
+        try { return JSON.parse(document.getElementById('fBody').value); } catch {
+          throw new Error(__('rules.body-json-invalid'));
+        }
+      }
       if (isSimpleEditorMode() && conditionLeaves.length) {
         const data = await admin('/rules/compile-condition', {
           method: 'POST',
@@ -732,7 +777,7 @@ end`;
 
     function syncEditorModeUiInner() {
       const runtime = currentEditorRuntime();
-      if (isFalcoRuntime(runtime)) {
+      if (isKernelRuntime(runtime)) {
         document.getElementById('simpleConditionPanel').style.display = 'none';
         document.getElementById('edgeDslPanel').style.display = 'none';
         document.getElementById('dlpDslPanel').style.display = 'none';
@@ -898,7 +943,7 @@ end`;
         return;
       }
       const runtime = isNewRule ? document.getElementById('fRuntime').value : editRuleMeta.runtime;
-      const layer = isNewRule ? currentLayer : editRuleMeta.layer;
+      const layer = isNewRule ? effectiveLayerForNewRule() : editRuleMeta.layer;
       const data = await admin('/rules/compile-condition', {
         method: 'POST',
         body: JSON.stringify({ layer, runtime, condition: readConditionPayload() })
@@ -945,7 +990,7 @@ end`;
 
     async function runRuleSimulate() {
       const runtime = isNewRule ? document.getElementById('fRuntime').value : editRuleMeta.runtime;
-      const layer = isNewRule ? currentLayer : editRuleMeta.layer;
+      const layer = isNewRule ? effectiveLayerForNewRule() : editRuleMeta.layer;
       const ruleId = isNewRule ? (document.getElementById('fRuleId').value.trim() || 'draft-preview') : selectedRuleId;
       const fixture = readSimFixture();
       const body = await resolveBodyForSave();
@@ -1258,7 +1303,7 @@ end`;
         document.getElementById('fBody').style.display = '';
       }
       syncBindScopeUi(runtime);
-      if (isFalcoRuntime(runtime)) {
+      if (isKernelRuntime(runtime)) {
         document.getElementById('conditionAuthoringRow').style.display = 'none';
         document.getElementById('simpleConditionPanel').style.display = 'none';
         document.getElementById('scriptWizardRow').style.display = 'none';
@@ -1388,7 +1433,16 @@ end`;
     }
 
     async function loadRules() {
-      const rules = await admin('/rules?layer=' + encodeURIComponent(currentLayer));
+      let rules;
+      if (currentLayer === 'kernel') {
+        const [falcoRules, sandboxRules] = await Promise.all([
+          admin('/rules?layer=falco'),
+          admin('/rules?layer=sandbox')
+        ]);
+        rules = [...falcoRules, ...sandboxRules];
+      } else {
+        rules = await admin('/rules?layer=' + encodeURIComponent(currentLayer));
+      }
       const tbody = document.querySelector('#rulesTable tbody');
       tbody.innerHTML = '';
       rules.forEach(r => {
@@ -1452,7 +1506,7 @@ end`;
         }
         syncEditorModeUi();
         syncDlpIntentReadonly();
-      } else if (isFalcoRuntime(r.runtime)) {
+      } else if (isKernelRuntime(r.runtime)) {
         document.getElementById('fEditorMode').value = 'advanced';
         syncEditorModeUi();
       } else if (!isPromptRuntime(r.runtime)) {
@@ -1558,7 +1612,7 @@ end`;
         log(__('rules.id-required'), 'warn');
         return;
       }
-      const layer = isNewRule ? currentLayer : editRuleMeta.layer;
+      const layer = isNewRule ? effectiveLayerForNewRule() : editRuleMeta.layer;
       const runtime = isNewRule ? document.getElementById('fRuntime').value : editRuleMeta.runtime;
       const scope = buildRuleScope();
       if (isEdgeFormRuntime(runtime) && scope.bind_scope === 'service') {

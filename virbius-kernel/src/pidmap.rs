@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 /// # Host PID vs Namespace PID
 ///
 /// In container environments, `getpid()` returns the **Namespace PID** (visible
-/// inside the container), while Falco/Tetragon on the host observe the **Host
+/// inside the container), while Falco on the host observes the **Host
 /// PID** (visible in the initial PID namespace). These are different numbers.
 ///
 /// Solution: `register_agent` auto-detects the Host PID from `/proc/self/status`
@@ -22,7 +22,7 @@ const TTL: Duration = Duration::from_secs(3600);
 
 #[derive(Debug, Clone)]
 pub struct PidMapEntry {
-    /// Host PID — what Falco/Tetragon/eBPF sees on the host.
+    /// Host PID — what Falco/eBPF sees on the host.
     pub host_pid: u32,
     /// Namespace PID — what the process sees inside its container.
     /// Equal to host_pid when not in a PID namespace.
@@ -136,7 +136,7 @@ pub fn unregister_agent(host_pid: u32) {
 
 /// Lookup by Host PID — the PRIMARY path for Falco event enrichment.
 ///
-/// Falco/Tetragon emit Host PID in their events. This lookup is <1μs.
+/// Falco emits Host PID in its events. This lookup is <1μs.
 pub fn lookup_agent(host_pid: u32) -> Option<PidMapEntry> {
     let store = PID_MAP.get()?;
     let guard = store.lock().ok()?;

@@ -27,7 +27,7 @@
       cloud: ['prompt', 'groovy'],
       gateway: ['lua'],
       edge: ['lua-dsl', 'dlp-dsl'],
-      falco: ['falco']
+      kernel: ['falco', 'landlock', 'gvisor']
     };
 
     function field(obj, ...keys) {
@@ -199,7 +199,7 @@
       gateway: __('layer.gateway'),
       cloud: __('layer.cloud'),
       edge: __('layer.edge'),
-      falco: 'Falco'
+      kernel: __('layer.kernel')
     };
 
     function formatMatchHeaders(h) {

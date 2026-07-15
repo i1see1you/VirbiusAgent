@@ -51,7 +51,6 @@ pub fn generate_config(info: &KernelInfo) -> FalcoModeConfig {
         KernelMode::FalcoPlugin => generate_plugin_mode_config(info),
         KernelMode::FalcoUserspace => generate_userspace_config(info),
         KernelMode::FalcoEbpf => generate_ebpf_config(info),
-        KernelMode::Tetragon => generate_ebpf_config(info), // Tetragon uses same Falco config as eBPF
         KernelMode::Disabled => generate_disabled_config(),
     }
 }
@@ -481,7 +480,6 @@ mod tests {
             has_cap_bpf: false,
             has_cap_sys_admin: false,
             has_cap_sys_ptrace: false,
-            has_kprobe_override: false,
             is_root: false,
         };
         let config = generate_config(&info);
@@ -502,7 +500,6 @@ mod tests {
             has_cap_bpf: true,
             has_cap_sys_admin: true,
             has_cap_sys_ptrace: true,
-            has_kprobe_override: true,
             is_root: true,
         };
         let config = generate_config(&info);
@@ -520,7 +517,6 @@ mod tests {
             has_cap_bpf: false,
             has_cap_sys_admin: false,
             has_cap_sys_ptrace: false,
-            has_kprobe_override: false,
             is_root: false,
         };
         let config = generate_config(&info);

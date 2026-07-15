@@ -98,7 +98,7 @@ public class DeployRolloutController {
 
         // Per-layer diffs based on staging; filter by layer if specified
                 List<String> targetLayers = layerFilter.isBlank()
-                ? List.of("cloud", "gateway", "edge", "falco")
+                ? List.of("cloud", "gateway", "edge", "falco", "sandbox")
                 : List.of(layerFilter);
         Map<String, Object> layers = new LinkedHashMap<>();
         for (String layer : targetLayers) {

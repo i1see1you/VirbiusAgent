@@ -215,7 +215,7 @@ virbius-control
 | 场景 | 处置 |
 |------|------|
 | Landlock deny | 子进程收到 -EPERM，工具返回 Error |
-| Tetragon enforcer kill | 进程被 kill，告警 |
+| gVisor 容器 kill | 进程被 kill，告警 |
 
 > **关键约束**：终判 deny 时工具不执行，不存在"工具已执行但 deny"的副作用。
 
@@ -244,7 +244,6 @@ virbius-control
 | 管 | Higress + WASM | AI 网关 + 安全插件 | 稳定(基于 Envoy, 阿里巴巴生产) | APISIX / Envoy |
 | 核 | eBPF + BTF/CO-RE | 内核观测 | 极稳定(行业标准) | 无 |
 | 核 | Falco | 观测引擎(CNCF 毕业) | 极稳定(CNCF Graduated) | Tracee |
-| 核 | Tetragon | eBPF enforcement(P2) | 较新(Isovalent/Cisco) | Falco + Landlock |
 | 云 | Groovy | L3 规则脚本 | 稳定但 declining(Apache) | Python sandbox |
 | 云 | Redis | session + 审计流 | 极稳定 | KeyDB |
 | 云 | Spring Boot | engine/control 框架 | 极稳定 | Quarkus |
@@ -268,7 +267,6 @@ virbius-control
 | 技术 | 风险 | 缓解 |
 |------|------|------|
 | Landlock 网络(v4) | 内核 6.7+, 2 年, 部署少 | P2 才引入; 文件版优先 |
-| Tetragon | Cisco 收购后可能商业化; 社区小 | P2 才引入; Falco+seccomp 替代 |
 | MCP 协议 | Anthropic 控制, 非 IETF 标准; spec 演进中 | 设计不绑死 MCP; 通用 JSON-RPC 兼容 |
 | qwen3guard | 模型可能更新/弃用 | mlPredict 抽象层, 模型可替换 |
 
@@ -282,7 +280,6 @@ virbius-control
 **可降级(失败有 fallback)**：
 - Falco eBPF 驱动 -> userspace -> plugin 降级链
 - gVisor -> Landlock subprocess 降级
-- Tetragon -> Falco + Landlock subprocess(P2) 替代
 - qwen3guard -> 任意 guard 模型
 
 ---
@@ -338,7 +335,7 @@ VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依
 | `virbius-control` License 模块 | Java | License 签发(EdDSA) + 吊销(pub/sub) |
 | `virbius-control` 宪法模块 | Java | 宪法规则管理 + 编译为 prompt 模板 |
 | `virbius-control` Memory Interceptor | Java | P1: 记忆读写拦截 |
-| `virbius-kernel/` | Rust/YAML | Falco 部署 + Tetragon 检测 + 降级逻辑 |
+| `virbius-kernel/` | Rust/YAML | Falco 部署 + 模式检测 + 降级逻辑 |
 | virbius-audit Falco 插件 | Go | 自定义 Falco 插件(消费 Redis Stream) |
 
 #### VirbiusAgent 项目结构
@@ -390,7 +387,7 @@ VirbiusAgent/
 |   +-- (直接复用，零改动)
 |
 +-- virbius-kernel/            # 全新
-|   +-- Falco 部署 + Tetragon 检测
+|   +-- Falco 部署 + 模式检测
 |
 +-- DESIGN.md
 +-- README.md
@@ -495,7 +492,7 @@ if session_risk > 30: 提升审计采样率
 | 应用层 | tool_call/tool_result 全链路 trace | MCP Proxy TraceCollector |
 | HTTP 层 | 请求级 allowlist/计数/阻断 | Higress WASM 插件 |
 | 内核层 | syscall/网络/文件事件 | Falco (eBPF/plugin 降级链) |
-| 内核层(P2) | 实时阻断 | Tetragon enforcer |
+| 内核层(P2) | 实时阻断 | Landlock + gVisor |
 
 #### 维度 5：审批与阻断能力（Enforcement）
 
@@ -503,7 +500,7 @@ if session_risk > 30: 提升审计采样率
 - 高风险操作能否被拦截并转人工审批？
 - 审批 token 是否一次性使用、绑定参数、有 TTL？
 - 审批超时是否默认 deny？
-- P2 阶段是否有内核级硬阻断（Landlock/Tetragon）？
+- P2 阶段是否有内核级硬阻断（Landlock/gVisor）？
 
 #### 维度 6：审计完整性（Audit Integrity）
 
@@ -592,8 +589,8 @@ if session_risk > 30: 提升审计采样率
 | 运行时观测 | Falco eBPF + plugin 降级链 + 决策链路追踪 | P0/P1 | P0 ✅ / P1 待实现（详见 [§13.4](#134-自定义-virbius-audit-falco-插件--falco-规则库扩充)） |
 | 高风险审批 | Challenge 全链路（create → approve → token verify） | P1 | ✅ 已完成 |
 | HTTP 阻断 | Higress WASM 403 + License 吊销 | P0 | ✅ 已完成 |
-| 内核级阻断 | Landlock + gVisor + Tetragon | P2 | 待实现 |
-| 审计完整性 | hash chain | P1 | 待实现（详见 [§13.5](#135-审计完整性hash-chain)） |
+| 内核级阻断 | Landlock + gVisor | P2 | 待实现 |
+| 审计完整性 | hash chain | P1 | ✅ 已完成（详见 [§13.5](#135-审计完整性hash-chain)） |
 | 供应链身份 | License 签发/校验/吊销 | P0 | ✅ 已完成 |
 | 记忆管控 | Memory Interceptor | P1 | 待实现（详见 [§13.6](#136-记忆管控memory-interceptor)） |
 | 输出安全 | Output Review（PII 脱敏 + 凭据检测 + 内容安全） | P1 | 待实现（详见 [§13.7](#137-输出审查output-review)） |
@@ -1165,181 +1162,172 @@ plugins:
 
 ### 13.5 审计完整性（Hash Chain）
 
+> **✅ 已实现。** 组件位于 `virbius-control/src/main/java/io/virbius/control/audit/`。
+
 #### 13.5.1 设计目标
 
-防篡改审计链：每条审计事件包含前一条的 hash，形成链式结构。任何篡改都会导致链断裂，可被验证检测。
+防篡改审计链：每条审计事件包含前一条的 hash，形成**按租户隔离**的链式结构。任何篡改都会导致链断裂，可被验证检测。
 
 #### 13.5.2 数据结构
 
-**审计事件扩展**（在现有审计事件基础上增加 3 个字段）：
+**审计事件扩展**（在 `tb_audit_events` 表上增加 3 个字段）：
 
-```json
-{
-  "trace_id": "uuid",
-  "session_id": "sess_xxx",
-  "event_type": "tool_call",
-  "tool_name": "read_file",
-  "action": "allow",
-  "timestamp": "2026-07-08T12:00:00Z",
+```sql
+-- V8__audit_hash_chain.sql
+ALTER TABLE tb_audit_events
+    ADD COLUMN audit_seq   BIGINT       NOT NULL DEFAULT 0,
+    ADD COLUMN prev_hash   VARCHAR(128) NOT NULL DEFAULT '',
+    ADD COLUMN curr_hash   VARCHAR(128) NOT NULL DEFAULT '';
 
-  "audit_seq": 42,
-  "prev_hash": "sha256:a1b2c3d4...",
-  "curr_hash": "sha256:e5f6g7h8..."
-}
+CREATE INDEX idx_audit_events_tenant_seq ON tb_audit_events (tenant_id, audit_seq);
+
+-- 链状态表（MySQL 降级时使用）
+CREATE TABLE tb_audit_chain_state (
+    tenant_id   VARCHAR(64)  PRIMARY KEY,
+    seq         BIGINT       NOT NULL DEFAULT 0,
+    last_hash   VARCHAR(128) NOT NULL DEFAULT '',
+    version     INT          NOT NULL DEFAULT 0,    -- 乐观锁
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 ```
 
-**Hash 计算规则**：
+**Hash 计算规则**（13 个字段参与哈希）：
 
 ```
-curr_hash = SHA256(
+curr_hash = "sha256:" + SHA256_HEX(
   prev_hash
   + "|" + audit_seq
+  + "|" + tenant_id
   + "|" + trace_id
-  + "|" + session_id
-  + "|" + event_type
-  + "|" + tool_name
-  + "|" + action
-  + "|" + timestamp
+  + "|" + event_id
+  + "|" + effective_action
+  + "|" + layer
+  + "|" + reason_code
+  + "|" + rule_id
+  + "|" + scene
+  + "|" + user_id
+  + "|" + device_id
+  + "|" + intercepted_at
 )
 ```
 
-#### 13.5.3 组件与接口
+> 创世哈希（genesis）: `sha256:` + `0` × 64
 
-**新增组件**：`virbius-policy/src/main/java/io/virbius/policy/audit/HashChainAuditor.java`
+#### 13.5.3 组件架构
 
-```java
-public class HashChainAuditor {
-    private final JedisPool jedisPool;
-    private final String chainKey = "virbius:audit:chain";
+`virbius-control/src/main/java/io/virbius/control/audit/`
 
-    /**
-     * 为审计事件附加 hash chain 字段。
-     * 在 RedisStreamAuditSink 写入前调用。
-     */
-    public AuditEvent chain(AuditEvent event) {
-        try (Jedis jedis = jedisPool.getResource()) {
-            // 1. 获取链状态（序号 + 前一条 hash）
-            HashChainState state = getChainState(jedis);
+| 组件 | 职责 |
+|------|------|
+| `HashChainOrchestrator` | 核心：为审计事件附加 hash chain 字段，支持 Redis Lua CAS + MySQL 降级 |
+| `HashChainVerifier` | 验证器：从 DB 读取事件并逐条校验序号连续性 + prev_hash 链 + curr_hash 重算 |
+| `HashChainVerifyTask` | 定时任务：每小时自动验证所有租户近 7 天的审计链 |
+| `AuditAdminController` | REST API：手动触发验证 + 查询链状态 |
 
-            // 2. 设置序号和前一条 hash
-            event.setAuditSeq(state.getSeq() + 1);
-            event.setPrevHash(state.getLastHash());
+#### 13.5.4 HashChainOrchestrator 实现细节
 
-            // 3. 计算当前 hash
-            String currHash = computeHash(event);
-            event.setCurrHash(currHash);
+**双写策略**：优先 Redis（Lua CAS 原子更新），Redis 不可用时降级到 MySQL（乐观锁 `version` 字段）。
 
-            // 4. 更新链状态（原子操作）
-            updateChainState(jedis, event.getAuditSeq(), currHash);
-
-            return event;
-        }
-    }
-
-    /**
-     * 验证审计链完整性。
-     * @param events 按序号排序的审计事件列表
-     * @return 验证结果（通过/断裂点）
-     */
-    public ChainVerificationResult verify(List<AuditEvent> events) {
-        for (int i = 1; i < events.size(); i++) {
-            AuditEvent prev = events.get(i - 1);
-            AuditEvent curr = events.get(i);
-
-            // 验证序号连续
-            if (curr.getAuditSeq() != prev.getAuditSeq() + 1) {
-                return ChainVerificationResult.broken(curr.getAuditSeq(),
-                    "序号不连续: expected " + (prev.getAuditSeq() + 1)
-                    + ", got " + curr.getAuditSeq());
-            }
-
-            // 验证 hash 链
-            if (!curr.getPrevHash().equals(prev.getCurrHash())) {
-                return ChainVerificationResult.broken(curr.getAuditSeq(),
-                    "hash 链断裂: prev_hash mismatch");
-            }
-
-            // 验证当前 hash 正确性
-            String recomputed = computeHash(curr);
-            if (!curr.getCurrHash().equals(recomputed)) {
-                return ChainVerificationResult.broken(curr.getAuditSeq(),
-                    "curr_hash 不匹配: 内容可能被篡改");
-            }
-        }
-        return ChainVerificationResult.ok();
-    }
-
-    private String computeHash(AuditEvent event) {
-        String input = event.getPrevHash()
-            + "|" + event.getAuditSeq()
-            + "|" + event.getTraceId()
-            + "|" + event.getSessionId()
-            + "|" + event.getEventType()
-            + "|" + event.getToolName()
-            + "|" + event.getAction()
-            + "|" + event.getTimestamp();
-        return "sha256:" + SHA256.hex(input);
-    }
-}
-```
-
-**Redis 链状态**：
+**Redis 链状态**（按租户隔离）：
 
 ```
-# 链状态（单条 hash + 序号）
-HSET virbius:audit:chain \
+# 每个租户独立链
+HSET virbius:audit:chain:{tenantId} \
   seq 42 \
-  last_hash "sha256:e5f6g7h8..."
+  last_hash "sha256:e5f6g7h8..." \
+  updated_at "2026-07-15T12:00:00Z"
 ```
 
-> 原子性保证：使用 Redis `MULTI/EXEC` 或 Lua 脚本确保序号递增 + hash 更新的原子性。
+**Lua CAS 脚本**（3 次重试，失败后降级 MySQL）：
 
-#### 13.5.4 集成点
+```lua
+local cur = redis.call('HGET', KEYS[1], 'seq') or '0'
+if tonumber(cur) ~= tonumber(ARGV[1]) then return -1 end
+redis.call('HSET', KEYS[1], 'seq', ARGV[2], 'last_hash', ARGV[3], 'updated_at', ARGV[4])
+return 1
+```
+
+**MySQL 降级**：使用 `SELECT ... FOR UPDATE` + 乐观锁 `WHERE version = ?` 实现 CAS。若 `updated == 0`（并发冲突），递归重试。
+
+**批量处理**：`chainBatch(tenantId, List<Map<String, Object>> events)` 支持批量附加 hash chain，减少 Redis 往返。
+
+#### 13.5.5 集成点
 
 ```
 各层审计事件
   │
   ▼
-virbius-policy RedisStreamAuditSink
+virbius-control AuditService
   │
-  ├── [新增] HashChainAuditor.chain(event)  ← 附加 hash chain 字段
-  │
-  ▼
-Redis XADD virbius:audit (含 audit_seq, prev_hash, curr_hash)
+  ├── HashChainOrchestrator.chainBatch(tenantId, events)  ← 附加 audit_seq / prev_hash / curr_hash
   │
   ▼
-virbius-engine AuditConsumer → 写入 DB (tb_audit_log + hash chain 字段)
+写入 tb_audit_events (含 hash chain 字段)
+  │
+  ▼
+HashChainVerifyTask (每小时) → HashChainVerifier.verify() → 重算 + 比对
 ```
 
-#### 13.5.5 验证 API
+#### 13.5.6 验证 API
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/v1/admin/tenants/{tenantId}/audit/verify` | 验证指定时间范围内的审计链完整性 |
-| GET | `/api/v1/admin/tenants/{tenantId}/audit/chain/status` | 查询链状态（最新序号 + hash） |
+| POST | `/api/v1/admin/tenants/{tenantId}/audit/verify` | 验证指定时间范围内的审计链完整性（body: `{"from": "...", "to": "..."}`，省略则全量验证） |
+| GET | `/api/v1/admin/tenants/{tenantId}/audit/chain/status` | 查询链状态（最新序号 + last_hash + updated_at） |
 
-**验证流程**：
+**验证逻辑**（`HashChainVerifier`）：
 
 ```
-1. 从 DB 读取指定时间范围内的审计事件（按 audit_seq 排序）
-2. 调用 HashChainAuditor.verify(events)
-3. 返回验证结果：
-   - 通过：链完整，无篡改
-   - 断裂：返回断裂点序号 + 原因
-4. 断裂时触发告警（运营台 + Webhook）
+1. 从 tb_audit_events 读取指定租户 + 时间范围内的事件（按 audit_seq ASC）
+2. 逐条校验：
+   a. 序号连续：seq == expectedSeq
+   b. prev_hash 链：prev_hash == expectedPrevHash
+   c. curr_hash 重算：recompute(prev_hash, seq, event) == curr_hash
+3. 返回 ChainVerificationResult:
+   - passed: true/false
+   - breakSeq: 断裂点序号（null 表示通过）
+   - reason: 断裂原因
+   - totalEvents / verifiedEvents
 ```
 
-#### 13.5.6 定期验证
+**ChainVerificationResult** 结构：
+
+```java
+public record ChainVerificationResult(
+    boolean passed,        // 验证是否通过
+    Long breakSeq,         // 断裂点序号（null = 通过）
+    String reason,         // 断裂原因
+    int totalEvents,       // 总事件数
+    int verifiedEvents) {} // 已验证事件数
+```
+
+#### 13.5.7 定时验证
 
 ```yaml
-# virbius-engine application.yml
+# virbius-control application.yml
 virbius:
   audit:
     hash-chain:
-      enabled: true
-      verify-interval: 3600  # 每小时验证一次（秒）
-      verify-batch-size: 10000  # 每批验证事件数
+      enabled: true                          # 是否启用 hash chain
+      verify-enabled: true                   # 是否启用定时验证
+      verify-interval-ms: 3600000            # 验证间隔（毫秒，默认 1 小时）
+      verify-batch-size: 10000               # 每批验证事件数
 ```
+
+`HashChainVerifyTask` 通过 `@Scheduled(fixedDelayString)` 定时执行：
+
+1. 查询 `tb_audit_chain_state` 获取所有租户
+2. 对每个租户验证近 7 天的审计事件
+3. 通过 → `log.info`；断裂 → `log.error`（含 breakSeq + reason）
+
+#### 13.5.8 配置项汇总
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `virbius.audit.hash-chain.enabled` | `true` | 全局开关 |
+| `virbius.audit.hash-chain.verify-enabled` | `true` | 定时验证开关 |
+| `virbius.audit.hash-chain.verify-interval-ms` | `3600000` | 验证间隔（ms） |
+| `virbius.audit.hash-chain.verify-batch-size` | `10000` | 批量大小 |
 
 ---
 

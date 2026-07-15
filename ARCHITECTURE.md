@@ -29,9 +29,8 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
   |
 [3] Kernel - Falco observer (observation layer)
     eBPF driver (standard node) / plugin mode (serverless fallback)
-    Tetragon enforcer (P2, eBPF available)
     observe: syscall/net/file + audit stream + session risk
-    enforce(P2): Landlock + drop caps (edge) / Tetragon (kernel)
+    enforce(P2): Landlock + drop caps (edge) / gVisor (edge)
   |
 [4] Cloud - virbius-engine + virbius-control
     engine: Groovy L3 + STI audit + tool-chain detect
@@ -90,7 +89,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 | **预检先于执行** | 端层预检 -> 管层/云层终判 -> 端层执行。工具在终判通过后才执行 |
 | **观测与阻断分离** | 观测(eyes)和阻断(hands)由不同技术栈承担。观测随环境降级(eBPF->ptrace->plugin)，阻断始终由端层 Landlock + drop caps 保证(P2) |
 | **观察先行** | P0 只实现观测(Falco + HTTP 层阻断 + session risk 累积)，P2 补 syscall 级阻断 |
-| **eBPF 是增强非依赖** | eBPF 可用时叠加 Tetragon enforcer；不可用时端层 Landlock + drop caps 仍是完整可用的阻断 |
+| **eBPF 是增强非依赖** | eBPF 可用时增强观测精度；不可用时端层 Landlock + drop caps + gVisor 仍是完整可用的阻断 |
 | **端层兜底** | 即使管层/云层被绕过，端层预检 + 沙箱仍限制进程行为 |
 | **快速通道** | 低风险工具跳过云层 RPC，端层预检 + 管层本地规则直接放行，目标延迟 <5ms |
 | **职责分离** | Higress 做路由 + 限流 + 安全预检；安全终判收敛到 virbius-engine |
@@ -103,7 +102,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 |------|-----------|------------|
 | **P0** | Falco(eBPF/plugin) + access log + Redis 审计流 + STI 审计 + Prompt Gateway(宪法注入) | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 + Runtime License 校验 |
 | **P1** | STI Taint 小模型 + virbius-audit Falco 插件 + 审计完整性 | 人工审批流 + 自适应 risk 模型 + 记忆管控(Memory Interceptor) |
-| **P2** | Tetragon observe(eBPF 可用时) | Landlock + drop caps + gVisor + Tetragon enforcer + TEE(金融级) |
+| **P2** | eBPF 自定义观测(execveat + IPv6) | Landlock + drop caps + gVisor + TEE(金融级) |
 
 ### 1.4 身份标识体系
 
@@ -177,7 +176,7 @@ virbius-control 签发 License（JWT 签名）：
 |---------|-----------|--------------|-------------|------------|
 | **身份管控层** | License 校验(allowed_tools) | License 校验(签名/过期/吊销) | — | License 签发 + risk_quota 校验 |
 | **运行时防护层** | 预检 + Prompt Gateway + 记忆管控 + 输出审查 | allowlist + 计数 + engine 调用 | — | Groovy L3 + STI + Prompt 入侵检测 |
-| **基础设施层** | Landlock + gVisor + 命名空间隔离 | — | Falco + eBPF + Tetragon | — |
+| **基础设施层** | Landlock + gVisor + 命名空间隔离 | — | Falco + eBPF | — |
 
 **第一层：身份管控层**
 
@@ -220,7 +219,6 @@ virbius-control 签发 License（JWT 签名）：
 | capabilities 丢弃 | drop caps | §2.3 | P2 |
 | 不可信代码沙箱 | gVisor runsc 预热池 | §2.4 | P2 |
 | 内核观测 | Falco eBPF + plugin 降级链 | §4 | P0 |
-| 内核阻断 | Tetragon enforcer | §4 | P2 |
 
 
 ---
@@ -430,13 +428,26 @@ fn detect_landlock_abi_version() -> u32 {
 ```rust
 // virbius-core/src/sandbox/gvisor_pool.rs (P2)
 pub struct GvisorPool {
-    warm_containers: HashMap<Language, Vec<WarmContainer>>,
-    min_warm: usize,
-    max_idle: usize,
+    config: GvisorPoolConfig,
+    warm: Arc<Mutex<HashMap<Language, Vec<WarmContainer>>>>,
+    runsc_available: bool,
+}
+
+pub struct GvisorPoolConfig {
+    pub runsc_path: String,
+    pub rootfs_path: String,
+    pub min_warm: usize,       // 每语言最小预热容器数
+    pub max_idle: usize,       // 每语言最大空闲容器数
+    pub memory_limit_bytes: u64,
+    pub cpu_quota: f64,
+    pub network_disabled: bool,
+    pub exec_timeout: Duration,
 }
 ```
 
-**降级策略**：gVisor 不可用时，自动降级为 Landlock subprocess + 超时 5s 强制 kill + 限制内存 128MB。
+**执行流程**：`execute(language, code)` → 从预热池获取容器（热路径 ~50ms）→ 写入 stdin → 读取 stdout → 销毁已用容器 → 后台补充新容器。冷启动 1-5s。
+
+**降级策略**：gVisor 不可用时（runsc 未安装），自动降级为 Landlock subprocess + 超时 5s 强制 kill + 限制内存。
 
 ### 2.5 与 virbius-control 的同步
 
@@ -1328,7 +1339,7 @@ Agent 进程
 | 范围 | P0 观测 | P2 阻断 |
 |------|---------|---------|
 | Agent 进程内 syscall | Falco eBPF 观测(可用时) | Landlock 文件路径阻断 |
-| 容器逃逸检测 | Falco eBPF 观测(可用时) | Tetragon enforcer kill |
+| 容器逃逸检测 | Falco eBPF 观测(可用时) | gVisor 容器隔离 + Landlock 路径阻断 |
 | SSRF / 内网扫描 | Falco eBPF 观测 connect | NetworkPolicy 网络阻断 |
 | 基础设施异常 | Falco plugin (k8saudit + cloudtrail) | 云厂商原生 enforcement |
 
@@ -1339,10 +1350,7 @@ Agent 进程
 ```
 detect_mode()
   |
-  +-- 有 CAP_BPF + 内核 5.8+ + BTF + KPROBE_OVERRIDE
-  |    -> Tetragon enforcer (P2, 完整 enforcement)
-  |
-  +-- 有 CAP_BPF + 内核 5.8+ + BTF, 无 KPROBE_OVERRIDE
+  +-- 有 CAP_BPF + 内核 5.8+ + BTF
   |    -> Falco eBPF 驱动 (观测 only)
   |
   +-- 无 CAP_BPF, 有 CAP_SYS_PTRACE
@@ -1352,16 +1360,15 @@ detect_mode()
        -> Falco plugin 模式 (k8saudit + filetail + 自定义插件)
 ```
 
-**为什么选 Falco 而非 Tetragon 做眼睛**：Falco 有驱动降级链(eBPF -> userspace -> plugin)，eBPF 不可用时不至于完全失明。Tetragon 无降级，eBPF 一断就瞎。Tetragon 在 P2 作为 enforcement 增强使用。
+**观测与阻断职责分离**：核层（Falco）只负责观测，不做 enforcement。阻断由端层 Landlock + drop caps（文件路径限制）和 gVisor（不可信代码隔离）承担。这种分离确保观测层故障不影响阻断能力，阻断层故障仍留有观测可见性。
 
-### 4.3 Tetragon 检测逻辑
+### 4.3 Falco 模式检测逻辑
 
 ```rust
 // virbius-kernel/src/detect.rs
 
 pub enum KernelMode {
-    Tetragon,        // 完整 eBPF + enforcement (P2)
-    FalcoEbpf,       // eBPF 观测，无 enforcement
+    FalcoEbpf,       // eBPF 观测
     FalcoUserspace,  // ptrace 驱动
     FalcoPlugin,     // 纯日志/审计
     Disabled,
@@ -1383,32 +1390,28 @@ pub fn detect() -> KernelMode {
     let kver = kernel_version().unwrap_or((0, 0));
     let btf_ok = std::fs::metadata("/sys/kernel/btf/vmlinux")
         .map(|m| m.len() > 0).unwrap_or(false);
-    let kprobe_override = kernel_config("CONFIG_BPF_KPROBE_OVERRIDE");
 
     if kver < (5, 8) || !btf_ok {
         return if has_sys_ptrace { KernelMode::FalcoUserspace }
                else { KernelMode::FalcoPlugin };
     }
 
-    if kprobe_override && has_sys_admin {
-        return KernelMode::Tetragon;
-    }
-
     KernelMode::FalcoEbpf
 }
 ```
 
-Tetragon 硬性要求：
+Falco eBPF 模式硬性要求：
 
 | 检测项 | 要求 | 常见失败原因 |
 |--------|------|------------|
 | 内核版本 | >= 5.8 (推荐 5.10+) | 老内核 |
 | **BTF**(最关键) | /sys/kernel/btf/vmlinux 存在且 > 0 字节 | CONFIG_DEBUG_INFO_BTF 未开启 |
 | 内核 config | CONFIG_BPF=y, CONFIG_KPROBES=y, CONFIG_TRACING=y | 硬化内核裁剪 |
-| enforcement 额外要求 | CONFIG_BPF_KPROBE_OVERRIDE=y | 多数云内核默认关 |
 | 权限 | CAP_SYS_ADMIN 或 CAP_BPF+CAP_PERFMON | serverless / PSA restricted |
 | tracefs | /sys/kernel/tracing/ 已挂载 | 容器内未映射 |
 | bpffs | /sys/fs/bpf/ 已挂载 | 容器内未映射 |
+
+> **注**：不再使用 Tetragon 做内核级 enforcement。阻断由端层 Landlock + drop caps（文件路径隔离）和 gVisor（不可信代码沙箱）承担，核层 Falco 专注观测。这简化了部署依赖（无需 CONFIG_BPF_KPROBE_OVERRIDE），且观测与阻断解耦——Falco 故障不影响 Landlock/gVisor 阻断能力。
 
 ### 4.4 eBPF 观测程序(P2, eBPF 可用时)
 
@@ -1517,13 +1520,13 @@ eBPF 程序 (bpf_get_current_cgroup_id()=98765)
 - **Host PID 变化**：Agent fork 出子进程时，子进程有新的 Host PID。若需追踪子进程，由端层 Proxy 在 `posix_spawn` 后立即注册子进程 PID（P2 沙箱场景）。
 - **竞态窗口**：`register_agent` 在 fork 后、子进程执行任何工具前调用。窗口内 Falco 可能观察到未注册的子进程事件——此时事件无 trace_id 关联，但端层 License/预检仍在生效，核层观测为"匿名事件"（标注 `unregistered_pid`）。
 
-> **stale mapping 防护**：Agent 崩溃时无法清理 PID 映射。进程内 pidmap 随进程销毁自动释放；eBPF `agent_cgroups` map 由 cgroup 销毁时内核自动回收（Tetragon 也可监听 `cgroup_rmdir`）；Redis 备份依赖 TTL。
+> **stale mapping 防护**：Agent 崩溃时无法清理 PID 映射。进程内 pidmap 随进程销毁自动释放；eBPF `agent_cgroups` map 由 cgroup 销毁时内核自动回收；Redis 备份依赖 TTL。
 
 ### 4.7 部署模式
 
 | 模式 | 判定条件 | 观测 | 阻断 |
 |------|---------|------|------|
-| host | 裸机/自管 VM + root | Falco eBPF + Tetragon(P2) | Tetragon(P2) + Landlock(P2) |
+| host | 裸机/自管 VM + root | Falco eBPF(P2) | Landlock(P2) + gVisor(P2) |
 | daemonset | K8s 标准节点池 + privileged | 同上 | 同上 |
 | pod-observe | serverless(Fargate/Autopilot) | Falco plugin + 云厂商告警 | 端层 Landlock(P2) + NetworkPolicy |
 | audit-only | 前期观测 | 上述观测的只读子集 | 无 |
@@ -1576,6 +1579,77 @@ Falco 节点 Pod 内：
 #### 4.8.3 示例
 
 详见 [README.md](#快速开始) 或 ops.html 前端操作界面。
+
+### 4.9 统一沙箱规则管理（Falco + Landlock + gVisor）
+
+核层的三类规则——Falco 观测规则、Landlock 文件隔离规则、gVisor 沙箱配置——统一通过 `tb_rules` 表管理，复用同一套 CRUD + 发布 + 灰度部署流程。
+
+#### 4.9.1 规则体系对照
+
+| 规则类型 | `layer` | `runtime` | `body_json` 内容 | 下发目标 | 下发方式 |
+|----------|---------|-----------|------------------|---------|---------|
+| **Falco 观测** | `falco` | `falco` | condition/output/priority/tags | 核层 Falco 节点 | Redis Stream → config-subscriber → YAML |
+| **Landlock 隔离** | `sandbox` | `landlock` | tool_name/read_paths/write_paths/exec_paths | 端层 EdgeManifest | REST → manifest JSON → SDK 拉取 |
+| **gVisor 沙箱** | `sandbox` | `gvisor` | runsc_path/memory_limit/cpu_quota/... | 端层 EdgeManifest | REST → manifest JSON → SDK 拉取 |
+
+#### 4.9.2 Landlock 规则格式
+
+每条 Landlock 规则绑定一个 `tool_name`，定义该工具在沙箱中可访问的路径白名单：
+
+```json
+{
+  "tool_name": "read_file",
+  "read_paths": ["/tmp/data/*", "/home/user/workdir/*", "/usr/lib/*"],
+  "write_paths": [],
+  "exec_paths": ["/usr/bin/cat", "/usr/bin/head"]
+}
+```
+
+运营台操作流程：新建规则 → 选择 `sandbox` 层 → 选择 `landlock` runtime → 编辑 JSON body → 保存 → 策略上线 → 部署 → Edge SDK 拉取 manifest → P2 沙箱执行时生效。
+
+#### 4.9.3 gVisor 规则格式
+
+gVisor 规则为全局配置（首个 `full` 状态的规则生效），定义不可信代码执行容器的资源限制：
+
+```json
+{
+  "runsc_path": "/usr/local/bin/runsc",
+  "rootfs_path": "/opt/virbius/rootfs",
+  "min_warm": 2,
+  "max_idle": 5,
+  "memory_limit_bytes": 268435456,
+  "cpu_quota": 1.0,
+  "network_disabled": true,
+  "exec_timeout_ms": 30000
+}
+```
+
+#### 4.9.4 下发链路
+
+```
+virbius-control（唯一真源）
+  |
+  +-- tb_rules (layer='falco')    → FalcoConfigBuilder → YAML → Redis Stream → Falco 节点
+  +-- tb_rules (layer='sandbox')  → ArtifactService.buildLandlockProfiles() / buildGvisorConfig()
+  |                                  → EdgeManifest JSON → REST API → Edge SDK 拉取
+  |
+  +-- 运营台 ops.html
+      +-- 导航：🦅 falco / 🔒 沙箱 sandbox
+      +-- 规则编辑器：JSON body + 校验 + 预览
+      +-- 策略上线：draft → dry_run → canary → full（复用现有状态机）
+```
+
+#### 4.9.5 运营台集成
+
+| 功能 | 实现方式 |
+|------|---------|
+| 规则导航 | ops.html 导航栏新增 `🔒 沙箱 sandbox` 按钮，与 `🦅 falco` 并列 |
+| 层/运行时 | `LAYER_RUNTIMES.sandbox = ['landlock', 'gvisor']`，运营台自动适配 |
+| 规则编辑 | JSON body 编辑器（与 falco 规则编辑体验一致），支持 landlock/gvisor 模板 |
+| 规则校验 | 保存时解析 JSON body，校验必填字段（tool_name / read_paths 等） |
+| 策略上线 | 复用 `draft → dry_run → canary → full` 状态机，与 falco/edge/cloud 规则一致 |
+| 灰度部署 | sandbox 层加入 `DeployRolloutController.diff-rules` 的 layer 列表 |
+| Manifest 下发 | `ArtifactService.writeEdgeManifestFile` 新增 `landlock_profiles` + `gvisor_config` 字段 |
 
 ---
 
@@ -1706,6 +1780,42 @@ virbius-control
   +-- Higress CRD (新增)
       +-- -> Higress: MCP route + WasmPlugin 配置 (virbius-compiler 生成)
 ```
+
+### 5.6 审计完整性（Hash Chain）
+
+> **✅ 已实现。** 位于 `virbius-control/src/main/java/io/virbius/control/audit/`，详见 [DESIGN.md §13.5](DESIGN.md#135-审计完整性hash-chain)。
+
+防篡改审计链：每条审计事件包含前一条的 SHA-256 hash，形成**按租户隔离**的链式结构。任何篡改都会导致链断裂，可被验证检测。
+
+**核心组件**：
+
+| 组件 | 职责 |
+|------|------|
+| `HashChainOrchestrator` | 为审计事件附加 `audit_seq` / `prev_hash` / `curr_hash`，Redis Lua CAS 原子更新 + MySQL 乐观锁降级 |
+| `HashChainVerifier` | 从 DB 读取事件逐条校验序号连续性 + prev_hash 链 + curr_hash 重算 |
+| `HashChainVerifyTask` | `@Scheduled` 每小时自动验证所有租户近 7 天审计链 |
+| `AuditAdminController` | REST API：`POST /audit/verify`（手动验证）+ `GET /audit/chain/status`（链状态查询） |
+
+**数据流**：
+
+```
+各层审计事件
+  │
+  ▼
+virbius-control AuditService
+  ├── HashChainOrchestrator.chainBatch(tenantId, events)
+  │     ├── Redis: HSET virbius:audit:chain:{tenantId} (Lua CAS, 3 次重试)
+  │     └── MySQL: tb_audit_chain_state (乐观锁 version, 降级)
+  ▼
+写入 tb_audit_events (含 audit_seq, prev_hash, curr_hash)
+  │
+  ▼
+HashChainVerifyTask (每小时) → HashChainVerifier → 重算 + 比对 → log.error on break
+```
+
+**Hash 计算**（13 字段）：`prev_hash | seq | tenant_id | trace_id | event_id | effective_action | layer | reason_code | rule_id | scene | user_id | device_id | intercepted_at`
+
+**DB 迁移**：`V8__audit_hash_chain.sql` — `tb_audit_events` 增加 3 列 + `tb_audit_chain_state` 链状态表。
 
 ---
 
