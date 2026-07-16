@@ -49,6 +49,9 @@ class ArtifactServiceTest {
     @Mock
     private EdgeArtifactMetaRepository edgeArtifactMetaRepository;
 
+    @Mock
+    private ToolRegistryService toolRegistryService;
+
     private ArtifactService artifactService;
 
     @BeforeEach
@@ -65,7 +68,8 @@ class ArtifactServiceTest {
                 gatewayListRedisService,
                 edgeArtifactMetaRepository,
                 false,
-                true);
+                true,
+                toolRegistryService);
     }
 
     @Test

@@ -21,16 +21,19 @@ public class PublishService {
     private final PolicyMaterializer policyMaterializer;
     private final PolicyDataBuilder policyDataBuilder;
     private final CacheReloadNotifier reloadNotifier;
+    private final ToolRegistryService toolRegistryService;
 
     public PublishService(
             RegistryRepository store,
             PolicyMaterializer policyMaterializer,
             PolicyDataBuilder policyDataBuilder,
-            CacheReloadNotifier reloadNotifier) {
+            CacheReloadNotifier reloadNotifier,
+            ToolRegistryService toolRegistryService) {
         this.store = store;
         this.policyMaterializer = policyMaterializer;
         this.policyDataBuilder = policyDataBuilder;
         this.reloadNotifier = reloadNotifier;
+        this.toolRegistryService = toolRegistryService;
     }
 
     public Map<String, Object> runtimeSnapshot(String tenantId) {
@@ -88,6 +91,7 @@ public class PublishService {
         body.set("lists", snakeMapper.valueToTree(policyDataBuilder.buildEngineMemoryLists(tenantId)));
         body.set("redis_list_index", snakeMapper.valueToTree(policyDataBuilder.buildEngineRedisListIndex(tenantId)));
         body.set("cumulatives", snakeMapper.valueToTree(policyDataBuilder.buildEngineCumulatives(tenantId)));
+        body.set("tool_policies", snakeMapper.valueToTree(toolRegistryService.buildEngineToolPolicies(tenantId)));
         return snakeMapper.convertValue(body, Map.class);
     }
 

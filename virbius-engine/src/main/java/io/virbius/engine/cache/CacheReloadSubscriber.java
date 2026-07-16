@@ -135,13 +135,16 @@ public class CacheReloadSubscriber {
                         payload.get("redis_list_index"), new TypeReference<>() {});
                 List<PolicyDataCache.CumulativeBlock> rawCumulatives = JSON.convertValue(
                         payload.get("cumulatives"), new TypeReference<>() {});
-                if (rawLists != null || rawCumulatives != null) {
-                    PolicyDataCache.TenantPolicyData data = ScriptRuleRunner.fromBlocks(
-                            rawLists != null ? rawLists : List.of(),
-                            rawRedisIndex != null ? rawRedisIndex : List.of(),
-                            rawCumulatives != null ? rawCumulatives : List.of());
-                    policyData.replace(tenantId, data);
-                }
+if (rawLists != null || rawCumulatives != null) {
+List<PolicyDataCache.ToolPolicyEntry> rawToolPolicies = JSON.convertValue(
+payload.get("tool_policies"), new TypeReference<>() {});
+PolicyDataCache.TenantPolicyData data = ScriptRuleRunner.fromBlocks(
+rawLists != null ? rawLists : List.of(),
+rawRedisIndex != null ? rawRedisIndex : List.of(),
+rawCumulatives != null ? rawCumulatives : List.of(),
+rawToolPolicies != null ? rawToolPolicies : List.of());
+policyData.replace(tenantId, data);
+}
                 log.info("cache reloaded from stream: tenant={} version={} rules={}", tenantId, policyVersion,
                         rawRules != null ? rawRules.size() : 0);
             }

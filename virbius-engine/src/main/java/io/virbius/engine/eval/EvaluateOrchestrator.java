@@ -25,6 +25,7 @@ public class EvaluateOrchestrator {
     private final ChallengeService challengeService;
     private final PromptInjectionDetector injectionDetector;
     private final StiTaintDetector taintDetector;
+    private final SessionRiskManager sessionRiskManager;
 
     public EvaluateOrchestrator(
             ScriptRuleRunner scriptRuleRunner,
@@ -33,7 +34,8 @@ public class EvaluateOrchestrator {
             PolicyMerger policyMerger,
             ChallengeService challengeService,
             PromptInjectionDetector injectionDetector,
-            StiTaintDetector taintDetector) {
+            StiTaintDetector taintDetector,
+            SessionRiskManager sessionRiskManager) {
         this.scriptRuleRunner = scriptRuleRunner;
         this.promptRunner = promptRunner;
         this.auditWriter = auditWriter;
@@ -41,6 +43,7 @@ public class EvaluateOrchestrator {
         this.challengeService = challengeService;
         this.injectionDetector = injectionDetector;
         this.taintDetector = taintDetector;
+        this.sessionRiskManager = sessionRiskManager;
     }
 
     public EvaluateResponseDto evaluate(EvaluateRequestDto req) {
@@ -116,6 +119,31 @@ public class EvaluateOrchestrator {
             log.warn("recordToolCall failed: {}", e.getMessage());
         }
 
+        // --- P1.3: Session Risk adaptive scoring (multi-dimensional weighted + time decay) ---
+        int sessionRiskScore = 0;
+        try {
+            int injectionHits = (int) signals.stream()
+                    .filter(s -> "PROMPT_INJECTION".equals(s.ruleId()))
+                    .count();
+            int chainDelta = signals.stream()
+                    .filter(s -> s.ruleId() != null
+                            && !"PROMPT_INJECTION".equals(s.ruleId())
+                            && s.score() > 0)
+                    .mapToInt(s -> (int) s.score())
+                    .sum();
+            RiskUpdateInput riskInput = new RiskUpdateInput(
+                    sessionId,
+                    req.tenantId() != null ? req.tenantId() : "default",
+                    100, // default risk_quota; TODO: load from License
+                    injectionHits,
+                    injectionResult.hit() ? injectionResult.riskDelta() : 15,
+                    chainDelta,
+                    0); // falco alerts are async, consumed from pending counter
+            sessionRiskScore = sessionRiskManager.updateRiskScore(riskInput);
+        } catch (Exception e) {
+            log.warn("sessionRiskManager.updateRiskScore failed: {}", e.getMessage());
+        }
+
         // Compute args hash for challenge binding
         String argsJson = req.argsJson() != null ? req.argsJson() : "";
         String argsHash = ChallengeService.computeArgsHash(toolName, argsJson);
@@ -136,6 +164,7 @@ public class EvaluateOrchestrator {
         return new EvaluateResponseDto(
                 decision.effectiveAction(),
                 decision.maxRiskScore(),
+                sessionRiskScore,
                 primaryRuleId,
                 primaryRevision,
                 reasonCode,

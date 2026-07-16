@@ -646,6 +646,26 @@
 
       // Rules hint
       'hint.rules': '新建规则默认为 <code>draft</code>（不进执行面）；保存后请到左侧「<strong>策略上线</strong>」点 <code>上线</code> 进入 <code>dry_run</code> 观测。停用后可 <code>恢复草稿</code> 再编辑。管/云 <code>prompt</code> / <code>lua</code> / <code>groovy</code> 可配 <code>bind_scope</code>（含 Route）；<strong>端 edge</strong> 用关键词表单 + <code>global</code> / <code>service(app_ids)</code>。',
+
+      // Tool risk class
+      'tool.risk-low': '🟢 低 (1) — read_file, search',
+      'tool.risk-medium': '🟡 中 (3) — write_file, git_commit',
+      'tool.risk-high': '🔴 高 (5) — delete_file, exec_cmd',
+      'tool.risk-network': '🔵 网络 (4) — http_post, webhook_call',
+
+      // Tool Registry
+      'nav.tools': '工具注册',
+      'tools.title': '工具注册',
+      'tools.desc': '工具元数据的全局注册表。每个工具定义其风险等级、沙箱类型、超时、快速通道和参数校验 Schema。配置后自动同步到 Edge Manifest 和 Engine Session Risk。',
+      'tools.btn-new': '新建工具',
+      'tools.header-name': 'tool_name',
+      'tools.header-risk': 'risk_class',
+      'tools.header-sandbox': 'sandbox_type',
+      'tools.header-timeout': 'timeout_ms',
+      'tools.header-fastpath': 'fast_path',
+      'tools.header-schema': 'args_schema',
+      'tools.header-desc': '描述',
+      'tools.btn-save': '保存',
     },
 
     en: {
@@ -1293,6 +1313,26 @@
 
       // Rules hint
       'hint.rules': 'New rules default to <code>draft</code> (not in execution plane); after saving, go to "<strong>Rollout</strong>" on the left and click <code>Publish</code> to enter <code>dry_run</code> for observation. After disabling, click <code>Restore Draft</code> to edit again. Gateway/Cloud <code>prompt</code> / <code>lua</code> / <code>groovy</code> support <code>bind_scope</code> (including Route); <strong>Edge</strong> uses keyword form + <code>global</code> / <code>service(app_ids)</code>.',
+
+      // Tool risk class
+      'tool.risk-low': '🟢 Low (1) — read_file, search',
+      'tool.risk-medium': '🟡 Medium (3) — write_file, git_commit',
+      'tool.risk-high': '🔴 High (5) — delete_file, exec_cmd',
+      'tool.risk-network': '🔵 Network (4) — http_post, webhook_call',
+
+      // Tool Registry
+      'nav.tools': 'Tool Registry',
+      'tools.title': 'Tool Registry',
+      'tools.desc': 'Global registry of tool metadata. Each tool defines its risk class, sandbox type, timeout, fast path, and args validation schema. Configurations are automatically synced to Edge Manifest and Engine Session Risk.',
+      'tools.btn-new': 'New Tool',
+      'tools.header-name': 'tool_name',
+      'tools.header-risk': 'risk_class',
+      'tools.header-sandbox': 'sandbox_type',
+      'tools.header-timeout': 'timeout_ms',
+      'tools.header-fastpath': 'fast_path',
+      'tools.header-schema': 'args_schema',
+      'tools.header-desc': 'Description',
+      'tools.btn-save': 'Save',
     }
   };
 

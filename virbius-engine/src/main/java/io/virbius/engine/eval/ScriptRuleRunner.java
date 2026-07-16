@@ -184,7 +184,7 @@ public class ScriptRuleRunner {
     @SuppressWarnings("unchecked")
     private Map<String, Object> preloadSession(String sessionId) {
         if (sessionStatePreloader == null || sessionId == null || sessionId.isBlank()) {
-            return Map.of("history", List.of(), "riskScore", 0, "toolCounts", Map.of());
+            return Map.of("history", List.of(), "riskScore", 0, "riskBreakdown", Map.of(), "toolCounts", Map.of());
         }
         return sessionStatePreloader.preload(sessionId);
     }
@@ -362,7 +362,8 @@ public class ScriptRuleRunner {
     public static PolicyDataCache.TenantPolicyData fromBlocks(
             List<PolicyDataCache.ListBlock> lists,
             List<PolicyDataCache.RedisListIndexBlock> redisIndex,
-            List<PolicyDataCache.CumulativeBlock> cumulatives) {
+            List<PolicyDataCache.CumulativeBlock> cumulatives,
+            List<PolicyDataCache.ToolPolicyEntry> toolPolicies) {
         Map<String, ScriptEnvironment.ListDefinition> listMap = new HashMap<>();
         if (lists != null) {
             for (PolicyDataCache.ListBlock b : lists) {
@@ -415,6 +416,15 @@ public class ScriptRuleRunner {
                                 b.valueSource()));
             }
         }
-        return new PolicyDataCache.TenantPolicyData(listMap, redisMap, cumMap);
+        Map<String, PolicyDataCache.ToolPolicyEntry> toolMap = new HashMap<>();
+        if (toolPolicies != null) {
+            for (PolicyDataCache.ToolPolicyEntry t : toolPolicies) {
+                if (t.toolName() == null || t.toolName().isBlank()) {
+                    continue;
+                }
+                toolMap.put(t.toolName(), t);
+            }
+        }
+        return new PolicyDataCache.TenantPolicyData(listMap, redisMap, cumMap, toolMap);
     }
 }

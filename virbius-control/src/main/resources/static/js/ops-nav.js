@@ -6,6 +6,7 @@
       await loadExtendedVars();
       await loadExtendedVars();
       await loadSceneRegistry();
+      await loadToolRegistry();
       await loadGatewayRoutes();
       await loadRules();
       if (document.getElementById('panel-rollout').classList.contains('active')) {
@@ -72,6 +73,9 @@
       if (tab === 'trace') {
         loadTraceIngestStatus();
       }
+      if (tab === 'tools') {
+        loadToolRegistry().catch(e => log(e.message, 'err'));
+      }
     }
 
     document.getElementById('btnSidebarToggle').onclick = () => {
@@ -124,3 +128,11 @@
     if (btnTraceRefresh) btnTraceRefresh.onclick = () => loadTraceSearch();
 
     reloadAll().catch(e => log(e.message, 'err'));
+
+    // Tool registry handlers
+    const btnNewTool = document.getElementById('btnNewTool');
+    if (btnNewTool) btnNewTool.onclick = () => showToolEditor(null);
+    const btnSaveTool = document.getElementById('btnSaveTool');
+    if (btnSaveTool) btnSaveTool.onclick = () => saveTool();
+    const btnCancelTool = document.getElementById('btnCancelTool');
+    if (btnCancelTool) btnCancelTool.onclick = () => hideToolEditor();

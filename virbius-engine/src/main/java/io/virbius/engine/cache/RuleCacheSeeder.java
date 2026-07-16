@@ -67,8 +67,11 @@ public class RuleCacheSeeder {
                     snapshot.get("redis_list_index"), new TypeReference<>() {});
             List<PolicyDataCache.CumulativeBlock> rawCumulatives = JSON.convertValue(
                     snapshot.get("cumulatives"), new TypeReference<>() {});
-            PolicyDataCache.TenantPolicyData data = ScriptRuleRunner.fromBlocks(
-                    rawLists, rawRedisIndex, rawCumulatives);
+List<PolicyDataCache.ToolPolicyEntry> rawToolPolicies = JSON.convertValue(
+snapshot.get("tool_policies"), new TypeReference<>() {});
+PolicyDataCache.TenantPolicyData data = ScriptRuleRunner.fromBlocks(
+rawLists, rawRedisIndex, rawCumulatives,
+rawToolPolicies != null ? rawToolPolicies : List.of());
             policyData.replace("default", data);
             log.info("recovered policy data (lists/cumulatives) for tenant default");
         } catch (Exception e) {

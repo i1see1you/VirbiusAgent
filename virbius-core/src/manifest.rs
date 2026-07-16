@@ -146,6 +146,10 @@ fn default_memory_tool_patterns() -> Vec<String> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ToolPolicy {
     pub tool_name: String,
+    /// Risk class for session risk scoring: low(1) / medium(3) / high(5) / network(4).
+    /// Configured via operational console (rule bind_scope=tool → bind_ref.risk_class).
+    #[serde(default = "default_risk_class")]
+    pub risk_class: String,
     #[serde(default)]
     pub allowed_args_schema: Option<serde_json::Value>,
     #[serde(default)]
@@ -154,6 +158,10 @@ pub struct ToolPolicy {
     pub sandbox_type: String,
     #[serde(default)]
     pub timeout_ms: u64,
+}
+
+fn default_risk_class() -> String {
+    "low".into()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -370,4 +378,17 @@ pub fn app_id() -> String {
 
 pub fn tool_policy(name: &str) -> Option<ToolPolicy> {
     load().tool_policies.into_iter().find(|t| t.tool_name == name)
+}
+
+/// Look up the risk_class for a tool. Returns "low" if not configured.
+pub fn tool_risk_class(name: &str) -> String {
+    tool_policy(name)
+        .map(|p| {
+            if p.risk_class.is_empty() {
+                "low".to_string()
+            } else {
+                p.risk_class
+            }
+        })
+        .unwrap_or_else(|| "low".to_string())
 }

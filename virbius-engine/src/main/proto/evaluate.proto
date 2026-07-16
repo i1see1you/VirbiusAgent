@@ -48,6 +48,7 @@ message EvaluateResponse {
   bool degraded = 7;
   string challenge_id = 8;     // populated when effective_action == "challenge"
   string args_hash = 9;        // SHA-256 of tool_name:args_json (for challenge binding)
+  int32 session_risk_score = 10; // multi-dimensional session risk (base + tool_weight + chain + injection + falco)
 }
 
 message EngineDecision {

@@ -42,6 +42,7 @@ public class ProtoMapper {
         var builder = EvaluateResponse.newBuilder()
                 .setEffectiveAction(dto.effectiveAction())
                 .setMaxRiskScore(dto.maxRiskScore())
+                .setSessionRiskScore(dto.sessionRiskScore())
                 .setRuleId(dto.ruleId())
                 .setRuleRevision(dto.ruleRevision())
                 .setReasonCode(dto.reasonCode())

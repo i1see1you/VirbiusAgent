@@ -16,6 +16,7 @@ public class SessionStatePreloader {
     private static final Logger log = LoggerFactory.getLogger(SessionStatePreloader.class);
     private static final String KEY_HISTORY = "session:%s:tool_history";
     private static final String KEY_RISK = "session:%s:risk_score";
+    private static final String KEY_BREAKDOWN = "session:%s:risk_breakdown";
     private static final String KEY_TOOL_COUNTS = "session:%s:tool_counts";
     private static final int MAX_HISTORY = 50;
 
@@ -29,22 +30,24 @@ public class SessionStatePreloader {
 
     public Map<String, Object> preload(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) {
-            return Map.of("history", List.of(), "riskScore", 0, "toolCounts", Map.of());
+            return Map.of("history", List.of(), "riskScore", 0, "riskBreakdown", Map.of(), "toolCounts", Map.of());
         }
         try (Jedis jedis = jedisPool.getResource()) {
             String historyKey = KEY_HISTORY.formatted(sessionId);
             String riskKey = KEY_RISK.formatted(sessionId);
-
+            String breakdownKey = KEY_BREAKDOWN.formatted(sessionId);
             String toolCountsKey = KEY_TOOL_COUNTS.formatted(sessionId);
 
             Pipeline pipe = jedis.pipelined();
             var historyFuture = pipe.lrange(historyKey, 0, 9);
             var riskFuture = pipe.get(riskKey);
+            var breakdownFuture = pipe.hgetAll(breakdownKey);
             var toolCountsFuture = pipe.hgetAll(toolCountsKey);
             pipe.sync();
 
             List<String> historyRaw = historyFuture.get();
             String riskRaw = riskFuture.get();
+            Map<String, String> breakdownRaw = breakdownFuture.get();
             Map<String, String> toolCountsRaw = toolCountsFuture.get();
 
             List<Map<String, Object>> history = new ArrayList<>();
@@ -63,6 +66,16 @@ public class SessionStatePreloader {
                 try { riskScore = Integer.parseInt(riskRaw); } catch (NumberFormatException ignored) {}
             }
 
+            // Parse risk breakdown (written by SessionRiskManager)
+            Map<String, Object> riskBreakdown = new HashMap<>();
+            if (breakdownRaw != null) {
+                for (var entry : breakdownRaw.entrySet()) {
+                    try {
+                        riskBreakdown.put(entry.getKey(), Integer.parseInt(entry.getValue()));
+                    } catch (NumberFormatException ignored) {}
+                }
+            }
+
             Map<String, Long> toolCounts = new HashMap<>();
             if (toolCountsRaw != null) {
                 for (var entry : toolCountsRaw.entrySet()) {
@@ -75,11 +88,12 @@ public class SessionStatePreloader {
             return Map.of(
                 "history", history,
                 "riskScore", riskScore,
+                "riskBreakdown", riskBreakdown,
                 "toolCounts", toolCounts
             );
         } catch (Exception e) {
             log.error("Failed to preload session state: {}", e.getMessage());
-            return Map.of("history", List.of(), "riskScore", 0, "toolCounts", Map.of());
+            return Map.of("history", List.of(), "riskScore", 0, "riskBreakdown", Map.of(), "toolCounts", Map.of());
         }
     }
 
@@ -112,6 +126,12 @@ public class SessionStatePreloader {
         }
     }
 
+    /**
+     * @deprecated Use {@link SessionRiskManager#updateRiskScore(RiskUpdateInput)} instead.
+     * The new multi-dimensional scoring replaces this simple INCRBY.
+     * Kept for backward compatibility during migration.
+     */
+    @Deprecated
     public void incrementRiskScore(String sessionId, int delta) {
         if (sessionId == null || sessionId.isBlank() || delta == 0) return;
         try (Jedis jedis = jedisPool.getResource()) {

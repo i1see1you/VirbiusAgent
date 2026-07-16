@@ -66,6 +66,19 @@ virbius:
     taint-min-content-length: 512
     taint-max-content-length: 8192
 
+  session-risk:
+    enabled: ${VIRBIUS_SESSION_RISK_ENABLED:true}
+    base-risk-ratio: 0.1                   # base_risk = risk_quota × ratio
+    injection-weight: 15                   # per-injection-hit risk delta
+    falco-weight: 10                       # per-falco-alert risk delta
+    decay-half-life-minutes: 30            # exp(-elapsed / half_life)
+    decay-cutoff-minutes: 120              # event-driven dims → 0 after this
+    threshold:
+      disconnect: 80                       # >80: force disconnect + alert
+      full-audit: 60                       # >60: exit fast path + full audit
+      sample-audit: 30                     # >30: audit sampling 50%
+    session-ttl-seconds: 3600
+
 audit:
   publish:
     async: true

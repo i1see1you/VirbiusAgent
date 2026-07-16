@@ -39,12 +39,22 @@ public class PolicyDataCache {
     public record TenantPolicyData(
             Map<String, ScriptEnvironment.ListDefinition> memoryLists,
             Map<String, ScriptEnvironment.RedisListDefinition> redisLists,
-            Map<String, ScriptEnvironment.CumulativeDefinition> cumulatives) {
+            Map<String, ScriptEnvironment.CumulativeDefinition> cumulatives,
+            Map<String, ToolPolicyEntry> toolPolicies) {
 
         public static TenantPolicyData empty() {
-            return new TenantPolicyData(Map.of(), Map.of(), Map.of());
+            return new TenantPolicyData(Map.of(), Map.of(), Map.of(), Map.of());
         }
     }
+
+    /** Tool policy entry cached from the Control's tool registry. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ToolPolicyEntry(
+            @JsonProperty("tool_name") String toolName,
+            @JsonProperty("risk_class") String riskClass,
+            @JsonProperty("sandbox_type") String sandboxType,
+            @JsonProperty("timeout_ms") long timeoutMs,
+            @JsonProperty("fast_path") boolean fastPath) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ListBlock(

@@ -544,3 +544,27 @@ CREATE TABLE IF NOT EXISTS tb_trace_ingest_checkpoint (
     last_entry_id   VARCHAR(64)  NOT NULL,
     updated_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ============================================================
+-- Tool Registry (§14.1) — canonical tool metadata
+-- Replaces ad-hoc tool config extraction from bind_scope=tool rules.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS tb_tool_registry (
+    tenant_id            VARCHAR(64)  NOT NULL,
+    tool_name            VARCHAR(128) NOT NULL,
+    risk_class           VARCHAR(16)  NOT NULL DEFAULT 'low',
+    sandbox_type         VARCHAR(16)  NOT NULL DEFAULT 'none',
+    timeout_ms           INTEGER      NOT NULL DEFAULT 30000,
+    fast_path            INTEGER      NOT NULL DEFAULT 0,
+    allowed_args_schema  TEXT,
+    description          VARCHAR(255),
+    created_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, tool_name),
+    CHECK (risk_class IN ('low', 'medium', 'high', 'network')),
+    CHECK (sandbox_type IN ('none', 'landlock', 'gvisor')),
+    CHECK (timeout_ms >= 1000 AND timeout_ms <= 300000)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tb_tool_registry_tenant
+    ON tb_tool_registry (tenant_id);

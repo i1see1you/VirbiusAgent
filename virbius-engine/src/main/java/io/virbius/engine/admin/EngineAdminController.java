@@ -53,13 +53,14 @@ public class EngineAdminController {
         if (!rules.isEmpty()) {
             cache.replaceAll(version, rules);
         }
-        if (body != null && (body.lists() != null || body.redisListIndex() != null || body.cumulatives() != null)) {
-            PolicyDataCache.TenantPolicyData data = ScriptRuleRunner.fromBlocks(
-                    body.lists() != null ? body.lists() : List.of(),
-                    body.redisListIndex() != null ? body.redisListIndex() : List.of(),
-                    body.cumulatives() != null ? body.cumulatives() : List.of());
-            policyData.replace(tenant_id, data);
-        }
+if (body != null && (body.lists() != null || body.redisListIndex() != null || body.cumulatives() != null || body.toolPolicies() != null)) {
+PolicyDataCache.TenantPolicyData data = ScriptRuleRunner.fromBlocks(
+body.lists() != null ? body.lists() : List.of(),
+body.redisListIndex() != null ? body.redisListIndex() : List.of(),
+body.cumulatives() != null ? body.cumulatives() : List.of(),
+body.toolPolicies() != null ? body.toolPolicies() : List.of());
+policyData.replace(tenant_id, data);
+}
         return Map.of(
                 "ok", true,
                 "cache_generation", cache.cacheGeneration(),

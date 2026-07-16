@@ -12,7 +12,6 @@ import io.virbius.control.domain.TenantRolloutPolicy;
 import io.virbius.control.script.ScriptRuleBodies;
 import io.virbius.control.policy.BindScopeExport;
 import io.virbius.control.gateway.DlpRuleValidator;
-import io.virbius.policy.BindScope;
 import io.virbius.policy.EdgeManifestFilter;
 
 
@@ -44,8 +43,7 @@ public class ArtifactService {
 
     private static final String DEFAULT_BUNDLE_ID = "poc-default";
     private static final String DEFAULT_BUNDLE_VERSION = "0.1.0";
-
-    private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        private final com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
     private final java.nio.file.Path dataDir;
     private final RegistryRepository registryRepo;
     private final ListMetaRepository listMetaRepo;
@@ -57,6 +55,7 @@ public class ArtifactService {
     private final EdgeArtifactMetaRepository edgeArtifactMetaRepository;
     private final boolean gatewayArtifactEnabled;
     private final boolean gatewayArtifactLocalFallback;
+    private final ToolRegistryService toolRegistryService;
 
     public ArtifactService(
             @Value("${virbius.data-dir:./data}") String dataDir,
@@ -69,7 +68,8 @@ public class ArtifactService {
             GatewayListRedisService gatewayListRedisService,
             EdgeArtifactMetaRepository edgeArtifactMetaRepository,
             @Value("${virbius.gateway.artifact.enabled:true}") boolean gatewayArtifactEnabled,
-            @Value("${virbius.gateway.artifact.local-fallback:false}") boolean gatewayArtifactLocalFallback) {
+            @Value("${virbius.gateway.artifact.local-fallback:false}") boolean gatewayArtifactLocalFallback,
+            ToolRegistryService toolRegistryService) {
         this.dataDir = java.nio.file.Path.of(dataDir);
         this.registryRepo = registryRepo;
         this.listMetaRepo = listMetaRepo;
@@ -81,6 +81,7 @@ public class ArtifactService {
         this.edgeArtifactMetaRepository = edgeArtifactMetaRepository;
         this.gatewayArtifactEnabled = gatewayArtifactEnabled;
         this.gatewayArtifactLocalFallback = gatewayArtifactLocalFallback;
+        this.toolRegistryService = toolRegistryService;
     }
 
     public Map<String, String> write(String tenantId, Map<String, Object> bundleMetadata) {
@@ -485,7 +486,7 @@ public class ArtifactService {
         }
         root.put("rules", buildEdgeRuleBlocks(rules));
         root.put("dlp_rules", buildDlpRuleBlocks(rules));
-        root.put("tool_policies", buildToolPolicyBlocks(rules, appId));
+        root.put("tool_policies", buildToolPolicyBlocks(tenantId));
         root.put("landlock_profiles", buildLandlockProfiles(tenantId));
         root.put("gvisor_config", buildGvisorConfig(tenantId));
 
@@ -592,52 +593,12 @@ public class ArtifactService {
         return block;
     }
 
-    private List<Map<String, Object>> buildToolPolicyBlocks(List<RuleRevision> rules, String appId) {
-        List<Map<String, Object>> blocks = new ArrayList<>();
-        for (RuleRevision rule : rules) {
-            Map<String, Object> scope = rule.scope() != null ? rule.scope() : Map.of();
-            if (!BindScope.TOOL.equals(BindScope.scopeFromRuleScope(scope))) {
-                continue;
-            }
-            Map<String, Object> ref = BindScope.bindRefFromScope(scope);
-            Object toolNames = ref.get("tool_names");
-            if (!(toolNames instanceof List<?> names) || names.isEmpty()) {
-                continue;
-            }
-            List<String> appIds = EdgeManifestFilter.appIdsFromBindRef(ref);
-            if (!appIds.isEmpty() && !appIds.contains(appId)) {
-                continue;
-            }
-            for (Object raw : names) {
-                if (raw == null) continue;
-                String tn = String.valueOf(raw).trim();
-                if (tn.isEmpty() || "*".equals(tn)) continue;
-                Map<String, Object> entry = new LinkedHashMap<>();
-                entry.put("tool_name", tn);
-                if (rule.body() != null) {
-                    try {
-                        String bodyStr = rule.body() instanceof String s ? s : mapper.writeValueAsString(rule.body());
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> bodyMap = mapper.readValue(bodyStr, Map.class);
-                        if (bodyMap.containsKey("sandbox_type")) {
-                            entry.put("sandbox_type", bodyMap.get("sandbox_type"));
-                        }
-                        if (bodyMap.containsKey("timeout_ms")) {
-                            entry.put("timeout_ms", bodyMap.get("timeout_ms"));
-                        }
-                    } catch (Exception ignored) {
-                    }
-                }
-                if (!entry.containsKey("sandbox_type")) {
-                    entry.put("sandbox_type", "subprocess");
-                }
-                if (!entry.containsKey("timeout_ms")) {
-                    entry.put("timeout_ms", 30000);
-                }
-                blocks.add(entry);
-            }
-        }
-        return blocks;
+    /**
+     * Build tool_policies for the Edge Manifest from the tool registry.
+     * Each tool has exactly one canonical definition — no conflict resolution needed.
+     */
+    private List<Map<String, Object>> buildToolPolicyBlocks(String tenantId) {
+        return toolRegistryService.buildToolPolicyBlocks(tenantId);
     }
 
     /**

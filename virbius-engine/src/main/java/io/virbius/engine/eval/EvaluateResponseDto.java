@@ -3,6 +3,7 @@ package io.virbius.engine.eval;
 public record EvaluateResponseDto(
         String effectiveAction,
         int maxRiskScore,
+        int sessionRiskScore,
         String ruleId,
         int ruleRevision,
         String reasonCode,
