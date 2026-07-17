@@ -2,9 +2,6 @@
       await loadTenantSelect();
       await loadLists();
       await loadCumulatives();
-      await loadBindings();
-      await loadExtendedVars();
-      await loadExtendedVars();
       await loadSceneRegistry();
       await loadToolRegistry();
       await loadGatewayRoutes();

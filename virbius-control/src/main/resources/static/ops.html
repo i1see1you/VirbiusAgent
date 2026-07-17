@@ -258,8 +258,6 @@
         <button type="button" class="nav-item" data-tab="tenants"><span class="nav-icon">🏢</span><span class="nav-label" data-i18n="nav.tenants">租户</span></button>
         <button type="button" class="nav-item active" data-tab="lists"><span class="nav-icon">📋</span><span class="nav-label" data-i18n="nav.lists">名单</span></button>
         <button type="button" class="nav-item" data-tab="cumulatives"><span class="nav-icon">📊</span><span class="nav-label" data-i18n="nav.cumulatives">累计</span></button>
-        <button type="button" class="nav-item" data-tab="bindings"><span class="nav-icon">🔗</span><span class="nav-label" data-i18n="nav.bindings">请求因子</span></button>
-        <button type="button" class="nav-item" data-tab="ext-bindings"><span class="nav-icon">🧮</span><span class="nav-label" data-i18n="nav.ext-bindings">扩展因子</span></button>
         <button type="button" class="nav-item" data-tab="scene-registry"><span class="nav-icon">🎭</span><span class="nav-label" data-i18n="nav.scene-registry">场景注册</span></button>
         <button type="button" class="nav-item" data-tab="tools"><span class="nav-icon">🔧</span><span class="nav-label" data-i18n="nav.tools">工具注册</span></button>
         <button type="button" class="nav-item" data-tab="gateway-routes"><span class="nav-icon">🛣</span><span class="nav-label" data-i18n="nav.gateway-routes">网关路由</span></button>
@@ -475,55 +473,9 @@
     </div>
   </div>
 
-  <div id="panel-bindings" class="panel card">
-    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="bind.title">上下文映射（context_bindings）</h2>
-    <p class="hint" data-i18n-html="bind.desc">逻辑名 → HTTP 来源；策略与名单只引用逻辑名。wire 留空时默认与逻辑名相同（如逻辑名 <code>debug_flag</code> → Query 参数 <code>debug_flag</code>）。</p>
-    <table id="bindTable">
-      <thead><tr><th data-i18n="bind.header-logical">逻辑名</th><th data-i18n="bind.header-from">来源 from</th><th data-i18n="bind.header-wire">wire name / field</th><th data-i18n="bind.header-scope">作用范围</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="row" style="margin-top:0.5rem;flex-wrap:wrap">
-      <input id="bLogical" placeholder="app_id" size="10" />
-      <select id="bFrom"><option value="header">header</option><option value="query">query</option><option value="subject">subject</option><option value="network">network</option></select>
-      <input id="bWire" placeholder="wire（可空，默认同逻辑名）" size="18" />
-      <select id="bScope"><option value="global">🌐 global</option><option value="service">🏢 service</option><option value="route">🛣️  route</option></select>
-      <select id="bScopeAppIds" multiple size="3" style="display:none;width:8rem" data-i18n-title="bind.scope-hint"></select>
-      <select id="bScopeScenes" multiple size="3" style="display:none;width:8rem" data-i18n-title="bind.scope-hint"></select>
-      <button type="button" id="btnBindAdd" data-i18n="bind.btn-add">添加行</button>
-      <button type="button" id="btnSaveBindings" data-i18n="bind.btn-save">保存映射</button>
-    </div>
-  </div>
-
-  <div id="panel-ext-bindings" class="panel card">
-    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="ext.title">扩展因子（extended_vars）</h2>
-    <p class="hint" data-i18n-html="ext.desc">通过 Lua 表达式从请求因子派生计算变量。表达式可用 <code>ctx.var('逻辑名')</code> 引用已解析的请求因子。扩展因子与请求因子共享命名空间，规则中通过 <code>ctx.var('扩展因子名')</code> 引用。<strong>计算顺序</strong>：请求因子 → scope 过滤 → 扩展因子计算 → 合并 → 规则执行。</p>
-    <table id="extVarTable">
-      <thead><tr><th data-i18n="ext.header-logical">逻辑名</th><th data-i18n="ext.header-expr">Lua 表达式</th><th data-i18n="ext.header-scope">作用范围</th><th></th></tr></thead>
-      <tbody></tbody>
-    </table>
-    <div class="row" style="margin-top:0.5rem;flex-wrap:wrap">
-      <input id="extLogical" placeholder="is_high_risk" size="14" />
-      <textarea id="extExpr" placeholder="if ctx.var('app_id') == 'evil' then 'true' else 'false' end" rows="2" style="min-width:20rem;flex:1;font-family:monospace;font-size:0.85rem"></textarea>
-      <select id="extScope"><option value="global">🌐 global</option><option value="service">🏢 service</option><option value="route">🛣️  route</option></select>
-      <select id="extScopeAppIds" multiple size="3" style="display:none;width:8rem" data-i18n-title="bind.scope-hint"></select>
-      <select id="extScopeScenes" multiple size="3" style="display:none;width:8rem" data-i18n-title="bind.scope-hint"></select>
-      <button type="button" id="btnExtVarAdd" data-i18n="ext.btn-add">添加</button>
-      <button type="button" id="btnSaveExtVars" data-i18n="ext.btn-save">保存</button>
-    </div>
-    <details class="ext-help" id="extHelp" style="margin-top:0.5rem;font-size:0.8rem">
-      <summary style="color:#64748b;cursor:pointer" data-i18n="ext.help-title">📖 Lua 表达式参考</summary>
-      <div style="padding:0.5rem;background:#f8fafc;border-radius:4px;margin-top:0.25rem">
-        <div data-i18n="ext.help-avail-vars">可用请求因子（点击插入 <code>ctx.var('名称')</code>）：</div>
-        <div id="extHelpVars" style="display:flex;flex-wrap:wrap;gap:0.25rem;margin:0.3rem 0 0.5rem"></div>
-        <div data-i18n="ext.help-examples">常用示例：</div>
-        <pre id="extHelpExamples" style="margin:0.3rem 0 0;font-size:0.75rem;color:#334155;line-height:1.6;white-space:pre-wrap"></pre>
-      </div>
-    </details>
-  </div>
-
   <div id="panel-scene-registry" class="panel card">
     <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="sr.title">场景注册（scene_registry）</h2>
-    <p class="hint" data-i18n-html="sr.desc">每个 <code>scene_id</code> 归属唯一 <code>app_id</code>；同一 app 可有多个 scene。运行时由 <code>(app_id, uri, match)</code> 解析 scene（见「请求因子」中的 <code>app_id</code>）。<strong>uris</strong> 须已在「网关路由」覆盖（支持 <code>/path/*</code>）。<strong>添加 / 删除 / 改 fail 开关</strong>会写入 DB；点<strong>同步到网关</strong>推产物。</p>
+    <p class="hint" data-i18n-html="sr.desc">每个 <code>scene_id</code> 归属唯一 <code>app_id</code>；同一 app 可有多个 scene。运行时由 <code>(app_id, uri, match)</code> 解析 scene。<strong>uris</strong> 须已在「网关路由」覆盖（支持 <code>/path/*</code>）。<strong>添加 / 删除 / 改 fail 开关</strong>会写入 DB；点<strong>同步到网关</strong>推产物。</p>
     <div class="row" style="flex-wrap:wrap;gap:0.75rem">
       <label style="flex-direction:row;align-items:center;gap:0.35rem;margin:0">
         <input type="checkbox" id="srFailUnknown" /> fail_on_unknown_app
@@ -694,7 +646,7 @@
         <label>app_ids <input id="fBindAppIds" placeholder="beta, medical-prod" style="min-width:18rem" /></label>
       </div>
       <p id="bindScopeHint" class="hint" style="display:none;margin:0 0 0.5rem" data-i18n-html="gw.scope-hint">
-        Tool 绑 <code>tool_names</code>（可选）和 <code>app_ids</code>（可选）。Service 绑 <code>app_ids</code>（来自 context_bindings 的 <code>app_id</code>）。<strong>端 edge</strong>：仅 <code>global</code> / <code>service(app_ids)</code>；发布时按 App 拆 manifest，SDK 不做运行时 bind。
+        Tool 绑 <code>tool_names</code>（可选）和 <code>app_ids</code>（可选）。Service 绑 <code>app_ids</code>。<strong>端 edge</strong>：仅 <code>global</code> / <code>service(app_ids)</code>；发布时按 App 拆 manifest，SDK 不做运行时 bind。
       </p>
       <div id="conditionAuthoringRow" class="row" style="display:none;flex-wrap:wrap;align-items:center;gap:0.75rem">
         <label><span data-i18n="rules.editor-mode">编辑模式</span>
@@ -1123,8 +1075,6 @@
   <script src="js/ops-rules.js"></script>
   <script src="js/ops-lists.js"></script>
   <script src="js/ops-cumulatives.js"></script>
-  <script src="js/ops-bindings.js"></script>
-  <script src="js/ops-ext-bindings.js"></script>
   <script src="js/ops-scene-registry.js"></script>
 <script src="js/ops-tools.js"></script>
   <script src="js/ops-gw-routes.js"></script>

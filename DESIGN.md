@@ -585,7 +585,7 @@ if session_risk > 30: 提升审计采样率
 | 输入安全 | Prompt Gateway（宪法注入 + PII 脱敏） | P0 | ✅ 已完成 |
 | Prompt 注入检测 | qwen3guard 小模型 | P1 | ✅ 已完成（详见 [§13.1](#131-prompt-注入检测)） |
 | 工具返回值检测 | STI Taint 语义审计 | P1 | ✅ 已完成（详见 [§13.2](#132-sti-taint-语义审计)） |
-| 会话风险 | Redis session risk + 自适应模型 | P0/P1 | P0 ✅ / P1 待实现（详见 [§13.3](#133-session-risk-自适应模型)） |
+| 会话风险 | Redis session risk + 自适应模型 | P0/P1 | ✅ 已完成（多维加权 + 衰减因子 + Redis 持久化，详见 [§13.3](#133-session-risk-自适应模型)） |
 | 运行时观测 | Falco eBPF + plugin 降级链 + 决策链路追踪 | P0/P1 | P0 ✅ / P1 待实现（详见 [§13.4](#134-自定义-virbius-audit-falco-插件--falco-规则库扩充)） |
 | 高风险审批 | Challenge 全链路（create → approve → token verify） | P1 | ✅ 已完成 |
 | HTTP 阻断 | Higress WASM 403 + License 吊销 | P0 | ✅ 已完成 |
@@ -595,7 +595,7 @@ if session_risk > 30: 提升审计采样率
 | 记忆管控 | Memory Interceptor（PII 脱敏 + 凭据检测 + LLM 注入检测） | P1 | ✅ 已实现（详见 [§13.6](#136-记忆管控memory-interceptor)） |
 | 输出安全 | Output Review（PII 脱敏 ✅ + 凭据检测 ✅ + 内容安全 ⏳） | P1 | 部分实现（PII 脱敏 + 凭据检测已完成，LLM 内容安全待实现，详见 [§13.7](#137-输出审查output-review)） |
 | 决策链路追踪 | Trace Collector + Ingest + 可视化 | P1 | ✅ 已完成 |
-| 显式信任分层 | TrustTagger + TrustBoundaryInjector + TrustViolationDetector | P1.10 | ⏳ 设计完成（详见 [§13.10](#1310-显式信任分层explicit-trust-layering)） |
+| 显式信任分层 | TrustTagger + TrustViolationDetector | P1.10 | ✅ 已完成（Edge 端包裹 `<trust_boundary>` + Engine 端违规检测，详见 [§13.10](#1310-显式信任分层explicit-trust-layering)） |
 | 规划劫持检测 | IntentAnchor + PlanDriftDetector | P1.11 | ⏳ 设计完成（详见 [§13.11](#1311-规划劫持检测plan-hijacking-detection)） |
 
 ---

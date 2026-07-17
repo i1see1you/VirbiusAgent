@@ -1714,10 +1714,12 @@ def decide(ctx) {
 }
 ```
 
-**Groovy ctx 扩展 API(新增)**：
+**Groovy ctx API**：
 
 | 函数 | 说明 | 数据来源 |
 |------|------|---------|
+| ctx.var(name) | 读取原生变量（如 `tool_name`、`tool_session_key`） | 引擎自动注入 + 调用方传入的 `vars` 映射 |
+| ctx.vars() | 返回全部原生变量只读视图 | 同上 |
 | ctx.sessionHistory(n) | 最近 N 次工具调用 | 预加载自 Redis LRANGE |
 | ctx.sessionRiskScore() | 当前会话风险分 | 预加载自 Redis GET |
 | ctx.incrementRiskScore(delta) | 提升风险分 | 异步写 Redis INCRBY |
@@ -1725,6 +1727,24 @@ def decide(ctx) {
 | ctx.toolName() | 当前工具名 | 请求上下文 |
 | ctx.lastToolResult() | 上一个工具的返回值摘要 | 预加载自 Redis LRANGE 0 0 |
 | ctx.isInternalHost(url) | 判断 URL 是否指向内部网络 | 根据 License 或策略中配置的 CIDR/域名列表判断 |
+
+**`ctx.var()` 原生变量列表**：
+
+删除请求因子（`tb_context_bindings`）和扩展因子（`tb_extended_vars`）后，`ctx.var()` 不再支持用户自定义的上下文绑定和表达式派生变量，仅保留以下引擎自动注入的原生变量：
+
+| 变量名 | 注入时机 | 说明 | 示例值 |
+|--------|---------|------|--------|
+| `tool_name` | `EvaluateOrchestrator` 始终注入 | 当前被调用的工具名 | `read_file`、`curl` |
+| `tool_session_key` | `EvaluateOrchestrator` 在 `toolName` 和 `sessionId` 均非空时注入 | 每个工具在每个会话中的唯一复合 key，用于累计聚合 | `tool:read_file-session:sess-001` |
+
+其他变量（如 `app_id`、`user_id`、`ip`、`command` 等）由调用方（网关 / SDK / 测试脚本）通过请求的 `vars` 字段显式传入，引擎不做任何自动解析或派生。规则脚本需要在 `decide(ctx)` 中先判空再使用：
+
+```groovy
+def appId = ctx.var("app_id")
+if (appId != null && appId == "restricted-app") {
+    return true
+}
+```
 
 ### 5.4 语义审计 — STI 协议
 
