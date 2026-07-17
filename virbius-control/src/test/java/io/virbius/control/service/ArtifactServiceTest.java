@@ -52,6 +52,9 @@ class ArtifactServiceTest {
     @Mock
     private ToolRegistryService toolRegistryService;
 
+    @Mock
+    private ExpressionCompilerClient expressionCompiler;
+
     private ArtifactService artifactService;
 
     @BeforeEach
@@ -69,7 +72,8 @@ class ArtifactServiceTest {
                 edgeArtifactMetaRepository,
                 false,
                 true,
-                toolRegistryService);
+                toolRegistryService,
+                expressionCompiler);
     }
 
     @Test

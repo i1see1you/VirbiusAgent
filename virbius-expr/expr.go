@@ -30,6 +30,9 @@ const (
 	// Set membership
 	OpIn    OpCode = "in"
 	OpNotIn OpCode = "not_in"
+
+	// Function calls
+	OpCtxVar OpCode = "ctx_var" // ctx.var('logical_name')
 )
 
 // Node is a single node in the flat operator DAG.

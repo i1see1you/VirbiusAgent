@@ -56,6 +56,7 @@ public class ArtifactService {
     private final boolean gatewayArtifactEnabled;
     private final boolean gatewayArtifactLocalFallback;
     private final ToolRegistryService toolRegistryService;
+    private final ExpressionCompilerClient expressionCompiler;
 
     public ArtifactService(
             @Value("${virbius.data-dir:./data}") String dataDir,
@@ -69,7 +70,8 @@ public class ArtifactService {
             EdgeArtifactMetaRepository edgeArtifactMetaRepository,
             @Value("${virbius.gateway.artifact.enabled:true}") boolean gatewayArtifactEnabled,
             @Value("${virbius.gateway.artifact.local-fallback:false}") boolean gatewayArtifactLocalFallback,
-            ToolRegistryService toolRegistryService) {
+            ToolRegistryService toolRegistryService,
+            ExpressionCompilerClient expressionCompiler) {
         this.dataDir = java.nio.file.Path.of(dataDir);
         this.registryRepo = registryRepo;
         this.listMetaRepo = listMetaRepo;
@@ -82,6 +84,7 @@ public class ArtifactService {
         this.gatewayArtifactEnabled = gatewayArtifactEnabled;
         this.gatewayArtifactLocalFallback = gatewayArtifactLocalFallback;
         this.toolRegistryService = toolRegistryService;
+        this.expressionCompiler = expressionCompiler;
     }
 
     public Map<String, String> write(String tenantId, Map<String, Object> bundleMetadata) {
@@ -312,6 +315,10 @@ public class ArtifactService {
         root.put("redis_list_index", redisIndex);
         root.put("cumulatives", buildCumulativeDefBlocks(tenantId));
         root.put("script_rules", buildScriptRuleBlocks(tenantId));
+        List<Map<String, Object>> expressions = buildExpressionBlocks(tenantId);
+        if (!expressions.isEmpty()) {
+            root.put("expressions", expressions);
+        }
         List<io.virbius.control.domain.ContextVarBinding> ctxBindings =
                 registryRepo.listContextBindings(tenantId, DEFAULT_BUNDLE_ID, DEFAULT_BUNDLE_VERSION);
         if (!ctxBindings.isEmpty()) {
@@ -399,6 +406,38 @@ public class ArtifactService {
         }
         blocks.sort((a, b) -> Integer.compare((int) b.get("risk_score"), (int) a.get("risk_score")));
         return blocks;
+    }
+
+    /**
+     * Compiles gateway Lua rules into expression IR at deployment time via virbius-expr CLI.
+     * IR is not persisted — Lua source in body_json remains the single source of truth.
+     * Failed compilations are silently skipped (fail-open).
+     */
+    private List<Map<String, Object>> buildExpressionBlocks(String tenantId) {
+        List<ExpressionCompilerClient.CompileRequest> requests = new ArrayList<>();
+        for (RuleRevision rule : registryRepo.listCurrentRules(tenantId, "gateway")) {
+            if (!RolloutStateHelper.inExecutionPlane(rule) || !"lua".equals(rule.runtime())) {
+                continue;
+            }
+            String script = ScriptRuleBodies.asArtifactScript(rule.body(), rule.runtime());
+            if (script.isBlank()) {
+                continue;
+            }
+            String action = rule.intentAction() != null ? rule.intentAction() : "deny";
+            String exprAction = switch (action) {
+                case "allow" -> "review";
+                case "challenge" -> "challenge";
+                default -> "block";
+            };
+            requests.add(new ExpressionCompilerClient.CompileRequest(
+                    script,
+                    rule.ruleId(),
+                    rule.ruleId(),
+                    exprAction,
+                    rule.reasonCode(),
+                    rule.riskScore()));
+        }
+        return expressionCompiler.compileBatch(requests);
     }
 
     private Map<String, Object> toScriptRuleBlock(RuleRevision rule) {

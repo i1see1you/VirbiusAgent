@@ -164,12 +164,11 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config VirbiusConfig, log wra
 }
 
 func onHttpRequestBody(ctx wrapper.HttpContext, config VirbiusConfig, body []byte, log wrapper.Log) types.Action {
-	// Body processing: parse JSON-RPC to extract tool_name if header is missing
 	if len(body) == 0 {
 		return types.ActionContinue
 	}
 
-	// Try to extract tool_name from JSON-RPC body
+	// Parse JSON-RPC body to extract tool_name and arguments
 	var rpcMsg struct {
 		Method string `json:"method"`
 		Params struct {
@@ -185,11 +184,6 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config VirbiusConfig, body []byt
 		return types.ActionContinue
 	}
 
-	// Set tool name header for downstream processing
-	ctx.Header().Set("x-mcp-tool-name", rpcMsg.Params.Name)
-
-	// The headers callback may have already run and missed the tool name.
-	// If so, we need to do the security check here.
 	toolName := rpcMsg.Params.Name
 	log.Infof("virbius-wasm: extracted tool_name from body: %s", toolName)
 
@@ -201,9 +195,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config VirbiusConfig, body []byt
 		return denyRequest(ctx, log, "not_in_allowlist", toolName, "tool not in allowlist")
 	}
 
-	// 1b. Expression evaluation
+	// 1b. Expression evaluation with enriched context (from body)
 	if len(config.Expressions) > 0 {
-		result := evalExpressions(config.Expressions, toolName, sessionID, path, config.TenantID, log)
+		result := evalExpressionsWithBody(config.Expressions, toolName, sessionID, path, config.TenantID, rpcMsg.Params.Arguments, log)
 		if result != nil {
 			return *result
 		}
@@ -219,7 +213,9 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config VirbiusConfig, body []byt
 		return types.ActionContinue
 	}
 
-	return types.ActionContinue
+	// 4. Engine evaluate — the headers callback may have already started this.
+	//    If we reach here, the headers callback didn't have the tool name.
+	return callEngine(ctx, config, log, toolName, sessionID)
 }
 
 // --- Expression Evaluation ---
@@ -227,6 +223,31 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config VirbiusConfig, body []byt
 // evalExpressions evaluates all compiled expression rules against the request context.
 // Returns a deny/challenge action if any expression matches, nil otherwise.
 func evalExpressions(rules []ExpressionRule, toolName, sessionID, path, tenantID string, log wrapper.Log) *types.Action {
+	return evalExpressionsWithBody(rules, toolName, sessionID, path, tenantID, nil, log)
+}
+
+// actionPriority maps an action string to its priority for merge resolution.
+// Mirrors Engine-side IntentAction.priority(): deny=100, challenge=50, review=30.
+func actionPriority(action string) int {
+	switch action {
+	case "block":
+		return 100
+	case "challenge":
+		return 50
+	case "review":
+		return 30
+	default:
+		return 0
+	}
+}
+
+// evalExpressionsWithBody evaluates ALL expression rules, then merges results by
+// action priority (block > challenge > review). Among rules at the same priority,
+// the one with the highest risk_score wins as the primary rule.
+//
+// This mirrors the Engine-side ActionMerge.merge() logic so that gateway-side
+// edge decisions are consistent with cloud-side decisions.
+func evalExpressionsWithBody(rules []ExpressionRule, toolName, sessionID, path, tenantID string, argsRaw json.RawMessage, log wrapper.Log) *types.Action {
 	ctx := map[string]any{
 		"tool_name":  toolName,
 		"session_id": sessionID,
@@ -234,6 +255,23 @@ func evalExpressions(rules []ExpressionRule, toolName, sessionID, path, tenantID
 		"tenant_id":  tenantID,
 	}
 
+	// Parse tool arguments and merge into context
+	if len(argsRaw) > 0 {
+		var args map[string]any
+		if err := json.Unmarshal(argsRaw, &args); err == nil {
+			ctx["args"] = args
+			// Flatten common arg fields for direct access (e.g., ctx.var('command'))
+			for k, v := range args {
+				if _, exists := ctx[k]; !exists {
+					ctx[k] = v
+				}
+			}
+		}
+		ctx["args_json"] = string(argsRaw)
+	}
+
+	// Collect all matched rules
+	var matched []ExpressionRule
 	for _, rule := range rules {
 		result, err := expr.Eval(&rule.Expression, ctx)
 		if err != nil {
@@ -243,23 +281,55 @@ func evalExpressions(rules []ExpressionRule, toolName, sessionID, path, tenantID
 		if !result {
 			continue
 		}
-
 		log.Infof("virbius-wasm: expr match rule=%s action=%s reason=%s",
 			rule.Action.ExprID, rule.Action.Action, rule.Action.Reason)
+		matched = append(matched, rule)
+	}
 
-		switch rule.Action.Action {
-		case "block":
-			action := denyRequest(nil, log, rule.Action.RuleID, toolName, rule.Action.Reason)
-			return &action
-		case "challenge":
-			action := challengeRequest(nil, log, toolName, rule.Action.ExprID, "", rule.Action.Reason)
-			return &action
-		case "review":
-			// Review mode: log and allow (engine will decide)
-			log.Infof("virbius-wasm: expr review rule=%s", rule.Action.ExprID)
+	if len(matched) == 0 {
+		return nil
+	}
+
+	// Find the highest priority among all matched rules
+	maxPriority := 0
+	for _, r := range matched {
+		p := actionPriority(r.Action.Action)
+		if p > maxPriority {
+			maxPriority = p
 		}
 	}
-	return nil
+
+	// Among rules at maxPriority, pick the one with highest risk_score as primary
+	var primary *ExpressionRule
+	for i := range matched {
+		if actionPriority(matched[i].Action.Action) != maxPriority {
+			continue
+		}
+		if primary == nil || matched[i].Action.RiskScore > primary.Action.RiskScore {
+			primary = &matched[i]
+		}
+	}
+	if primary == nil {
+		return nil
+	}
+
+	log.Infof("virbius-wasm: expr merged %d hits → action=%s primary=%s risk_score=%d",
+		len(matched), primary.Action.Action, primary.Action.RuleID, primary.Action.RiskScore)
+
+	switch primary.Action.Action {
+	case "block":
+		action := denyRequest(nil, log, primary.Action.RuleID, toolName, primary.Action.Reason)
+		return &action
+	case "challenge":
+		action := challengeRequest(nil, log, toolName, primary.Action.ExprID, "", primary.Action.Reason)
+		return &action
+	case "review":
+		// Review mode: log and allow (engine will decide)
+		log.Infof("virbius-wasm: expr review primary=%s, deferring to engine", primary.Action.ExprID)
+		return nil
+	default:
+		return nil
+	}
 }
 
 // --- Engine Call ---

@@ -140,6 +140,12 @@ func (c *compiler) compileNode(n astNode) int {
 			Args: []int{left},
 			Val:  v.ListName,
 		})
+
+	case astCall:
+		if v.Name == "ctx.var" {
+			return c.addNode(Node{Op: OpCtxVar, Val: v.Arg})
+		}
+		return -1
 	}
 	return -1
 }

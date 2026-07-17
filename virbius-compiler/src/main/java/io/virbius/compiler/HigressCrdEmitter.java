@@ -106,7 +106,11 @@ public final class HigressCrdEmitter {
         config.put("tool_allowlist", allowlist);
 
         // Expression rules (pre-compiled IR from control plane)
+        // Supports two locations: gateway.virbius.expressions (rule bundle) or top-level expressions (gateway snapshot)
         JsonNode exprNode = virbius.path("expressions");
+        if (exprNode.isMissingNode() || !exprNode.isArray() || exprNode.size() == 0) {
+            exprNode = root.path("expressions");
+        }
         if (exprNode.isArray() && exprNode.size() > 0) {
             List<Map<String, Object>> expressions = new ArrayList<>();
             for (JsonNode exprEntry : exprNode) {

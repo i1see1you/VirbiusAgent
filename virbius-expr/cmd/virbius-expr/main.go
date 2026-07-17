@@ -4,10 +4,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/virbius/virbius-expr"
 )
+
+// returnExprPattern matches a `return <expr>` statement in a Lua script.
+// It captures the expression after `return` up to the end of line.
+var returnExprPattern = regexp.MustCompile(`(?m)^\s*return\s+(.+?)\s*$`)
+
+// CompileLuaScript extracts the `return <expr>` from a Lua decide(ctx) script
+// and compiles the expression into IR JSON. Returns the compiled Expression
+// or an error if no return statement is found or compilation fails.
+func CompileLuaScript(script string, exprID string) (*expr.Expression, error) {
+	m := returnExprPattern.FindStringSubmatch(script)
+	if m == nil {
+		return nil, fmt.Errorf("no `return <expr>` statement found in script")
+	}
+	source := strings.TrimSpace(m[1])
+	return expr.CompileString(source, exprID)
+}
 
 func main() {
 	args := os.Args[1:]
@@ -20,6 +37,7 @@ func main() {
 
 	exprID := "default"
 	source := ""
+	scriptMode := false
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -45,6 +63,8 @@ func main() {
 				}
 				source = strings.TrimSpace(string(data))
 			}
+		case "--script":
+			scriptMode = true
 		default:
 			source = args[i]
 		}
@@ -55,11 +75,18 @@ func main() {
 		os.Exit(1)
 	}
 
-	expr, err := expr.CompileString(source, exprID)
+	var expr2 *expr.Expression
+	var err error
+	if scriptMode {
+		expr2, err = CompileLuaScript(source, exprID)
+	} else {
+		expr2, err = expr.CompileString(source, exprID)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compilation error: %v\n", err)
 		os.Exit(1)
 	}
+	expr := expr2
 
 	// Support wrapping in a CompiledRule for direct use in Wasm config
 	shouldWrap := false

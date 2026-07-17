@@ -23,6 +23,7 @@ type (
 	astMatches  struct{ Left astNode; Pattern string }
 	astContains struct{ Left astNode; Substr string }
 	astIn       struct{ Left astNode; ListName string }
+	astCall     struct{ Name string; Arg string }
 )
 
 func (astVariable) astMarker() {}
@@ -34,6 +35,7 @@ func (astBinary) astMarker()   {}
 func (astMatches) astMarker()  {}
 func (astContains) astMarker() {}
 func (astIn) astMarker()       {}
+func (astCall) astMarker()     {}
 
 // --- Pratt Parser ---
 
@@ -216,6 +218,24 @@ func (p *parser) parsePrefix() astNode {
 					return nil
 				}
 				tok = p.tokenText()
+			}
+			// Check for function call: ident '(' string_literal ')'
+			if p.peek == '(' {
+				p.next() // consume '('
+				if p.peek != scanner.String {
+					return nil
+				}
+				argRaw := p.tokenText()
+				p.next()
+				arg := argRaw
+				if len(arg) >= 2 {
+					arg = arg[1 : len(arg)-1]
+				}
+				if p.peek != ')' {
+					return nil
+				}
+				p.next() // consume ')'
+				return astCall{Name: strings.Join(parts, "."), Arg: arg}
 			}
 			return astVariable{Parts: parts}
 		}

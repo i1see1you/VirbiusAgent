@@ -168,6 +168,9 @@ func Eval(expr *Expression, ctx map[string]any) (bool, error) {
 				result = !found
 			}
 
+		case OpCtxVar:
+			result = resolveVar(n.Val, ctx)
+
 		default:
 			return false, fmt.Errorf("unknown op: %s", n.Op)
 		}
