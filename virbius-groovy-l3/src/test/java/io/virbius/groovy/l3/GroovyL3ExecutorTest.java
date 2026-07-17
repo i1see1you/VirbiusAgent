@@ -15,7 +15,7 @@ class GroovyL3ExecutorTest {
     @BeforeAll
     static void warmUp() {
         // Warm up Groovy compilation + class loading before any test to avoid CI cold-start timeout
-        PolicyContext ctx = new PolicyContext("t", "s", "chat", "r", Map.of(), List.of());
+        PolicyContext ctx = new PolicyContext("t", "s", "chat", Map.of(), List.of());
         try {
             executor.precompile(GroovyL3Defaults.DEFAULT_DECIDE_SCRIPT);
             executor.executeDecide(GroovyL3Defaults.DEFAULT_DECIDE_SCRIPT, ctx);
@@ -50,7 +50,6 @@ class GroovyL3ExecutorTest {
         return new PolicyContext(
                 "default",
                 "sess-1",
-                "chat",
                 "cloud_groovy_l3",
                 Map.of("cloud_groovy_l3", l3),
                 List.of(signal));

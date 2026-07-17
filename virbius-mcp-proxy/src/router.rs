@@ -15,7 +15,7 @@ use crate::pipeline::{PipelineResult, SecurityPipeline, SharedPipeline};
 use crate::session::{Session, SessionManager};
 use crate::trace_collector::{SharedTraceCollector, TraceEvent};
 use crate::upstream::UpstreamManager;
-use virbius_core::{mask_pii_output, MemoryInterceptor, MemoryContext, MemoryWriteResult};
+use virbius_core::{mask_pii_output, MemoryInterceptor, MemoryContext, MemoryWriteResult, TrustTagger, TrustTagInput, TrustTagResult};
 
 /// Separator used for prefixed tool names in multi-upstream mode.
 /// Only applied when the same tool name exists on multiple upstreams.
@@ -809,6 +809,8 @@ async fn handle_tools_call(
                 let mut resp = proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts).await;
                 // ── Output PII masking ──
                 mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
+                // ── Trust boundary tagging (high/network risk only) ──
+                tag_tool_result(&mut resp, &original_tool_name, false);
                 // ── Trace: record tool_result ──
                 let duration_ms = trace_start.elapsed().as_millis() as u64;
                 let result_step_id = uuid::Uuid::new_v4().to_string();
@@ -859,6 +861,8 @@ async fn handle_tools_call(
                 Ok(mut resp) => {
                     // ── Output PII masking ──
                     mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
+                    // ── Trust boundary tagging (high/network risk only) ──
+                    tag_tool_result(&mut resp, &original_tool_name, false);
                     // ── Trace: record tool_result ──
                     let duration_ms = trace_start.elapsed().as_millis() as u64;
                     let result_step_id = uuid::Uuid::new_v4().to_string();
@@ -1087,6 +1091,61 @@ fn mask_pii_in_response(resp: &mut Value, tool_name: &str, session_id: &str) {
             "output PII masked for tool '{}' in session '{}'",
             tool_name, session_id
         );
+    }
+}
+
+/// Wrap high/network risk tool results with explicit trust boundary tags.
+///
+/// Only applied when `trust_layering_enabled` is true in SdkConfig and the
+/// tool's risk class is high or network.  The wrapping is added to the text
+/// content of the JSON-RPC response after PII masking.
+fn tag_tool_result(resp: &mut Value, tool_name: &str, tainted: bool) {
+    let manifest = virbius_core::manifest::load();
+    if !manifest.sdk_config.trust_layering_enabled {
+        return;
+    }
+    let risk_class = virbius_core::manifest::tool_risk_class(tool_name);
+    let tagged_classes: Vec<&str> = manifest
+        .sdk_config
+        .trust_tagged_risk_classes
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>();
+    if !tagged_classes.contains(&risk_class.as_str()) {
+        return;
+    }
+
+    let Some(result) = resp.get_mut("result") else {
+        return;
+    };
+    let Some(content_arr) = result.get_mut("content").and_then(|c| c.as_array_mut()) else {
+        return;
+    };
+
+    for item in content_arr.iter_mut() {
+        if item.get("type").and_then(|t| t.as_str()) != Some("text") {
+            continue;
+        }
+        if let Some(text) = item
+            .get_mut("text")
+            .and_then(|t| t.as_str().map(|s| s.to_string()))
+        {
+            let tag_result = TrustTagger::tag(TrustTagInput {
+                tool_name,
+                risk_class: &risk_class,
+                tool_result: &text,
+                tainted,
+            });
+            if let TrustTagResult::Wrapped { tagged_text, .. } = tag_result {
+                if let Some(text_field) = item.get_mut("text") {
+                    *text_field = Value::String(tagged_text);
+                }
+                debug!(
+                    "trust boundary applied for tool '{}' (risk_class={})",
+                    tool_name, risk_class
+                );
+            }
+        }
     }
 }
 

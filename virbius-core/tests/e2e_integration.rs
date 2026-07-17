@@ -42,7 +42,6 @@ fn make_license(allowed_tools: Vec<&str>, risk_quota: u32) -> (SigningKey, Strin
         agent_name: "Test Agent".into(),
         agent_aid: "aid:cn:org:tenant-1:agent:test-agent-abc123".into(),
         allowed_tools: allowed_tools.into_iter().map(String::from).collect(),
-        allowed_scenes: vec!["code_review".into()],
         risk_quota,
         tool_rate_limit: 50,
         exp: 9999999999,
@@ -63,11 +62,10 @@ fn make_license(allowed_tools: Vec<&str>, risk_quota: u32) -> (SigningKey, Strin
 use base64::Engine;
 
 /// Build an EnhanceContext for Prompt Gateway tests.
-fn make_enhance_context(session_id: &str, scene: &str, license_tools: Vec<&str>) -> EnhanceContext {
+fn make_enhance_context(session_id: &str, license_tools: Vec<&str>) -> EnhanceContext {
     EnhanceContext {
         app_id: "test-agent".into(),
         session_id: session_id.into(),
-        scene: scene.into(),
         risk_score: 0,
         recent_tools: vec![],
         license_tools: license_tools.into_iter().map(String::from).collect(),
@@ -118,7 +116,7 @@ fn e2e_full_allow_path() {
     let mut messages = vec![
         r#"{"role":"user","content":"my phone is 13800138000"}"#.to_string(),
     ];
-    let ctx = make_enhance_context("sess-e2e-1", "code_review", vec!["read_file", "search"]);
+    let ctx = make_enhance_context("sess-e2e-1", vec!["read_file", "search"]);
     let gateway = PromptGateway::new();
     gateway.enhance(&mut messages, &ctx).expect("enhance should succeed");
 
@@ -178,7 +176,6 @@ fn e2e_deny_expired_license() {
         agent_name: "Expired Agent".into(),
         agent_aid: "aid:cn:org:tenant-1:agent:expired-agent-abc123".into(),
         allowed_tools: vec!["read_file".into()],
-        allowed_scenes: vec![],
         risk_quota: 60,
         tool_rate_limit: 50,
         exp: 1, // expired in 1970
@@ -213,7 +210,6 @@ fn e2e_license_revocation() {
         agent_name: "Revocation Test Agent".into(),
         agent_aid: "aid:cn:org:tenant-1:agent:revocation-test-abc123".into(),
         allowed_tools: vec!["read_file".into()],
-        allowed_scenes: vec![],
         risk_quota: 60,
         tool_rate_limit: 50,
         exp: 9999999999,
@@ -267,7 +263,6 @@ fn e2e_prompt_gateway_constitution_injection() {
     let ctx = EnhanceContext {
         app_id: "test-agent".into(),
         session_id: "sess-e2e-5".into(),
-        scene: "code_review".into(),
         risk_score: 10,
         recent_tools: vec![
             ToolCallSummary {
@@ -421,7 +416,6 @@ fn e2e_multi_tool_session_simulation() {
     let ctx = EnhanceContext {
         app_id: "test-agent".into(),
         session_id: session_id.into(),
-        scene: "code_review".into(),
         risk_score: 25, // elevated after write_file
         recent_tools: vec![
             ToolCallSummary {
@@ -481,7 +475,7 @@ fn e2e_trace_id_propagation() {
     assert!(precheck_result.allowed);
 
     // Gateway layer: prompt enhancement uses session_id
-    let ctx = make_enhance_context(&session_id, "code_review", vec!["read_file"]);
+    let ctx = make_enhance_context(&session_id, vec!["read_file"]);
     let mut messages = vec![r#"{"role":"user","content":"hello"}"#.to_string()];
     PromptGateway::new().enhance(&mut messages, &ctx).expect("enhance ok");
 

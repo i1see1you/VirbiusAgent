@@ -9,5 +9,4 @@ public record ToolResultRequestDto(
         String traceId,
         String toolName,
         String toolResult,
-        int sessionRiskScore,
-        String scene) {}
+        int sessionRiskScore) {}

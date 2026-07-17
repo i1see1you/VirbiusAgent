@@ -6,7 +6,6 @@ CREATE TABLE tb_agent_licenses (
     tenant_id       VARCHAR(64)  NOT NULL,
     app_id          VARCHAR(128) NOT NULL,
     allowed_tools   TEXT         NOT NULL DEFAULT '[]',
-    allowed_scenes  TEXT         NOT NULL DEFAULT '[]',
     risk_quota      INTEGER      NOT NULL DEFAULT 60,
     tool_rate_limit INTEGER      NOT NULL DEFAULT 50,
     expiry          TIMESTAMP    NOT NULL,

@@ -48,7 +48,6 @@ public class LicenseService {
             String appId,
             String agentName,
             List<String> allowedTools,
-            List<String> allowedScenes,
             int riskQuota,
             int toolRateLimit,
             long expirySeconds,
@@ -74,7 +73,6 @@ public class LicenseService {
         license.setDescription(description);
         license.setAgentAid(agentAid);
         license.setAllowedTools(allowedTools);
-        license.setAllowedScenes(allowedScenes);
         license.setRiskQuota(riskQuota);
         license.setToolRateLimit(toolRateLimit);
         license.setExpiry(Instant.now().plusSeconds(expirySeconds));
@@ -99,7 +97,6 @@ public class LicenseService {
                 Map.entry("jwt", jwt),
                 Map.entry("expiry", license.getExpiry().toString()),
                 Map.entry("allowed_tools", allowedTools),
-                Map.entry("allowed_scenes", allowedScenes),
                 Map.entry("risk_quota", riskQuota),
                 Map.entry("tool_rate_limit", toolRateLimit));
     }

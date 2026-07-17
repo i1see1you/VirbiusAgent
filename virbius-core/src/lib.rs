@@ -9,11 +9,12 @@ pub mod bootstrap;
 mod dlp;
 mod enforce;
 mod engine;
-mod manifest;
+pub mod manifest;
 mod matcher;
 mod runtime;
 mod sync;
 pub mod trace;
+pub mod trust;
 mod upload;
 pub mod license;
 pub mod mcp;
@@ -34,6 +35,7 @@ pub use memory_interceptor::{
 pub use license::{License, LicenseClaims, LicenseError};
 pub use manifest::ToolPolicy;
 pub use precheck::{precheck, PrecheckResult, ToolCall};
+pub use trust::{TrustTagger, TrustTagInput, TrustTagResult};
 pub use mcp::{execute as mcp_execute, McpToolCall, ToolResult as McpToolResult};
 pub use sync::EdgeInitConfig;
 
@@ -49,7 +51,6 @@ use manifest::EdgeRule;
 pub struct VirbiusScanCtx {
     pub user_id: *const c_char,
     pub device_id: *const c_char,
-    pub scene: *const c_char,
     pub trace_id: *const c_char,
 }
 
@@ -168,12 +169,11 @@ pub extern "C" fn virbius_scan(
     if content.is_empty() {
         return -1;
     }
-    let (scene, trace_id_raw, user_id, device_id) = if ctx.is_null() {
-        ("default".to_string(), String::new(), None, None)
+    let (trace_id_raw, user_id, device_id) = if ctx.is_null() {
+        (String::new(), None, None)
     } else {
         let c = unsafe { &*ctx };
         (
-            cstr_opt(c.scene).unwrap_or_else(|| "default".into()),
             cstr_opt(c.trace_id).unwrap_or_default(),
             cstr_opt(c.user_id),
             cstr_opt(c.device_id),
@@ -192,7 +192,6 @@ pub extern "C" fn virbius_scan(
     let result = engine::scan_once(ScanRequest {
         user_id: user_id.as_deref(),
         device_id: device_id.as_deref(),
-        scene: &scene,
         trace_id: &trace_id,
         trace_id_source,
         content: content.as_ref(),
@@ -391,7 +390,7 @@ pub extern "C" fn virbius_verify_license(
 ///
 /// `messages_json` is a JSON array of message strings.
 /// `context_json` contains enhancement context:
-/// `{ "app_id": "...", "session_id": "...", "scene": "...", "risk_score": 0, "license_tools": [...], "constitution_version": "v1" }`
+/// `{ "app_id": "...", "session_id": "...", "risk_score": 0, "license_tools": [...], "constitution_version": "v1" }`
 ///
 /// Returns a heap-allocated C string containing the enhanced messages JSON array,
 /// or NULL on error. The caller MUST free the returned string with `virbius_free_string`.
@@ -420,7 +419,6 @@ pub extern "C" fn virbius_enhance_prompt(
     let enhance_ctx = prompt_gateway::EnhanceContext {
         app_id: ctx.get("app_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
         session_id: ctx.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        scene: ctx.get("scene").and_then(|v| v.as_str()).unwrap_or("default").to_string(),
         risk_score: ctx.get("risk_score").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         recent_tools: vec![],
         license_tools: ctx.get("license_tools").and_then(|v| v.as_array())
@@ -472,9 +470,8 @@ mod c_abi_tests {
             tenant_id: "tenant-1".into(),
             agent_name: "Test Agent".into(),
             agent_aid: "aid:cn:org:tenant-1:agent:test-agent-abc123".into(),
-            allowed_tools: vec!["read_file".into(), "search".into()],
-            allowed_scenes: vec![],
-            risk_quota: 60,
+                allowed_tools: vec!["read_file".into(), "search".into()],
+                risk_quota: 60,
             tool_rate_limit: 50,
             exp: 9999999999,
             iat: 1700000000,
@@ -648,7 +645,7 @@ mod c_abi_tests {
     #[test]
     fn c_abi_enhance_prompt_returns_json() {
         let messages = r#"["{\"role\":\"user\",\"content\":\"hello\"}"]"#;
-        let context = r#"{"app_id":"test","session_id":"s1","scene":"chat","risk_score":0}"#;
+        let context = r#"{"app_id":"test","session_id":"s1","risk_score":0}"#;
         let c_messages = CString::new(messages).unwrap();
         let c_context = CString::new(context).unwrap();
 

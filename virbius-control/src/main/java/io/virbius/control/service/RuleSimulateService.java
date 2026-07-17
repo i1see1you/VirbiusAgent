@@ -9,7 +9,6 @@ import io.virbius.control.ruleauthoring.ConditionCompiler;
 import io.virbius.control.ruleauthoring.ConditionEvaluator;
 import io.virbius.control.ruleauthoring.ConditionParser;
 import io.virbius.control.ruleauthoring.ContextVarResolver;
-import io.virbius.control.gateway.SceneRegistryHelper;
 import io.virbius.groovy.l3.GroovyL3Executor;
 import io.virbius.groovy.l3.L3RuleView;
 import io.virbius.groovy.l3.L3SignalView;
@@ -17,7 +16,6 @@ import io.virbius.groovy.l3.PolicyContext;
 import io.virbius.groovy.l3.ScriptEnvironment;
 import io.virbius.policy.BindScope;
 import io.virbius.policy.MatchContext;
-import io.virbius.policy.SceneRegistry;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -79,21 +77,6 @@ public class RuleSimulateService {
         }
         String content = str(fixture.get("content"));
         String userId = header(headers, "X-Virbius-User-Id");
-        SceneRegistry registry = SceneRegistryHelper.parseRegistry(metadata);
-        String appId = vars.get("app_id");
-        String sceneId = null;
-        String sceneSource = null;
-        if (appId != null && !appId.isBlank()) {
-            var resolved = registry.resolve(appId, routeUri, query, headers);
-            if (resolved.isPresent()) {
-                sceneId = resolved.get().sceneId();
-                sceneSource = resolved.get().source();
-            }
-        }
-        steps.add(step(
-                "scene",
-                sceneId != null,
-                Map.of("scene_id", sceneId != null ? sceneId : "", "source", sceneSource != null ? sceneSource : "")));
 
         MatchContext matchCtx = new MatchContext(
                 content,
@@ -104,7 +87,6 @@ public class RuleSimulateService {
                 vars,
                 query,
                 headers,
-                sceneId,
                 routeUri,
                 null,
                 null,
@@ -272,7 +254,6 @@ public class RuleSimulateService {
         return new PolicyContext(
                 tenantId,
                 matchCtx.sessionId() != null ? matchCtx.sessionId() : "simulate",
-                matchCtx.scene() != null ? matchCtx.scene() : "",
                 ruleId,
                 rules,
                 signals,

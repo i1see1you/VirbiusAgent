@@ -20,7 +20,6 @@ public class ProtoMapper {
         }
         return new EvaluateRequestDto(
                 proto.getTenantId(),
-                proto.getScene(),
                 proto.getRole(),
                 proto.getSessionId(),
                 proto.getContent(),

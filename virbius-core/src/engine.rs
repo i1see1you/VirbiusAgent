@@ -7,7 +7,6 @@ use crate::trace::TraceIdSource;
 pub struct ScanRequest<'a> {
     pub user_id: Option<&'a str>,
     pub device_id: Option<&'a str>,
-    pub scene: &'a str,
     pub trace_id: &'a str,
     pub trace_id_source: TraceIdSource,
     pub content: &'a str,
@@ -30,7 +29,6 @@ pub fn scan_once(req: ScanRequest<'_>) -> ScanEngineResult {
         &cfg,
         req.trace_id,
         req.trace_id_source.as_str(),
-        req.scene,
         &merged,
         session_id,
         req.user_id,

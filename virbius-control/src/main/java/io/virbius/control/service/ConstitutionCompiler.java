@@ -8,22 +8,19 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.TreeSet;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * Compiles active {@link ConstitutionRule} entries into scene-specific
- * {@link ConstitutionTemplate} prompt templates.
+ * Compiles active {@link ConstitutionRule} entries into a
+ * {@link ConstitutionTemplate} prompt template.
  *
  * <p>The compilation process:
  * <ol>
  *   <li>Fetch all active rules for the tenant</li>
- *   <li>Group rules by scene (rules with empty scene_filter apply to all scenes)</li>
- *   <li>For each scene, render the system_prefix by concatenating rules in priority order,
+ *   <li>Render the system_prefix by concatenating rules in priority order,
  *       grouped by category (prohibitions → tool_rules → boundaries → principles)</li>
  *   <li>Generate the dynamic_suffix with template variables</li>
  *   <li>Persist the compiled template</li>
@@ -43,52 +40,32 @@ public class ConstitutionCompiler {
     }
 
     /**
-     * Compile all active constitution rules into prompt templates for a tenant.
+     * Compile all active constitution rules into a prompt template for a tenant.
      *
      * @param tenantId           the tenant
      * @param constitutionVersion the version label for this compilation (e.g. "1.2")
-     * @param scenes             the list of scene names to compile for; always includes wildcard "*"
-     * @return the list of compiled templates
+     * @return the compiled template
      */
-    public List<ConstitutionTemplate> compile(String tenantId, String constitutionVersion, List<String> scenes) {
-        List<ConstitutionRule> allRules = repo.listActiveRulesForScene(tenantId, null);
+    public ConstitutionTemplate compile(String tenantId, String constitutionVersion) {
+        List<ConstitutionRule> allRules = repo.listActiveRules(tenantId);
 
-        // Collect all scenes: provided scenes + wildcard + scenes from rule filters
-        Set<String> sceneSet = new TreeSet<>();
-        sceneSet.add(ConstitutionTemplate.SCENE_WILDCARD);
-        if (scenes != null) {
-            sceneSet.addAll(scenes);
-        }
-        for (ConstitutionRule rule : allRules) {
-            if (rule.sceneFilter() != null && !rule.sceneFilter().isEmpty()) {
-                sceneSet.addAll(rule.sceneFilter());
-            }
-        }
+        ConstitutionTemplate tmpl = compileTemplate(tenantId, constitutionVersion, allRules);
+        repo.saveTemplate(tmpl);
 
-        List<ConstitutionTemplate> compiled = new ArrayList<>();
-        for (String scene : sceneSet) {
-            ConstitutionTemplate tmpl = compileForScene(tenantId, constitutionVersion, scene, allRules);
-            repo.saveTemplate(tmpl);
-            compiled.add(tmpl);
-        }
-
-        log.info("compiled constitution v{} for tenant {}: {} scenes, {} total rules",
-                constitutionVersion, tenantId, sceneSet.size(), allRules.size());
-        return compiled;
+        log.info("compiled constitution v{} for tenant {}: {} total rules",
+                constitutionVersion, tenantId, allRules.size());
+        return tmpl;
     }
 
     /**
-     * Compile a single scene template from the given rules.
+     * Compile a single template from the given rules.
      */
-    ConstitutionTemplate compileForScene(
+    ConstitutionTemplate compileTemplate(
             String tenantId,
             String constitutionVersion,
-            String scene,
             List<ConstitutionRule> allRules) {
 
-        // Filter rules applicable to this scene
         List<ConstitutionRule> applicable = allRules.stream()
-                .filter(r -> r.appliesToScene(scene))
                 .sorted((a, b) -> Integer.compare(b.priority(), a.priority()))
                 .toList();
 
@@ -101,14 +78,13 @@ public class ConstitutionCompiler {
         List<String> boundaries = extractTexts(byCategory.get(ConstitutionRule.CATEGORY_BOUNDARY));
         List<String> principles = extractTexts(byCategory.get(ConstitutionRule.CATEGORY_PRINCIPLE));
 
-        String systemPrefix = renderSystemPrefix(constitutionVersion, scene, prohibitions, toolRules, boundaries, principles);
+        String systemPrefix = renderSystemPrefix(constitutionVersion, prohibitions, toolRules, boundaries, principles);
         String dynamicSuffix = renderDynamicSuffix();
 
         return new ConstitutionTemplate(
                 null,
                 tenantId,
                 constitutionVersion,
-                scene,
                 systemPrefix,
                 dynamicSuffix,
                 prohibitions,
@@ -127,36 +103,16 @@ public class ConstitutionCompiler {
 
     /**
      * Render the system prefix — the text prepended to the system message.
-     *
-     * Format:
-     * <pre>
-     * ## Virbius Agent Constitution {version} (scene: {scene})
-     *
-     * ### 绝对禁止
-     * 1. {prohibition_1}
-     * 2. {prohibition_2}
-     *
-     * ### 工具使用规则
-     * 1. {tool_rule_1}
-     *
-     * ### 边界约束
-     * 1. {boundary_1}
-     *
-     * ### 运行原则
-     * 1. {principle_1}
-     * </pre>
      */
     private String renderSystemPrefix(
             String version,
-            String scene,
             List<String> prohibitions,
             List<String> toolRules,
             List<String> boundaries,
             List<String> principles) {
 
         StringBuilder sb = new StringBuilder();
-        sb.append("## Virbius Agent Constitution ").append(version);
-        sb.append(" (scene: ").append(scene).append(")\n\n");
+        sb.append("## Virbius Agent Constitution ").append(version).append("\n\n");
 
         if (!prohibitions.isEmpty()) {
             sb.append("### 绝对禁止\n");
@@ -188,14 +144,12 @@ public class ConstitutionCompiler {
 
     /**
      * Render the dynamic suffix — appended to the system message with template variables.
-     * These variables are filled at runtime by PromptGateway.
      */
     private String renderDynamicSuffix() {
         return """
                 ## 当前会话上下文
                 - 风险分: {{risk_score}}/100
                 - 已调用工具: {{recent_tools}}
-                - 场景: {{scene}}
                 - License 权限: {{license_permissions}}""";
     }
 }

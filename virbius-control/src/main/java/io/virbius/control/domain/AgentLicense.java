@@ -7,7 +7,6 @@ public class AgentLicense {
     private String appId;
     private String tenantId;
     private List<String> allowedTools;
-    private List<String> allowedScenes;
     private int riskQuota;
     private int toolRateLimit;
     private Instant expiry;
@@ -28,9 +27,6 @@ public class AgentLicense {
 
     public List<String> getAllowedTools() { return allowedTools; }
     public void setAllowedTools(List<String> allowedTools) { this.allowedTools = allowedTools; }
-
-    public List<String> getAllowedScenes() { return allowedScenes; }
-    public void setAllowedScenes(List<String> allowedScenes) { this.allowedScenes = allowedScenes; }
 
     public int getRiskQuota() { return riskQuota; }
     public void setRiskQuota(int riskQuota) { this.riskQuota = riskQuota; }

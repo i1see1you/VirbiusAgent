@@ -4,6 +4,7 @@ import io.virbius.engine.audit.AuditWriter;
 import io.virbius.engine.challenge.ChallengeService;
 import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
 import io.virbius.engine.eval.StiTaintDetector.TaintResult;
+import io.virbius.engine.eval.TrustViolationDetector.TrustViolationResult;
 import io.virbius.policy.MatchContext;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -26,6 +27,7 @@ public class EvaluateOrchestrator {
     private final PromptInjectionDetector injectionDetector;
     private final StiTaintDetector taintDetector;
     private final SessionRiskManager sessionRiskManager;
+    private final TrustViolationDetector trustViolationDetector;
 
     public EvaluateOrchestrator(
             ScriptRuleRunner scriptRuleRunner,
@@ -35,7 +37,8 @@ public class EvaluateOrchestrator {
             ChallengeService challengeService,
             PromptInjectionDetector injectionDetector,
             StiTaintDetector taintDetector,
-            SessionRiskManager sessionRiskManager) {
+            SessionRiskManager sessionRiskManager,
+            TrustViolationDetector trustViolationDetector) {
         this.scriptRuleRunner = scriptRuleRunner;
         this.promptRunner = promptRunner;
         this.auditWriter = auditWriter;
@@ -44,6 +47,7 @@ public class EvaluateOrchestrator {
         this.injectionDetector = injectionDetector;
         this.taintDetector = taintDetector;
         this.sessionRiskManager = sessionRiskManager;
+        this.trustViolationDetector = trustViolationDetector;
     }
 
     public EvaluateResponseDto evaluate(EvaluateRequestDto req) {
@@ -79,6 +83,28 @@ public class EvaluateOrchestrator {
                     null));
         }
 
+        // --- P1.4: Trust Violation Detection (boundary leakage / injection leakage) ---
+        // Inspect Agent-generated content for leaked trust boundary tags or
+        // injection patterns originating from high/network risk tool results.
+        TrustViolationResult trustResult = trustViolationDetector.detect(req.content(), toolName);
+        if (trustResult.violated()) {
+            log.info("trust violation detected: tenant={} session={} type={} pattern={} riskDelta={}",
+                    req.tenantId(), req.sessionId(),
+                    trustResult.violationType(), trustResult.matchedPattern(),
+                    trustResult.riskDelta());
+            signals.add(new SignalDto(
+                    "TRUST_VIOLATION",
+                    1,
+                    "cloud",
+                    "cloud",
+                    trustResult.riskDelta(),
+                    trustResult.matchedPattern(),
+                    "warn",
+                    "full",
+                    null,
+                    null));
+        }
+
         MatchContext matchCtx = MatchContext.withBind(
                 req.content(),
                 req.userId(),
@@ -86,7 +112,6 @@ public class EvaluateOrchestrator {
                 null,
                 req.sessionId(),
                 vars,
-                req.scene(),
                 req.routeUri());
 
         signals.addAll(promptRunner.run(req.tenantId(), matchCtx));

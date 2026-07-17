@@ -15,7 +15,6 @@ public final class PolicyContext {
 
     private final String tenantId;
     private final String sessionId;
-    private final String scene;
     private final String currentRuleId;
     private final Map<String, L3RuleView> rulesById;
     private final List<L3SignalView> signals;
@@ -30,40 +29,36 @@ public final class PolicyContext {
     public PolicyContext(
             String tenantId,
             String sessionId,
-            String scene,
             String currentRuleId,
             Map<String, L3RuleView> rulesById,
             List<L3SignalView> signals) {
-        this(tenantId, sessionId, scene, currentRuleId, rulesById, signals, Map.of(), null, List.of(), 0, Map.of());
+        this(tenantId, sessionId, currentRuleId, rulesById, signals, Map.of(), null, List.of(), 0, Map.of());
     }
 
     public PolicyContext(
             String tenantId,
             String sessionId,
-            String scene,
             String currentRuleId,
             Map<String, L3RuleView> rulesById,
             List<L3SignalView> signals,
             Map<String, String> vars) {
-        this(tenantId, sessionId, scene, currentRuleId, rulesById, signals, vars, null, List.of(), 0, Map.of());
+        this(tenantId, sessionId, currentRuleId, rulesById, signals, vars, null, List.of(), 0, Map.of());
     }
 
     public PolicyContext(
             String tenantId,
             String sessionId,
-            String scene,
             String currentRuleId,
             Map<String, L3RuleView> rulesById,
             List<L3SignalView> signals,
             Map<String, String> vars,
             ScriptEnvironment scriptEnv) {
-        this(tenantId, sessionId, scene, currentRuleId, rulesById, signals, vars, scriptEnv, List.of(), 0, Map.of());
+        this(tenantId, sessionId, currentRuleId, rulesById, signals, vars, scriptEnv, List.of(), 0, Map.of());
     }
 
     public PolicyContext(
             String tenantId,
             String sessionId,
-            String scene,
             String currentRuleId,
             Map<String, L3RuleView> rulesById,
             List<L3SignalView> signals,
@@ -74,7 +69,6 @@ public final class PolicyContext {
             Map<String, Long> toolCounts) {
         this.tenantId = tenantId != null ? tenantId : "";
         this.sessionId = sessionId != null ? sessionId : "";
-        this.scene = scene != null ? scene : "";
         this.currentRuleId = currentRuleId != null ? currentRuleId : "";
         this.rulesById = rulesById != null ? Map.copyOf(rulesById) : Map.of();
         this.signals = signals != null ? List.copyOf(signals) : List.of();
@@ -91,10 +85,6 @@ public final class PolicyContext {
 
     public String sessionId() {
         return sessionId;
-    }
-
-    public String scene() {
-        return scene;
     }
 
     public String currentRuleId() {

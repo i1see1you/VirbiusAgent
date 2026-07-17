@@ -90,7 +90,6 @@ public class AsyncActionHandler {
             ctx.put("client_ip", matchCtx.clientIp() != null ? matchCtx.clientIp() : "");
             ctx.put("session_id", matchCtx.sessionId() != null ? matchCtx.sessionId() : "");
             ctx.put("content", matchCtx.content() != null ? matchCtx.content() : "");
-            ctx.put("scene", matchCtx.scene() != null ? matchCtx.scene() : "");
             ctx.put("route_uri", matchCtx.routeUri() != null ? matchCtx.routeUri() : "");
             ctx.put("vars", matchCtx.varsOrEmpty());
         }

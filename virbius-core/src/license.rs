@@ -18,8 +18,6 @@ pub struct LicenseClaims {
     #[serde(default)]
     pub allowed_tools: Vec<String>,
     #[serde(default)]
-    pub allowed_scenes: Vec<String>,
-    #[serde(default)]
     pub risk_quota: u32,
     #[serde(default)]
     pub tool_rate_limit: u32,
@@ -151,7 +149,6 @@ mod tests {
             agent_name: "Test Agent".into(),
             agent_aid: "aid:cn:org:tenant-1:agent:test-agent-abc123".into(),
             allowed_tools: vec!["read_file".into(), "search".into()],
-            allowed_scenes: vec![],
             risk_quota: 60,
             tool_rate_limit: 50,
             exp: 9999999999,
@@ -185,7 +182,6 @@ mod tests {
             agent_name: "Test Agent".into(),
             agent_aid: "aid:cn:org:tenant-1:agent:test-agent-abc123".into(),
             allowed_tools: vec![],
-            allowed_scenes: vec![],
             risk_quota: 60,
             tool_rate_limit: 50,
             exp: 1,

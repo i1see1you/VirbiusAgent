@@ -17,7 +17,7 @@ public interface ConstitutionRepository {
 
     List<ConstitutionRule> listRules(String tenantId, String status);
 
-    List<ConstitutionRule> listActiveRulesForScene(String tenantId, String scene);
+    List<ConstitutionRule> listActiveRules(String tenantId);
 
     void updateRuleStatus(String tenantId, String ruleId, String version, String status);
 
@@ -27,7 +27,7 @@ public interface ConstitutionRepository {
 
     void saveTemplate(ConstitutionTemplate tmpl);
 
-    Optional<ConstitutionTemplate> findTemplate(String tenantId, String constitutionVersion, String scene);
+    Optional<ConstitutionTemplate> findTemplate(String tenantId, String constitutionVersion);
 
     List<ConstitutionTemplate> listTemplates(String tenantId);
 

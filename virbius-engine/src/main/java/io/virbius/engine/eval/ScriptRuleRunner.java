@@ -282,7 +282,6 @@ public class ScriptRuleRunner {
         return new PolicyContext(
                 tenantId,
                 matchCtx.sessionId(),
-                matchCtx.scene(),
                 current.ruleId(),
                 rules,
                 all,

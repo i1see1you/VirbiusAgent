@@ -51,7 +51,6 @@ public class LicenseSigner {
                     "agent_name", license.getAgentName() != null ? license.getAgentName() : "",
                     "agent_aid", license.getAgentAid() != null ? license.getAgentAid() : "",
                     "allowed_tools", license.getAllowedTools() != null ? license.getAllowedTools() : List.of(),
-                    "allowed_scenes", license.getAllowedScenes() != null ? license.getAllowedScenes() : List.of(),
                     "risk_quota", license.getRiskQuota(),
                     "tool_rate_limit", license.getToolRateLimit(),
                     "exp", license.getExpiry() != null ? license.getExpiry().getEpochSecond() : 0L,

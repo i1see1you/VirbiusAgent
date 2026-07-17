@@ -36,15 +36,14 @@ public class JdbcConstitutionRepository implements ConstitutionRepository {
         jdbc.update(
                 """
                 INSERT INTO tb_constitution
-                    (tenant_id, rule_id, version, category, priority, scene_filter, rule_text, status, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (tenant_id, rule_id, version, category, priority, rule_text, status, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rule.tenantId(),
                 rule.ruleId(),
                 rule.version(),
                 rule.category(),
                 rule.priority(),
-                toJson(rule.sceneFilter()),
                 rule.ruleText(),
                 rule.status(),
                 rule.createdBy());
@@ -86,7 +85,7 @@ public class JdbcConstitutionRepository implements ConstitutionRepository {
     }
 
     @Override
-    public List<ConstitutionRule> listActiveRulesForScene(String tenantId, String scene) {
+    public List<ConstitutionRule> listActiveRules(String tenantId) {
         return jdbc.query(
                 """
                 SELECT * FROM tb_constitution
@@ -121,20 +120,19 @@ public class JdbcConstitutionRepository implements ConstitutionRepository {
 
     @Override
     public void saveTemplate(ConstitutionTemplate tmpl) {
-        // Upsert: delete then insert (SQLite doesn't have ON CONFLICT for all dialects)
+        // Upsert: delete then insert
         jdbc.update(
-                "DELETE FROM tb_constitution_templates WHERE tenant_id = ? AND constitution_version = ? AND scene = ?",
-                tmpl.tenantId(), tmpl.constitutionVersion(), tmpl.scene());
+                "DELETE FROM tb_constitution_templates WHERE tenant_id = ? AND constitution_version = ?",
+                tmpl.tenantId(), tmpl.constitutionVersion());
         jdbc.update(
                 """
                 INSERT INTO tb_constitution_templates
-                    (tenant_id, constitution_version, scene, system_prefix, dynamic_suffix,
+                    (tenant_id, constitution_version, system_prefix, dynamic_suffix,
                      prohibitions, tool_rules, compiled_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 tmpl.tenantId(),
                 tmpl.constitutionVersion(),
-                tmpl.scene(),
                 tmpl.systemPrefix(),
                 tmpl.dynamicSuffix(),
                 toJson(tmpl.prohibitions()),
@@ -143,21 +141,21 @@ public class JdbcConstitutionRepository implements ConstitutionRepository {
     }
 
     @Override
-    public Optional<ConstitutionTemplate> findTemplate(String tenantId, String constitutionVersion, String scene) {
+    public Optional<ConstitutionTemplate> findTemplate(String tenantId, String constitutionVersion) {
         List<ConstitutionTemplate> rows = jdbc.query(
                 """
                 SELECT * FROM tb_constitution_templates
-                WHERE tenant_id = ? AND constitution_version = ? AND scene = ?
+                WHERE tenant_id = ? AND constitution_version = ?
                 """,
                 TEMPLATE_MAPPER,
-                tenantId, constitutionVersion, scene);
+                tenantId, constitutionVersion);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
     @Override
     public List<ConstitutionTemplate> listTemplates(String tenantId) {
         return jdbc.query(
-                "SELECT * FROM tb_constitution_templates WHERE tenant_id = ? ORDER BY constitution_version DESC, scene",
+                "SELECT * FROM tb_constitution_templates WHERE tenant_id = ? ORDER BY constitution_version DESC",
                 TEMPLATE_MAPPER,
                 tenantId);
     }
@@ -168,7 +166,6 @@ public class JdbcConstitutionRepository implements ConstitutionRepository {
                 """
                 SELECT * FROM tb_constitution_templates
                 WHERE tenant_id = ? AND constitution_version = ?
-                ORDER BY scene
                 """,
                 TEMPLATE_MAPPER,
                 tenantId, constitutionVersion);
@@ -191,7 +188,6 @@ public class JdbcConstitutionRepository implements ConstitutionRepository {
                 rs.getString("version"),
                 rs.getString("category"),
                 rs.getInt("priority"),
-                parseStringList(rs.getString("scene_filter")),
                 rs.getString("rule_text"),
                 rs.getString("status"),
                 rs.getString("created_by"),
@@ -204,7 +200,6 @@ public class JdbcConstitutionRepository implements ConstitutionRepository {
                 rs.getLong("id"),
                 rs.getString("tenant_id"),
                 rs.getString("constitution_version"),
-                rs.getString("scene"),
                 rs.getString("system_prefix"),
                 rs.getString("dynamic_suffix"),
                 parseStringList(rs.getString("prohibitions")),

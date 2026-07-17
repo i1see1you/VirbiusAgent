@@ -29,8 +29,6 @@ public class JdbcLicenseRepository implements LicenseRepository {
         lic.setTenantId(rs.getString("tenant_id"));
         String toolsRaw = rs.getString("allowed_tools");
         lic.setAllowedTools(toolsRaw != null ? Arrays.asList(toolsRaw.split(",")) : List.of());
-        String scenesRaw = rs.getString("allowed_scenes");
-        lic.setAllowedScenes(scenesRaw != null ? Arrays.asList(scenesRaw.split(",")) : List.of());
         lic.setRiskQuota(rs.getInt("risk_quota"));
         lic.setToolRateLimit(rs.getInt("tool_rate_limit"));
         Timestamp exp = rs.getTimestamp("expiry");
@@ -50,16 +48,15 @@ public class JdbcLicenseRepository implements LicenseRepository {
         jdbc.update(
                 """
                 INSERT INTO tb_agent_licenses
-                    (license_id, tenant_id, app_id, allowed_tools, allowed_scenes,
+                    (license_id, tenant_id, app_id, allowed_tools,
                      risk_quota, tool_rate_limit, expiry, issued_at, status, signature,
                      created_by, agent_name, description, agent_aid)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 licenseId,
                 license.getTenantId(),
                 license.getAppId(),
                 String.join(",", license.getAllowedTools() != null ? license.getAllowedTools() : List.of()),
-                String.join(",", license.getAllowedScenes() != null ? license.getAllowedScenes() : List.of()),
                 license.getRiskQuota(),
                 license.getToolRateLimit(),
                 Timestamp.from(license.getExpiry()),
@@ -76,7 +73,7 @@ public class JdbcLicenseRepository implements LicenseRepository {
     public Optional<AgentLicense> findActiveByAppId(String tenantId, String appId) {
         List<AgentLicense> rows = jdbc.query(
                 """
-                SELECT app_id, tenant_id, allowed_tools, allowed_scenes, risk_quota,
+                SELECT app_id, tenant_id, allowed_tools, risk_quota,
                        tool_rate_limit, expiry, issued_at, status, signature,
                        agent_name, description, agent_aid
                 FROM tb_agent_licenses
@@ -92,7 +89,7 @@ public class JdbcLicenseRepository implements LicenseRepository {
     @Override
     public List<AgentLicense> listByTenant(String tenantId, String status) {
         String sql = """
-                SELECT app_id, tenant_id, allowed_tools, allowed_scenes, risk_quota,
+                SELECT app_id, tenant_id, allowed_tools, risk_quota,
                        tool_rate_limit, expiry, issued_at, status, signature,
                        agent_name, description, agent_aid
                 FROM tb_agent_licenses

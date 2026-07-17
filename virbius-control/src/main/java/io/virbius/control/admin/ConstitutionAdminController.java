@@ -26,9 +26,9 @@ import org.springframework.web.bind.annotation.RestController;
  *   <li>GET /rules/{ruleId} — get a rule (optional ?version=1.0)</li>
  *   <li>PATCH /rules/{ruleId}/status — enable/disable a rule</li>
  *   <li>DELETE /rules/{ruleId} — delete a rule (optional ?version=1.0)</li>
- *   <li>POST /compile — compile active rules into prompt templates</li>
+ *   <li>POST /compile — compile active rules into a prompt template</li>
  *   <li>GET /templates — list compiled templates (optional ?version=1.2)</li>
- *   <li>GET /templates/{version}/{scene} — get a specific template</li>
+ *   <li>GET /templates/{version} — get a specific template</li>
  * </ul>
  */
 @RestController
@@ -87,13 +87,10 @@ public class ConstitutionAdminController {
     // ---- Compilation ----
 
     @PostMapping("/compile")
-    public ApiResult<List<Map<String, Object>>> compile(
+    public ApiResult<Map<String, Object>> compile(
             @PathVariable("tenantId") String tenantId,
             @RequestBody CompileConstitutionRequest body) {
-        return ApiResult.ok(constitutionService.compile(
-                tenantId,
-                body.version(),
-                body.scenes() != null ? body.scenes() : List.of()));
+        return ApiResult.ok(constitutionService.compile(tenantId, body.version()));
     }
 
     // ---- Template retrieval ----
@@ -105,17 +102,16 @@ public class ConstitutionAdminController {
         return ApiResult.ok(constitutionService.listTemplates(tenantId, version));
     }
 
-    @GetMapping("/templates/{version}/{scene}")
+    @GetMapping("/templates/{version}")
     public ApiResult<Map<String, Object>> getTemplate(
             @PathVariable("tenantId") String tenantId,
-            @PathVariable("version") String version,
-            @PathVariable("scene") String scene) {
-        return ApiResult.ok(constitutionService.getTemplate(tenantId, version, scene));
+            @PathVariable("version") String version) {
+        return ApiResult.ok(constitutionService.getTemplate(tenantId, version));
     }
 
     // ---- Request DTOs ----
 
     public record UpdateConstitutionStatusRequest(String version, String status) {}
 
-    public record CompileConstitutionRequest(String version, List<String> scenes) {}
+    public record CompileConstitutionRequest(String version) {}
 }

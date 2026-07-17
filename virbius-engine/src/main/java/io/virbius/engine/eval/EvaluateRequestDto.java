@@ -5,7 +5,6 @@ import java.util.Map;
 
 public record EvaluateRequestDto(
         String tenantId,
-        String scene,
         String role,
         String sessionId,
         String content,

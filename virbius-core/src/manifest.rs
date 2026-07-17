@@ -98,6 +98,15 @@ pub struct SdkConfig {
     /// Tool name prefixes that are recognized as memory write operations.
     #[serde(default = "default_memory_tool_patterns")]
     pub memory_tool_patterns: Vec<String>,
+    /// Whether explicit trust layering is enabled for high/network risk tools.
+    /// When enabled, the MCP proxy wraps high/network risk tool results in
+    /// `<trust_boundary>` tags before returning them to the Agent.
+    #[serde(default = "default_true")]
+    pub trust_layering_enabled: bool,
+    /// Risk classes that require explicit trust boundary wrapping.
+    /// Defaults to ["high", "network"].
+    #[serde(default = "default_trust_tagged_risk_classes")]
+    pub trust_tagged_risk_classes: Vec<String>,
 }
 
 fn default_dlp_vault_ttl() -> u64 {
@@ -141,6 +150,10 @@ fn default_memory_tool_patterns() -> Vec<String> {
         "store_memory".into(),
         "recall_save".into(),
     ]
+}
+
+fn default_trust_tagged_risk_classes() -> Vec<String> {
+    vec!["high".into(), "network".into()]
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

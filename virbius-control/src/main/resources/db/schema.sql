@@ -436,7 +436,6 @@ CREATE TABLE IF NOT EXISTS tb_constitution (
     version         VARCHAR(32)  NOT NULL DEFAULT '1.0',
     category        VARCHAR(64)  NOT NULL,
     priority        INTEGER      NOT NULL DEFAULT 50,
-    scene_filter    TEXT         NOT NULL DEFAULT '[]',
     rule_text       TEXT         NOT NULL,
     status          VARCHAR(16)  NOT NULL DEFAULT 'active',
     created_by      VARCHAR(64),
@@ -448,24 +447,23 @@ CREATE TABLE IF NOT EXISTS tb_constitution (
     CHECK (priority >= 0 AND priority <= 100)
 );
 
-CREATE INDEX IF NOT EXISTS idx_tb_constitution_tenant_scene
+CREATE INDEX IF NOT EXISTS idx_tb_constitution_tenant
     ON tb_constitution (tenant_id, status);
 
 CREATE TABLE IF NOT EXISTS tb_constitution_templates (
     id              INTEGER PRIMARY KEY,
     tenant_id       VARCHAR(64)  NOT NULL,
     constitution_version VARCHAR(32) NOT NULL,
-    scene           VARCHAR(64)  NOT NULL,
     system_prefix   TEXT         NOT NULL,
     dynamic_suffix  TEXT         NOT NULL DEFAULT '',
     prohibitions    TEXT         NOT NULL DEFAULT '[]',
     tool_rules      TEXT         NOT NULL DEFAULT '[]',
     compiled_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (tenant_id, constitution_version, scene)
+    UNIQUE (tenant_id, constitution_version)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tb_constitution_templates_lookup
-    ON tb_constitution_templates (tenant_id, scene, constitution_version);
+    ON tb_constitution_templates (tenant_id, constitution_version);
 
 -- Challenge approval audit trail (primary storage is Redis, this is for persistence/analytics)
 CREATE TABLE IF NOT EXISTS tb_challenge_audit (
@@ -508,7 +506,6 @@ CREATE TABLE IF NOT EXISTS tb_agent_trace (
     step_seq         INTEGER      NOT NULL DEFAULT 0,
     step_type        VARCHAR(32)  NOT NULL,
     layer            VARCHAR(16)  NOT NULL DEFAULT 'edge',
-    scene            VARCHAR(64),
     user_id          VARCHAR(256),
     device_id        VARCHAR(256),
     input_role       VARCHAR(16),

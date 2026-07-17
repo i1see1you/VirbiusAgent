@@ -60,7 +60,6 @@ public class AuditWriter {
             event.put("trace_id", req.traceId());
             event.put("trace_id_source", "client");
             event.put("tenant_id", req.tenantId());
-            event.put("scene", req.scene());
             event.put("layer", "cloud");
             event.put("rule_id", ruleId != null ? ruleId : "");
             event.put("rule_revision", ruleRevision);

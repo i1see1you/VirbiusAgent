@@ -11,7 +11,6 @@ CREATE TABLE tb_agent_trace (
     step_seq         INTEGER      NOT NULL DEFAULT 0,
     step_type        VARCHAR(32)  NOT NULL,
     layer            VARCHAR(16)  NOT NULL DEFAULT 'edge',
-    scene            VARCHAR(64),
     user_id          VARCHAR(256),
     device_id        VARCHAR(256),
     input_role       VARCHAR(16),

@@ -1,13 +1,12 @@
 package io.virbius.control.domain;
 
 import java.time.Instant;
-import java.util.List;
 
 /**
  * A single clause in the enterprise AI Agent constitution.
  *
  * <p>Constitution rules are managed in the control plane, compiled into
- * scene-specific prompt templates, and synced to the edge layer where
+ * prompt templates, and synced to the edge layer where
  * {@code PromptGateway} injects them into LLM prompts (§2.8).
  *
  * <p>Categories:
@@ -25,7 +24,6 @@ public record ConstitutionRule(
         String version,
         String category,
         int priority,
-        List<String> sceneFilter,
         String ruleText,
         String status,
         String createdBy,
@@ -39,15 +37,4 @@ public record ConstitutionRule(
 
     public static final String STATUS_ACTIVE = "active";
     public static final String STATUS_DISABLED = "disabled";
-
-    /**
-     * Whether this rule applies to the given scene.
-     * Empty scene_filter means "all scenes".
-     */
-    public boolean appliesToScene(String scene) {
-        if (sceneFilter == null || sceneFilter.isEmpty()) {
-            return true;
-        }
-        return sceneFilter.contains(scene);
-    }
 }

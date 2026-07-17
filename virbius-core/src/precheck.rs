@@ -130,7 +130,6 @@ mod tests {
                 agent_name: String::new(),
                 agent_aid: String::new(),
                 allowed_tools: allowed.into_iter().map(String::from).collect(),
-                allowed_scenes: vec![],
                 risk_quota: 60,
                 tool_rate_limit: 50,
                 exp: 9999999999,

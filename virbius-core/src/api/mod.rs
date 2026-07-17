@@ -56,11 +56,9 @@ impl VirbiusEdge {
             return Err(VirbiusError::EmptyContent);
         }
         let (trace_id, trace_id_source) = ctx.resolve_trace_id()?;
-        let scene = ctx.scene_or_default();
         let engine_result = engine::scan_once(ScanRequest {
             user_id: ctx.user_id.as_deref(),
             device_id: ctx.device_id.as_deref(),
-            scene: &scene,
             trace_id: &trace_id,
             trace_id_source,
             content,

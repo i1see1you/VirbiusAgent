@@ -47,7 +47,6 @@ public class ConstitutionService {
                 version,
                 req.category(),
                 req.priority() != null ? req.priority() : 50,
-                req.sceneFilter() != null ? req.sceneFilter() : List.of(),
                 req.ruleText(),
                 ConstitutionRule.STATUS_ACTIVE,
                 "admin",
@@ -88,19 +87,17 @@ public class ConstitutionService {
 
     // ---- Compilation ----
 
-    public List<Map<String, Object>> compile(String tenantId, String constitutionVersion, List<String> scenes) {
-        List<ConstitutionTemplate> templates = compiler.compile(tenantId, constitutionVersion, scenes);
-        return templates.stream()
-                .map(ConstitutionService::toTemplateMap)
-                .toList();
+    public Map<String, Object> compile(String tenantId, String constitutionVersion) {
+        ConstitutionTemplate template = compiler.compile(tenantId, constitutionVersion);
+        return toTemplateMap(template);
     }
 
     // ---- Template retrieval ----
 
-    public Map<String, Object> getTemplate(String tenantId, String constitutionVersion, String scene) {
-        ConstitutionTemplate tmpl = repo.findTemplate(tenantId, constitutionVersion, scene)
+    public Map<String, Object> getTemplate(String tenantId, String constitutionVersion) {
+        ConstitutionTemplate tmpl = repo.findTemplate(tenantId, constitutionVersion)
                 .orElseThrow(() -> new BusinessException(404,
-                        "template not found: version=" + constitutionVersion + " scene=" + scene));
+                        "template not found: version=" + constitutionVersion));
         return toTemplateMap(tmpl);
     }
 
@@ -137,7 +134,6 @@ public class ConstitutionService {
         m.put("version", r.version());
         m.put("category", r.category());
         m.put("priority", r.priority());
-        m.put("scene_filter", r.sceneFilter());
         m.put("rule_text", r.ruleText());
         m.put("status", r.status());
         m.put("created_by", r.createdBy() != null ? r.createdBy() : "");
@@ -150,7 +146,6 @@ public class ConstitutionService {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", t.id() != null ? t.id() : 0);
         m.put("constitution_version", t.constitutionVersion());
-        m.put("scene", t.scene());
         m.put("system_prefix", t.systemPrefix());
         m.put("dynamic_suffix", t.dynamicSuffix());
         m.put("prohibitions", t.prohibitions());
@@ -166,6 +161,5 @@ public class ConstitutionService {
             String version,
             String category,
             Integer priority,
-            List<String> sceneFilter,
             String ruleText) {}
 }

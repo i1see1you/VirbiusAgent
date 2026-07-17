@@ -13,7 +13,6 @@ public record MatchContext(
         Map<String, String> vars,
         Map<String, String> query,
         Map<String, String> headers,
-        String scene,
         String routeUri,
         String upstreamId,
         String consumerId,
@@ -34,7 +33,7 @@ public record MatchContext(
             String sessionId,
             Map<String, String> vars) {
         return new MatchContext(
-                content, userId, deviceId, clientIp, sessionId, vars, Map.of(), Map.of(), null, null, null, null, null, null);
+                content, userId, deviceId, clientIp, sessionId, vars, Map.of(), Map.of(), null, null, null, null, null);
     }
 
     public static MatchContext withBind(
@@ -44,7 +43,6 @@ public record MatchContext(
             String clientIp,
             String sessionId,
             Map<String, String> vars,
-            String scene,
             String routeUri) {
         return new MatchContext(
                 content,
@@ -55,7 +53,6 @@ public record MatchContext(
                 vars,
                 Map.of(),
                 Map.of(),
-                scene,
                 routeUri,
                 null,
                 null,
@@ -72,7 +69,7 @@ public record MatchContext(
             Map<String, String> vars,
             String toolName) {
         return new MatchContext(
-                content, userId, deviceId, clientIp, sessionId, vars, Map.of(), Map.of(), null, null, null, null, null, toolName);
+                content, userId, deviceId, clientIp, sessionId, vars, Map.of(), Map.of(), null, null, null, null, toolName);
     }
 
     public Map<String, String> varsOrEmpty() {
