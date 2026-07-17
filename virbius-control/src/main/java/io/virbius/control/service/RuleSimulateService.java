@@ -8,7 +8,6 @@ import io.virbius.control.repository.RegistryRepository;
 import io.virbius.control.ruleauthoring.ConditionCompiler;
 import io.virbius.control.ruleauthoring.ConditionEvaluator;
 import io.virbius.control.ruleauthoring.ConditionParser;
-import io.virbius.control.ruleauthoring.ContextVarResolver;
 import io.virbius.groovy.l3.GroovyL3Executor;
 import io.virbius.groovy.l3.L3RuleView;
 import io.virbius.groovy.l3.L3SignalView;
@@ -67,8 +66,7 @@ public class RuleSimulateService {
         Map<String, String> headers = stringMap(fixture.get("headers"));
         Map<String, String> query = stringMap(fixture.get("query"));
         Map<String, String> fixtureVars = stringMap(fixture.get("vars"));
-        var bindings = store.listContextBindings(tenantId, bundleId, RuleBindScopeValidator.defaultBundleVersion());
-        Map<String, String> vars = ContextVarResolver.resolve(bindings, headers, query, fixtureVars);
+        Map<String, String> vars = fixtureVars;
         steps.add(step("vars", true, Map.of("vars", vars)));
 
         String routeUri = str(fixture.get("route_uri"));

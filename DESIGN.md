@@ -593,7 +593,7 @@ if session_risk > 30: 提升审计采样率
 | 审计完整性 | hash chain | P1 | ✅ 已完成（详见 [§13.5](#135-审计完整性hash-chain)） |
 | 供应链身份 | License 签发/校验/吊销 | P0 | ✅ 已完成 |
 | 记忆管控 | Memory Interceptor（PII 脱敏 + 凭据检测 + LLM 注入检测） | P1 | ✅ 已实现（详见 [§13.6](#136-记忆管控memory-interceptor)） |
-| 输出安全 | Output Review（PII 脱敏 ✅ + 凭据检测 ✅ + 内容安全 ⏳） | P1 | 部分实现（PII 脱敏 + 凭据检测已完成，LLM 内容安全待实现，详见 [§13.7](#137-输出审查output-review)） |
+| 输出安全 | Output Review（PII 脱敏 ✅ + 凭据检测 ✅ + 内容安全 ✅） | P1 | ✅ 工具结果审查已完成（MCP Proxy 复用 Engine `/v1/evaluate` + qwen3guard 规则管线）；Agent 最终输出审查为设计建议，待应用层集成（详见 [§13.7](#137-输出审查output-review)） |
 | 决策链路追踪 | Trace Collector + Ingest + 可视化 | P1 | ✅ 已完成 |
 | 显式信任分层 | TrustTagger + TrustViolationDetector | P1.10 | ✅ 已完成（Edge 端包裹 `<trust_boundary>` + Engine 端违规检测，详见 [§13.10](#1310-显式信任分层explicit-trust-layering)） |
 | 规划劫持检测 | IntentAnchor + PlanDriftDetector | P1.11 | ⏳ 设计完成（详见 [§13.11](#1311-规划劫持检测plan-hijacking-detection)） |
@@ -2228,62 +2228,84 @@ injection_threshold = 0.7         # 注入检测置信度阈值
 
 ### 13.7 输出审查（Output Review）
 
-> **已有设计**：[ARCHITECTURE.md §2.10](ARCHITECTURE.md#210-输出审查output-review) 已包含完整设计（审查流程、审查维度、实现代码、成本控制）。以下为补充的集成与配置细节。
+> **工具结果审查已实现；Agent 最终输出审查为设计建议，待应用层集成。** 本方案放弃了原始设计中独立的 `OutputReviewer` 类，改为**复用 Engine 现有规则管线**（`POST /v1/evaluate`），实现零新增端点、零新增 LLM 客户端。工具结果审查已在 MCP Proxy 中实现；Agent 最终输出审查（方案 B）需应用层自行调用 `/v1/evaluate`，目前代码库中未包含应用层集成代码。
 
-#### 13.7.1 审查维度对照
+#### 13.7.1 设计决策：复用而非新建
+
+原始设计（ARCHITECTURE.md §2.10）提议在 `virbius-core` 中新建 `OutputReviewer` 结构体，内嵌 `GuardModelClient`。经分析发现 Engine 的 `prompt` runtime（qwen3guard:0.6b）已具备完整的内容安全分类能力，`groovy` runtime 覆盖确定性检查，两者共享信号流和策略合并。因此实际实现为：
+
+- **Engine 侧零改动**：`POST /v1/evaluate` 的 `EvaluateRequestDto` 已有 `content` 和 `role` 字段，现有 `PromptRunner` + `ScriptRuleRunner` → `PolicyMerger` 管线自动对 `content` 执行安全分类
+- **MCP Proxy 侧**：在工具结果返回前（`mask_pii` + `trust_tag` 之后），提取文本调用 `/v1/evaluate`（`role="output"`），若 `deny` 则替换为安全提示
+- **Agent 最终输出**：⏳ 设计建议——应用层直接调用 `POST /v1/evaluate`（方案 B），无需额外端点。Engine 侧已就绪（`/v1/evaluate` 支持 `role="output"`），但应用层集成代码尚未编写
+
+#### 13.7.2 审查维度对照
 
 | 维度 | 机制 | 触发条件 | 命中动作 | LLM 调用 |
-|------|------|---------|---------|---------|
-| **PII 泄露** | DLP 实体识别 | 每次输出 | 脱敏后返回 + 审计 | 否 |
-| **凭据泄露** | 正则 + 小模型辅助 | 每次输出 | 脱敏后返回 + 审计 | 否（正则为主） |
-| **内容安全** | qwen3guard 小模型 | 输出 >512 字符 或 session_risk > 50 | block + 审计 + risk_delta | 是（仅高风险） |
-| **策略合规** | 规则引擎（场景约束） | 每次输出 | block 或 require_review + 审计 | 否 |
+|------|------|---------|---------|----------|
+| **PII 泄露** | DLP 实体识别（`mask_pii_in_response`） | 每次工具输出 | 脱敏后返回 + 审计 | 否 |
+| **凭据泄露** | 正则 + 小模型辅助 | 每次工具输出 | 脱敏后返回 + 审计 | 否（正则为主） |
+| **内容安全** | qwen3guard 小模型（复用 Engine `prompt` runtime） | 输出 >512 字符 或 session_risk > 50 | block + 审计 + risk_delta | 是（仅高风险） |
+| **策略合规** | Groovy 规则引擎（场景约束） | 每次工具输出 | block 或 challenge + 审计 | 否 |
 
-#### 13.7.2 集成点
+#### 13.7.3 实现架构
 
 ```
-Agent 生成最终响应
+工具返回结果（egress / non-egress 两条路径）
   │
   ▼
-[输出审查] OutputReviewer（嵌入 virbius-core）
-  │  ├── PII 泄露检测（dlp/engine.rs）
-  │  ├── 凭据泄露检测（正则 + 小模型辅助）
-  │  ├── 内容安全检测（qwen3guard，仅高风险触发）
-  │  └── 策略合规检测（场景规则）
+mask_pii_in_response()    ← PII 脱敏（已有）
   │
   ▼
-通过 → 返回用户
-拦截 → 脱敏/过滤后返回 + 审计
+tag_tool_result()          ← 信任边界标签（已有）
+  │
+  ▼
+review_tool_output()       ← 内容安全审查（新增）
+  ├── extract_result_text()        从 resp.result.content[].text 提取文本
+  ├── should_review_output()       条件触发：text.len() ≥ 512 || risk_score ≥ 50
+  ├── pipeline.review_output()    调用 POST /v1/evaluate { content, role: "output" }
+  │   └── Engine 复用 PromptRunner (qwen3guard) + ScriptRuleRunner (groovy) → PolicyMerger
+  └── 若 deny → replace_result_text() 替换为安全提示
+      若 engine 不可用 → 根据 fail_open 决定放行或拦截
+
+Agent 最终响应（方案 B：应用层调用，⏳ 设计建议/待应用层集成）
+  │
+  ▼
+应用层 POST /v1/evaluate { content: "<Agent 输出>", role: "output" }
+  └── Engine 同一管线分类 → deny 则脱敏/拦截
 ```
 
-#### 13.7.3 策略配置
+> **工具结果审查与 Agent 最终输出审查的分工**：MCP Proxy 只能看到工具调用和工具返回值，看不到 Agent 的最终文本响应（那是 chat completion API 的响应）。因此工具结果审查在 MCP Proxy 实现（✅ 已完成），Agent 最终输出审查由应用层自行调用 `/v1/evaluate`（方案 B，⏳ 设计建议——Engine 侧已就绪，待应用层集成）。
+
+#### 13.7.4 代码位置
+
+| 文件 | 改动 |
+|------|------|
+| `virbius-mcp-proxy/src/config.rs` | 新增 `OutputReviewConfig` 结构体（`enabled`、`min_text_length`、`min_risk_score`、`fail_open`） |
+| `virbius-mcp-proxy/src/pipeline.rs` | `EvaluateRequest` 增加 `content`/`role` 字段；`SecurityPipeline` 新增 `review_output()` / `should_review_output()` 方法 |
+| `virbius-mcp-proxy/src/router.rs` | 新增 `extract_result_text()` / `replace_result_text()` / `review_tool_output()`；egress + non-egress 两条路径插入审查调用 |
+| `virbius-mcp-proxy/src/main.rs` | `SecurityPipeline::new()` 传入 `OutputReviewConfig` |
+| Engine 侧 | **零改动**（`/v1/evaluate` 已支持 `content`/`role`） |
+
+#### 13.7.5 配置
 
 ```toml
-# virbius-control → 策略下发 → virbius-core manifest
-[output_review]
+# virbius-mcp-proxy.toml
+[security.output_review]
 enabled = true
-pii_check = true                    # PII 泄露检测
-credential_check = true             # 凭据泄露检测
-content_safety_check = true         # 内容安全检测
-content_safety_threshold = 512      # 输出 >512 字符时触发小模型
-content_safety_risk_threshold = 50  # session_risk > 50 时触发小模型
-policy_compliance_check = true      # 策略合规检测
-
-# 场景相关输出约束（示例：code_review 场景）
-[output_review.scene.code_review]
-block_full_code_output = true       # 禁止输出完整可执行代码
-block_internal_path_leak = true     # 禁止泄漏内部路径
-max_output_length = 4096            # 最大输出长度
+min_text_length = 512       # 文本长度 ≥ 此值时触发 LLM 审查
+min_risk_score = 50         # 会话风险分 ≥ 此值时触发 LLM 审查
+fail_open = true            # Engine 不可用时是否放行
 ```
 
-#### 13.7.4 与 STI Taint 的分工
+#### 13.7.6 与 STI Taint 的分工
 
 | 检测层 | 作用对象 | 阶段 | 机制 |
 |--------|---------|------|------|
 | **STI Taint（§13.2）** | 工具返回值 | 工具执行后、Agent 汇总前 | 小模型判定注入 |
-| **输出审查（本节）** | Agent 最终响应 | Agent 汇总后、返回用户前 | DLP + 小模型 + 规则 |
+| **工具结果审查（本节）** | 工具返回值 | PII 脱敏 + 信任标签之后 | 复用 Engine 规则管线（qwen3guard + groovy） |
+| **Agent 输出审查（方案 B）** | Agent 最终响应 | Agent 汇总后、返回用户前 | 应用层调用 `/v1/evaluate`（⏳ 设计建议/待应用层集成） |
 
-> 两者覆盖不同阶段，形成从工具返回到最终输出的完整审查链路。
+> 三层覆盖从工具返回到最终输出的完整审查链路。
 
 ---
 
@@ -2431,7 +2453,7 @@ HGETALL session:{id}:tool_counts  → {read_file: 3, write_file: 5}
 | **P1.2** | STI Taint 语义审计（§13.2） | 工具返回值注入是第二大攻击入口 | 与 P1.1 共享模型 |
 | **P1.3** | Session Risk 自适应模型（§13.3） | 自适应评分是其他检测的联动基础 | 无 |
 | **P1.4** | 审计完整性 hash chain（§13.5） | 审计可信是安全合规的底线 | 无 |
-| **P1.5** | 输出审查（§13.7） | 覆盖最终输出安全 | 与 P1.1/P1.2 共享模型 |
+| **P1.5** | 输出审查（§13.7） | 覆盖最终输出安全 | 复用 P1.1/P1.2 的 Engine 规则管线（零新增端点） |
 | **P1.6** | 记忆管控（§13.6） | 记忆污染是持久化攻击 | 与 P1.1 共享模型 |
 | **P1.7** | virbius-audit Falco 插件（§13.4） | 增强内核级 Agent 专用检测 | Falco plugin SDK |
 | **P1.8** | Falco 规则库扩充（§13.4） | 配合 virbius-audit 插件 | 依赖 P1.7 |

@@ -1,6 +1,9 @@
 package io.virbius.control.repository;
 
 import io.virbius.control.domain.BundleMetadataResources;
+import io.virbius.control.domain.BundleVersion;
+import io.virbius.control.domain.RiskScore;
+import io.virbius.control.domain.RolloutStateHelper;
 import io.virbius.control.domain.RuleRevision;
 import io.virbius.control.domain.enums.RolloutState;
 import java.sql.ResultSet;

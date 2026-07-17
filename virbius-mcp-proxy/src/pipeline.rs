@@ -12,7 +12,7 @@ use virbius_core::license::{License, LicenseError};
 use virbius_core::precheck::{self, PrecheckResult, ToolCall};
 
 use crate::audit::{AuditEvent, SharedAuditSink};
-use crate::config::{FailoverConfig, FastPathConfig, FallbackPolicy, HIGH_RISK_TOOLS};
+use crate::config::{FailoverConfig, FastPathConfig, FallbackPolicy, OutputReviewConfig, HIGH_RISK_TOOLS};
 use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
 use crate::session::Session;
 
@@ -84,24 +84,28 @@ struct EvaluateRequest<'a> {
     args: &'a Value,
     args_json: String,
     license_risk_quota: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<&'a str>,
 }
 
 /// Engine evaluate response body.
 #[derive(Debug, Deserialize)]
-struct EvaluateResponse {
-    effective_action: String,
+pub(crate) struct EvaluateResponse {
+    pub(crate) effective_action: String,
     #[serde(default)]
-    rule_id: Option<String>,
+    pub(crate) rule_id: Option<String>,
     #[serde(default)]
-    reason: Option<String>,
+    pub(crate) reason: Option<String>,
     #[serde(default)]
-    risk_score_delta: i32,
+    pub(crate) risk_score_delta: i32,
     #[serde(default)]
-    session_risk_score: u32,
+    pub(crate) session_risk_score: u32,
     #[serde(default)]
-    challenge_id: Option<String>,
+    pub(crate) challenge_id: Option<String>,
     #[serde(default)]
-    args_hash: Option<String>,
+    pub(crate) args_hash: Option<String>,
 }
 
 /// Engine memory check request body (LLM-based injection detection).
@@ -117,16 +121,16 @@ struct MemoryCheckRequest<'a> {
 
 /// Engine memory check response body.
 #[derive(Debug, Deserialize)]
-struct MemoryCheckResponse {
-    allowed: bool,
+pub(crate) struct MemoryCheckResponse {
+    pub(crate) allowed: bool,
     #[serde(default)]
-    block_reason: Option<String>,
+    pub(crate) block_reason: Option<String>,
     #[serde(default)]
-    risk_score: Option<i32>,
+    pub(crate) risk_score: Option<i32>,
     #[serde(default)]
-    model: Option<String>,
+    pub(crate) model: Option<String>,
     #[serde(default)]
-    metadata: Option<String>,
+    pub(crate) metadata: Option<String>,
 }
 
 /// HTTP client for calling virbius-engine.
@@ -194,6 +198,7 @@ pub struct SecurityPipeline {
     failover: FailoverConfig,
     fallback_policy: FallbackPolicy,
     audit: SharedAuditSink,
+    output_review: OutputReviewConfig,
 }
 
 impl SecurityPipeline {
@@ -204,6 +209,7 @@ impl SecurityPipeline {
         failover: FailoverConfig,
         fallback_policy: FallbackPolicy,
         audit: SharedAuditSink,
+        output_review: OutputReviewConfig,
     ) -> Self {
         let engine = EngineClient::new(engine_url, failover.engine_timeout_ms);
         Self {
@@ -213,6 +219,7 @@ impl SecurityPipeline {
             failover,
             fallback_policy,
             audit,
+            output_review,
         }
     }
 
@@ -292,6 +299,8 @@ impl SecurityPipeline {
             args,
             args_json: serde_json::to_string(args).unwrap_or_default(),
             license_risk_quota: risk_quota,
+            content: None,
+            role: None,
         };
 
         match self.engine.evaluate(&req).await {
@@ -479,7 +488,7 @@ impl SecurityPipeline {
     /// Check a memory write with the Engine (LLM-based injection detection).
     ///
     /// Called by the router after local Memory Interceptor checks pass.
-    pub async fn check_memory(
+    pub(crate) async fn check_memory(
         &self,
         session: &Session,
         tool_name: &str,
@@ -583,6 +592,53 @@ impl SecurityPipeline {
     ) {
         let event = AuditEvent::tool_call(session, tool_name, action, rule_id, reason);
         self.audit.report(event).await;
+    }
+
+    /// Check if output review should be triggered for the given text and risk score.
+    ///
+    /// Review is triggered when either:
+    /// - Text length >= `min_text_length` (default 512 chars), or
+    /// - Session risk score >= `min_risk_score` (default 50)
+    pub fn should_review_output(&self, text: &str, session_risk_score: u32) -> bool {
+        if !self.output_review.enabled {
+            return false;
+        }
+        text.len() >= self.output_review.min_text_length
+            || session_risk_score >= self.output_review.min_risk_score
+    }
+
+    /// Review tool output content via the Engine (reuses `POST /v1/evaluate`).
+    ///
+    /// Sends the tool result text as `content` with `role = "output"`,
+    /// allowing the Engine's existing prompt/groovy rule pipeline to
+    /// perform LLM content safety classification (qwen3guard) and
+    /// deterministic pattern matching.
+    ///
+    /// Returns the engine's evaluate response, or an error on failure.
+    pub(crate) async fn review_output(
+        &self,
+        session: &Session,
+        tool_name: &str,
+        content: &str,
+    ) -> Result<EvaluateResponse, EngineError> {
+        let req = EvaluateRequest {
+            trace_id: &session.trace_id,
+            session_id: &session.session_id,
+            app_id: &session.app_id,
+            tenant_id: &session.tenant_id,
+            tool_name,
+            args: &serde_json::Value::Null,
+            args_json: String::new(),
+            license_risk_quota: 100,
+            content: Some(content),
+            role: Some("output"),
+        };
+        self.engine.evaluate(&req).await
+    }
+
+    /// Returns the output review configuration.
+    pub fn output_review_config(&self) -> &OutputReviewConfig {
+        &self.output_review
     }
 }
 

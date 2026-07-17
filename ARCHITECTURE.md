@@ -192,7 +192,7 @@ virbius-control 签发 License（JWT 签名）：
 | **提示增强** | 注入宪法约束，预防危险意图产生 | §2.8 Prompt Gateway | 预防 |
 | **记忆管控** | Agent 记忆读写拦截 + 脱敏 + 注入检测 | §2.9 Memory Interceptor | 预防+检测 |
 | **工具拦截** | 参数校验 + allowlist + schema + 工具链检测 | §2.1 端层预检 + §3.2 管层 WASM + §5.3 云层 L3 | 检测+阻断 |
-| **输出审查** | Agent 最终响应的内容安全审查 | §2.10 Output Review | 检测 |
+| **输出审查** | 工具结果内容安全审查 + Agent 最终响应审查 | §2.10 Output Review | 检测+阻断 |
 
 运行时防护流程：
 
@@ -902,82 +902,130 @@ pub struct MemoryAuditEvent {
 
 ### 2.10 输出审查（Output Review）
 
-> **P1 实现。** STI Taint（§5.4）审查的是**工具返回值**，输出审查审查的是 **Agent 最终返回给用户的响应**——经过 LLM 汇总工具结果后生成的内容。两者覆盖不同阶段。
+> **工具结果审查已实现；Agent 最终输出审查为设计建议，待应用层集成。** 实际实现复用 Engine `/v1/evaluate` 端点，而非新建独立 `OutputReviewer` 类。工具结果审查已在 MCP Proxy 中实现；Agent 最终输出审查（方案 B）需应用层自行调用 `/v1/evaluate`，目前代码库中未包含应用层集成代码。详见 [DESIGN.md §13.7](DESIGN.md#137-输出审查output-review)。
+
+> STI Taint（§5.4）审查的是**工具返回值**，输出审查审查的是 **Agent 最终返回给用户的响应**——经过 LLM 汇总工具结果后生成的内容。两者覆盖不同阶段。
 
 **审查流程**：
 
 ```
-Agent 生成最终响应
+工具返回结果（egress / non-egress 两条路径）
   |
   v
-[输出审查] Output Reviewer（嵌入 virbius-core）
-  |  +-- PII 泄露检测（复用 dlp/engine.rs，输出脱敏）
-  |  +-- 凭据/密钥泄露检测（正则 + 小模型）
-  |  +-- 内容安全检测（复用 prompt runtime 小模型，检测 Agent 输出是否含违规内容）
-  |  +-- 策略合规检测（规则：如"code_review 场景不得输出完整执行代码"）
+mask_pii_in_response()    ← PII 脱敏（已有）
   |
   v
-通过 → 返回用户
-拦截 → 脱敏/过滤后返回 + 审计
+tag_tool_result()          ← 信任边界标签（已有）
+  |
+  v
+review_tool_output()       ← 内容安全审查（新增）
+  +-- extract_result_text()        从 resp.result.content[].text 提取文本
+  +-- should_review_output()       条件触发：text.len() ≥ 512 || risk_score ≥ 50
+  +-- pipeline.review_output()    调用 POST /v1/evaluate { content, role: "output" }
+  |   +-- Engine 复用 PromptRunner (qwen3guard) + ScriptRuleRunner (groovy) -> PolicyMerger
+  +-- 若 deny -> replace_result_text() 替换为安全提示
+      若 engine 不可用 -> 根据 fail_open 决定放行或拦截
+
+Agent 最终响应（方案 B：应用层调用，⏳ 设计建议/待应用层集成）
+  |
+  v
+应用层 POST /v1/evaluate { content: "<Agent 输出>", role: "output" }
+  +-- Engine 同一管线分类 -> deny 则脱敏/拦截
 ```
 
 **审查维度**：
 
 | 维度 | 机制 | 触发条件 | 命中动作 |
 |------|------|---------|---------|
-| **PII 泄露** | dlp/engine.rs 实体识别 | 每次输出 | 脱敏后返回 + 审计 |
-| **凭据泄露** | 正则（API key/token/password 模式） + 小模型辅助 | 每次输出 | 脱敏后返回 + 审计 |
-| **内容安全** | qwen3guard 小模型（复用 prompt runtime 基础设施） | 输出 >512 字符 或 session_risk > 50 | block + 审计 + 提升 risk_score |
-| **策略合规** | 规则引擎（场景相关输出约束） | 每次输出 | block 或 require_review + 审计 |
+| **PII 泄露** | dlp/engine.rs 实体识别（`mask_pii_in_response`） | 每次工具输出 | 脱敏后返回 + 审计 |
+| **凭据泄露** | 正则（API key/token/password 模式） + 小模型辅助 | 每次工具输出 | 脱敏后返回 + 审计 |
+| **内容安全** | qwen3guard 小模型（复用 Engine `prompt` runtime） | 输出 >512 字符 或 session_risk > 50 | block + 审计 + 提升 risk_score |
+| **策略合规** | Groovy 规则引擎（场景相关输出约束） | 每次工具输出 | block 或 challenge + 审计 |
 
 **与 STI Taint 的分工**：
 
 | 检测层 | 作用对象 | 阶段 | 机制 |
 |--------|---------|------|------|
 | **STI Taint（§5.4）** | 工具返回值 | 工具执行后、Agent 汇总前 | 小模型判定注入 |
-| **输出审查（本节）** | Agent 最终响应 | Agent 汇总后、返回用户前 | DLP + 小模型 + 规则 |
+| **工具结果审查（本节）** | 工具返回值 | PII 脱敏 + 信任标签之后 | 复用 Engine 规则管线（qwen3guard + groovy） |
+| **Agent 输出审查（方案 B）** | Agent 最终响应 | Agent 汇总后、返回用户前 | 应用层调用 `/v1/evaluate`（⏳ 设计建议/待应用层集成） |
 
-**实现**：
+> 三层覆盖从工具返回到最终输出的完整审查链路。
+
+**实现**（MCP Proxy 侧，非 virbius-core）：
 
 ```rust
-// virbius-core/src/output_reviewer.rs (P1)
+// virbius-mcp-proxy/src/pipeline.rs
 
-pub struct OutputReviewer {
-    dlp_engine: DlpEngine,
-    guard_model: GuardModelClient,
-    policies: Vec<OutputPolicy>,                        // 场景相关，from virbius-control
+/// Review tool output content via the Engine (reuses POST /v1/evaluate).
+pub(crate) async fn review_output(
+    &self,
+    session: &Session,
+    tool_name: &str,
+    content: &str,
+) -> Result<EvaluateResponse, EngineError> {
+    let req = EvaluateRequest {
+        trace_id: &session.trace_id,
+        session_id: &session.session_id,
+        app_id: &session.app_id,
+        tenant_id: &session.tenant_id,
+        tool_name,
+        args: &serde_json::Value::Null,
+        args_json: String::new(),
+        license_risk_quota: 100,
+        content: Some(content),
+        role: Some("output"),
+    };
+    self.engine.evaluate(&req).await
 }
 
-pub struct ReviewResult {
-    pub action: ReviewAction,                           // Allow / Desensitize / Block / RequireReview
-    pub desensitized_content: Option<String>,
-    pub violations: Vec<ReviewViolation>,
-    pub risk_delta: u32,
+/// Check if output review should be triggered.
+pub fn should_review_output(&self, text: &str, session_risk_score: u32) -> bool {
+    if !self.output_review.enabled {
+        return false;
+    }
+    text.len() >= self.output_review.min_text_length
+        || session_risk_score >= self.output_review.min_risk_score
 }
+```
 
-impl OutputReviewer {
-    pub fn review(&self, content: &str, ctx: &ReviewContext) -> ReviewResult {
-        // 1. PII 泄露检测（DLP 实体识别）
-        let (desensitized, pii_found) = self.dlp_engine.desensitize_out(content, ...);
+```rust
+// virbius-mcp-proxy/src/router.rs
 
-        // 2. 凭据泄露检测（正则 + 小模型辅助）
-        let cred_violations = self.detect_credentials(content);
-
-        // 3. 内容安全检测（小模型，仅高风险触发）
-        let content_violation = if content.len() > 512 || ctx.risk_score > 50 {
-            self.guard_model.judge_content_safety(content)
-        } else {
-            None
-        };
-
-        // 4. 策略合规检测（场景规则）
-        let policy_violations = self.check_policies(content, ctx.scene);
-
-        // 汇总决策
-        self.merge_results(desensitized, pii_found, cred_violations,
-                          content_violation, policy_violations)
+async fn review_tool_output(
+    resp: &mut Value,
+    session: &Session,
+    tool_name: &str,
+    pipeline: &SecurityPipeline,
+) {
+    let text = extract_result_text(resp);
+    if text.is_empty() || !pipeline.should_review_output(&text, session.session_risk_score) {
+        return;
+    }
+    match pipeline.review_output(session, tool_name, &text).await {
+        Ok(eval_resp) => {
+            if eval_resp.effective_action == "block" || eval_resp.effective_action == "deny" {
+                replace_result_text(resp, &format!("[Content blocked: {}]", ...));
+            }
+        }
+        Err(_) => {
+            if !cfg.fail_open {
+                replace_result_text(resp, "[Content blocked: safety review unavailable]");
+            }
+        }
     }
 }
+```
+
+**配置**：
+
+```toml
+# virbius-mcp-proxy.toml
+[security.output_review]
+enabled = true
+min_text_length = 512
+min_risk_score = 50
+fail_open = true
 ```
 
 **成本控制**：PII/凭据检测为规则+正则，无 LLM 调用。内容安全检测复用 qwen3guard 小模型，仅高风险触发（输出 >512 字符 或 session_risk > 50），非每次调用。

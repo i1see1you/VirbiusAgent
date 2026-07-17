@@ -7,7 +7,7 @@
 /// - `tools/call` routes to the correct upstream via `tool_routes`
 
 use serde_json::Value;
-use tracing::{debug, warn};
+use tracing::{debug, warn, info};
 
 use crate::egress::EgressClient;
 use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
@@ -811,6 +811,14 @@ async fn handle_tools_call(
                 mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
                 // ── Trust boundary tagging (high/network risk only) ──
                 tag_tool_result(&mut resp, &original_tool_name, false);
+                // ── Output content safety review (LLM-based) ──
+                review_tool_output(
+                    &mut resp,
+                    &session,
+                    &original_tool_name,
+                    pipeline.as_ref(),
+                )
+                .await;
                 // ── Trace: record tool_result ──
                 let duration_ms = trace_start.elapsed().as_millis() as u64;
                 let result_step_id = uuid::Uuid::new_v4().to_string();
@@ -863,6 +871,14 @@ async fn handle_tools_call(
                     mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
                     // ── Trust boundary tagging (high/network risk only) ──
                     tag_tool_result(&mut resp, &original_tool_name, false);
+                    // ── Output content safety review (LLM-based) ──
+                    review_tool_output(
+                        &mut resp,
+                        &session,
+                        &original_tool_name,
+                        pipeline.as_ref(),
+                    )
+                    .await;
                     // ── Trace: record tool_result ──
                     let duration_ms = trace_start.elapsed().as_millis() as u64;
                     let result_step_id = uuid::Uuid::new_v4().to_string();
@@ -1091,6 +1107,133 @@ fn mask_pii_in_response(resp: &mut Value, tool_name: &str, session_id: &str) {
             "output PII masked for tool '{}' in session '{}'",
             tool_name, session_id
         );
+    }
+}
+
+/// Extract concatenated text from a JSON-RPC tool call response.
+///
+/// Navigates `resp.result.content[]` and collects all `text`-type items.
+/// Returns an empty String if the response has no text content.
+fn extract_result_text(resp: &Value) -> String {
+    let Some(result) = resp.get("result") else {
+        return String::new();
+    };
+    let Some(content_arr) = result.get("content").and_then(|c| c.as_array()) else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    for item in content_arr {
+        if item.get("type").and_then(|t| t.as_str()) != Some("text") {
+            continue;
+        }
+        if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
+            parts.push(text);
+        }
+    }
+    parts.join("\n")
+}
+
+/// Replace all text content in a JSON-RPC tool call response with a safe message.
+///
+/// Used when the output review engine denies the content.
+fn replace_result_text(resp: &mut Value, safe_message: &str) {
+    let Some(result) = resp.get_mut("result") else {
+        return;
+    };
+    let Some(content_arr) = result.get_mut("content").and_then(|c| c.as_array_mut()) else {
+        return;
+    };
+    for item in content_arr.iter_mut() {
+        if item.get("type").and_then(|t| t.as_str()) != Some("text") {
+            continue;
+        }
+        if let Some(text_field) = item.get_mut("text") {
+            *text_field = Value::String(safe_message.to_string());
+        }
+    }
+}
+
+/// Review tool output for content safety via the Engine.
+///
+/// Extracts text from the tool result response and sends it to the Engine's
+/// `/v1/evaluate` endpoint with `role = "output"`. The Engine reuses its
+/// existing rule pipeline (qwen3guard LLM classification + groovy pattern
+/// matching) to classify the content.
+///
+/// Conditional trigger: only reviews when text length >= `min_text_length`
+/// or session risk score >= `min_risk_score`, balancing latency and safety.
+///
+/// If the Engine denies the content, the response text is replaced with a
+/// safe placeholder. On engine failure, the `fail_open` config determines
+/// whether to allow or block the content.
+async fn review_tool_output(
+    resp: &mut Value,
+    session: &Session,
+    tool_name: &str,
+    pipeline: &SecurityPipeline,
+) {
+    let cfg = pipeline.output_review_config();
+    if !cfg.enabled {
+        return;
+    }
+
+    let text = extract_result_text(resp);
+    if text.is_empty() {
+        return;
+    }
+
+    // Conditional trigger: skip review for short, low-risk outputs
+    if !pipeline.should_review_output(&text, session.session_risk_score) {
+        return;
+    }
+
+    debug!(
+        "output review triggered: tool={} session={} text_len={} risk_score={}",
+        tool_name,
+        session.session_id,
+        text.len(),
+        session.session_risk_score
+    );
+
+    match pipeline.review_output(session, tool_name, &text).await {
+        Ok(eval_resp) => {
+            let action = eval_resp.effective_action.as_str();
+            if action == "block" || action == "deny" {
+                let reason = eval_resp
+                    .reason
+                    .as_deref()
+                    .unwrap_or("content safety violation");
+                info!(
+                    "output review blocked: tool={} session={} rule={:?} reason={}",
+                    tool_name,
+                    session.session_id,
+                    eval_resp.rule_id,
+                    reason
+                );
+                let safe_msg = format!(
+                    "[Content blocked by safety review: {}]",
+                    reason
+                );
+                replace_result_text(resp, &safe_msg);
+            } else {
+                debug!(
+                    "output review passed: tool={} session={} action={}",
+                    tool_name, session.session_id, action
+                );
+            }
+        }
+        Err(e) => {
+            warn!(
+                "output review engine error: tool={} session={} error={}",
+                tool_name, session.session_id, e
+            );
+            if !cfg.fail_open {
+                replace_result_text(
+                    resp,
+                    "[Content blocked: safety review unavailable]",
+                );
+            }
+        }
     }
 }
 

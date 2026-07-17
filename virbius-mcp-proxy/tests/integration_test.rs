@@ -22,13 +22,14 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt as _;
 use tracing::debug;
 
-use virbius_mcp_proxy::audit::AuditSink;
-use virbius_mcp_proxy::config::{FastPathConfig, FailoverConfig, FallbackPolicy};
+use virbius_mcp_proxy::audit::{AuditBackend, AuditSink};
+use virbius_mcp_proxy::config::{FastPathConfig, FailoverConfig, FallbackPolicy, OutputReviewConfig};
 use virbius_mcp_proxy::egress::EgressClient;
 use virbius_mcp_proxy::pipeline::SecurityPipeline;
 use virbius_mcp_proxy::router;
 use virbius_mcp_proxy::session::{Session, SessionManager};
 use virbius_mcp_proxy::config::UpstreamEntry;
+use virbius_mcp_proxy::trace_collector::{SharedTraceCollector, TraceBackend, TraceCollector};
 use virbius_mcp_proxy::upstream::UpstreamManager;
 
 // ═══════════════════════════════════════════════════════════════
@@ -155,6 +156,7 @@ struct ProxyEnv {
     egress_client: EgressClient,
     egress_hosts: Vec<String>,
     pubkey: String,
+    trace_collector: SharedTraceCollector,
 }
 
 async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
@@ -169,7 +171,7 @@ async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
         10,
     ));
 
-    let audit = Arc::new(AuditSink::new("", 1.0)); // No Redis
+    let audit = Arc::new(AuditSink::new(AuditBackend::Disabled, 1.0)); // No Redis
     let pipeline = Arc::new(SecurityPipeline::new(
         String::new(),                    // No public key (License verification will fail gracefully)
         "http://127.0.0.1:59999",         // Non-existent engine (triggers failover)
@@ -177,11 +179,13 @@ async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
         FailoverConfig::default(),
         FallbackPolicy::MinimumPrivilege,
         audit,
+        OutputReviewConfig::default(),
     ));
 
     let egress_client = EgressClient::new(30, 50);
     let egress_hosts = Vec::new();
     let pubkey = String::new();
+    let trace_collector = Arc::new(TraceCollector::new(TraceBackend::Disabled));
 
     ProxyEnv {
         session_mgr,
@@ -190,6 +194,7 @@ async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
         egress_client,
         egress_hosts,
         pubkey,
+        trace_collector,
     }
 }
 
@@ -208,6 +213,7 @@ async fn route(
         &env.egress_client,
         &env.egress_hosts,
         &env.pubkey,
+        &env.trace_collector,
     )
     .await
 }
@@ -689,7 +695,7 @@ async fn test_multi_upstream_no_conflict() {
         10,
     ));
 
-    let audit = Arc::new(AuditSink::new("", 1.0));
+    let audit = Arc::new(AuditSink::new(AuditBackend::Disabled, 1.0));
     let pipeline = Arc::new(SecurityPipeline::new(
         String::new(),
         "http://127.0.0.1:59999",
@@ -697,7 +703,10 @@ async fn test_multi_upstream_no_conflict() {
         FailoverConfig::default(),
         FallbackPolicy::MinimumPrivilege,
         audit,
+        OutputReviewConfig::default(),
     ));
+
+    let trace_collector = Arc::new(TraceCollector::new(TraceBackend::Disabled));
 
     let env = ProxyEnv {
         session_mgr,
@@ -706,6 +715,7 @@ async fn test_multi_upstream_no_conflict() {
         egress_client: EgressClient::new(30, 50),
         egress_hosts: Vec::new(),
         pubkey: String::new(),
+        trace_collector,
     };
 
     let sid = "itest-multi-no-conflict";
@@ -791,7 +801,7 @@ async fn test_multi_upstream_name_conflict() {
         10,
     ));
 
-    let audit = Arc::new(AuditSink::new("", 1.0));
+    let audit = Arc::new(AuditSink::new(AuditBackend::Disabled, 1.0));
     let pipeline = Arc::new(SecurityPipeline::new(
         String::new(),
         "http://127.0.0.1:59999",
@@ -799,7 +809,10 @@ async fn test_multi_upstream_name_conflict() {
         FailoverConfig::default(),
         FallbackPolicy::MinimumPrivilege,
         audit,
+        OutputReviewConfig::default(),
     ));
+
+    let trace_collector = Arc::new(TraceCollector::new(TraceBackend::Disabled));
 
     let env = ProxyEnv {
         session_mgr,
@@ -808,6 +821,7 @@ async fn test_multi_upstream_name_conflict() {
         egress_client: EgressClient::new(30, 50),
         egress_hosts: Vec::new(),
         pubkey: String::new(),
+        trace_collector,
     };
 
     let sid = "itest-multi-conflict";

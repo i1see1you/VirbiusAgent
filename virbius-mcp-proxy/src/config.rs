@@ -85,6 +85,8 @@ pub struct SecuritySection {
     pub fast_path: FastPathConfig,
     #[serde(default)]
     pub failover: FailoverConfig,
+    #[serde(default)]
+    pub output_review: OutputReviewConfig,
 }
 
 fn default_control_url() -> String {
@@ -106,6 +108,50 @@ impl Default for SecuritySection {
             fallback_policy: default_fallback(),
             fast_path: FastPathConfig::default(),
             failover: FailoverConfig::default(),
+            output_review: OutputReviewConfig::default(),
+        }
+    }
+}
+
+/// Output review configuration: controls LLM content safety review of tool results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputReviewConfig {
+    /// Master switch for output content safety review.
+    #[serde(default = "default_or_enabled")]
+    pub enabled: bool,
+    /// Minimum text length (in characters) to trigger LLM review.
+    /// Texts shorter than this are only reviewed if risk score is high.
+    #[serde(default = "default_or_min_text_length")]
+    pub min_text_length: usize,
+    /// Minimum session risk score to trigger LLM review regardless of text length.
+    #[serde(default = "default_or_min_risk_score")]
+    pub min_risk_score: u32,
+    /// If true, allow tool result to pass through when engine is unavailable.
+    /// If false, block the result on engine failure (fail-closed).
+    #[serde(default = "default_or_fail_open")]
+    pub fail_open: bool,
+}
+
+fn default_or_enabled() -> bool {
+    true
+}
+fn default_or_min_text_length() -> usize {
+    512
+}
+fn default_or_min_risk_score() -> u32 {
+    50
+}
+fn default_or_fail_open() -> bool {
+    true
+}
+
+impl Default for OutputReviewConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_or_enabled(),
+            min_text_length: default_or_min_text_length(),
+            min_risk_score: default_or_min_risk_score(),
+            fail_open: default_or_fail_open(),
         }
     }
 }

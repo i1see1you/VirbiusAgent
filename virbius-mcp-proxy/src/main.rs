@@ -91,6 +91,7 @@ async fn main() {
         cfg.security.failover.clone(),
         cfg.fallback_policy(),
         audit.clone(),
+        cfg.security.output_review.clone(),
     ));
 
     // Create upstream manager from normalized config (single or multi-upstream)

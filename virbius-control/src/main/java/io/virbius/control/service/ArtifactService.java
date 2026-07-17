@@ -319,16 +319,6 @@ public class ArtifactService {
         if (!expressions.isEmpty()) {
             root.put("expressions", expressions);
         }
-        List<io.virbius.control.domain.ContextVarBinding> ctxBindings =
-                registryRepo.listContextBindings(tenantId, DEFAULT_BUNDLE_ID, DEFAULT_BUNDLE_VERSION);
-        if (!ctxBindings.isEmpty()) {
-            root.put("context_bindings", ContextBindingsHelper.toMetadataBlock(ctxBindings));
-        }
-        List<io.virbius.control.domain.ExtendedVar> extVars =
-                registryRepo.listExtendedVars(tenantId, DEFAULT_BUNDLE_ID, DEFAULT_BUNDLE_VERSION);
-        if (!extVars.isEmpty()) {
-            root.put("extended_vars", ExtendedVarsHelper.toMetadataBlock(extVars));
-        }
         Map<String, Object> sceneReg = io.virbius.control.gateway.SceneRegistryHelper.registryBlock(bundleMetadata);
         if (!sceneReg.isEmpty()) {
             root.put("scene_registry", sceneReg);
