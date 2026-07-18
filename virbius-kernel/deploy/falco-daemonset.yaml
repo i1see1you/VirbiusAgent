@@ -28,6 +28,9 @@ spec:
             - name: falco-config
               mountPath: /etc/falco/falco.yaml
               subPath: falco.yaml
+            - name: falco-rules-d
+              mountPath: /etc/falco/falco_rules.d
+              readOnly: true
             - name: dev-fs
               mountPath: /dev
             - name: proc-fs
@@ -39,10 +42,37 @@ spec:
             - name: kernel-modules
               mountPath: /host/lib/modules
               readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 5
+            periodSeconds: 5
+        - name: config-subscriber
+          image: virbius-kernel-config-subscriber:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: VIRBIUS_REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: virbius-redis-credentials
+                  key: url
+                  optional: true
+          volumeMounts:
+            - name: falco-rules-d
+              mountPath: /etc/falco/falco_rules.d
       volumes:
         - name: falco-config
           configMap:
             name: falco-config
+        - name: falco-rules-d
+          emptyDir: {}
         - name: dev-fs
           hostPath:
             path: /dev

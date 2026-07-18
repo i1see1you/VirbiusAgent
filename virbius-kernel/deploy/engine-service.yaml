@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: virbius-engine
+  namespace: virbius-system
+  labels:
+    app: virbius-engine
+spec:
+  type: ClusterIP
+  selector:
+    app: virbius-engine
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

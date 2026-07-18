@@ -9,7 +9,7 @@ class BindScopeTest {
 
     @Test
     void globalAlwaysMatches() {
-        MatchContext ctx = MatchContext.withBind("hi", "u1", null, null, null, null, "general_chat", "/v1/chat/completions");
+        MatchContext ctx = MatchContext.withBind("hi", "u1", null, null, null, null, "/v1/chat/completions");
         assertTrue(BindScope.matches("global", java.util.Map.of(), ctx));
     }
 
@@ -48,7 +48,7 @@ class BindScopeTest {
     @Test
     void serviceMatchesAppIds() {
         MatchContext ctx = MatchContext.withBind(
-                "hi", "u1", null, null, null, java.util.Map.of("app_id", "medical-prod"), "x", "/v1/chat/completions");
+                "hi", "u1", null, null, null, java.util.Map.of("app_id", "medical-prod"), "/v1/chat/completions");
         assertTrue(BindScope.matches(
                 "service", java.util.Map.of("app_ids", java.util.List.of("beta", "medical-prod")), ctx));
         assertFalse(BindScope.matches("service", java.util.Map.of("app_ids", java.util.List.of("beta")), ctx));

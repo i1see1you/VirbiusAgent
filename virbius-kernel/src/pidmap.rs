@@ -224,7 +224,19 @@ fn read_cgroup_id() -> Option<u64> {
 }
 
 /// Asynchronous Redis backup via simple TCP (fire-and-forget).
-/// Keyed by Host PID so the host-side Falco daemon can look up directly.
+///
+/// Writes two keys pointing to the same JSON value:
+/// <ul>
+///   <li><b>{@code pid_trace:{host_pid}}</b> — primary index, looked up by
+///       Falco's {@code proc.pid} (Host PID).</li>
+///   <li><b>{@code cgroup_trace:{cgroup_id}}</b> — reverse index, looked up
+///       by Falco's {@code proc.cgroup.id}. Survives fork/exec/detach within
+///       the same cgroup, covering grandchild processes where ppid fallback
+///       breaks. Only written when {@code cgroup_id != 0} (cgroup v2).</li>
+/// </ul>
+///
+/// Both keys share the same TTL (3600s) and are written in a single Redis
+/// pipeline to keep the fire-and-forget overhead minimal.
 fn redis_backup_async(
     host_pid: u32,
     cgroup_id: u64,
@@ -237,7 +249,7 @@ fn redis_backup_async(
         Ok(url) if !url.is_empty() => url,
         _ => return,
     };
-    let key = format!("pid_trace:{}", host_pid);
+    let pid_key = format!("pid_trace:{}", host_pid);
     let value = serde_json::json!({
         "host_pid": host_pid,
         "cgroup_id": cgroup_id,
@@ -250,11 +262,20 @@ fn redis_backup_async(
             .unwrap_or_default()
             .as_secs(),
     });
-    let cmd = format!(
-        "SET {} '{}' EX 3600\r\n",
-        key,
-        value.to_string().replace('\'', "\\'")
-    );
+    let value_str = value.to_string().replace('\'', "\\'");
+
+    // Build a pipelined command: always SET pid_trace, additionally SET
+    // cgroup_trace when cgroup_id is available (non-zero, i.e. cgroup v2).
+    let cmd = if cgroup_id != 0 {
+        let cgroup_key = format!("cgroup_trace:{}", cgroup_id);
+        format!(
+            "SET {} '{}' EX 3600\r\nSET {} '{}' EX 3600\r\n",
+            pid_key, value_str, cgroup_key, value_str
+        )
+    } else {
+        format!("SET {} '{}' EX 3600\r\n", pid_key, value_str)
+    };
+
     // Fire-and-forget: no connection reuse, no read response
     std::thread::spawn(move || {
         if let Ok(mut stream) = TcpStream::connect(&redis_url) {

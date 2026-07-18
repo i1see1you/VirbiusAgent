@@ -5,7 +5,6 @@ use std::path::Path;
 pub enum KernelMode {
     FalcoEbpf,
     FalcoUserspace,
-    FalcoPlugin,
     Disabled,
 }
 
@@ -14,7 +13,6 @@ impl KernelMode {
         match self {
             KernelMode::FalcoEbpf => "falco-ebpf",
             KernelMode::FalcoUserspace => "falco-userspace",
-            KernelMode::FalcoPlugin => "falco-plugin",
             KernelMode::Disabled => "disabled",
         }
     }
@@ -62,12 +60,12 @@ pub fn detect_full() -> KernelInfo {
     let has_caps = is_root || has_cap_sys_admin || (has_cap_bpf && has_cap_perfmon);
 
     let mode = if !has_caps && !has_cap_sys_ptrace {
-        KernelMode::FalcoPlugin
+        KernelMode::Disabled
     } else if kver < (5, 8, 0) || !btf_ok || !has_caps {
         if has_cap_sys_ptrace {
             KernelMode::FalcoUserspace
         } else {
-            KernelMode::FalcoPlugin
+            KernelMode::Disabled
         }
     } else {
         KernelMode::FalcoEbpf
@@ -157,7 +155,7 @@ mod tests {
 
     #[test]
     fn test_kernel_mode_str() {
-        assert_eq!(KernelMode::FalcoPlugin.as_str(), "falco-plugin");
+        assert_eq!(KernelMode::FalcoEbpf.as_str(), "falco-ebpf");
         assert_eq!(KernelMode::Disabled.as_str(), "disabled");
     }
 
@@ -170,6 +168,7 @@ mod tests {
     #[test]
     fn test_uses_ebpf() {
         assert!(KernelMode::FalcoEbpf.uses_ebpf());
-        assert!(!KernelMode::FalcoPlugin.uses_ebpf());
+        assert!(!KernelMode::FalcoUserspace.uses_ebpf());
+        assert!(!KernelMode::Disabled.uses_ebpf());
     }
 }

@@ -24,6 +24,10 @@ data:
         - getpid
         - gettid
         - getrandom
+    rules_file:
+      - /etc/falco/falco_rules.yaml
+      - /etc/falco/falco_rules.local.yaml
+      - /etc/falco/falco_rules.d/*.yaml
     stdout_output:
       enabled: false
     file_output:
@@ -34,30 +38,45 @@ data:
       enabled: true
       listen_port: 8765
       k8s_healthz_endpoint: /healthz
-    program_output:
+    http_output:
       enabled: true
-      keep_alive: false
-      program: |
-        virbius-kernel-falco-ingest
+      url: "http://virbius-engine.virbius-system.svc.cluster.local:8080/api/internal/falco-alert"
+      user_agent: "falco/virbius"
+      connection_keepalive: true
+      retry_wait_seconds: 5
 
   falco_rules.local.yaml: |
+    - rule: Sensitive file access
+      desc: Detect access to sensitive system files
+      condition: >
+        evt.type in (open, openat, openat2)
+        and fd.name in (/etc/shadow, /etc/passwd, /root/.ssh/id_rsa, /root/.ssh/authorized_keys)
+        and evt.is_open_write=true
+      output: >
+        Sensitive file access (user=%user.name, pid=%proc.pid, ppid=%proc.ppid,
+        pname=%proc.name, file=%fd.name, pcmdline=%proc.pcmdline)
+      priority: WARNING
+      tags: [agent, filesystem, sensitive]
+
     - rule: Agent process spawned
-      desc: Detect new processes in Agent context
+      desc: Detect new processes spawned by Agent
       condition: >
         spawned_process
         and not proc.name startswith "falco"
         and not proc.name startswith "virbius"
       output: >
-        Agent process spawned (user=%user.name, command=%proc.cmdline, pid=%proc.pid)
+        Agent process spawned (user=%user.name, pid=%proc.pid, ppid=%proc.ppid,
+        command=%proc.cmdline, pcmdline=%proc.pcmdline)
       priority: WARNING
       tags: [agent, process]
 
-    - rule: Agent network connection
+    - rule: Agent outbound connection
       desc: Detect outbound connections from Agent
       condition: >
         outbound
-        and not fd.sip in (trusted_ips)
+        and not fd.sip in (127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
       output: >
-        Agent outbound connection (fd=%fd.name, pid=%proc.pid)
+        Agent outbound connection (pid=%proc.pid, ppid=%proc.ppid,
+        pname=%proc.name, sip=%fd.sip, sport=%fd.sport, pcmdline=%proc.pcmdline)
       priority: NOTICE
       tags: [agent, network]

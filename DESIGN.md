@@ -315,7 +315,7 @@ VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依
 | 来源 | 文件 | 已有能力 | 需新增 |
 |------|------|---------|--------|
 | virbius-core | `src/manifest.rs` | EdgeManifest(rules/dlp_rules/sdk_config) | 加 tool_policies + landlock_profiles 字段 |
-| virbius-groovy-l3 | `PolicyContext.java` | listMatch/getCumulative/riskScore/scene/sessionId | 加 sessionHistory(n)/sessionRiskScore()/incrementRiskScore()/recordToolCall()/lastToolResult()/toolName() |
+| virbius-groovy-l3 | `PolicyContext.java` | listMatch/getCumulative/riskScore/scene/sessionId | 加 sessionHistory(n)/sessionRiskScore()/incrementRiskScore() |
 | virbius-gateway | `wasm/access.go` | WASM access 阶段 | 加 tool allowlist + tool 计数 + engine 调用 |
 | virbius-control | `RuleService.java` | 规则 CRUD | 加 Agent 规则类型 + License CRUD + 宪法管理 |
 | virbius-control | `ArtifactService.java` | 产物编译 | 加 Higress CRD + Landlock profile + Constitution template 编译 |
@@ -1584,18 +1584,21 @@ Groovy L3 规则无需修改，`incrementRiskScore()` 仍然可用，但内部�
 
 ##### 集成点 3：Falco 告警 → Session Risk
 
-Falco 告警通过 `pidmap.rs` 关联到 `session_id`后，异步回调 Engine：
+Falco 告警通过 `http_output` 发送到 Engine `FalcoAlertController`，由 Engine 通过 Redis pidmap 三级关联链反查 session_id，再异步回调 `SessionRiskManager`：
 
 ```
-Falco 告警 (host_pid)
-  → pidmap.lookup_agent(host_pid) → session_id
-  → HTTP POST /api/internal/falco-alert { session_id, alert }
+Falco 告警 (http_output POST, native JSON)
+  → Engine FalcoAlertController.onFalcoAlert()
+  → 三级关联链:
+    1. lookupSessionByHostPid(proc.pid) → pid_trace:{host_pid} → session_id
+    2. (未命中) lookupSessionByCgroup(proc.cgroup.id) → cgroup_trace:{cgroup_id} → session_id
+    3. (未命中) lookupSessionByHostPid(proc.ppid) → pid_trace:{ppid} → session_id (ppid fallback)
   → SessionRiskManager.onFalcoAlert(session_id)
   → Redis INCR session:{id}:falco_pending
   → 下次 updateRiskScore() 时消费
 ```
 
-Engine 新增内部 API：
+Engine 内部 API（实际实现）：
 
 ```java
 @RestController
@@ -1603,16 +1606,19 @@ Engine 新增内部 API：
 public class FalcoAlertController {
 
     private final SessionRiskManager riskManager;
+    private final Optional<JedisPool> jedisPool;
 
     @PostMapping("/falco-alert")
-    public ResponseEntity<Void> onFalcoAlert(@RequestBody FalcoAlertEvent event) {
-        if (event.sessionId() != null) {
-            riskManager.onFalcoAlert(event.sessionId());
-        }
-        return ResponseEntity.ok().build();
+    public Map<String, Object> onFalcoAlert(@RequestBody Map<String, Object> falcoAlert) {
+        // 解析 output_fields 中的 proc.pid, proc.cgroup.id, proc.ppid
+        // 三级关联: host_pid → cgroup_id → ppid
+        // 返回 {"status":"ok", "session_id":"...", "resolved_by":"pid|cgroup|ppid"}
+        // 或 {"status":"ignored", "reason":"pid_not_mapped"}
     }
 }
 ```
+
+**返回值新增 `resolved_by` 字段**：标识命中的关联路径（`pid` / `cgroup` / `ppid`），便于调试和审计。
 
 ##### 集成点 4：SessionStatePreloader 改造
 
@@ -1739,11 +1745,20 @@ P1.10 和 P1.11 产生的 riskDelta 统一汇入 chain_anomaly 维度，
 
 ---
 
-### 13.4 自定义 virbius-audit Falco 插件 + Falco 规则库扩充
+### 13.4 ~~自定义 virbius-audit Falco 插件~~ + Falco 规则库扩充
 
-#### 13.4.1 virbius-audit Falco 插件
+> **架构变更（方案 A）**：自定义 `virbius-audit` Go 插件已移除。原设计为在 Falco 引擎内消费 Redis Stream 审计事件并执行 Agent 专用规则，实现跨层联合判断（syscall 事件 + Agent 上下文在一个条件表达式里）。
+>
+> **移除原因**：
+> 1. Go C-shared library 构建和维护成本高
+> 2. 插件模式无 syscall 可见性，与 Falco 核心价值冲突
+> 3. 跨层关联通过 Engine `FalcoAlertController` 事后关联即可实现，不需要在 Falco 引擎内联合判断
+>
+> **替代方案**：Falco 退回纯系统级 syscall 观测，通过 `http_output` 将告警发送到 Engine，由 Engine 完成三级关联（pid → cgroup → ppid）和 session 风险评分。详见 [ARCHITECTURE.md §4.5](ARCHITECTURE.md#45-falco-plugin-模式已移除) 和 [§4.6 三级关联链](ARCHITECTURE.md#三级关联链p1-实现)。
+>
+> 以下为原插件设计（保留作为历史参考）：
 
-> **已有设计**：[ARCHITECTURE.md §4.5](ARCHITECTURE.md#45-falco-plugin-模式serverless-降级) 描述了 Falco plugin 模式。以下为 virbius-audit 自定义插件的完整设计。
+#### 13.4.1 ~~virbius-audit Falco 插件~~（已移除）
 
 **设计目标**：消费 Redis Audit Stream + Trace Stream，在 Falco 引擎中执行 Agent 专用规则检测，弥补标准 Falco 规则不感知 Agent 上下文的缺陷。
 

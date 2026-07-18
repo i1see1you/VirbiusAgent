@@ -4,5 +4,4 @@ namespace: virbius-system
 resources:
   - falco-config.yaml
   - falco-daemonset.yaml
-  - falco-plugin-config.yaml
-  - falco-plugin-daemonset.yaml
+  - engine-service.yaml

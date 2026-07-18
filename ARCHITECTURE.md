@@ -1405,8 +1405,10 @@ detect_mode()
   |    -> Falco userspace 驱动 (ptrace, 性能差 5-10x)
   |
   +-- 无任何特权
-       -> Falco plugin 模式 (k8saudit + filetail + 自定义插件)
+       -> Disabled (无 syscall 可见性)
 ```
+
+> **架构变更（方案 A）**：已移除 `FalcoPlugin` 模式和自定义 `virbius-audit` Go 插件。Falco 退回纯系统级 syscall 观测角色，跨层关联由 Engine `FalcoAlertController` 通过 Redis pidmap 反查完成。无特权环境下 `detect_mode()` 返回 `Disabled`，不降级到 plugin 模式。
 
 **观测与阻断职责分离**：核层（Falco）只负责观测，不做 enforcement。阻断由端层 Landlock + drop caps（文件路径限制）和 gVisor（不可信代码隔离）承担。这种分离确保观测层故障不影响阻断能力，阻断层故障仍留有观测可见性。
 
@@ -1418,8 +1420,7 @@ detect_mode()
 pub enum KernelMode {
     FalcoEbpf,       // eBPF 观测
     FalcoUserspace,  // ptrace 驱动
-    FalcoPlugin,     // 纯日志/审计
-    Disabled,
+    Disabled,         // 无特权，无 syscall 可见性
 }
 
 pub fn detect() -> KernelMode {
@@ -1432,7 +1433,7 @@ pub fn detect() -> KernelMode {
     let has_caps = is_root || has_sys_admin || (has_bpf && has_perfmon);
 
     if !has_caps && !has_sys_ptrace {
-        return KernelMode::FalcoPlugin;
+        return KernelMode::Disabled;
     }
 
     let kver = kernel_version().unwrap_or((0, 0));
@@ -1441,12 +1442,14 @@ pub fn detect() -> KernelMode {
 
     if kver < (5, 8) || !btf_ok {
         return if has_sys_ptrace { KernelMode::FalcoUserspace }
-               else { KernelMode::FalcoPlugin };
+               else { KernelMode::Disabled };
     }
 
     KernelMode::FalcoEbpf
 }
 ```
+
+> **变更**：`FalcoPlugin` 枚举变体已移除。无特权环境直接返回 `Disabled`，不再降级到 plugin 模式。
 
 Falco eBPF 模式硬性要求：
 
@@ -1482,19 +1485,14 @@ eBPF Maps(策略数据)：
 
 > **注**：connect_allowlist 分为 IP(LPM_TRIE) 和 Port(HASH) 两个 map，因为 LPM_TRIE 只能匹配 IP 前缀，不能匹配 IP:Port。
 
-### 4.5 Falco plugin 模式(serverless 降级)
+### 4.5 ~~Falco plugin 模式~~（已移除）
 
-当 eBPF 不可用时，Falco 降级为 plugin 模式，消费日志/审计事件：
-
-| 插件 | 数据源 | 监控内容 |
-|------|--------|---------|
-| **k8saudit** | K8s API Server audit log | privileged Pod 创建、secret 访问、RBAC 变更、exec into pod |
-| **filetail** | Higress access log | 工具调用频次、调用链异常、4xx/5xx 突增 |
-| **filetail** | MCP Server 应用日志 | 工具执行失败率、返回值过大、执行超时 |
-| **自定义 virbius-audit** | Redis Stream 审计流 | session risk 累积、Landlock 连续 deny、批量攻击 |
-| **cloudtrail** | AWS CloudTrail | IAM 变更、S3 访问、安全组修改 |
-
-> **限制**：plugin 模式无 syscall 可见性。覆盖"谁在动 Agent 基础设施"的威胁面，不覆盖"Agent 运行时做了什么"(后者由端层 Landlock 在 P2 承担)。
+> **架构变更（方案 A）**：自定义 `virbius-audit` Go 插件和 `FalcoPlugin` 模式已移除。原 plugin 模式设计为在 serverless 环境下降级消费日志/审计事件，但实际部署中发现：
+> 1. 插件模式无 syscall 可见性，与 Falco 核心价值冲突
+> 2. 跨层联合判断（syscall 事件 + Agent 上下文在一个条件表达式里）通过 Engine 事后关联即可实现
+> 3. Go C-shared library 构建和维护成本高
+>
+> **替代方案**：Falco 退回纯系统级 syscall 观测，通过 `http_output` 将告警发送到 Engine `FalcoAlertController`，由 Engine 完成 pidmap 反查和 session 关联。无特权环境返回 `Disabled`。
 
 ### 4.6 PID -> trace_id 映射
 
@@ -1540,13 +1538,34 @@ virbius-core register_agent(ns_pid=getpid())
   |   by_cgroup[98765]   = { ... 同上 ... }
   |
   +-- 异步 Redis 备份: SET pid_trace:12345 '{...}' EX 3600
+  |                       SET cgroup_trace:98765 '{...}' EX 3600  (cgroup 反向索引, P1)
 
 Falco 事件到达 (host_pid=12345)
-  → lookup_agent(12345) → 命中 by_host_pid[12345] → 补全 trace_id
+  → Engine FalcoAlertController 三级关联链:
+    1. lookupSessionByHostPid(12345) → pid_trace:12345 → session_id  ✅ 命中
+    2. (未命中时) lookupSessionByCgroup(cgroup_id) → cgroup_trace:{id} → session_id
+    3. (未命中时) lookupSessionByHostPid(ppid) → pid_trace:{ppid} → session_id (ppid fallback)
 
 eBPF 程序 (bpf_get_current_cgroup_id()=98765)
   → lookup_by_cgroup(98765) → 命中 by_cgroup[98765] → 补全 trace_id
 ```
+
+#### 三级关联链（P1 实现）
+
+Engine `FalcoAlertController` 对每条 Falco 告警执行三级 session 关联，优先级从高到低：
+
+| 优先级 | 关联键 | Redis Key | 覆盖场景 | resolved_by |
+|--------|--------|-----------|---------|-------------|
+| 1 | `proc.pid` (Host PID) | `pid_trace:{host_pid}` | Agent 主进程 | `pid` |
+| 2 | `proc.cgroup.id` | `cgroup_trace:{cgroup_id}` | 孙子进程、setsid detach、exec 后 | `cgroup` |
+| 3 | `proc.ppid` | `pid_trace:{ppid}` | 直接子进程（ppid 是 Agent 主进程） | `ppid` |
+
+**cgroup 优先于 ppid 的原因**：cgroup 是容器级身份（同一容器内 fork/exec 不变），ppid 是进程级身份（深度>1 或 setsid 后断链）。cgroup 能覆盖孙子进程和 detach 场景，ppid 只能覆盖直接子进程。
+
+**降级策略**：
+- cgroup v2 + Falco 0.37+：三级关联完整可用
+- cgroup v1 / 旧 Falco / macOS：`proc.cgroup.id=0` 自动跳过 cgroup 查找，降级到 ppid fallback
+- 无 Redis：全部降级，告警被忽略（不影响 Agent 正常运行）
 
 #### 存储层级
 
@@ -1555,7 +1574,8 @@ eBPF 程序 (bpf_get_current_cgroup_id()=98765)
 | **进程内 pidmap** `by_host_pid`（内存 HashMap, virbius-kernel） | Host PID | trace_id + session_id + ns_pid + cgroup_id | Agent 生命周期 | <1μs（零延迟） |
 | **进程内 pidmap** `by_cgroup`（辅助索引） | cgroup_id | 同上 | 同上 | <1μs |
 | **eBPF agent_cgroups map**（核层, eBPF 可用时, P2） | cgroup_id | 1(标记受监控) | Agent 启动时写入、退出时删除 | <1μs（内核查表） |
-| Redis `pid_trace:{host_pid}`（异步备份） | Host PID | trace_id + session_id + host_pid + cgroup_id | TTL 1h | 只在 Falco plugin 模式下兜底 |
+| Redis `pid_trace:{host_pid}`（异步备份） | Host PID | trace_id + session_id + host_pid + cgroup_id | TTL 1h | Engine FalcoAlertController 查询 |
+| Redis `cgroup_trace:{cgroup_id}`（cgroup 反向索引, P1） | cgroup_id | 同上（与 pid_trace 共用 value） | TTL 1h | Engine FalcoAlertController cgroup 关联查询 |
 
 > **eBPF map 改用 cgroup_id 而非 PID**：原设计的 `agent_pids` map 以 PID 为 key，在容器环境中 Host PID 频繁变化（进程 fork/exec）。改用 `agent_cgroups` map 以 cgroup_id 为 key——cgroup 在容器生命周期内不变，eBPF 程序用 `bpf_get_current_cgroup_id()` 查表，无需 PID 翻译。
 
@@ -1623,6 +1643,32 @@ Falco 节点 Pod 内：
   config-subscriber (Rust sidecar)
     Redis Stream 消费 → 写 /etc/falco/falco_rules.d/{tenant}-{target}.yaml → SIGHUP 重载
 ```
+
+#### 4.8.3 Falco http_output 配置（方案 A）
+
+Falco 通过 `http_output` 将告警发送到 Engine `FalcoAlertController`，替代原 `program_output` 模式：
+
+```yaml
+# virbius-kernel/deploy/falco-config.yaml
+http_output:
+  enabled: true
+  url: "http://virbius-engine.virbius-system.svc.cluster.local:8080/api/internal/falco-alert"
+  user_agent: "falco/virbius"
+  connection_keepalive: true
+  retry_wait_seconds: 5
+
+rules_file:
+  - /etc/falco/falco_rules.d/   # config-subscriber 热重载目录
+```
+
+**数据流**：
+```
+Falco eBPF → 告警触发 → http_output POST → Engine FalcoAlertController
+  → 三级关联 (pid → cgroup → ppid) → SessionRiskManager.onFalcoAlert()
+  → Redis INCR session:{id}:falco_pending → 下次 updateRiskScore() 消费
+```
+
+**Falco 规则 output 字段要求**：规则 `output` 模板必须包含 `%proc.cgroup.id`，否则 cgroup 关联路径无法生效（`proc.cgroup.id` 需要 Falco 0.37+ modern eBPF driver）。
 
 #### 4.8.3 示例
 
@@ -1771,9 +1817,6 @@ def decide(ctx) {
 | ctx.sessionHistory(n) | 最近 N 次工具调用 | 预加载自 Redis LRANGE |
 | ctx.sessionRiskScore() | 当前会话风险分 | 预加载自 Redis GET |
 | ctx.incrementRiskScore(delta) | 提升风险分 | 异步写 Redis INCRBY |
-| ctx.recordToolCall(tool_name, args) | 记录本次工具调用 | 异步写 Redis LPUSH + LTRIM |
-| ctx.toolName() | 当前工具名 | 请求上下文 |
-| ctx.lastToolResult() | 上一个工具的返回值摘要 | 预加载自 Redis LRANGE 0 0 |
 | ctx.isInternalHost(url) | 判断 URL 是否指向内部网络 | 根据 License 或策略中配置的 CIDR/域名列表判断 |
 
 **`ctx.var()` 原生变量列表**：

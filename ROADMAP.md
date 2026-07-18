@@ -2,7 +2,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v3.5 |
+| 文档版本 | v3.6 |
 | 状态 | 草案 |
 | 关联 | [DESIGN.md](DESIGN.md)（索引） · [ARCHITECTURE.md](ARCHITECTURE.md) |
 
@@ -28,10 +28,11 @@
 | 云层 Groovy L3 Agent 规则（工具链检测 + 场景匹配） | engine | 2w |
 | 云层 Groovy ctx 扩展（sessionHistory / riskScore，内存预加载） | engine | 2w |
 | 控制面 Agent 规则 CRUD + 发布 | control | 2w |
-| 核层 Falco 部署 + eBPF 驱动（标准节点池） | virbius-kernel | 2w |
-| 核层 Falco plugin 模式（serverless 降级: k8saudit + filetail） | virbius-kernel | 2w |
-| 核层 PID->trace_id 映射 + 审计上报 | virbius-kernel | 1w |
-| 端到端集成测试 | 全组件 | 3w |
+| 核层 Falco 部署 + eBPF 驱动（标准节点池） | virbius-kernel | 2w | ✅ 已完成 |
+| 核层 Falco plugin 模式（serverless 降级: k8saudit + filetail） | virbius-kernel | ~~2w~~ | ❌ 已移除（方案 A） |
+| 核层 PID->trace_id 映射 + 审计上报 | virbius-kernel | 1w | ✅ 已完成 |
+| 核层 Falco http_output → Engine FalcoAlertController | virbius-kernel + engine | 1w | ✅ 已完成 |
+| 端到端集成测试 | 全组件 | 3w | ✅ 已完成 |
 | **P0 合计** | | **~36w** |
 
 ### P1 — 增强观测 + 记忆管控
@@ -39,12 +40,13 @@
 | 任务 | 说明 | 状态 |
 |------|------|------|
 | 端层快速通道（低风险工具跳过云层） | 延迟优化 | ✅ 已完成 |
-| 自定义 virbius-audit Falco 插件 | 消费 Redis Stream，Agent 专用规则 | ✅ 已完成 |
+| 自定义 virbius-audit Falco 插件 | 消费 Redis Stream，Agent 专用规则 | ❌ 已移除（方案 A） |
 | 审计大盘 | session risk + 工具调用 + 告警可视化 | ✅ 已完成 |
 | STI 语义审计（Taint 维度调小模型） | 工具返回值注入检测 | |
 | Prompt 入侵检测（prompt runtime 重新定位） | 用户输入越狱/注入检测，与 STI Taint 共享 qwen3guard 模型 | |
 | 输出 PII 脱敏（端层，工具返回前） | 复用 virbius-core dlp/engine.rs | |
 | Falco 规则库扩充 + 自定义规则管理 | 控制面统一管理 falco 规则，灰度部署 | ✅ 已完成 |
+| Falco http_output 路径 + 三级关联链 (pid→cgroup→ppid) | Engine FalcoAlertController + Redis pidmap/cgroup 反查 | ✅ 已完成 |
 | 高风险工具人工审批流 | engine -> 审批 UI -> 超时 deny | ✅ 已完成 |
 | session risk 自适应模型 | 从规则阈值升级为加权累积 | |
 | 审计完整性（hash chain） | 防篡改 | |
@@ -93,6 +95,17 @@
 
 - 新增 [DESIGN.md §12](DESIGN.md#12-agent-安全风险评估框架) Agent 安全风险评估框架：七维风险评估 + 评估方法论（5 步）+ 安全保障对照表
 - 新增 [DESIGN.md §13](DESIGN.md#13-p1-功能详细设计方案) P1 功能详细设计方案：覆盖 7 项 P1 功能（Prompt 注入检测、STI Taint、Session Risk 自适应、审计完整性 hash chain、记忆管控、输出审查、virbius-audit Falco 插件 + 规则库）+ 实现优先级建议
+
+### v3.6 (2026-07-18)
+
+**Falco 退回纯系统级 + http_output 路径（方案 A）**
+
+- **移除自定义 virbius-audit Go 插件**：`virbius-kernel/plugin/` 目录、`falco_plugin.rs` 模块、`KernelMode::FalcoPlugin` 枚举变体全部移除。Falco 退回纯系统级 syscall 观测角色。
+- **P0 打通 syscall 路径**：Falco `http_output` → Engine `FalcoAlertController`（`POST /api/internal/falco-alert`）→ Redis pidmap 反查 → `SessionRiskManager.onFalcoAlert()`。包含 ppid fallback。
+- **P1 cgroup 关联路径**：`pidmap.rs` 增加 `cgroup_trace:{cgroup_id}` Redis 反向索引；`FalcoAlertController` 增加三级关联链 `host_pid → cgroup_id → ppid`，新增 `resolved_by` 返回字段。
+- **修复 Spring 依赖注入 bug**：`PolicyRedisConfig` 的 `@Bean Optional<JedisPool>` 改为 `@Bean JedisPool` + `@ConditionalOnProperty`。
+- **修复 virbius-policy 测试编译错误**：`BindScopeTest` / `ValueResolverVarDimensionTest` 中 `MatchContext.withBind()` 调用对齐当前 7 参数签名。
+- **测试脚本**：`scripts/test-falco-cross-layer.sh` 覆盖 5 个场景（pid 直接命中、ppid fallback、cgroup 孙子进程、cgroup setsid detach、非 Agent 过滤），macOS 模拟模式无需 Falco。
 
 ### v3.5 (2026-07-13)
 
