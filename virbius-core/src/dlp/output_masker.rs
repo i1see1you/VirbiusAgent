@@ -313,11 +313,7 @@ mod tests {
     #[test]
     fn multiple_entities_masked() {
         let rules = vec![phone_rule("full"), email_rule()];
-        let result = mask_pii(
-            "contact 13912345678 or admin@example.com",
-            &rules,
-            None,
-        );
+        let result = mask_pii("contact 13912345678 or admin@example.com", &rules, None);
         assert!(result.masked);
         assert!(result.text.contains("[REDACTED:PHONE_CN]"));
         assert!(result.text.contains("[REDACTED:EMAIL]"));

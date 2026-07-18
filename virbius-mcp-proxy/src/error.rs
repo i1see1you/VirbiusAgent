@@ -53,7 +53,11 @@ impl VirbiusErrorCode {
 }
 
 /// Build a JSON-RPC 2.0 error response.
-pub fn jsonrpc_error(code: VirbiusErrorCode, id: serde_json::Value, data: serde_json::Value) -> serde_json::Value {
+pub fn jsonrpc_error(
+    code: VirbiusErrorCode,
+    id: serde_json::Value,
+    data: serde_json::Value,
+) -> serde_json::Value {
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,

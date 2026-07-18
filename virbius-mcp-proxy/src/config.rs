@@ -1,9 +1,8 @@
 /// Configuration loading (TOML file + environment variable overrides).
-
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProxyConfig {
     #[serde(default)]
     pub proxy: ProxySection,
@@ -246,18 +245,6 @@ impl Default for AuditSection {
             kafka_brokers: String::new(),
             kafka_topic: default_audit_kafka_topic(),
             sample_rate: default_sample_rate(),
-        }
-    }
-}
-
-impl Default for ProxyConfig {
-    fn default() -> Self {
-        Self {
-            proxy: ProxySection::default(),
-            security: SecuritySection::default(),
-            audit: AuditSection::default(),
-            trace: TraceSection::default(),
-            memory: MemorySection::default(),
         }
     }
 }

@@ -1,5 +1,4 @@
 /// Audit event reporting to Redis Stream or Kafka (best-effort, non-blocking).
-
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,8 +56,8 @@ impl AuditEvent {
         action: &str,
         rule_id: Option<&str>,
         reason: Option<&str>,
-        pii_found: bool,
-        risk_score: Option<i32>,
+        _pii_found: bool,
+        _risk_score: Option<i32>,
     ) -> Self {
         let timestamp = chrono::Utc::now().to_rfc3339();
         Self {
@@ -115,7 +114,10 @@ impl AuditSink {
             }
         };
 
-        Self { sender, sample_rate }
+        Self {
+            sender,
+            sample_rate,
+        }
     }
 
     pub async fn report(&self, event: AuditEvent) {
@@ -180,11 +182,7 @@ async fn redis_audit_worker(url: String, mut rx: mpsc::Receiver<AuditEvent>) {
 
 // ─── Kafka worker ──────────────────────────────────────────────────────
 
-async fn kafka_audit_worker(
-    brokers: String,
-    topic: String,
-    mut rx: mpsc::Receiver<AuditEvent>,
-) {
+async fn kafka_audit_worker(brokers: String, topic: String, mut rx: mpsc::Receiver<AuditEvent>) {
     debug!("audit kafka worker started, brokers={}", brokers);
 
     let producer: rdkafka::producer::FutureProducer = match rdkafka::config::ClientConfig::new()

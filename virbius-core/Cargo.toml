@@ -9,6 +9,8 @@ description = "VirbiusAgent edge SDK: DLP, precheck, sandbox, Prompt Gateway, Li
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+libc = "0.2"
+glob = "0.3"
 regex = "1"
 sha2 = "0.10"
 serde = { version = "1", features = ["derive"] }

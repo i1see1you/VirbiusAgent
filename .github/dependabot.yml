@@ -1,0 +1,72 @@
+version: 2
+
+updates:
+  # Rust dependencies — Cargo.lock
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - rust
+    commit-message:
+      prefix: "cargo"
+      include: scope
+
+  # Java dependencies — Maven (root pom.xml)
+  - package-ecosystem: maven
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - java
+    commit-message:
+      prefix: "maven"
+      include: scope
+
+  # Go dependencies — virbius-expr
+  - package-ecosystem: gomod
+    directory: /virbius-expr
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+    commit-message:
+      prefix: "go"
+      include: scope
+
+  # Go dependencies — virbius-gateway/wasm
+  - package-ecosystem: gomod
+    directory: /virbius-gateway/wasm
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - go
+    commit-message:
+      prefix: "go"
+      include: scope
+
+  # GitHub Actions — keep workflow action versions current
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - github-actions
+    commit-message:
+      prefix: "ci"
+      include: scope

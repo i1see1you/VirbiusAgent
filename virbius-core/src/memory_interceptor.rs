@@ -51,7 +51,8 @@ fn default_credential_patterns() -> Vec<CredentialPattern> {
     vec![
         CredentialPattern {
             name: "api_key".into(),
-            regex: Regex::new(r#"(?i)(?:api[_-]?key|apikey)\s*[:=]\s*['\"]?[a-zA-Z0-9]{32,}"#).unwrap(),
+            regex: Regex::new(r#"(?i)(?:api[_-]?key|apikey)\s*[:=]\s*['\"]?[a-zA-Z0-9]{32,}"#)
+                .unwrap(),
         },
         CredentialPattern {
             name: "bearer_token".into(),
@@ -63,7 +64,8 @@ fn default_credential_patterns() -> Vec<CredentialPattern> {
         },
         CredentialPattern {
             name: "private_key".into(),
-            regex: Regex::new(r#"-----BEGIN\s+(RSA|EC|OPENSSH|DSA)?\s*PRIVATE\s+KEY-----"#).unwrap(),
+            regex: Regex::new(r#"-----BEGIN\s+(RSA|EC|OPENSSH|DSA)?\s*PRIVATE\s+KEY-----"#)
+                .unwrap(),
         },
         CredentialPattern {
             name: "password_assignment".into(),
@@ -178,12 +180,17 @@ impl MemoryInterceptor {
             "save_memory",
             "store_memory",
         ];
-        if write_prefixes.iter().any(|p| lower == *p || lower.starts_with(p)) {
+        if write_prefixes
+            .iter()
+            .any(|p| lower == *p || lower.starts_with(p))
+        {
             return true;
         }
         // Also check config-defined patterns
         let cfg = manifest::effective_sdk_config();
-        cfg.memory_tool_patterns.iter().any(|p| lower.starts_with(p))
+        cfg.memory_tool_patterns
+            .iter()
+            .any(|p| lower.starts_with(p))
     }
 
     /// Intercept a memory write: size check → credential detection → PII desensitization.
@@ -191,11 +198,7 @@ impl MemoryInterceptor {
     /// Returns a result indicating whether the write is allowed, the (possibly
     /// desensitized) content, and whether the caller should invoke the Engine
     /// for LLM-based injection detection.
-    pub fn intercept_write(
-        &self,
-        content: &str,
-        ctx: &MemoryContext,
-    ) -> MemoryWriteResult {
+    pub fn intercept_write(&self, content: &str, ctx: &MemoryContext) -> MemoryWriteResult {
         if !self.policies.enabled {
             // Disabled — pass through
             return MemoryWriteResult::allowed(content.to_string(), false, false);
@@ -293,7 +296,11 @@ mod tests {
         let content = "config: api_key = 'a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6'";
         let result = interceptor.intercept_write(content, &make_ctx());
         assert!(!result.allowed);
-        assert!(result.block_reason.as_ref().unwrap().contains("credential_detected"));
+        assert!(result
+            .block_reason
+            .as_ref()
+            .unwrap()
+            .contains("credential_detected"));
     }
 
     #[test]
@@ -305,7 +312,11 @@ mod tests {
         let content = "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig";
         let result = interceptor.intercept_write(content, &make_ctx());
         assert!(!result.allowed);
-        assert!(result.block_reason.as_ref().unwrap().contains("credential_detected"));
+        assert!(result
+            .block_reason
+            .as_ref()
+            .unwrap()
+            .contains("credential_detected"));
     }
 
     #[test]

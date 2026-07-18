@@ -132,7 +132,11 @@ fn session_id_from_context(ctx: &ScanContext) -> Option<String> {
 /// masking (`[REDACTED:ENTITY_TYPE]`) to any detected PII entities.
 ///
 /// This is the primary entry point for MCP Proxy to mask tool return values.
-pub fn mask_pii_output(content: &str, tool_name: &str, session_id: Option<&str>) -> OutputMaskResult {
+pub fn mask_pii_output(
+    content: &str,
+    tool_name: &str,
+    session_id: Option<&str>,
+) -> OutputMaskResult {
     let manifest = manifest::load();
 
     // Check exempt tools

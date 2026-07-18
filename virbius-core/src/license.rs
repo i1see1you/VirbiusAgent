@@ -64,8 +64,8 @@ impl License {
             return Err(LicenseError::Expired);
         }
 
-        let pub_key =
-            VerifyingKey::from_public_key_pem(public_key_pem).map_err(|_| LicenseError::InvalidSignature)?;
+        let pub_key = VerifyingKey::from_public_key_pem(public_key_pem)
+            .map_err(|_| LicenseError::InvalidSignature)?;
         let message = format!("{}.{}", header_b64, payload_b64);
         let sig_bytes = decode_b64url(sig_b64).map_err(|_| LicenseError::InvalidFormat)?;
         let sig = Signature::from_slice(&sig_bytes).map_err(|_| LicenseError::InvalidSignature)?;
@@ -89,11 +89,7 @@ impl License {
     }
 
     pub fn remaining_quota(&self, current_risk: u32) -> u32 {
-        if self.claims.risk_quota > current_risk {
-            self.claims.risk_quota - current_risk
-        } else {
-            0
-        }
+        self.claims.risk_quota.saturating_sub(current_risk)
     }
 }
 
@@ -101,11 +97,13 @@ fn decode_b64url(input: &str) -> Result<Vec<u8>, ()> {
     let mut s = input.to_string();
     match s.len() % 4 {
         2 => s.push_str("=="),
-        3 => s.push_str("="),
+        3 => s.push('='),
         _ => {}
     }
     s = s.replace('-', "+").replace('_', "/");
-    base64::engine::general_purpose::STANDARD.decode(&s).map_err(|_| ())
+    base64::engine::general_purpose::STANDARD
+        .decode(&s)
+        .map_err(|_| ())
 }
 
 pub fn revoke(app_id: &str) {
@@ -156,12 +154,11 @@ mod tests {
         };
 
         let header = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9";
-        let payload =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&serde_json::to_vec(&claims).unwrap());
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&claims).unwrap());
         let message = format!("{}.{}", header, payload);
         let sig = signing_key.sign(message.as_bytes());
-        let sig_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
+        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
         let jwt = format!("{}.{}.{}", header, payload, sig_b64);
 
         let license = License::verify(&jwt, &pub_pem, "test-agent").unwrap();
@@ -189,12 +186,11 @@ mod tests {
         };
 
         let header = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9";
-        let payload =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&serde_json::to_vec(&claims).unwrap());
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&claims).unwrap());
         let message = format!("{}.{}", header, payload);
         let sig = signing_key.sign(message.as_bytes());
-        let sig_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
+        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
         let jwt = format!("{}.{}.{}", header, payload, sig_b64);
 
         assert!(matches!(

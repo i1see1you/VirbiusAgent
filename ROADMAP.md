@@ -42,16 +42,16 @@
 | 端层快速通道（低风险工具跳过云层） | 延迟优化 | ✅ 已完成 |
 | 自定义 virbius-audit Falco 插件 | 消费 Redis Stream，Agent 专用规则 | ❌ 已移除（方案 A） |
 | 审计大盘 | session risk + 工具调用 + 告警可视化 | ✅ 已完成 |
-| STI 语义审计（Taint 维度调小模型） | 工具返回值注入检测 | |
-| Prompt 入侵检测（prompt runtime 重新定位） | 用户输入越狱/注入检测，与 STI Taint 共享 qwen3guard 模型 | |
-| 输出 PII 脱敏（端层，工具返回前） | 复用 virbius-core dlp/engine.rs | |
+| STI 语义审计（Taint 维度调小模型） | 工具返回值注入检测 | ✅ 已完成 |
+| Prompt 入侵检测（prompt runtime 重新定位） | 用户输入越狱/注入检测，与 STI Taint 共享 qwen3guard 模型 | ✅ 已完成 |
+| 输出 PII 脱敏（端层，工具返回前） | 复用 virbius-core dlp/engine.rs | ✅ 已完成 |
 | Falco 规则库扩充 + 自定义规则管理 | 控制面统一管理 falco 规则，灰度部署 | ✅ 已完成 |
 | Falco http_output 路径 + 三级关联链 (pid→cgroup→ppid) | Engine FalcoAlertController + Redis pidmap/cgroup 反查 | ✅ 已完成 |
 | 高风险工具人工审批流 | engine -> 审批 UI -> 超时 deny | ✅ 已完成 |
-| session risk 自适应模型 | 从规则阈值升级为加权累积 | |
-| 审计完整性（hash chain） | 防篡改 | |
+| session risk 自适应模型 | 从规则阈值升级为加权累积 | ✅ 已完成 |
+| 审计完整性（hash chain） | 防篡改 | ✅ 已完成 |
 | 累计计数器 Engine 侧 Ingest（A1） | 配置驱动的工具调用频率熔断 | ✅ 已完成 |
-| 记忆管控（Memory Interceptor） | Agent 记忆读写拦截 + 脱敏 + 注入检测 | |
+| 记忆管控（Memory Interceptor） | Agent 记忆读写拦截 + 脱敏 + 注入检测 | ✅ 已完成 |
 | Agent 决策链路追踪 | input → reasoning → tool_call → tool_result → output 全链路 trace | ✅ 已完成 |
 
 ### P2 — 阻断(hands) + TEE
@@ -68,7 +68,7 @@
 | 阶段 | 观测(eyes) | 阻断(hands) | 新增能力 |
 |------|-----------|------------|---------|
 | P0 | Falco + access log + Redis 审计 + STI + Prompt Gateway | HTTP 403 + License + allowlist + 计数 + schema + risk 断连 | 身份管控 + 提示增强 |
-| P1 | STI Taint + Prompt 入侵检测 + virbius-audit 插件 + 审计完整性 + 决策链路追踪 | 人工审批 + 自适应 risk + 记忆管控 | 记忆管控 + prompt 越狱检测 + 决策链路可视化 |
+| P1 | STI Taint + Prompt 入侵检测 + Falco http_output 三级关联 + 审计完整性 + 决策链路追踪 | 人工审批 + 自适应 risk + 记忆管控 | 记忆管控 + prompt 越狱检测 + 决策链路可视化 |
 | P2 | eBPF 自定义观测 | Landlock + gVisor + TEE | syscall 级隔离 |
 
 ---

@@ -13,8 +13,8 @@ pub mod landlock;
 pub use gvisor_pool::{GvisorExecResult, GvisorPool, GvisorPoolConfig, Language};
 #[cfg(target_os = "linux")]
 pub use landlock::{
-    detect_abi_version, execute_sandboxed, check_landlock_availability,
-    LandlockAbi, LandlockRules, LandlockSandbox, SandboxConfig, SandboxResult,
+    check_landlock_availability, detect_abi_version, execute_sandboxed, LandlockAbi, LandlockRules,
+    LandlockSandbox, SandboxConfig, SandboxResult,
 };
 
 /// Type of sandbox to use for a tool execution.

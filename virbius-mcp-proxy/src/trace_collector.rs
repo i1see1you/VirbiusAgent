@@ -3,7 +3,6 @@
 ///
 /// Events are sent via a background tokio task. The collector is best-effort
 /// and non-blocking.
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -270,11 +269,7 @@ async fn redis_trace_worker(url: String, mut rx: mpsc::Receiver<TraceEvent>) {
 
 // ─── Kafka worker ──────────────────────────────────────────────────────
 
-async fn kafka_trace_worker(
-    brokers: String,
-    topic: String,
-    mut rx: mpsc::Receiver<TraceEvent>,
-) {
+async fn kafka_trace_worker(brokers: String, topic: String, mut rx: mpsc::Receiver<TraceEvent>) {
     debug!("trace kafka worker started, brokers={}", brokers);
 
     let producer: rdkafka::producer::FutureProducer = match rdkafka::config::ClientConfig::new()

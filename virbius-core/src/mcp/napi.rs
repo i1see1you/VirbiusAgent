@@ -151,23 +151,20 @@ mod tests {
 
     #[test]
     fn test_server_target_parsing() {
-        let call = McpToolCall::new("test", serde_json::json!({}))
-            .with_server("node:./server.js");
+        let call = McpToolCall::new("test", serde_json::json!({})).with_server("node:./server.js");
         let path = call.server_target.strip_prefix("node:").unwrap();
         assert_eq!(path, "./server.js");
     }
 
     #[test]
     fn test_execute_rejects_non_node_target() {
-        let call = McpToolCall::new("test", serde_json::json!({}))
-            .with_server("python:mcp_server");
+        let call = McpToolCall::new("test", serde_json::json!({})).with_server("python:mcp_server");
         assert!(execute(&call).is_err());
     }
 
     #[test]
     fn test_execute_rejects_empty_module() {
-        let call = McpToolCall::new("test", serde_json::json!({}))
-            .with_server("node:");
+        let call = McpToolCall::new("test", serde_json::json!({})).with_server("node:");
         assert!(execute(&call).is_err());
     }
 

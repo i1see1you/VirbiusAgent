@@ -3,7 +3,6 @@
 /// All modules are re-exported as `pub` so that `tests/integration_test.rs`
 /// can construct proxy components (SessionManager, UpstreamManager, etc.)
 /// and call `router::route_request` directly.
-
 pub mod audit;
 pub mod config;
 pub mod egress;

@@ -13,7 +13,6 @@
 /// - `session_id` (UUID) is the logical session key throughout the proxy
 /// - Sessions persist across TCP reconnects (within TTL)
 /// - Upstream connections are per-session (via UpstreamManager)
-
 use std::sync::Arc;
 
 use axum::{
@@ -252,10 +251,7 @@ async fn handle_post_message(
 
         if let Some(resp) = response {
             if sender.send(resp).await.is_err() {
-                warn!(
-                    "SSE session {} disconnected, response dropped",
-                    session_id
-                );
+                warn!("SSE session {} disconnected, response dropped", session_id);
                 // Clean up SSE channel
                 state_clone.sse_sessions.remove(&session_id);
             }
@@ -269,10 +265,7 @@ async fn handle_post_message(
 ///
 /// Returns the JSON-RPC response directly in the HTTP body.
 /// Uses a per-request session_id (stateless), suitable for testing.
-async fn handle_simple_post(
-    State(state): State<AppState>,
-    Json(request): Json<Value>,
-) -> Response {
+async fn handle_simple_post(State(state): State<AppState>, Json(request): Json<Value>) -> Response {
     // For simple HTTP POST, generate a per-request session_id.
     // This is stateless — each request gets its own session.
     // For stateful usage, clients should use the SSE protocol.

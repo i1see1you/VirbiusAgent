@@ -4,7 +4,6 @@
 /// - Created on `initialize`
 /// - Persists across TCP reconnects (within TTL)
 /// - Cleaned up by background task when TTL expires
-
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -124,7 +123,10 @@ impl Session {
 
     /// Check if a specific upstream has been initialized for this session.
     pub fn is_upstream_initialized(&self, name: &str) -> bool {
-        self.upstream_initialized.get(name).copied().unwrap_or(false)
+        self.upstream_initialized
+            .get(name)
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Mark an upstream as initialized for this session.
@@ -151,7 +153,7 @@ fn extract_allowed_tools_from_jwt(jwt: &str) -> Vec<String> {
             let mut s = parts[1].to_string();
             match s.len() % 4 {
                 2 => s.push_str("=="),
-                3 => s.push_str("="),
+                3 => s.push('='),
                 _ => {}
             }
             base64::engine::general_purpose::STANDARD.decode(&s)
@@ -252,6 +254,11 @@ impl SessionManager {
     /// Number of active sessions.
     pub fn len(&self) -> usize {
         self.sessions.len()
+    }
+
+    /// Check if there are no active sessions.
+    pub fn is_empty(&self) -> bool {
+        self.sessions.is_empty()
     }
 
     /// Check if a session exists and is not expired.
@@ -395,7 +402,10 @@ mod tests {
         });
         let s = Session::from_meta(&meta);
         assert!(s.has_license());
-        assert_eq!(s.allowed_tools, vec!["read_file", "search", "execute_python"]);
+        assert_eq!(
+            s.allowed_tools,
+            vec!["read_file", "search", "execute_python"]
+        );
     }
 
     #[test]

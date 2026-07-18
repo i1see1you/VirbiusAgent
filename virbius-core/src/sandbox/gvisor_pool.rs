@@ -156,7 +156,7 @@ pub struct GvisorPool {
     config: GvisorPoolConfig,
     warm: Arc<Mutex<HashMap<Language, Vec<WarmContainer>>>>,
     /// Whether `runsc` is available on this host.
-    runsc_available: bool,
+    pub(crate) runsc_available: bool,
 }
 
 impl GvisorPool {
@@ -182,11 +182,7 @@ impl GvisorPool {
     /// Otherwise, creates a new container (cold path, 1-5s).
     /// If gVisor is not available, returns `Err` so the caller can
     /// fall back to [`super::landlock::LandlockSandbox`].
-    pub fn execute(
-        &self,
-        language: Language,
-        code: &str,
-    ) -> Result<GvisorExecResult, String> {
+    pub fn execute(&self, language: Language, code: &str) -> Result<GvisorExecResult, String> {
         if !self.runsc_available {
             return Err("runsc binary not available".to_string());
         }
@@ -216,10 +212,7 @@ impl GvisorPool {
             loop {
                 if start.elapsed() > timeout {
                     let _ = container.child.kill();
-                    return Err(format!(
-                        "gVisor exec timeout after {}s",
-                        timeout.as_secs()
-                    ));
+                    return Err(format!("gVisor exec timeout after {}s", timeout.as_secs()));
                 }
                 match stdout.read(&mut buf) {
                     Ok(0) => break,
@@ -290,15 +283,13 @@ impl GvisorPool {
 
             if Instant::now() >= deadline {
                 // No warm container available; create a cold one.
-                return self
-                    .create_container(language)
-                    .map(|c| AcquiredContainer {
-                        id: c.id,
-                        language: c.language,
-                        stdin: c.stdin,
-                        child: c.child,
-                        warm_hit: false,
-                    });
+                return self.create_container(language).map(|c| AcquiredContainer {
+                    id: c.id,
+                    language: c.language,
+                    stdin: c.stdin,
+                    child: c.child,
+                    warm_hit: false,
+                });
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -306,14 +297,9 @@ impl GvisorPool {
 
     /// Create a new gVisor container.
     fn create_container(&self, language: Language) -> Result<WarmContainer, String> {
-        let container_id = format!(
-            "virbius-{}-{}",
-            language.as_str(),
-            uuid_v4_short()
-        );
-        let bundle_dir = PathBuf::from(&self.bundle_root).join(&container_id);
-        std::fs::create_dir_all(&bundle_dir)
-            .map_err(|e| format!("create bundle dir: {e}"))?;
+        let container_id = format!("virbius-{}-{}", language.as_str(), uuid_v4_short());
+        let bundle_dir = PathBuf::from(&self.config.bundle_root).join(&container_id);
+        std::fs::create_dir_all(&bundle_dir).map_err(|e| format!("create bundle dir: {e}"))?;
 
         // Write config.json (OCI runtime spec).
         let config_json = self.build_oci_config(language);
@@ -356,7 +342,10 @@ impl GvisorPool {
         let mem_limit = self.config.memory_limit_bytes;
         let cpu_quota = self.config.cpu_quota;
         let interpreter = language.interpreter();
-        let network_str = if self.config.network_disabled {
+        // Network namespace type: "none" (isolated) or "bridge" (default).
+        // Currently always emitted as a network namespace; the value is kept
+        // for future conditional logic (e.g. omit network namespace entirely).
+        let _network_str = if self.config.network_disabled {
             "none"
         } else {
             "bridge"
@@ -515,24 +504,32 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&config).unwrap();
 
         // noNewPrivileges should be true.
-        assert_eq!(
-            parsed["process"]["noNewPrivileges"].as_bool(),
-            Some(true)
-        );
+        assert_eq!(parsed["process"]["noNewPrivileges"].as_bool(), Some(true));
         // Capabilities should be empty.
         assert_eq!(
-            parsed["process"]["capabilities"]["bounding"].as_array().unwrap().len(),
+            parsed["process"]["capabilities"]["bounding"]
+                .as_array()
+                .unwrap()
+                .len(),
             0
         );
         // Memory limit should be set.
-        assert!(parsed["linux"]["resources"]["memory"]["limit"].as_u64().unwrap() > 0);
+        assert!(
+            parsed["linux"]["resources"]["memory"]["limit"]
+                .as_u64()
+                .unwrap()
+                > 0
+        );
     }
 
     #[test]
     fn test_find_subsequence() {
         assert_eq!(find_subsequence(b"hello world", b"world"), Some(6));
         assert_eq!(find_subsequence(b"hello", b"xyz"), None);
-        assert_eq!(find_subsequence(b"abc__VIRBIUS_EOF__def", b"__VIRBIUS_EOF__"), Some(3));
+        assert_eq!(
+            find_subsequence(b"abc__VIRBIUS_EOF__def", b"__VIRBIUS_EOF__"),
+            Some(3)
+        );
     }
 
     #[test]

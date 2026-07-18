@@ -24,7 +24,6 @@
 /// 3. Start background SSE reader to receive responses
 /// 4. POST JSON-RPC requests to the endpoint URL
 /// 5. Responses are received via SSE stream and matched by JSON-RPC id
-
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -132,11 +131,7 @@ impl UpstreamClient {
     /// Read first `endpoint` event → get POST URL with session_id
     /// Start background reader to process subsequent SSE events.
     async fn connect_sse(&self) -> Result<(), UpstreamError> {
-        let sse_url = format!(
-            "{}{}",
-            self.base_url.trim_end_matches('/'),
-            self.sse_path
-        );
+        let sse_url = format!("{}{}", self.base_url.trim_end_matches('/'), self.sse_path);
         debug!("connecting to upstream SSE: {}", sse_url);
 
         let resp = self
@@ -408,7 +403,10 @@ impl UpstreamManager {
     /// Connect to all upstreams concurrently for a session.
     ///
     /// Used during `initialize` in multi-upstream mode.
-    pub async fn connect_all(&self, session_id: &str) -> Vec<Result<UpstreamClient, UpstreamError>> {
+    pub async fn connect_all(
+        &self,
+        session_id: &str,
+    ) -> Vec<Result<UpstreamClient, UpstreamError>> {
         let names: Vec<String> = self.entries.iter().map(|e| e.name.clone()).collect();
         let mut results = Vec::with_capacity(names.len());
         for name in &names {
@@ -472,6 +470,11 @@ impl UpstreamManager {
     /// Number of active upstream connections (across all sessions and upstreams).
     pub fn len(&self) -> usize {
         self.connections.len()
+    }
+
+    /// Check if there are no active upstream connections.
+    pub fn is_empty(&self) -> bool {
+        self.connections.is_empty()
     }
 
     /// Remove all upstream connections whose SSE connection has been lost.
@@ -609,11 +612,7 @@ fn construct_endpoint_url(base_url: &str, relative_path: &str) -> String {
         }
     }
     // Fallback: simple concatenation
-    format!(
-        "{}{}",
-        base_url.trim_end_matches('/'),
-        relative_path
-    )
+    format!("{}{}", base_url.trim_end_matches('/'), relative_path)
 }
 
 #[derive(Debug)]
@@ -680,8 +679,10 @@ mod tests {
         let disconnected_client = UpstreamClient::new(client_config);
         assert!(!disconnected_client.is_connected());
 
-        mgr.connections
-            .insert(("stale-session".to_string(), "default".to_string()), disconnected_client);
+        mgr.connections.insert(
+            ("stale-session".to_string(), "default".to_string()),
+            disconnected_client,
+        );
         assert_eq!(mgr.len(), 1);
 
         // Cleanup should remove the disconnected client
@@ -810,12 +811,18 @@ mod tests {
             sse_path: "/sse".to_string(),
         };
         let cfg1_clone = cfg1.clone();
-        mgr.connections
-            .insert(("s1".to_string(), "fs".to_string()), UpstreamClient::new(cfg1));
-        mgr.connections
-            .insert(("s1".to_string(), "gh".to_string()), UpstreamClient::new(cfg2));
-        mgr.connections
-            .insert(("s2".to_string(), "fs".to_string()), UpstreamClient::new(cfg1_clone));
+        mgr.connections.insert(
+            ("s1".to_string(), "fs".to_string()),
+            UpstreamClient::new(cfg1),
+        );
+        mgr.connections.insert(
+            ("s1".to_string(), "gh".to_string()),
+            UpstreamClient::new(cfg2),
+        );
+        mgr.connections.insert(
+            ("s2".to_string(), "fs".to_string()),
+            UpstreamClient::new(cfg1_clone),
+        );
 
         assert_eq!(mgr.len(), 3);
 

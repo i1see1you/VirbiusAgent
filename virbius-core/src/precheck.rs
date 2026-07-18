@@ -1,6 +1,6 @@
 /// Tool pre-check: allowlist, args validation, fast path detection.
 use crate::license::License;
-use crate::manifest;  // ToolPolicy used through manifest::tool_policy
+use crate::manifest; // ToolPolicy used through manifest::tool_policy
 use serde::Deserialize;
 
 #[derive(Debug, Clone)]
@@ -93,7 +93,10 @@ fn validate_args(args: &serde_json::Value, schema: &serde_json::Value) -> Result
                 if let Some(expected_type) = prop.get("type").and_then(|t| t.as_str()) {
                     if let Some(value) = args_obj.get(key) {
                         if !type_matches(value, expected_type) {
-                            return Err(format!("field '{}' expected type '{}'", key, expected_type));
+                            return Err(format!(
+                                "field '{}' expected type '{}'",
+                                key, expected_type
+                            ));
                         }
                     }
                 }

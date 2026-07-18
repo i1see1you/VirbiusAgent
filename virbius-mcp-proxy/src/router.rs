@@ -5,9 +5,8 @@
 /// - `initialize` is forwarded to all upstreams concurrently
 /// - `tools/list` merges tools from all upstreams, prefixes conflicting names
 /// - `tools/call` routes to the correct upstream via `tool_routes`
-
 use serde_json::Value;
-use tracing::{debug, warn, info};
+use tracing::{debug, info, warn};
 
 use crate::egress::EgressClient;
 use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
@@ -15,7 +14,9 @@ use crate::pipeline::{PipelineResult, SecurityPipeline, SharedPipeline};
 use crate::session::{Session, SessionManager};
 use crate::trace_collector::{SharedTraceCollector, TraceEvent};
 use crate::upstream::UpstreamManager;
-use virbius_core::{mask_pii_output, MemoryInterceptor, MemoryContext, MemoryWriteResult, TrustTagger, TrustTagInput, TrustTagResult};
+use virbius_core::{
+    mask_pii_output, MemoryContext, MemoryInterceptor, TrustTagInput, TrustTagResult, TrustTagger,
+};
 
 /// Separator used for prefixed tool names in multi-upstream mode.
 /// Only applied when the same tool name exists on multiple upstreams.
@@ -25,6 +26,7 @@ const TOOL_PREFIX_SEP: &str = "__";
 ///
 /// `session_id` identifies the logical session (decoupled from TCP connection).
 /// Returns `Some(response)` for requests (have `id`), `None` for notifications.
+#[allow(clippy::too_many_arguments)]
 pub async fn route_request(
     request: &Value,
     session_id: &str,
@@ -50,8 +52,15 @@ pub async fn route_request(
 
     match method {
         "initialize" => {
-            handle_initialize(&id, &params, session_id, session_mgr, upstream_mgr, public_key_pem)
-                .await
+            handle_initialize(
+                &id,
+                &params,
+                session_id,
+                session_mgr,
+                upstream_mgr,
+                public_key_pem,
+            )
+            .await
         }
         "tools/list" => handle_tools_list(&id, session_id, session_mgr, upstream_mgr).await,
         "tools/call" => {
@@ -94,11 +103,9 @@ pub async fn route_request(
                     match upstream_mgr.get_or_connect_single(session_id).await {
                         Ok(upstream) => match upstream.forward(request).await {
                             Ok(resp) => Some(resp),
-                            Err(e) => Some(jsonrpc_error(
-                                -32603,
-                                &id,
-                                &format!("upstream error: {e}"),
-                            )),
+                            Err(e) => {
+                                Some(jsonrpc_error(-32603, &id, &format!("upstream error: {e}")))
+                            }
                         },
                         Err(e) => Some(jsonrpc_error(
                             -32603,
@@ -355,12 +362,14 @@ async fn handle_tools_list(
             }
         }
 
-        if tools_by_upstream.is_empty() && last_err.is_some() {
-            return Some(jsonrpc_error(
-                -32603,
-                id,
-                &format!("all upstreams failed: {}", last_err.unwrap()),
-            ));
+        if tools_by_upstream.is_empty() {
+            if let Some(err) = &last_err {
+                return Some(jsonrpc_error(
+                    -32603,
+                    id,
+                    &format!("all upstreams failed: {}", err),
+                ));
+            }
         }
 
         // Merge tools from all upstreams, prefix conflicting names,
@@ -478,10 +487,7 @@ fn filter_tools_list(mut resp: Value, session: &Session) -> Option<Value> {
         if let Some(tools) = result.get_mut("tools").and_then(|t| t.as_array_mut()) {
             let allowed = &session.allowed_tools;
             tools.retain(|tool| {
-                let displayed_name = tool
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or("");
+                let displayed_name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
 
                 // Check both the displayed name and the original name (strip prefix).
                 // In single-upstream mode there's no prefix, so displayed == original.
@@ -528,6 +534,7 @@ fn strip_tool_prefix(name: &str) -> &str {
 ///
 /// In multi-upstream mode, the tool name is resolved via `tool_routes` to
 /// determine the correct upstream and the original tool name.
+#[allow(clippy::too_many_arguments)]
 async fn handle_tools_call(
     id: &Value,
     params: &Value,
@@ -550,10 +557,7 @@ async fn handle_tools_call(
         }
     };
 
-    let displayed_tool_name = params
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let displayed_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
     let args = params
         .get("arguments")
         .cloned()
@@ -579,18 +583,19 @@ async fn handle_tools_call(
             // wasn't called or the tool doesn't exist. Try to use the displayed
             // name as-is and pick the first upstream as best-effort.
             if upstream_mgr.is_single_upstream() {
-                (upstream_mgr.upstream_names()[0].to_string(), displayed_tool_name.to_string())
+                (
+                    upstream_mgr.upstream_names()[0].to_string(),
+                    displayed_tool_name.to_string(),
+                )
             } else {
                 // Try stripping a prefix in case the route wasn't registered
                 let stripped = strip_tool_prefix(displayed_tool_name);
                 if stripped != displayed_tool_name {
                     // Has a prefix — try to find the upstream by the prefix
-                    let prefix_end = displayed_tool_name
-                        .find(TOOL_PREFIX_SEP)
-                        .unwrap_or(0);
+                    let prefix_end = displayed_tool_name.find(TOOL_PREFIX_SEP).unwrap_or(0);
                     let possible_upstream = &displayed_tool_name[..prefix_end];
                     let names = upstream_mgr.upstream_names();
-                    if names.iter().any(|n| *n == possible_upstream) {
+                    if names.contains(&possible_upstream) {
                         (possible_upstream.to_string(), stripped.to_string())
                     } else {
                         return Some(jsonrpc_error(
@@ -622,21 +627,25 @@ async fn handle_tools_call(
 
     // ── P1.3: Memory Interceptor (write-only) ──
     let memory_interceptor = MemoryInterceptor::from_manifest();
-    if memory_interceptor.is_enabled() && memory_interceptor.is_memory_write_tool(&original_tool_name) {
+    if memory_interceptor.is_enabled()
+        && memory_interceptor.is_memory_write_tool(&original_tool_name)
+    {
         // Extract content from args (assume there's a "content" field)
         let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        
+
         let mem_ctx = MemoryContext {
             session_id: session.session_id.clone(),
             trace_id: session.trace_id.clone(),
             tool_name: original_tool_name.clone(),
         };
-        
+
         let mem_result = memory_interceptor.intercept_write(content, &mem_ctx);
-        
+
         if !mem_result.allowed {
             // Local check failed (size, credentials, PII)
-            let reason = mem_result.block_reason.unwrap_or_else(|| "memory_write_blocked".into());
+            let reason = mem_result
+                .block_reason
+                .unwrap_or_else(|| "memory_write_blocked".into());
             return Some(jsonrpc_error_simple(
                 VirbiusErrorCode::MemoryWriteBlocked,
                 id.clone(),
@@ -646,13 +655,18 @@ async fn handle_tools_call(
                 Some(&reason),
             ));
         }
-        
+
         // Local checks passed — now perform LLM-based injection detection if needed
         if mem_result.need_llm_check {
-            match pipeline.check_memory(&session, &original_tool_name, &mem_result.sanitized_content).await {
+            match pipeline
+                .check_memory(&session, &original_tool_name, &mem_result.sanitized_content)
+                .await
+            {
                 Ok(resp) if !resp.allowed => {
                     // LLM detected injection
-                    let reason = resp.block_reason.unwrap_or_else(|| "prompt_injection_detected".into());
+                    let reason = resp
+                        .block_reason
+                        .unwrap_or_else(|| "prompt_injection_detected".into());
                     return Some(jsonrpc_error_simple(
                         VirbiusErrorCode::MemoryWriteBlocked,
                         id.clone(),
@@ -684,21 +698,37 @@ async fn handle_tools_call(
 
     // If a challenge token is present, verify it before running the pipeline
     if let Some(token) = &challenge_token {
-        match pipeline.verify_challenge_token(token, &original_tool_name, &args, &session).await {
+        match pipeline
+            .verify_challenge_token(token, &original_tool_name, &args, &session)
+            .await
+        {
             Ok(true) => {
                 // Token verified — bypass pipeline, allow directly
-                debug!("challenge token verified, allowing tool call: tool={}", original_tool_name);
+                debug!(
+                    "challenge token verified, allowing tool call: tool={}",
+                    original_tool_name
+                );
                 session.increment_calls();
                 session_mgr.update(session_id.to_string(), session.clone());
 
                 // Forward to upstream (same as Allow path)
                 if crate::egress::is_egress_tool(&original_tool_name) {
                     return Some(
-                        proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts).await,
+                        proxy_egress_tool(
+                            id,
+                            &original_tool_name,
+                            &args,
+                            egress_client,
+                            egress_hosts,
+                        )
+                        .await,
                     );
                 }
 
-                let upstream = match upstream_mgr.get_or_connect(session_id, &upstream_name).await {
+                let upstream = match upstream_mgr
+                    .get_or_connect(session_id, &upstream_name)
+                    .await
+                {
                     Ok(u) => u,
                     Err(e) => {
                         return Some(jsonrpc_error(
@@ -712,7 +742,10 @@ async fn handle_tools_call(
                 let forward_params = if displayed_tool_name != original_tool_name {
                     let mut p = params.clone();
                     if let Some(obj) = p.as_object_mut() {
-                        obj.insert("name".to_string(), Value::String(original_tool_name.clone()));
+                        obj.insert(
+                            "name".to_string(),
+                            Value::String(original_tool_name.clone()),
+                        );
                     }
                     p
                 } else {
@@ -726,7 +759,10 @@ async fn handle_tools_call(
                     "method": "tools/call",
                     "params": forward_params,
                 });
-                if let Some(obj) = forward_req.get_mut("params").and_then(|p| p.as_object_mut()) {
+                if let Some(obj) = forward_req
+                    .get_mut("params")
+                    .and_then(|p| p.as_object_mut())
+                {
                     if let Some(m) = obj.get_mut("_meta").and_then(|m| m.as_object_mut()) {
                         m.remove("challenge_token");
                     }
@@ -734,11 +770,13 @@ async fn handle_tools_call(
 
                 match upstream.forward(&forward_req).await {
                     Ok(resp) => return Some(resp),
-                    Err(e) => return Some(jsonrpc_error(
-                        -32603,
-                        id,
-                        &format!("upstream tools/call failed: {e}"),
-                    )),
+                    Err(e) => {
+                        return Some(jsonrpc_error(
+                            -32603,
+                            id,
+                            &format!("upstream tools/call failed: {e}"),
+                        ))
+                    }
                 }
             }
             Ok(false) => {
@@ -783,10 +821,16 @@ async fn handle_tools_call(
 
     // Run security pipeline with the ORIGINAL tool name (before any prefix stripping).
     // The License allowed_tools contains original names, not prefixed ones.
-    let result = pipeline.check_tool_call(&session, &original_tool_name, &args).await;
+    let result = pipeline
+        .check_tool_call(&session, &original_tool_name, &args)
+        .await;
 
     match result {
-        PipelineResult::Allow { reason: _, risk_score, .. } => {
+        PipelineResult::Allow {
+            reason: _,
+            risk_score,
+            ..
+        } => {
             // Write back risk score from engine (if evaluated)
             if let Some(score) = risk_score {
                 session.session_risk_score = score;
@@ -798,34 +842,41 @@ async fn handle_tools_call(
 
             // ── Trace: update tool_call with decision ──
             let tc_event = TraceEvent::tool_call(
-                &session, &tool_call_step_id, parent_step_id.as_deref(), step_seq,
-                &original_tool_name, &args,
-            ).with_decision("allow", None, None, risk_score);
+                &session,
+                &tool_call_step_id,
+                parent_step_id.as_deref(),
+                step_seq,
+                &original_tool_name,
+                &args,
+            )
+            .with_decision("allow", None, None, risk_score);
             trace_collector.record(tc_event).await;
 
             // Egress tools: Proxy HTTP request directly with streaming response.
             // Check against the original tool name.
             if crate::egress::is_egress_tool(&original_tool_name) {
-                let mut resp = proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts).await;
+                let mut resp =
+                    proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts)
+                        .await;
                 // ── Output PII masking ──
                 mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
                 // ── Trust boundary tagging (high/network risk only) ──
                 tag_tool_result(&mut resp, &original_tool_name, false);
                 // ── Output content safety review (LLM-based) ──
-                review_tool_output(
-                    &mut resp,
-                    &session,
-                    &original_tool_name,
-                    pipeline.as_ref(),
-                )
-                .await;
+                review_tool_output(&mut resp, &session, &original_tool_name, pipeline.as_ref())
+                    .await;
                 // ── Trace: record tool_result ──
                 let duration_ms = trace_start.elapsed().as_millis() as u64;
                 let result_step_id = uuid::Uuid::new_v4().to_string();
                 let result_seq = session.next_step_seq();
                 let tr_event = TraceEvent::tool_result(
-                    &session, &result_step_id, &tool_call_step_id, result_seq,
-                    "success", duration_ms, &resp,
+                    &session,
+                    &result_step_id,
+                    &tool_call_step_id,
+                    result_seq,
+                    "success",
+                    duration_ms,
+                    &resp,
                 );
                 trace_collector.record(tr_event).await;
                 session.set_last_step_id(result_step_id);
@@ -835,7 +886,10 @@ async fn handle_tools_call(
 
             // Non-egress tools: Forward to the resolved upstream.
             // Use the ORIGINAL tool name (not prefixed) when forwarding.
-            let upstream = match upstream_mgr.get_or_connect(session_id, &upstream_name).await {
+            let upstream = match upstream_mgr
+                .get_or_connect(session_id, &upstream_name)
+                .await
+            {
                 Ok(u) => u,
                 Err(e) => {
                     return Some(jsonrpc_error(
@@ -851,7 +905,10 @@ async fn handle_tools_call(
                 // Replace the tool name in params with the original name
                 let mut p = params.clone();
                 if let Some(obj) = p.as_object_mut() {
-                    obj.insert("name".to_string(), Value::String(original_tool_name.clone()));
+                    obj.insert(
+                        "name".to_string(),
+                        Value::String(original_tool_name.clone()),
+                    );
                 }
                 p
             } else {
@@ -872,20 +929,20 @@ async fn handle_tools_call(
                     // ── Trust boundary tagging (high/network risk only) ──
                     tag_tool_result(&mut resp, &original_tool_name, false);
                     // ── Output content safety review (LLM-based) ──
-                    review_tool_output(
-                        &mut resp,
-                        &session,
-                        &original_tool_name,
-                        pipeline.as_ref(),
-                    )
-                    .await;
+                    review_tool_output(&mut resp, &session, &original_tool_name, pipeline.as_ref())
+                        .await;
                     // ── Trace: record tool_result ──
                     let duration_ms = trace_start.elapsed().as_millis() as u64;
                     let result_step_id = uuid::Uuid::new_v4().to_string();
                     let result_seq = session.next_step_seq();
                     let tr_event = TraceEvent::tool_result(
-                        &session, &result_step_id, &tool_call_step_id, result_seq,
-                        "success", duration_ms, &resp,
+                        &session,
+                        &result_step_id,
+                        &tool_call_step_id,
+                        result_seq,
+                        "success",
+                        duration_ms,
+                        &resp,
                     );
                     trace_collector.record(tr_event).await;
                     session.set_last_step_id(result_step_id);
@@ -899,8 +956,13 @@ async fn handle_tools_call(
                     let result_seq = session.next_step_seq();
                     let err_val = serde_json::json!({"error": e.to_string()});
                     let tr_event = TraceEvent::tool_result(
-                        &session, &result_step_id, &tool_call_step_id, result_seq,
-                        "error", duration_ms, &err_val,
+                        &session,
+                        &result_step_id,
+                        &tool_call_step_id,
+                        result_seq,
+                        "error",
+                        duration_ms,
+                        &err_val,
                     );
                     trace_collector.record(tr_event).await;
                     session.set_last_step_id(result_step_id);
@@ -913,7 +975,12 @@ async fn handle_tools_call(
                 }
             }
         }
-        PipelineResult::Deny { code, reason, risk_score, .. } => {
+        PipelineResult::Deny {
+            code,
+            reason,
+            risk_score,
+            ..
+        } => {
             // Write back risk score from engine (if evaluated)
             if let Some(score) = risk_score {
                 session.session_risk_score = score;
@@ -922,9 +989,14 @@ async fn handle_tools_call(
 
             // ── Trace: update tool_call with deny decision ──
             let tc_event = TraceEvent::tool_call(
-                &session, &tool_call_step_id, parent_step_id.as_deref(), step_seq,
-                &original_tool_name, &args,
-            ).with_decision("block", None, Some(&reason), risk_score);
+                &session,
+                &tool_call_step_id,
+                parent_step_id.as_deref(),
+                step_seq,
+                &original_tool_name,
+                &args,
+            )
+            .with_decision("block", None, Some(&reason), risk_score);
             trace_collector.record(tc_event).await;
 
             Some(jsonrpc_error_simple(
@@ -936,16 +1008,32 @@ async fn handle_tools_call(
                 Some(&reason),
             ))
         }
-        PipelineResult::Challenge { challenge_id, args_hash, rule_id, reason, risk_score } => {
+        PipelineResult::Challenge {
+            challenge_id,
+            args_hash,
+            rule_id,
+            reason,
+            risk_score,
+        } => {
             // Write back risk score from engine
             session.session_risk_score = risk_score;
             session_mgr.update(session_id.to_string(), session.clone());
 
             // ── Trace: update tool_call with challenge decision ──
             let tc_event = TraceEvent::tool_call(
-                &session, &tool_call_step_id, parent_step_id.as_deref(), step_seq,
-                &original_tool_name, &args,
-            ).with_decision("challenge", rule_id.as_deref(), Some(&reason), Some(risk_score));
+                &session,
+                &tool_call_step_id,
+                parent_step_id.as_deref(),
+                step_seq,
+                &original_tool_name,
+                &args,
+            )
+            .with_decision(
+                "challenge",
+                rule_id.as_deref(),
+                Some(&reason),
+                Some(risk_score),
+            );
             trace_collector.record(tc_event).await;
 
             // Return JSON-RPC error -32011 with challenge details
@@ -1000,17 +1088,12 @@ async fn proxy_egress_tool(
     }
 
     // 3. Extract HTTP method and body from args
-    let method = args
-        .get("method")
-        .and_then(|v| v.as_str())
-        .unwrap_or("GET");
+    let method = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
     let body = args.get("body").or_else(|| args.get("data"));
 
     // 4. Extract headers from args (filter happens inside proxy_request)
-    let headers: Option<Vec<(String, String)>> = args
-        .get("headers")
-        .and_then(|h| h.as_object())
-        .map(|map| {
+    let headers: Option<Vec<(String, String)>> =
+        args.get("headers").and_then(|h| h.as_object()).map(|map| {
             map.iter()
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect()
@@ -1091,7 +1174,10 @@ fn mask_pii_in_response(resp: &mut Value, tool_name: &str, session_id: &str) {
         if item.get("type").and_then(|t| t.as_str()) != Some("text") {
             continue;
         }
-        if let Some(text) = item.get_mut("text").and_then(|t| t.as_str().map(|s| s.to_string())) {
+        if let Some(text) = item
+            .get_mut("text")
+            .and_then(|t| t.as_str().map(|s| s.to_string()))
+        {
             let mask_result = mask_pii_output(&text, tool_name, Some(session_id));
             if mask_result.masked {
                 any_masked = true;
@@ -1205,15 +1291,9 @@ async fn review_tool_output(
                     .unwrap_or("content safety violation");
                 info!(
                     "output review blocked: tool={} session={} rule={:?} reason={}",
-                    tool_name,
-                    session.session_id,
-                    eval_resp.rule_id,
-                    reason
+                    tool_name, session.session_id, eval_resp.rule_id, reason
                 );
-                let safe_msg = format!(
-                    "[Content blocked by safety review: {}]",
-                    reason
-                );
+                let safe_msg = format!("[Content blocked by safety review: {}]", reason);
                 replace_result_text(resp, &safe_msg);
             } else {
                 debug!(
@@ -1228,10 +1308,7 @@ async fn review_tool_output(
                 tool_name, session.session_id, e
             );
             if !cfg.fail_open {
-                replace_result_text(
-                    resp,
-                    "[Content blocked: safety review unavailable]",
-                );
+                replace_result_text(resp, "[Content blocked: safety review unavailable]");
             }
         }
     }
@@ -1304,8 +1381,8 @@ mod tests {
             "app_id": "test",
             "allowed_tools": tools,
         });
-        let payload_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).unwrap());
+        let payload_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::to_vec(&payload).unwrap());
         let jwt = format!("header.{}.sig", payload_b64);
         Session::from_meta(&serde_json::json!({ "app_id": "test", "license_jwt": jwt }))
     }
@@ -1337,10 +1414,7 @@ mod tests {
 
         let tools = filtered["result"]["tools"].as_array().unwrap();
         assert_eq!(tools.len(), 2);
-        let names: Vec<&str> = tools
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"search"));
         assert!(!names.contains(&"execute_python"));

@@ -161,8 +161,8 @@ mod tests {
 
     #[test]
     fn test_server_target_parsing() {
-        let call = McpToolCall::new("test", serde_json::json!({}))
-            .with_server("python:mcp_server.tools");
+        let call =
+            McpToolCall::new("test", serde_json::json!({})).with_server("python:mcp_server.tools");
 
         let path = call.server_target.strip_prefix("python:").unwrap();
         assert_eq!(path, "mcp_server.tools");
@@ -170,15 +170,13 @@ mod tests {
 
     #[test]
     fn test_execute_rejects_non_python_target() {
-        let call = McpToolCall::new("test", serde_json::json!({}))
-            .with_server("node:./server.js");
+        let call = McpToolCall::new("test", serde_json::json!({})).with_server("node:./server.js");
         assert!(execute(&call).is_err());
     }
 
     #[test]
     fn test_execute_rejects_empty_module() {
-        let call = McpToolCall::new("test", serde_json::json!({}))
-            .with_server("python:");
+        let call = McpToolCall::new("test", serde_json::json!({})).with_server("python:");
         assert!(execute(&call).is_err());
     }
 

@@ -12,8 +12,8 @@ const CONSUMER_GROUP: &str = "falco-config-subscriber";
 const CONSUMER_ID: &str = "falco-node";
 
 pub fn run() {
-    let redis_url = std::env::var("VIRBIUS_REDIS_URL")
-        .unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url =
+        std::env::var("VIRBIUS_REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
 
     let client = match redis::Client::open(redis_url.as_str()) {
         Ok(c) => c,
@@ -44,6 +44,9 @@ pub fn run() {
 
     loop {
         for stream in REDIS_STREAMS {
+            // Clippy: the nested generic type is dictated by the redis crate's
+            // XREADGROUP return shape. Allow for readability.
+            #[allow(clippy::type_complexity)]
             let result: Result<Vec<(String, Vec<(String, Vec<(String, String)>)>)>, _> =
                 redis::cmd("XREADGROUP")
                     .arg("GROUP")
@@ -63,10 +66,7 @@ pub fn run() {
                     for (_stream_name, messages) in &streams {
                         for (msg_id, fields) in messages {
                             if let Err(e) = handle_message(&mut con, fields) {
-                                eprintln!(
-                                    "config_subscriber: error processing {}: {}",
-                                    msg_id, e
-                                );
+                                eprintln!("config_subscriber: error processing {}: {}", msg_id, e);
                             }
                             // Acknowledge the message
                             let _: Result<(), _> = redis::cmd("XACK")
@@ -109,9 +109,7 @@ fn handle_message(
 
     // Fetch the rules YAML from Redis
     let artifact_key = format!("virbius:falco:artifact:{}:{}", tenant_id, revision);
-    let rules_yaml: Option<String> = redis::cmd("GET")
-        .arg(&artifact_key)
-        .query(con)?;
+    let rules_yaml: Option<String> = redis::cmd("GET").arg(&artifact_key).query(con)?;
 
     let rules_yaml = match rules_yaml {
         Some(y) => y,
@@ -136,9 +134,7 @@ fn handle_message(
 fn send_sighup_to_falco() {
     #[cfg(target_os = "linux")]
     {
-        let output = std::process::Command::new("pgrep")
-            .arg("falco")
-            .output();
+        let output = std::process::Command::new("pgrep").arg("falco").output();
         if let Ok(output) = output {
             let pids = String::from_utf8_lossy(&output.stdout);
             for line in pids.lines() {

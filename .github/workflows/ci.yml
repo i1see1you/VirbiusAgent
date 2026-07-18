@@ -6,49 +6,193 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
+  # ────────────────────────────────────────────────────────────
+  #  Rust: fmt + clippy + build + test
+  # ────────────────────────────────────────────────────────────
   rust:
+    name: Rust (fmt · clippy · build · test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Clippy (deny warnings)
+        run: |
+          cargo clippy \
+            --workspace \
+            --exclude virbius-mcp-python \
+            --exclude virbius-mcp-node \
+            --all-targets \
+            -- -D warnings
 
       - name: Build
-        run: cargo build --workspace --exclude virbius-mcp-python --exclude virbius-mcp-node
+        run: |
+          cargo build \
+            --workspace \
+            --exclude virbius-mcp-python \
+            --exclude virbius-mcp-node \
+            --verbose
 
       - name: Test
-        run: cargo test --workspace --exclude virbius-mcp-python --exclude virbius-mcp-node
+        run: |
+          cargo test \
+            --workspace \
+            --exclude virbius-mcp-python \
+            --exclude virbius-mcp-node \
+            --verbose
 
-  java:
+  # ────────────────────────────────────────────────────────────
+  #  Rust FFI bindings (PyO3 + napi-rs)
+  #  These need Python / Node.js dev toolchains, hence a separate job.
+  # ────────────────────────────────────────────────────────────
+  rust-bindings:
+    name: Rust FFI bindings (PyO3 · napi-rs)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Check Python bindings (virbius-mcp-python)
+        env:
+          PYO3_PYTHON: python3
+        run: cargo check -p virbius-mcp-python
+
+      - name: Check Node bindings (virbius-mcp-node)
+        run: cargo check -p virbius-mcp-node
+
+  # ────────────────────────────────────────────────────────────
+  #  Java: Maven test (engine · control · compiler · policy · groovy-l3)
+  # ────────────────────────────────────────────────────────────
+  java:
+    name: Java (Maven test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: temurin
           cache: maven
 
-      - name: Test
-        run: mvn test
+      - name: Maven test
+        run: mvn -B -e test
 
+  # ────────────────────────────────────────────────────────────
+  #  Go: fmt + vet + test
+  #  virbius-expr  — standard Go module with tests
+  #  virbius-gateway/wasm — Higress WASM plugin (needs tinygo to build;
+  #    CI only runs gofmt + go vet for static analysis)
+  # ────────────────────────────────────────────────────────────
   go:
+    name: Go (fmt · vet · test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
+
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
-          cache-dependency-path: |
-            virbius-expr/go.sum
-            virbius-gateway/wasm/go.sum
-            virbius-kernel/plugin/go.sum
+          go-version: '1.22'
+
+      - name: gofmt check
+        run: |
+          unformatted=$(gofmt -l virbius-expr virbius-gateway/wasm)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Go files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
 
       - name: Test virbius-expr
         working-directory: virbius-expr
-        run: go test ./...
+        run: go test ./... -v
+
+      - name: Vet virbius-expr
+        working-directory: virbius-expr
+        run: go vet ./...
+
+      - name: Vet virbius-gateway/wasm
+        working-directory: virbius-gateway/wasm
+        run: go vet ./...
+
+  # ────────────────────────────────────────────────────────────
+  #  Shell scripts: shellcheck
+  # ────────────────────────────────────────────────────────────
+  shellcheck:
+    name: Shell scripts (shellcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run shellcheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+          paths: |
+            scripts/*.sh
+
+  # ────────────────────────────────────────────────────────────
+  #  Rust security audit (CVE check via cargo-audit)
+  # ────────────────────────────────────────────────────────────
+  cargo-audit:
+    name: Rust security audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked || true
+
+      - name: Run cargo audit
+        run: cargo audit
+
+  # ────────────────────────────────────────────────────────────
+  #  Aggregate: all checks must pass (useful for branch protection)
+  # ────────────────────────────────────────────────────────────
+  ci-pass:
+    name: CI (all checks)
+    runs-on: ubuntu-latest
+    needs: [rust, rust-bindings, java, go, shellcheck, cargo-audit]
+    if: always()
+    steps:
+      - name: Check job results
+        run: |
+          echo "rust: ${{ needs.rust.result }}"
+          echo "rust-bindings: ${{ needs.rust-bindings.result }}"
+          echo "java: ${{ needs.java.result }}"
+          echo "go: ${{ needs.go.result }}"
+          echo "shellcheck: ${{ needs.shellcheck.result }}"
+          echo "cargo-audit: ${{ needs.cargo-audit.result }}"
+          for r in "${{ needs.rust.result }}" "${{ needs.rust-bindings.result }}" "${{ needs.java.result }}" "${{ needs.go.result }}" "${{ needs.shellcheck.result }}" "${{ needs.cargo-audit.result }}"; do
+            if [ "$r" != "success" ]; then
+              echo "::error::One or more CI checks failed"
+              exit 1
+            fi
+          done
+          echo "✅ All CI checks passed"

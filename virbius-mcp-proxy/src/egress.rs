@@ -4,7 +4,6 @@
 /// Key design: uses reqwest `bytes_stream()` to read response bodies in chunks,
 /// preventing OOM on large responses. SSE (text/event-stream) responses are
 /// parsed and forwarded as-is.
-
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -359,7 +358,10 @@ mod tests {
         };
         let result = to_mcp_result(&response);
         assert_eq!(result["isError"], false);
-        assert!(result["content"][0]["text"].as_str().unwrap().contains("key"));
+        assert!(result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("key"));
     }
 
     #[test]

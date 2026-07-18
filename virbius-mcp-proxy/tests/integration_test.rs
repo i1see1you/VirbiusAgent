@@ -3,7 +3,6 @@
 /// These tests start a mock upstream MCP server (implementing the MCP SSE
 /// protocol) and exercise the proxy's routing, security pipeline, session
 /// management, and upstream connection management end-to-end.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -23,12 +22,14 @@ use tokio_stream::StreamExt as _;
 use tracing::debug;
 
 use virbius_mcp_proxy::audit::{AuditBackend, AuditSink};
-use virbius_mcp_proxy::config::{FastPathConfig, FailoverConfig, FallbackPolicy, OutputReviewConfig};
+use virbius_mcp_proxy::config::UpstreamEntry;
+use virbius_mcp_proxy::config::{
+    FailoverConfig, FallbackPolicy, FastPathConfig, OutputReviewConfig,
+};
 use virbius_mcp_proxy::egress::EgressClient;
 use virbius_mcp_proxy::pipeline::SecurityPipeline;
 use virbius_mcp_proxy::router;
 use virbius_mcp_proxy::session::{Session, SessionManager};
-use virbius_mcp_proxy::config::UpstreamEntry;
 use virbius_mcp_proxy::trace_collector::{SharedTraceCollector, TraceBackend, TraceCollector};
 use virbius_mcp_proxy::upstream::UpstreamManager;
 
@@ -173,8 +174,8 @@ async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
 
     let audit = Arc::new(AuditSink::new(AuditBackend::Disabled, 1.0)); // No Redis
     let pipeline = Arc::new(SecurityPipeline::new(
-        String::new(),                    // No public key (License verification will fail gracefully)
-        "http://127.0.0.1:59999",         // Non-existent engine (triggers failover)
+        String::new(),            // No public key (License verification will fail gracefully)
+        "http://127.0.0.1:59999", // Non-existent engine (triggers failover)
         FastPathConfig::default(),
         FailoverConfig::default(),
         FallbackPolicy::MinimumPrivilege,
@@ -199,11 +200,7 @@ async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
 }
 
 /// Helper to call route_request with the proxy environment.
-async fn route(
-    env: &ProxyEnv,
-    request: &Value,
-    session_id: &str,
-) -> Option<Value> {
+async fn route(env: &ProxyEnv, request: &Value, session_id: &str) -> Option<Value> {
     router::route_request(
         request,
         session_id,
@@ -272,7 +269,11 @@ async fn test_initialize_tools_list_and_call() {
     let resp = resp.unwrap();
     assert!(resp.get("result").is_some(), "tools/list should succeed");
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 4, "all 4 tools should be returned (no license)");
+    assert_eq!(
+        tools.len(),
+        4,
+        "all 4 tools should be returned (no license)"
+    );
 
     // 3. tools/call — "search" is not high-risk, allowed by fallback policy
     let call_req = json!({
@@ -294,7 +295,10 @@ async fn test_initialize_tools_list_and_call() {
 
     // Verify call count was incremented
     let session = env.session_mgr.get(sid).unwrap();
-    assert!(session.tool_call_count >= 1, "call count should be incremented");
+    assert!(
+        session.tool_call_count >= 1,
+        "call count should be incremented"
+    );
 }
 
 /// Test tools/list filtering by License allowed_tools
@@ -362,7 +366,10 @@ async fn test_high_risk_tool_denied_without_license() {
     });
     let resp = route(&env, &call_req, sid).await;
     let resp = resp.unwrap();
-    assert!(resp.get("error").is_some(), "high-risk tool should be denied");
+    assert!(
+        resp.get("error").is_some(),
+        "high-risk tool should be denied"
+    );
     let code = resp["error"]["code"].as_i64().unwrap();
     assert_eq!(code, -32003, "should be HighRiskNoLicense error code");
 }
@@ -465,7 +472,7 @@ async fn test_upstream_cleanup_disconnected() {
 
     // Upstream should have at least 1 connection
     assert!(
-        env.upstream_mgr.len() >= 1,
+        !env.upstream_mgr.is_empty(),
         "upstream should have a connection after initialize"
     );
 
@@ -473,7 +480,7 @@ async fn test_upstream_cleanup_disconnected() {
     env.upstream_mgr.cleanup_disconnected();
     // Connection should still be there (mock server is running)
     assert!(
-        env.upstream_mgr.len() >= 1,
+        !env.upstream_mgr.is_empty(),
         "connected upstream should not be cleaned up"
     );
 }
@@ -482,7 +489,10 @@ async fn test_upstream_cleanup_disconnected() {
 #[tokio::test]
 async fn test_session_risk_score_initialization() {
     let session = Session::from_meta(&json!({ "app_id": "test" }));
-    assert_eq!(session.session_risk_score, 0, "risk score should start at 0");
+    assert_eq!(
+        session.session_risk_score, 0,
+        "risk score should start at 0"
+    );
 }
 
 /// Test that the proxy capabilities are injected into the initialize response
@@ -531,7 +541,11 @@ async fn test_concurrent_sessions() {
             "params": { "_meta": { "app_id": "test-app" } }
         });
         let resp = route(&env, &init_req, sid).await;
-        assert!(resp.unwrap().get("result").is_some(), "initialize should succeed for {}", sid);
+        assert!(
+            resp.unwrap().get("result").is_some(),
+            "initialize should succeed for {}",
+            sid
+        );
     }
 
     // Both sessions should exist
@@ -547,7 +561,11 @@ async fn test_concurrent_sessions() {
         });
         let resp = route(&env, &list_req, sid).await;
         let resp = resp.unwrap();
-        assert!(resp.get("result").is_some(), "tools/list should succeed for {}", sid);
+        assert!(
+            resp.get("result").is_some(),
+            "tools/list should succeed for {}",
+            sid
+        );
     }
 
     // Upstream should have 2 connections (one per session)
@@ -594,7 +612,9 @@ async fn start_mock_mcp_with_tools(tools: Vec<(&str, &str)>) -> String {
             "/messages/",
             post({
                 let ts = tools_state.clone();
-                move |State(state): State<MockMcpState>, query: Query<MockQuery>, Json(req): Json<Value>| {
+                move |State(state): State<MockMcpState>,
+                      query: Query<MockQuery>,
+                      Json(req): Json<Value>| {
                     let ts = ts.clone();
                     async move {
                         mock_post_handler_with_tools(State(state), query, Json(req), &ts).await
@@ -669,14 +689,13 @@ async fn mock_post_handler_with_tools(
 /// Test multi-upstream mode: two upstreams with different tools, no conflicts.
 #[tokio::test]
 async fn test_multi_upstream_no_conflict() {
-    let url_a = start_mock_mcp_with_tools(vec![
-        ("read_file", "Read a file"),
-        ("search", "Search"),
-    ]).await;
+    let url_a =
+        start_mock_mcp_with_tools(vec![("read_file", "Read a file"), ("search", "Search")]).await;
     let url_b = start_mock_mcp_with_tools(vec![
         ("create_issue", "Create issue"),
         ("list_repos", "List repos"),
-    ]).await;
+    ])
+    .await;
 
     let session_mgr = Arc::new(SessionManager::new());
     let upstream_mgr = Arc::new(UpstreamManager::new(
@@ -728,7 +747,10 @@ async fn test_multi_upstream_no_conflict() {
         "params": { "_meta": { "app_id": "test-app" } }
     });
     let resp = route(&env, &init_req, sid).await;
-    assert!(resp.unwrap().get("result").is_some(), "initialize should succeed");
+    assert!(
+        resp.unwrap().get("result").is_some(),
+        "initialize should succeed"
+    );
 
     // Both upstreams should be initialized
     let session = env.session_mgr.get(sid).unwrap();
@@ -775,14 +797,13 @@ async fn test_multi_upstream_no_conflict() {
 /// Test multi-upstream mode with conflicting tool names — prefixing should occur.
 #[tokio::test]
 async fn test_multi_upstream_name_conflict() {
-    let url_a = start_mock_mcp_with_tools(vec![
-        ("read_file", "Read from fs"),
-        ("search", "Search"),
-    ]).await;
+    let url_a =
+        start_mock_mcp_with_tools(vec![("read_file", "Read from fs"), ("search", "Search")]).await;
     let url_b = start_mock_mcp_with_tools(vec![
         ("read_file", "Read from backup"),
         ("restore", "Restore"),
-    ]).await;
+    ])
+    .await;
 
     let session_mgr = Arc::new(SessionManager::new());
     let upstream_mgr = Arc::new(UpstreamManager::new(
@@ -844,8 +865,14 @@ async fn test_multi_upstream_name_conflict() {
 
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     // Conflicting read_file should be prefixed
-    assert!(names.contains(&"fs__read_file"), "should have fs__read_file");
-    assert!(names.contains(&"backup__read_file"), "should have backup__read_file");
+    assert!(
+        names.contains(&"fs__read_file"),
+        "should have fs__read_file"
+    );
+    assert!(
+        names.contains(&"backup__read_file"),
+        "should have backup__read_file"
+    );
     // Non-conflicting tools should NOT be prefixed
     assert!(names.contains(&"search"), "search should not be prefixed");
     assert!(names.contains(&"restore"), "restore should not be prefixed");

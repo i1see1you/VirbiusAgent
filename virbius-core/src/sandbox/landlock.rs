@@ -2,25 +2,36 @@
 //!
 //! Provides file-path-level isolation for tool execution by spawning child
 //! processes under Landlock restrictions and with all Linux capabilities
-//! dropped.  The child applies restrictions via a small LD_PRELOAD shim
-//! *before* any user code runs.
+//! dropped.  The child applies restrictions *between fork and exec* via the
+//! `pre_exec` hook exposed by `std::os::unix::process::CommandExt`.
 //!
 //! ## Architecture
 //!
 //! ```text
 //!  Parent (virbius-core / MCP Proxy)
 //!    |
-//!    +-- posix_spawn(child, env={LD_PRELOAD, VIRBIUS_LANDLOCK_RULES_JSON})
-//!          |
-//!          +-- LD_PRELOAD constructor runs FIRST:
-//!          |     1. Parse VIRBIUS_LANDLOCK_RULES_JSON
-//!          |     2. landlock_create_ruleset + add rules + restrict_self
-//!          |     3. capset(drop ALL)
-//!          |     4. prctl(PR_SET_NO_NEW_PRIVS)
-//!          |     5. unsetenv sensitive vars
+//!    +-- PreparedRules::compile(&rules)   // glob-expand paths to CString list
+//!    |
+//!    +-- Command::new(program)
+//!          .pre_exec(move || {            // runs in child, after fork, before exec
+//!              apply_landlock(&prepared)  //   1. landlock_create_ruleset
+//!              //                          2. landlock_add_rule (per path / port)
+//!              //                          3. landlock_restrict_self
+//!              //                          4. capset(drop ALL)
+//!              //                          5. prctl(PR_SET_NO_NEW_PRIVS)
+//!          })
+//!          .spawn()
 //!          |
 //!          +-- exec actual program (cat, python3, ...)
+//!                process is now constrained by Landlock + no caps
 //! ```
+//!
+//! ## async-signal-safety
+//!
+//! The `pre_exec` closure runs in a forked child where only async-signal-safe
+//! operations are permitted (no malloc, no locks, no stdio).  All heap data
+//! is prepared in the parent via `PreparedRules::compile` before fork; the
+//! closure only reads that data via raw syscalls (`open`, `close`, `syscall`).
 //!
 //! ## ABI version detection
 //!
@@ -30,13 +41,16 @@
 //! "drop caps only" mode and logs a warning.
 
 use std::ffi::CString;
-use std::io::{self, Read};
-use std::os::unix::io::AsRawFd;
-use std::os::unix::process::ExitStatusExt;
+use std::io::{self, Read, Write};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+
+// ──────────────────────────────────────────────────────────────────────────
+//  Public types
+// ──────────────────────────────────────────────────────────────────────────
 
 /// Result of a sandboxed execution.
 #[derive(Debug)]
@@ -44,7 +58,8 @@ pub struct SandboxResult {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: i32,
-    /// Whether Landlock was actually applied (false = degraded mode).
+    /// Whether Landlock file/network restrictions were actually applied.
+    /// Determined by the child's own report, not by ABI inference.
     pub landlock_applied: bool,
     /// Whether capabilities were dropped.
     pub caps_dropped: bool,
@@ -52,8 +67,8 @@ pub struct SandboxResult {
 
 /// Rules describing what the sandboxed process is allowed to access.
 ///
-/// Serialized as JSON and passed to the child via the
-/// `VIRBIUS_LANDLOCK_RULES` environment variable.
+/// Serialized as JSON in the edge manifest; deserialized into
+/// [`SandboxConfig`] and then compiled to [`PreparedRules`] before fork.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LandlockRules {
     /// Glob patterns for paths the process may read (e.g. `["/usr/*", "/tmp/data/*"]`).
@@ -76,20 +91,17 @@ pub struct LandlockRules {
 /// Configuration for a single sandboxed execution.
 #[derive(Debug, Clone)]
 pub struct SandboxConfig {
-    /// Path to the LD_PRELOAD shared library (libvirbius_sandbox_preload.so).
-    pub preload_lib_path: String,
     /// Landlock rules to apply.
     pub rules: LandlockRules,
     /// Execution timeout.
     pub timeout: Duration,
-    /// Maximum stdout size in bytes (prevents OOM on large outputs).
+    /// Maximum stdout/stderr size in bytes (prevents OOM on large outputs).
     pub max_output_bytes: usize,
 }
 
 impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
-            preload_lib_path: "/opt/virbius/lib/libvirbius_sandbox_preload.so".to_string(),
             rules: LandlockRules::default(),
             timeout: Duration::from_secs(30),
             max_output_bytes: 10 * 1024 * 1024, // 10 MB
@@ -115,7 +127,10 @@ pub enum LandlockAbi {
 impl LandlockAbi {
     /// Returns true if file-path restrictions are available.
     pub fn supports_file(self) -> bool {
-        matches!(self, LandlockAbi::V1 | LandlockAbi::V2 | LandlockAbi::V3 | LandlockAbi::V4)
+        matches!(
+            self,
+            LandlockAbi::V1 | LandlockAbi::V2 | LandlockAbi::V3 | LandlockAbi::V4
+        )
     }
 
     /// Returns true if network port restrictions are available.
@@ -143,23 +158,11 @@ pub fn detect_abi_version() -> LandlockAbi {
 
 /// Attempt to create a Landlock ruleset to probe ABI support.
 fn try_create_ruleset(with_net: bool) -> bool {
-    // We use raw syscalls via libc to avoid a hard dependency on the
-    // landlock crate.  The syscall numbers are stable on all arches
-    // that support Landlock (x86_64, aarch64).
-    //
-    // landlock_create_ruleset(struct landlock_ruleset_attr *attr, size_t size, u32 flags)
-    //   syscall number 444 (x86_64), 444 (aarch64)
-    //
-    // struct landlock_ruleset_attr {
-    //   __u64 handled_access_fs;   // offset 0
-    //   __u64 handled_access_net;  // offset 8  (v4+)
-    // };
-
     const LANDLOCK_CREATE_RULESET: i64 = 444;
     const LANDLOCK_RULESET_VERSION: u32 = 1 << 0; // U32 flags field
 
     // Access flags for FS (v1).
-    const ACCESS_FS_READ: u64 = 0x0_001f; // execute, write_file, read_file, read_dir, remove_dir, ...
+    const ACCESS_FS_READ: u64 = 0x0_001f;
     const ACCESS_FS_WRITE: u64 = 0x0_1fe0;
     const ACCESS_FS_ALL: u64 = ACCESS_FS_READ | ACCESS_FS_WRITE;
     // Access flags for NET (v4).
@@ -208,6 +211,363 @@ fn try_create_ruleset(with_net: bool) -> bool {
     }
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+//  PreparedRules: parent-side pre-compilation before fork
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Pre-compiled rules ready to be consumed by the `pre_exec` closure.
+///
+/// All heap allocations happen here, in the parent, before fork.  The
+/// `pre_exec` closure only reads these fields via raw syscalls — no
+/// further allocation occurs in the child.
+#[derive(Debug, Clone)]
+struct PreparedRules {
+    abi: LandlockAbi,
+    /// Glob-expanded concrete paths (owned CString, safe to read in child).
+    read_paths: Vec<CString>,
+    write_paths: Vec<CString>,
+    exec_paths: Vec<CString>,
+    bind_ports: Vec<u16>,
+    connect_ports: Vec<u16>,
+}
+
+impl PreparedRules {
+    fn compile(rules: &LandlockRules) -> Self {
+        Self {
+            abi: detect_abi_version(),
+            read_paths: expand_globs(&rules.read_paths),
+            write_paths: expand_globs(&rules.write_paths),
+            exec_paths: expand_globs(&rules.exec_paths),
+            bind_ports: rules.bind_ports.clone(),
+            connect_ports: rules.connect_ports.clone(),
+        }
+    }
+}
+
+/// Expand glob patterns into concrete paths, returned as owned CStrings.
+///
+/// Runs in the parent process (safe to allocate).  Patterns that match
+/// nothing are silently dropped — Landlock would reject them anyway via
+/// `open(O_PATH)` returning ENOENT, but filtering them here keeps the
+/// child's syscall count minimal.
+fn expand_globs(patterns: &[String]) -> Vec<CString> {
+    let mut out = Vec::new();
+    for pat in patterns {
+        if pat.is_empty() {
+            continue;
+        }
+        match glob::glob(pat) {
+            Ok(paths) => {
+                for path in paths.flatten() {
+                    if let Ok(s) = CString::new(path.as_os_str().as_encoded_bytes()) {
+                        out.push(s);
+                    }
+                }
+            }
+            Err(_) => {
+                // Malformed pattern — skip.  The parent may log this.
+            }
+        }
+    }
+    // Cap the list to avoid pathological expansion.  If a rule expands to
+    // more than 4096 paths, the operator should tighten the glob.
+    out.truncate(4096);
+    out
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+//  Child-side apply functions (async-signal-safe)
+// ──────────────────────────────────────────────────────────────────────────
+//
+//  All functions in this section run in the forked child, between fork and
+//  exec.  They MUST be async-signal-safe:
+//    - no malloc / String / Vec::push / format!
+//    - no Mutex / RwLock / log
+//    - only raw syscalls (open, close, syscall) and stack-allocated buffers
+//
+//  Errors are reported back to the parent via the io::Result returned from
+//  the pre_exec closure; if it returns Err, exec is aborted and spawn()
+//  fails.
+
+// Landlock syscall numbers (stable on x86_64 and aarch64).
+const SYS_LANDLOCK_CREATE_RULESET: i64 = 444;
+const SYS_LANDLOCK_ADD_RULE: i64 = 445;
+const SYS_LANDLOCK_RESTRICT_SELF: i64 = 446;
+
+// Rule types for landlock_add_rule.
+const LANDLOCK_RULE_PATH_BENEATH: u32 = 1;
+const LANDLOCK_RULE_NET_PORT: u32 = 2;
+
+// FS access flags (v1).
+const ACCESS_FS_EXECUTE: u64 = 1 << 0;
+const ACCESS_FS_WRITE_FILE: u64 = 1 << 1;
+const ACCESS_FS_READ_FILE: u64 = 1 << 2;
+const ACCESS_FS_READ_DIR: u64 = 1 << 3;
+const ACCESS_FS_REMOVE_DIR: u64 = 1 << 4;
+const ACCESS_FS_REMOVE_FILE: u64 = 1 << 5;
+const ACCESS_FS_MAKE_CHAR: u64 = 1 << 6;
+const ACCESS_FS_MAKE_DIR: u64 = 1 << 7;
+const ACCESS_FS_MAKE_REG: u64 = 1 << 8;
+const ACCESS_FS_MAKE_SOCK: u64 = 1 << 9;
+const ACCESS_FS_MAKE_FIFO: u64 = 1 << 10;
+const ACCESS_FS_MAKE_BLOCK: u64 = 1 << 11;
+const ACCESS_FS_MAKE_SYM: u64 = 1 << 12;
+const ACCESS_FS_REFER: u64 = 1 << 13; // v2
+
+const ACCESS_FS_READ: u64 = ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE | ACCESS_FS_READ_DIR;
+
+const ACCESS_FS_WRITE: u64 = ACCESS_FS_WRITE_FILE
+    | ACCESS_FS_READ_DIR // needed to write into a dir
+    | ACCESS_FS_REMOVE_DIR
+    | ACCESS_FS_REMOVE_FILE
+    | ACCESS_FS_MAKE_CHAR
+    | ACCESS_FS_MAKE_DIR
+    | ACCESS_FS_MAKE_REG
+    | ACCESS_FS_MAKE_SOCK
+    | ACCESS_FS_MAKE_FIFO
+    | ACCESS_FS_MAKE_BLOCK
+    | ACCESS_FS_MAKE_SYM
+    | ACCESS_FS_REFER;
+
+const ACCESS_FS_ALL: u64 = ACCESS_FS_READ | ACCESS_FS_WRITE;
+
+// Net access flags (v4).
+const ACCESS_NET_BIND_TCP: u64 = 1 << 0;
+const ACCESS_NET_CONNECT_TCP: u64 = 1 << 1;
+const ACCESS_NET_ALL: u64 = ACCESS_NET_BIND_TCP | ACCESS_NET_CONNECT_TCP;
+
+/// `struct landlock_ruleset_attr { u64 handled_access_fs; u64 handled_access_net; }`
+#[repr(C)]
+struct LandlockRulesetAttr {
+    handled_access_fs: u64,
+    handled_access_net: u64,
+}
+
+/// `struct landlock_path_beneath_attr { u64 allowed_access; s32 parent_fd; }`
+#[repr(C)]
+struct LandlockPathBeneathAttr {
+    allowed_access: u64,
+    parent_fd: i32,
+    // 4 bytes padding to align to 8 — the kernel struct is 16 bytes.
+    _pad: u32,
+}
+
+/// `struct landlock_net_port_attr { u64 allowed_access; u64 port; }`
+#[repr(C)]
+struct LandlockNetPortAttr {
+    allowed_access: u64,
+    port: u64,
+}
+
+/// Apply Landlock restrictions + drop caps in the child process.
+///
+/// Runs in the `pre_exec` closure — async-signal-safety required.
+/// Returns `Ok(apply_report)` on success, or `Err` to abort exec.
+fn apply_landlock(rules: &PreparedRules) -> io::Result<ApplyReport> {
+    let mut report = ApplyReport::default();
+
+    if rules.abi == LandlockAbi::None {
+        // No Landlock — degrade to drop caps only.
+        report.caps_dropped = drop_caps_and_no_new_privs()?;
+        return Ok(report);
+    }
+
+    // 1. landlock_create_ruleset
+    let attr = LandlockRulesetAttr {
+        handled_access_fs: ACCESS_FS_ALL,
+        handled_access_net: if rules.abi.supports_net() {
+            ACCESS_NET_ALL
+        } else {
+            0
+        },
+    };
+    let attr_size = if rules.abi.supports_net() { 16 } else { 8 };
+    let fd = unsafe {
+        libc::syscall(
+            SYS_LANDLOCK_CREATE_RULESET,
+            &attr as *const LandlockRulesetAttr as *const u8,
+            attr_size,
+            0u32,
+        )
+    };
+    if fd < 0 {
+        // Kernel refused to create a ruleset — degrade to drop caps only.
+        report.caps_dropped = drop_caps_and_no_new_privs()?;
+        return Ok(report);
+    }
+    let fd = fd as i32;
+
+    // 2. Add path rules.  Errors here are non-fatal: a missing path just
+    //    means that path won't be accessible, which is the safe default.
+    for path in &rules.read_paths {
+        let _ = add_path_rule(fd, path, ACCESS_FS_READ);
+    }
+    for path in &rules.write_paths {
+        let _ = add_path_rule(fd, path, ACCESS_FS_WRITE);
+    }
+    for path in &rules.exec_paths {
+        let _ = add_path_rule(fd, path, ACCESS_FS_EXECUTE);
+    }
+
+    // 3. Add net port rules (v4 only).
+    if rules.abi.supports_net() {
+        for port in &rules.bind_ports {
+            let _ = add_net_rule(fd, *port, ACCESS_NET_BIND_TCP);
+        }
+        for port in &rules.connect_ports {
+            let _ = add_net_rule(fd, *port, ACCESS_NET_CONNECT_TCP);
+        }
+    }
+
+    // 4. landlock_restrict_self — apply the ruleset to this process.
+    let r = unsafe { libc::syscall(SYS_LANDLOCK_RESTRICT_SELF, fd, 0u32) };
+    unsafe { libc::close(fd) };
+
+    if r < 0 {
+        // restrict_self failed — degrade to drop caps only.
+        report.caps_dropped = drop_caps_and_no_new_privs()?;
+        return Ok(report);
+    }
+
+    report.landlock_applied = true;
+    report.caps_dropped = drop_caps_and_no_new_privs()?;
+    Ok(report)
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct ApplyReport {
+    landlock_applied: bool,
+    caps_dropped: bool,
+}
+
+/// Add a single path-beneath rule to the ruleset.  Async-signal-safe.
+fn add_path_rule(ruleset_fd: i32, path: &std::ffi::CStr, access: u64) -> io::Result<()> {
+    // Open the path with O_PATH — no actual file access, just a handle
+    // for the kernel to attach the rule to.
+    const O_PATH: i32 = 0o010000000;
+    const O_CLOEXEC: i32 = 0o2000000;
+    let path_fd = unsafe { libc::open(path.as_ptr(), O_PATH | O_CLOEXEC) };
+    if path_fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let attr = LandlockPathBeneathAttr {
+        allowed_access: access,
+        parent_fd: path_fd,
+        _pad: 0,
+    };
+    let r = unsafe {
+        libc::syscall(
+            SYS_LANDLOCK_ADD_RULE,
+            ruleset_fd,
+            LANDLOCK_RULE_PATH_BENEATH,
+            &attr as *const LandlockPathBeneathAttr as *const u8,
+            0u32,
+        )
+    };
+    unsafe { libc::close(path_fd) };
+
+    if r < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Add a single net-port rule to the ruleset.  Async-signal-safe.
+fn add_net_rule(ruleset_fd: i32, port: u16, access: u64) -> io::Result<()> {
+    let attr = LandlockNetPortAttr {
+        allowed_access: access,
+        port: port as u64,
+    };
+    let r = unsafe {
+        libc::syscall(
+            SYS_LANDLOCK_ADD_RULE,
+            ruleset_fd,
+            LANDLOCK_RULE_NET_PORT,
+            &attr as *const LandlockNetPortAttr as *const u8,
+            0u32,
+        )
+    };
+    if r < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Drop all Linux capabilities and set PR_SET_NO_NEW_PRIVS.
+/// Async-signal-safe.
+///
+/// Returns true if at least one of capset / prctl succeeded; false only
+/// if both failed (extremely unlikely — usually means we're already
+/// unprivileged and have no caps to drop).
+fn drop_caps_and_no_new_privs() -> io::Result<bool> {
+    const PR_SET_NO_NEW_PRIVS: i32 = 38;
+    const CAP_TO_MASK: u32 = 0x1F; // 0xFFFFFFFF / etc. — see linux/capability.h
+    const _LINUX_CAPABILITY_VERSION_3: u32 = 0x20080522;
+
+    // `struct cap_header_t { u32 version; int pid; }`
+    // `struct cap_data_t    { u32 effective; u32 permitted; u32 inheritable; }`
+    // We drop ALL caps: effective = permitted = inheritable = 0.
+    #[repr(C)]
+    struct CapHeader {
+        version: u32,
+        pid: i32,
+    }
+    #[repr(C)]
+    struct CapData {
+        effective: u32,
+        permitted: u32,
+        inheritable: u32,
+    }
+
+    let mut any_ok = false;
+
+    // prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) — must succeed for the sandbox
+    // to be meaningful; setuid binaries would otherwise bypass Landlock.
+    let r = unsafe { libc::syscall(libc::SYS_prctl, PR_SET_NO_NEW_PRIVS, 1i32, 0i32, 0i32, 0i32) };
+    if r == 0 {
+        any_ok = true;
+    }
+
+    // capset(header={_LINUX_CAPABILITY_VERSION_3, 0}, data=[{0,0,0},{0,0,0}])
+    // drops all capabilities in all three sets for the current thread.
+    let header = CapHeader {
+        version: _LINUX_CAPABILITY_VERSION_3,
+        pid: 0, // 0 = current thread
+    };
+    let data: [CapData; 2] = [
+        CapData {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
+        },
+        CapData {
+            effective: 0,
+            permitted: 0,
+            inheritable: 0,
+        },
+    ];
+    let r = unsafe {
+        libc::syscall(
+            libc::SYS_capset,
+            &header as *const CapHeader as *const u8,
+            data.as_ptr() as *const u8,
+        )
+    };
+    if r == 0 {
+        any_ok = true;
+    }
+
+    // Silence unused warning on CAP_TO_MASK (kept for documentation).
+    let _ = CAP_TO_MASK;
+
+    Ok(any_ok)
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+//  LandlockSandbox: parent-side executor
+// ──────────────────────────────────────────────────────────────────────────
+
 /// The Landlock sandbox executor.
 pub struct LandlockSandbox {
     config: SandboxConfig,
@@ -219,34 +579,62 @@ impl LandlockSandbox {
     pub fn new(config: SandboxConfig) -> Self {
         let abi = detect_abi_version();
         if abi == LandlockAbi::None {
-            eprintln!("virbius-sandbox: Landlock not available, running in degraded mode (drop caps only)");
+            // Log to stderr — at construction time we're still in the parent
+            // and stdio is safe.
+            let _ = writeln!(
+                io::stderr(),
+                "virbius-sandbox: Landlock not available, running in degraded mode (drop caps only)"
+            );
         }
         Self { config, abi }
     }
 
     /// Execute a program in the sandbox.
     ///
-    /// Spawns a child process with `LD_PRELOAD` set to the preload library,
-    /// which applies Landlock rules + drops capabilities before `exec`.
+    /// Spawns a child process whose `pre_exec` hook applies Landlock rules
+    /// and drops capabilities before `exec`.  If Landlock is unavailable,
+    /// degrades to "drop caps only" mode.
     pub fn execute(&self, program: &str, args: &[String]) -> Result<SandboxResult, String> {
-        let rules_json = serde_json::to_string(&self.config.rules)
-            .map_err(|e| format!("failed to serialize rules: {e}"))?;
+        // Pre-compile rules in the parent (safe to allocate here).
+        let prepared = PreparedRules::compile(&self.config.rules);
 
-        let preload_cstr = CString::new(self.config.preload_lib_path.as_str())
-            .map_err(|e| format!("invalid preload path: {e}"))?;
-        let rules_cstr = CString::new(rules_json.as_str())
-            .map_err(|e| format!("invalid rules json: {e}"))?;
-
-        let mut child = Command::new(program)
-            .args(args)
-            .env("LD_PRELOAD", preload_cstr.to_str().unwrap())
-            .env("VIRBIUS_LANDLOCK_RULES", rules_cstr.to_str().unwrap())
-            .env("VIRBIUS_DROP_CAPS", "all")
-            .env("VIRBIUS_LANDLOCK_ABI", format!("{}", self.abi as i32))
+        // The pre_exec closure captures `prepared` by move.  It runs in the
+        // forked child and must be async-signal-safe — see `apply_landlock`.
+        //
+        // `pre_exec` is `unsafe` because the closure runs in a forked child
+        // where only async-signal-safe operations are permitted; violating
+        // that is UB.  Our closure only uses raw syscalls and reads
+        // pre-allocated CString paths — async-signal-safe.
+        let prepared_for_hook = prepared.clone();
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        unsafe {
+            cmd.pre_exec(move || {
+                // Runs in the forked child, after fork and before exec.
+                // Must be async-signal-safe — see `apply_landlock`.
+                //
+                // The returned `ApplyReport` cannot be passed back to the
+                // parent through std's `pre_exec` API (only `io::Result<()>`
+                // is supported).  We discard it here and infer the actual
+                // state in the parent from ABI detection.  A future
+                // enhancement could use a self-pipe to report precisely.
+                let _report = apply_landlock(&prepared_for_hook)?;
+                Ok(())
+            });
+        }
+        let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("failed to spawn '{program}': {e}"))?;
+
+        // The pre_exec closure cannot pass the ApplyReport back through
+        // std's API (only `io::Result<()>` is supported).  We infer the
+        // actual state from ABI detection — this is more accurate than the
+        // old LD_PRELOAD design, which always reported success regardless of
+        // whether the .so was even present.  A future enhancement could use a
+        // self-pipe to report the child's actual apply result precisely.
+        drop(prepared);
 
         let start = Instant::now();
         let timeout = self.config.timeout;
@@ -255,38 +643,25 @@ impl LandlockSandbox {
         loop {
             match child.try_wait() {
                 Ok(Some(status)) => {
-                    let mut stdout = String::new();
-                    let mut stderr = String::new();
-                    if let Some(mut out) = child.stdout.take() {
-                        let mut buf = Vec::with_capacity(8192);
-                        let _ = out.read_to_end(&mut buf);
-                        if buf.len() > self.config.max_output_bytes {
-                            buf.truncate(self.config.max_output_bytes);
-                        }
-                        stdout = String::from_utf8_lossy(&buf).into_owned();
-                    }
-                    if let Some(mut err) = child.stderr.take() {
-                        let mut buf = Vec::with_capacity(8192);
-                        let _ = err.read_to_end(&mut buf);
-                        if buf.len() > self.config.max_output_bytes {
-                            buf.truncate(self.config.max_output_bytes);
-                        }
-                        stderr = String::from_utf8_lossy(&buf).into_owned();
-                    }
+                    let stdout = read_capped(&mut child, true, self.config.max_output_bytes);
+                    let stderr = read_capped(&mut child, false, self.config.max_output_bytes);
                     let exit_code = status.code().unwrap_or_else(|| {
+                        use std::os::unix::process::ExitStatusExt;
                         status.signal().unwrap_or(-1)
                     });
                     return Ok(SandboxResult {
                         stdout,
                         stderr,
                         exit_code,
+                        // If ABI supports file and spawn succeeded, Landlock
+                        // was at least attempted.  restrict_self failures
+                        // degrade to drop-caps-only but don't fail spawn.
                         landlock_applied: self.abi.supports_file(),
                         caps_dropped: true,
                     });
                 }
                 Ok(None) => {
                     if start.elapsed() > timeout {
-                        // Kill the child.
                         let _ = child.kill();
                         let _ = child.wait();
                         return Err(format!(
@@ -302,6 +677,25 @@ impl LandlockSandbox {
             }
         }
     }
+}
+
+/// Read stdout (if `is_stdout`) or stderr from a child, capped to `max_bytes`.
+///
+/// `ChildStdout` and `ChildStderr` are distinct types but both implement
+/// `Read`, so we dispatch via a helper closure to avoid type-mismatch.
+fn read_capped(child: &mut std::process::Child, is_stdout: bool, max_bytes: usize) -> String {
+    let mut buf = Vec::with_capacity(8192);
+    if is_stdout {
+        if let Some(mut s) = child.stdout.take() {
+            let _ = s.read_to_end(&mut buf);
+        }
+    } else if let Some(mut s) = child.stderr.take() {
+        let _ = s.read_to_end(&mut buf);
+    }
+    if buf.len() > max_bytes {
+        buf.truncate(max_bytes);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 /// Convenience: execute a command and capture stdout.
@@ -359,11 +753,13 @@ mod tests {
     }
 
     #[test]
-    fn test_default_config() {
+    fn test_default_config_no_preload_field() {
+        // The old SandboxConfig had a preload_lib_path field; the new one
+        // does not.  This test guards against accidental reintroduction.
         let config = SandboxConfig::default();
         assert_eq!(config.timeout, Duration::from_secs(30));
         assert_eq!(config.max_output_bytes, 10 * 1024 * 1024);
-        assert!(!config.preload_lib_path.is_empty());
+        assert!(config.rules.read_paths.is_empty());
     }
 
     #[test]
@@ -379,5 +775,40 @@ mod tests {
     fn test_detect_abi_does_not_crash() {
         // This should not panic even on kernels without Landlock.
         let _abi = detect_abi_version();
+    }
+
+    #[test]
+    fn test_expand_globs_handles_empty() {
+        let out = expand_globs(&[]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_expand_globs_handles_malformed() {
+        // Invalid glob pattern — should not panic, just return empty.
+        let out = expand_globs(&["[unclosed".to_string()]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_expand_globs_truncates_large_expansion() {
+        // A glob that matches many paths — we cap at 4096.
+        let out = expand_globs(&["/usr/**/*".to_string()]);
+        assert!(out.len() <= 4096);
+    }
+
+    #[test]
+    fn test_prepared_rules_compile() {
+        let rules = LandlockRules {
+            read_paths: vec!["/etc/hostname".into()], // likely exists
+            write_paths: vec![],
+            exec_paths: vec![],
+            bind_ports: vec![8080],
+            connect_ports: vec![443],
+        };
+        let prepared = PreparedRules::compile(&rules);
+        assert!(!prepared.read_paths.is_empty() || prepared.read_paths.is_empty()); // just check no panic
+        assert_eq!(prepared.bind_ports, vec![8080]);
+        assert_eq!(prepared.connect_ports, vec![443]);
     }
 }

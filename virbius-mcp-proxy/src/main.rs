@@ -1,5 +1,4 @@
 /// Entry point + CLI argument parsing for virbius-mcp-proxy.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,7 +27,10 @@ async fn main() {
         .init();
 
     let cfg = ProxyConfig::load();
-    info!("virbius-mcp-proxy starting (transport={})", cfg.proxy.listen);
+    info!(
+        "virbius-mcp-proxy starting (transport={})",
+        cfg.proxy.listen
+    );
 
     // Load License public key
     let pubkey_pem = load_public_key(&cfg.security.license_public_key);
@@ -223,6 +225,7 @@ async fn run_stdio(
 /// - `POST /` — Simple HTTP JSON-RPC endpoint
 ///
 /// Also starts a background task that cleans up expired sessions every 60 seconds.
+#[allow(clippy::too_many_arguments)]
 async fn run_sse(
     addr: &str,
     session_mgr: Arc<SessionManager>,

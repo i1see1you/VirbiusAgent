@@ -1,5 +1,4 @@
 /// Security pipeline: License -> precheck -> fast-path -> engine -> audit.
-
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,8 +11,10 @@ use virbius_core::license::{License, LicenseError};
 use virbius_core::precheck::{self, PrecheckResult, ToolCall};
 
 use crate::audit::{AuditEvent, SharedAuditSink};
-use crate::config::{FailoverConfig, FastPathConfig, FallbackPolicy, OutputReviewConfig, HIGH_RISK_TOOLS};
-use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
+use crate::config::{
+    FailoverConfig, FallbackPolicy, FastPathConfig, OutputReviewConfig, HIGH_RISK_TOOLS,
+};
+use crate::error::VirbiusErrorCode;
 use crate::session::Session;
 
 /// Result of the security pipeline check.
@@ -99,6 +100,7 @@ pub(crate) struct EvaluateResponse {
     #[serde(default)]
     pub(crate) reason: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(crate) risk_score_delta: i32,
     #[serde(default)]
     pub(crate) session_risk_score: u32,
@@ -126,10 +128,13 @@ pub(crate) struct MemoryCheckResponse {
     #[serde(default)]
     pub(crate) block_reason: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(crate) risk_score: Option<i32>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(crate) model: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     pub(crate) metadata: Option<String>,
 }
 
@@ -247,29 +252,31 @@ impl SecurityPipeline {
                     let pre = precheck::precheck(&license, &call);
                     if !pre.allowed {
                         let reason = pre.reason.unwrap_or_default();
-                        self.audit_tool_call(session, tool_name, "block", None, Some(&reason)).await;
-                        return PipelineResult::deny(
-                            VirbiusErrorCode::NotInAllowlist,
-                            &reason,
-                        );
+                        self.audit_tool_call(session, tool_name, "block", None, Some(&reason))
+                            .await;
+                        return PipelineResult::deny(VirbiusErrorCode::NotInAllowlist, &reason);
                     }
 
                     // 3. Fast path check
                     if self.is_fast_path(session, &pre, tool_name) {
-                        self.audit_tool_call(session, tool_name, "allow", None, Some("fast_path")).await;
+                        self.audit_tool_call(session, tool_name, "allow", None, Some("fast_path"))
+                            .await;
                         return PipelineResult::allow("fast_path");
                     }
 
                     // 4. Engine evaluate
-                    return self.check_engine(session, tool_name, args, license.claims.risk_quota, &pre).await;
+                    return self
+                        .check_engine(session, tool_name, args, license.claims.risk_quota, &pre)
+                        .await;
                 }
                 Err(e) => {
                     let reason = format!("{:?}", e);
-                    self.audit_tool_call(session, tool_name, "block", None, Some(&reason)).await;
+                    self.audit_tool_call(session, tool_name, "block", None, Some(&reason))
+                        .await;
                     let code = match e {
-                        LicenseError::Expired | LicenseError::Revoked(_) | LicenseError::InvalidSignature => {
-                            VirbiusErrorCode::LicenseInvalid
-                        }
+                        LicenseError::Expired
+                        | LicenseError::Revoked(_)
+                        | LicenseError::InvalidSignature => VirbiusErrorCode::LicenseInvalid,
                         _ => VirbiusErrorCode::LicenseInvalid,
                     };
                     return PipelineResult::deny(code, &reason);
@@ -335,7 +342,9 @@ impl SecurityPipeline {
                         challenge_id: resp.challenge_id.unwrap_or_default(),
                         args_hash: resp.args_hash.unwrap_or_default(),
                         rule_id: resp.rule_id.clone(),
-                        reason: resp.reason.unwrap_or_else(|| "challenge_required".to_string()),
+                        reason: resp
+                            .reason
+                            .unwrap_or_else(|| "challenge_required".to_string()),
                         risk_score: resp.session_risk_score,
                     };
                 }
@@ -448,28 +457,16 @@ impl SecurityPipeline {
                 }
             }
             FallbackPolicy::DefaultDeny => {
-                self.audit_tool_call(
-                    session,
-                    tool_name,
-                    "block",
-                    None,
-                    Some("license_required"),
-                )
-                .await;
+                self.audit_tool_call(session, tool_name, "block", None, Some("license_required"))
+                    .await;
                 PipelineResult::deny(
                     VirbiusErrorCode::LicenseRequired,
                     "a valid License is required (default_deny policy)",
                 )
             }
             FallbackPolicy::AuditOnly => {
-                self.audit_tool_call(
-                    session,
-                    tool_name,
-                    "allow",
-                    None,
-                    Some("audit_only"),
-                )
-                .await;
+                self.audit_tool_call(session, tool_name, "allow", None, Some("audit_only"))
+                    .await;
                 PipelineResult::allow("audit_only")
             }
         }
@@ -519,7 +516,9 @@ impl SecurityPipeline {
             return Err(EngineError::Status(status, body));
         }
 
-        resp.json::<MemoryCheckResponse>().await.map_err(EngineError::Http)
+        resp.json::<MemoryCheckResponse>()
+            .await
+            .map_err(EngineError::Http)
     }
 
     /// Verify a challenge token with the Engine.
@@ -538,7 +537,10 @@ impl SecurityPipeline {
             "args_hash": args_hash,
             "session_id": session.session_id,
         });
-        let url = self.engine.url.replace("/v1/evaluate", "/v1/challenge/verify");
+        let url = self
+            .engine
+            .url
+            .replace("/v1/evaluate", "/v1/challenge/verify");
         let resp = self
             .engine
             .http
@@ -554,7 +556,10 @@ impl SecurityPipeline {
         }
 
         let result: serde_json::Value = resp.json().await.map_err(EngineError::Http)?;
-        Ok(result.get("valid").and_then(|v| v.as_bool()).unwrap_or(false))
+        Ok(result
+            .get("valid")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false))
     }
 
     /// Determine if this call qualifies for the fast path.

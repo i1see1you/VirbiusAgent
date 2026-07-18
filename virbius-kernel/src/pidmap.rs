@@ -207,12 +207,10 @@ fn read_cgroup_id() -> Option<u64> {
                 } else {
                     format!("/sys/fs/cgroup/{}", path)
                 };
-                return fs::metadata(&full_path)
-                    .ok()
-                    .and_then(|meta| {
-                        use std::os::unix::fs::MetadataExt;
-                        Some(meta.ino())
-                    });
+                return fs::metadata(&full_path).ok().and_then(|meta| {
+                    use std::os::unix::fs::MetadataExt;
+                    Some(meta.ino())
+                });
             }
         }
         None
@@ -336,7 +334,10 @@ mod tests {
         let host_pid = read_host_pid();
         let ns_pid = std::process::id();
         if let Some(hp) = host_pid {
-            assert_eq!(hp, ns_pid, "host_pid should equal getpid() when not in a PID namespace");
+            assert_eq!(
+                hp, ns_pid,
+                "host_pid should equal getpid() when not in a PID namespace"
+            );
         }
     }
 }

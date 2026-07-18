@@ -37,17 +37,19 @@ pub struct ToolCallSummary {
 
 pub struct PromptGateway;
 
+impl Default for PromptGateway {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PromptGateway {
     pub fn new() -> Self {
         Self
     }
 
     /// Enhance messages: constitution prefix + dynamic context suffix + PII desensitization.
-    pub fn enhance(
-        &self,
-        messages: &mut Vec<String>,
-        ctx: &EnhanceContext,
-    ) -> Result<(), String> {
+    pub fn enhance(&self, messages: &mut Vec<String>, ctx: &EnhanceContext) -> Result<(), String> {
         let constitution = Self::load_constitution(&ctx.constitution_version);
 
         let prefix = if let Some(ref c) = constitution {
@@ -61,10 +63,7 @@ impl PromptGateway {
             let tool_rules = if ctx.license_tools.is_empty() {
                 String::new()
             } else {
-                format!(
-                    "\n\n### 可用工具\n{}",
-                    ctx.license_tools.join(", ")
-                )
+                format!("\n\n### 可用工具\n{}", ctx.license_tools.join(", "))
             };
             let trust_directive = Self::build_trust_directive();
             format!(
@@ -81,12 +80,7 @@ impl PromptGateway {
                 },
                 ctx.recent_tools
                     .iter()
-                    .map(|t| {
-                        format!(
-                            "- {}: {} -> {}",
-                            t.tool_name, t.args, t.result_summary
-                        )
-                    })
+                    .map(|t| { format!("- {}: {} -> {}", t.tool_name, t.args, t.result_summary) })
                     .collect::<Vec<_>>()
                     .join("\n"),
                 trust_directive
@@ -137,10 +131,7 @@ impl PromptGateway {
                         let new_content = format!(
                             "{}content\":\"{}\"{}",
                             &msg[..content_start],
-                            desensitized
-                                .text
-                                .replace('"', "\\\"")
-                                .replace('\n', "\\n"),
+                            desensitized.text.replace('"', "\\\"").replace('\n', "\\n"),
                             &msg[content_start + prefix_len + end..]
                         );
                         *msg = new_content;

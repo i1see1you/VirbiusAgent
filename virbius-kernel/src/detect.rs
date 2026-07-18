@@ -102,7 +102,7 @@ fn kernel_version() -> (u32, u32, u32) {
     }
     if let Ok(version) = fs::read_to_string("/proc/version") {
         for part in version.split_whitespace() {
-            if part.chars().next().map_or(false, |c| c.is_ascii_digit()) {
+            if part.chars().next().is_some_and(|c| c.is_ascii_digit()) {
                 return parse_version(part);
             }
         }
@@ -113,14 +113,20 @@ fn kernel_version() -> (u32, u32, u32) {
 fn parse_version(s: &str) -> (u32, u32, u32) {
     let parts: Vec<&str> = s.trim().split('.').collect();
     let major = parts.first().and_then(|p| p.parse().ok()).unwrap_or(0);
-    let minor = parts.get(1).and_then(|p| {
-        let clean = p.split(|c: char| !c.is_ascii_digit()).next().unwrap_or(p);
-        clean.parse().ok()
-    }).unwrap_or(0);
-    let patch = parts.get(2).and_then(|p| {
-        let clean = p.split(|c: char| !c.is_ascii_digit()).next().unwrap_or(p);
-        clean.parse().ok()
-    }).unwrap_or(0);
+    let minor = parts
+        .get(1)
+        .and_then(|p| {
+            let clean = p.split(|c: char| !c.is_ascii_digit()).next().unwrap_or(p);
+            clean.parse().ok()
+        })
+        .unwrap_or(0);
+    let patch = parts
+        .get(2)
+        .and_then(|p| {
+            let clean = p.split(|c: char| !c.is_ascii_digit()).next().unwrap_or(p);
+            clean.parse().ok()
+        })
+        .unwrap_or(0);
     (major, minor, patch)
 }
 

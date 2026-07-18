@@ -1,7 +1,4 @@
-#![allow(
-    clippy::not_unsafe_ptr_arg_deref,
-    clippy::too_many_arguments
-)]
+#![allow(clippy::not_unsafe_ptr_arg_deref, clippy::too_many_arguments)]
 
 mod api;
 mod audit;
@@ -9,35 +6,34 @@ pub mod bootstrap;
 mod dlp;
 mod enforce;
 mod engine;
+pub mod license;
 pub mod manifest;
 mod matcher;
+pub mod mcp;
+pub mod memory_interceptor;
+pub mod precheck;
+pub mod prompt_gateway;
 mod runtime;
+#[cfg(target_os = "linux")]
+mod sandbox;
 mod sync;
 pub mod trace;
 pub mod trust;
 mod upload;
-pub mod license;
-pub mod mcp;
-pub mod precheck;
-pub mod prompt_gateway;
-pub mod memory_interceptor;
-#[cfg(target_os = "linux")]
-mod sandbox;
 
 pub use api::{
-    DesensitizeInResult, DesensitizeOutResult, DlpHit, EffectiveAction, OutputMaskResult, RuleHit,
-    ScanContext, ScanOutcome, TraceIdSource, VirbiusEdge, VirbiusError,
-    mask_pii_output,
-};
-pub use memory_interceptor::{
-    CredentialPattern, MemoryContext, MemoryInterceptor, MemoryPolicies, MemoryWriteResult,
+    mask_pii_output, DesensitizeInResult, DesensitizeOutResult, DlpHit, EffectiveAction,
+    OutputMaskResult, RuleHit, ScanContext, ScanOutcome, TraceIdSource, VirbiusEdge, VirbiusError,
 };
 pub use license::{License, LicenseClaims, LicenseError};
 pub use manifest::ToolPolicy;
-pub use precheck::{precheck, PrecheckResult, ToolCall};
-pub use trust::{TrustTagger, TrustTagInput, TrustTagResult};
 pub use mcp::{execute as mcp_execute, McpToolCall, ToolResult as McpToolResult};
+pub use memory_interceptor::{
+    CredentialPattern, MemoryContext, MemoryInterceptor, MemoryPolicies, MemoryWriteResult,
+};
+pub use precheck::{precheck, PrecheckResult, ToolCall};
 pub use sync::EdgeInitConfig;
+pub use trust::{TrustTagInput, TrustTagResult, TrustTagger};
 
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint};
@@ -370,7 +366,8 @@ pub extern "C" fn virbius_verify_license(
         Err(_) => return -1,
     };
 
-    let tools_json = serde_json::to_string(&lic.claims.allowed_tools).unwrap_or_else(|_| "[]".into());
+    let tools_json =
+        serde_json::to_string(&lic.claims.allowed_tools).unwrap_or_else(|_| "[]".into());
 
     unsafe {
         (*out).app_id = into_c_string(&lic.claims.app_id);
@@ -417,14 +414,32 @@ pub extern "C" fn virbius_enhance_prompt(
     };
 
     let enhance_ctx = prompt_gateway::EnhanceContext {
-        app_id: ctx.get("app_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-        session_id: ctx.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        app_id: ctx
+            .get("app_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        session_id: ctx
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
         risk_score: ctx.get("risk_score").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         recent_tools: vec![],
-        license_tools: ctx.get("license_tools").and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        license_tools: ctx
+            .get("license_tools")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default(),
-        constitution_version: ctx.get("constitution_version").and_then(|v| v.as_str()).unwrap_or("v1").to_string(),
+        constitution_version: ctx
+            .get("constitution_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("v1")
+            .to_string(),
     };
 
     let mut messages: Vec<String> = match serde_json::from_str(&messages_raw) {
@@ -461,17 +476,15 @@ mod c_abi_tests {
         let mut csprng = OsRng;
         let signing_key = SigningKey::generate(&mut csprng);
         let verifying_key = signing_key.verifying_key();
-        let pub_pem = verifying_key
-            .to_public_key_pem(Default::default())
-            .unwrap();
+        let pub_pem = verifying_key.to_public_key_pem(Default::default()).unwrap();
 
         let claims = LicenseClaims {
             app_id: "test-agent".into(),
             tenant_id: "tenant-1".into(),
             agent_name: "Test Agent".into(),
             agent_aid: "aid:cn:org:tenant-1:agent:test-agent-abc123".into(),
-                allowed_tools: vec!["read_file".into(), "search".into()],
-                risk_quota: 60,
+            allowed_tools: vec!["read_file".into(), "search".into()],
+            risk_quota: 60,
             tool_rate_limit: 50,
             exp: 9999999999,
             iat: 1700000000,
@@ -482,8 +495,7 @@ mod c_abi_tests {
             .encode(serde_json::to_vec(&claims).unwrap());
         let message = format!("{}.{}", header, payload);
         let sig = signing_key.sign(message.as_bytes());
-        let sig_b64 =
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
+        let sig_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes());
         let jwt = format!("{}.{}.{}", header, payload, sig_b64);
 
         (signing_key, pub_pem, jwt, claims)
@@ -530,7 +542,9 @@ mod c_abi_tests {
         unsafe {
             let app_id = CStr::from_ptr(out.app_id).to_string_lossy().into_owned();
             let tenant = CStr::from_ptr(out.tenant_id).to_string_lossy().into_owned();
-            let tools = CStr::from_ptr(out.allowed_tools_json).to_string_lossy().into_owned();
+            let tools = CStr::from_ptr(out.allowed_tools_json)
+                .to_string_lossy()
+                .into_owned();
             assert_eq!(app_id, "test-agent");
             assert_eq!(tenant, "tenant-1");
             assert!(tools.contains("read_file"));
@@ -639,7 +653,17 @@ mod c_abi_tests {
             fast_path: 0,
             sandbox_type: ptr::null(),
         };
-        assert_eq!(virbius_precheck(ptr::null(), ptr::null(), ptr::null(), ptr::null(), ptr::null(), &mut out), -1);
+        assert_eq!(
+            virbius_precheck(
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                ptr::null(),
+                &mut out
+            ),
+            -1
+        );
     }
 
     #[test]
@@ -650,7 +674,10 @@ mod c_abi_tests {
         let c_context = CString::new(context).unwrap();
 
         let result_ptr = virbius_enhance_prompt(c_messages.as_ptr(), c_context.as_ptr());
-        assert!(!result_ptr.is_null(), "enhance_prompt should return non-NULL on valid input");
+        assert!(
+            !result_ptr.is_null(),
+            "enhance_prompt should return non-NULL on valid input"
+        );
         unsafe {
             let result_json = CStr::from_ptr(result_ptr).to_string_lossy().into_owned();
             let parsed: Vec<String> = serde_json::from_str(&result_json).unwrap();

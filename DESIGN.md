@@ -589,10 +589,10 @@ if session_risk > 30: 提升审计采样率
 | 运行时观测 | Falco eBPF + plugin 降级链 + 决策链路追踪 | P0/P1 | P0 ✅ / P1 待实现（详见 [§13.4](#134-自定义-virbius-audit-falco-插件--falco-规则库扩充)） |
 | 高风险审批 | Challenge 全链路（create → approve → token verify） | P1 | ✅ 已完成 |
 | HTTP 阻断 | Higress WASM 403 + License 吊销 | P0 | ✅ 已完成 |
-| 内核级阻断 | Landlock + gVisor | P2 | ✅ 已实现（详见 [ARCHITECTURE.md §2.3-2.4](ARCHITECTURE.md#23-p2-landlock--drop-caps-子进程linux)） |
+| 内核级阻断 | Landlock + gVisor | P2 | 🔧 代码完成 + 编译通过（Rust `pre_exec` hook 实现 Landlock + capset + prctl）；待 Linux 运行时验证 + 集成测试（`landlock_applied` 当前由 ABI 推断，待 self-pipe 精确上报）（详见 [ARCHITECTURE.md §2.3-2.4](ARCHITECTURE.md#23-p2-landlock--drop-caps-子进程linux)） |
 | 审计完整性 | hash chain | P1 | ✅ 已完成（详见 [§13.5](#135-审计完整性hash-chain)） |
 | 供应链身份 | License 签发/校验/吊销 | P0 | ✅ 已完成 |
-| 记忆管控 | Memory Interceptor（PII 脱敏 + 凭据检测 + LLM 注入检测） | P1 | ✅ 已实现（详见 [§13.6](#136-记忆管控memory-interceptor)） |
+| 记忆管控 | Memory Interceptor（PII 脱敏 + 凭据检测 + LLM 注入检测） | P1 | 🔧 本地检查已实现（PII 脱敏 + 凭据检测 + size 限制，`virbius-core/src/memory_interceptor.rs`）；LLM 注入检测委托 Engine（`need_llm_check` 标志）；读取拦截 + 框架集成（LangChain/OpenAI SDK）待实现（详见 [§13.6](#136-记忆管控memory-interceptor)） |
 | 输出安全 | Output Review（PII 脱敏 ✅ + 凭据检测 ✅ + 内容安全 ✅） | P1 | ✅ 工具结果审查已完成（MCP Proxy 复用 Engine `/v1/evaluate` + qwen3guard 规则管线）；Agent 最终输出审查为设计建议，待应用层集成（详见 [§13.7](#137-输出审查output-review)） |
 | 决策链路追踪 | Trace Collector + Ingest + 可视化 | P1 | ✅ 已完成 |
 | 显式信任分层 | TrustTagger + TrustViolationDetector | P1.10 | ✅ 已完成（Edge 端包裹 `<trust_boundary>` + Engine 端违规检测，详见 [§13.10](#1310-显式信任分层explicit-trust-layering)） |

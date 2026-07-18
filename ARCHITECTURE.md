@@ -281,68 +281,100 @@ ToolCallRequest { name, args }
 
 **SSRF 防护补偿**：Landlock 不能按 IP 限制 connect，但 subprocess 沙箱仅用于 `read_file`/`write_file`/`curl（白名单目标）`，不用于 `execute_python`/`shell`（后者走 gVisor）。`curl` 的 URL 在应用层已做 schema 校验 + 白名单校验（Sidecar 模式由端层 MCP Proxy 代发时校验，非 Sidecar 模式由管层 Higress Egress 校验，见 [§3.5](#35-egress-流量管控)），不需要 syscall 级 connect 拦截。网络层由 K8s NetworkPolicy 兜底。
 
-**多线程安全**：Agent 框架基于 tokio 异步运行时，是多线程的。禁止使用 fork()，改用 posix_spawn。
+**多线程安全**：Agent 框架基于 tokio 异步运行时，是多线程的。子进程创建使用 `std::process::Command::spawn`（内部走 `fork+exec`），并通过 `pre_exec` hook 在 fork 与 exec 之间应用 Landlock 限制，避免在多线程进程中长期存活子进程的 race。
 
-> **注意**：posix_spawn 配合 POSIX_SPAWN_SETSID 只创建新会话/进程组，**不创建新 PID namespace**。如需新 namespace 必须使用 clone3(CLONE_NEWPID | CLONE_NEWNS)。
+> **架构变更（方案 B）**：原设计使用 LD_PRELOAD 注入 C 共享库 (`libvirbius_sandbox_preload.so`) 来在子进程 `main()` 前应用 Landlock。已改为 `std::os::unix::process::CommandExt::pre_exec` 在 Rust 侧 fork 与 exec 之间直接调用 Landlock syscall。这样：
+> 1. 零额外构建产物（无需编译/部署 `.so`）
+> 2. 单一构建系统（纯 Cargo）
+> 3. 错误可观测（`pre_exec` 返回 `Err` 会让 `spawn()` 失败，不像 LD_PRELOAD 缺失只打警告继续跑）
+> 4. 所有堆分配在父进程 `PreparedRules::compile` 完成，子进程 `pre_exec` 闭包只读遍历 + raw syscall，遵守 async-signal-safety
 
 **Landlock（P2 核心）**：
 
 ```rust
 // virbius-core/src/sandbox/landlock.rs (P2)
+//
+// 所有堆分配在父进程的 PreparedRules::compile 里完成；
+// pre_exec 闭包在 fork 后、exec 前的子进程里执行，只能用
+// async-signal-safe 操作（raw syscall / open / close，无 malloc / Mutex）。
 
 pub struct LandlockSandbox {
-    rules: LandlockRules,
-    timeout_ms: u64,
+    config: SandboxConfig,
+    abi: LandlockAbi,
 }
 
 pub struct LandlockRules {
-    // v1 (kernel 5.13+): 文件路径
-    read_paths: Vec<PathGlob>,      // 只读路径，如 ["/usr/*", "/lib/*"]
-    write_paths: Vec<PathGlob>,     // 读写路径，如 ["/tmp/workdir/*"]
-    exec_paths: Vec<PathGlob>,      // 可执行路径，如 ["/usr/bin/*"]
+    // v1 (kernel 5.13+): 文件路径（glob，父进程展开为具体路径）
+    pub read_paths: Vec<String>,      // 只读路径，如 ["/usr/*", "/lib/*"]
+    pub write_paths: Vec<String>,     // 读写路径，如 ["/tmp/workdir/*"]
+    pub exec_paths: Vec<String>,      // 可执行路径，如 ["/usr/bin/*"]
     // v4 (kernel 6.7+): 网络端口（可选，不支持则跳过）
-    bind_ports: Vec<u16>,           // 允许绑定的端口
-    connect_ports: Vec<u16>,        // 允许连接的端口
+    pub bind_ports: Vec<u16>,         // 允许绑定的端口
+    pub connect_ports: Vec<u16>,     // 允许连接的端口
+}
+
+/// 父进程预编译：glob 展开 + 转 CString，供 pre_exec 闭包只读使用
+struct PreparedRules {
+    abi: LandlockAbi,
+    read_paths: Vec<CString>,   // glob 展开后的具体路径
+    write_paths: Vec<CString>,
+    exec_paths: Vec<CString>,
+    bind_ports: Vec<u16>,
+    connect_ports: Vec<u16>,
 }
 
 impl LandlockSandbox {
-    /// posix_spawn + LD_PRELOAD(Landlock + drop caps) -> 执行子进程
-    pub fn execute(&self, program: &str, args: &[String]) -> Result<String> {
-        let (stdout_pipe, stderr_pipe) = create_pipes()?;
+    /// spawn + pre_exec(Landlock + drop caps) -> 执行子进程
+    pub fn execute(&self, program: &str, args: &[String]) -> Result<SandboxResult, String> {
+        // 父进程：预编译规则（安全分配）
+        let prepared = PreparedRules::compile(&self.config.rules);
+        let prepared_for_hook = prepared.clone();
 
-        // posix_spawn 创建子进程
-        let mut attrs = posix_spawn::SpawnAttrs::new();
-        attrs.set_flags(PosixSpawnFlags::POSIX_SPAWN_SETSID);
-
-        // 通过 LD_PRELOAD 注入 Landlock + drop caps 初始化
-        let env = vec![
-            ("VIRBIUS_LANDLOCK_RULES", serde_json::to_string(&self.rules)?),
-            ("VIRBIUS_DROP_CAPS", "all"),
-            ("LD_PRELOAD", "libvirbius_sandbox_preload.so"),
-        ];
-
-        let pid = posix_spawn::spawn(program, args, &env, &attrs)?;
+        let mut child = Command::new(program)
+            .args(args)
+            .pre_exec(move || {
+                // 子进程内，fork 后 exec 前。async-signal-safe。
+                // 1. landlock_create_ruleset + add_rule(path/net) + restrict_self
+                // 2. capset(drop ALL) + prctl(PR_SET_NO_NEW_PRIVS)
+                apply_landlock(&prepared_for_hook)
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
 
         // 父进程：等待 + 超时 + 读 stdout（无 supervisor，无 /dev/seccomp）
-        let output = wait_and_read(pid, stdout_pipe, self.timeout_ms)?;
-        Ok(output)
+        // ...
     }
 }
 ```
 
-**LD_PRELOAD 注入器**（比原方案简单——只有 Landlock + drop caps，无 seccomp-notify）：
+**pre_exec hook 的工作**（全部用 raw syscall，async-signal-safe）：
 
-```c
-// virbius-sandbox-preload.c — 编译为 .so，通过 LD_PRELOAD 注入
+```rust
+// virbius-core/src/sandbox/landlock.rs
+//
 // 顺序：Landlock -> drop caps（两步，无 seccomp）
 
-__attribute__((constructor))
-static void virbius_sandbox_init(void) {
+fn apply_landlock(rules: &PreparedRules) -> io::Result<ApplyReport> {
+    if rules.abi == LandlockAbi::None {
+        // 降级：只 drop caps
+        return drop_caps_and_no_new_privs();
+    }
+
     // 1. Landlock: 创建 ruleset + 添加规则 + restrict_self
     //    检测 ABI 版本：v1(5.13+, 文件) / v4(6.7+, 网络)
     //    不支持网络 v4 则跳过网络规则，只做文件
     //    Landlock 无 audit 模式，只能 enforce（deny），不产生观测事件
-    virbius_landlock_apply(getenv("VIRBIUS_LANDLOCK_RULES"));
+    let fd = syscall(SYS_landlock_create_ruleset, &attr, size, 0)?;
+    for path in &rules.read_paths  { add_path_rule(fd, path, ACCESS_FS_READ)?; }
+    for path in &rules.write_paths { add_path_rule(fd, path, ACCESS_FS_WRITE)?; }
+    for path in &rules.exec_paths  { add_path_rule(fd, path, ACCESS_FS_EXECUTE)?; }
+    if rules.abi.supports_net() {
+        for port in &rules.bind_ports     { add_net_rule(fd, *port, ACCESS_NET_BIND_TCP)?; }
+        for port in &rules.connect_ports  { add_net_rule(fd, *port, ACCESS_NET_CONNECT_TCP)?; }
+    }
+    syscall(SYS_landlock_restrict_self, fd, 0)?;
+    close(fd);
 
     // 2. Capabilities: 丢弃所有 CAP_*
     //    Landlock 不覆盖的威胁面由 drop caps 补充：
@@ -351,15 +383,11 @@ static void virbius_sandbox_init(void) {
     //    - CAP_SYS_ADMIN: 禁止 mount/namespace 操作
     //    - CAP_NET_ADMIN: 禁止改 iptables/路由
     //    - CAP_SYS_MODULE: 禁止加载内核模块
-    virbius_drop_all_capabilities();
+    drop_caps_and_no_new_privs()?;
 
-    // 3. 禁止通过 setuid 二进制提权
-    prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
-
-    // 4. 清理环境变量
-    unsetenv("VIRBIUS_LANDLOCK_RULES");
-    unsetenv("VIRBIUS_DROP_CAPS");
-    unsetenv("LD_PRELOAD");
+    // 3. prctl(PR_SET_NO_NEW_PRIVS) 已包含在上一步
+    // 4. 环境变量无需清理（不再用 LD_PRELOAD / VIRBIUS_* env 传递规则）
+    Ok(ApplyReport { landlock_applied: true, caps_dropped: true })
 }
 ```
 
@@ -379,21 +407,15 @@ static void virbius_sandbox_init(void) {
 **Landlock ABI 版本适配**：
 
 ```rust
-fn detect_landlock_abi_version() -> u32 {
+pub fn detect_abi_version() -> LandlockAbi {
     // 尝试创建 ruleset 测试支持的 ABI 版本
     // v1 (5.13+): 文件路径
     // v2 (5.19+): 文件 + 引用
     // v3 (6.2+):  文件 + 设备
     // v4 (6.7+): 文件 + 网络
-    let fd = landlock_create_ruleset(&RulesetAttr {
-        handled_access_fs: AccessFs::ALL,
-        handled_access_net: AccessNet::ALL,  // v4 only
-    }, 0);
-    match fd {
-        Ok(_) => { close(fd); 4 }
-        Err(ENOTSUP) => { /* 重试不带网络 */ ... 1 }
-        Err(_) => 0  // Landlock 不可用
-    }
+    if try_create_ruleset(with_net = true)  { return LandlockAbi::V4; }
+    if try_create_ruleset(with_net = false) { return LandlockAbi::V1; }
+    LandlockAbi::None
 }
 ```
 

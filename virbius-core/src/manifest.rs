@@ -390,7 +390,10 @@ pub fn app_id() -> String {
 }
 
 pub fn tool_policy(name: &str) -> Option<ToolPolicy> {
-    load().tool_policies.into_iter().find(|t| t.tool_name == name)
+    load()
+        .tool_policies
+        .into_iter()
+        .find(|t| t.tool_name == name)
 }
 
 /// Look up the risk_class for a tool. Returns "low" if not configured.

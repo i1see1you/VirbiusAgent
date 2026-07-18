@@ -127,7 +127,8 @@ mod tests {
             } => {
                 assert_eq!(risk_class, "high");
                 assert!(!tainted);
-                assert!(tagged_text.contains("<trust_boundary tool=\"shell_exec\" risk_class=\"high\">"));
+                assert!(tagged_text
+                    .contains("<trust_boundary tool=\"shell_exec\" risk_class=\"high\">"));
                 assert!(tagged_text.contains("output line 1"));
                 assert!(tagged_text.contains("</trust_boundary>"));
                 assert!(!tagged_text.contains("<untrusted_data"));
@@ -153,7 +154,8 @@ mod tests {
                 assert_eq!(risk_class, "network");
                 assert!(tainted);
                 assert!(tagged_text.contains("<untrusted_data source=\"tool:http_get\">"));
-                assert!(tagged_text.contains("<trust_boundary tool=\"http_get\" risk_class=\"network\">"));
+                assert!(tagged_text
+                    .contains("<trust_boundary tool=\"http_get\" risk_class=\"network\">"));
                 assert!(tagged_text.contains("</trust_boundary>"));
                 assert!(tagged_text.contains("</untrusted_data>"));
             }
