@@ -59,6 +59,10 @@ public class EvaluateOrchestrator {
         if (!toolName.isEmpty() && !sessionId.isEmpty()) {
             vars.put("tool_session_key", "tool:" + toolName + "-session:" + sessionId);
         }
+        // Expose request content as a var so groovy rules can inspect it via ctx.var('content')
+        if (req.content() != null && !req.content().isBlank()) {
+            vars.put("content", req.content());
+        }
         List<SignalDto> signals = new ArrayList<>();
         if (req.priorSignals() != null) {
             signals.addAll(req.priorSignals());

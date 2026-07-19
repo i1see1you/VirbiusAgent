@@ -1,20 +1,20 @@
-# VirbiusAgent 架构设计 — ARCHITECTURE
+# VirbiusAgent Architecture Design — ARCHITECTURE
 
-| 项目 | 说明 |
+| Project | Description |
 |------|------|
-| 文档版本 | v3.3 |
-| 状态 | 草案 |
-| 关联 | [DESIGN.md](DESIGN.md)（索引） · [PROTOCOL.md](PROTOCOL.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [ROADMAP.md](ROADMAP.md) |
-| 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
+| Document version | v3.3 |
+| Status | Draft |
+| Related | [DESIGN.md](DESIGN.md) (index) · [PROTOCOL.md](PROTOCOL.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [ROADMAP.md](ROADMAP.md) |
+| Reference project | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
 
-> 本文件包含 §1 总体架构 · §2 端层 · §3 管层 · §4 核层 · §5 云层。
-> §2.6 MCP Proxy 完整技术方案已拆分至 [PROTOCOL.md](PROTOCOL.md)。
+> This document contains §1 Overall Architecture · §2 Edge Layer · §3 Gateway Layer · §4 Kernel Layer · §5 Cloud Layer.
+> §2.6 MCP Proxy complete technical solution has been split into [PROTOCOL.md](PROTOCOL.md).
 
 ---
 
-## 1. 总体架构
+## 1. Overall Architecture
 
-### 1.1 四层总览
+### 1.1 Four-Layer Overview
 
 ```
 Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
@@ -38,265 +38,267 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
     control: rule CRUD + rollout + unified delivery
 ```
 
-**流量拓扑——南北向 vs 东西向**：
+**Traffic topology—North-South vs East-West**:
 
-端管核云四层在流量方向上分为两类，需明确区分以避免拓扑冲突：
+The four layers (Edge, Gateway, Kernel, Cloud) are divided into two categories by traffic direction, requiring clear distinction to avoid topology conflicts:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  东西向流量（East-West，本地/同 Pod）                          │
+│  East-West Traffic (local/same Pod)                        │
 │                                                              │
-│  Agent ──MCP/JSON-RPC──> [端层] MCP Proxy (Sidecar)          │
-│    localhost:9090，stdiorSSE                                 │
-│    职责：License 校验 + 预检 + 安全管线 + 工具执行              │
+│  Agent ──MCP/JSON-RPC──> [Edge] MCP Proxy (Sidecar)          │
+│    localhost:9090, stdio or SSE                              │
+│    Responsibility: License check + precheck + security pipeline + tool execution │
 │                                                              │
-│  特点：Agent 与 Proxy 同进程组，流量不出 Pod，不经过管层        │
+│  Features: Agent and Proxy in the same process group, traffic stays within Pod, does not pass through Gateway │
 ├─────────────────────────────────────────────────────────────┤
-│  南北向流量（North-South，跨网络）                             │
+│  North-South Traffic (cross-network)                        │
 │                                                              │
-│  远程 Agent ──HTTPS──> [管层] Higress (Ingress) ──> MCP Server  │
-│                         TLS/限流/allowlist/engine 调用         │
+│  Remote Agent ──HTTPS──> [Gateway] Higress (Ingress) ──> MCP Server  │
+│                         TLS/rate-limit/allowlist/engine call         │
 │                                                              │
-│  Agent/curl工具 ──HTTP──> [管层] Higress (Egress) ──> 外部 API  │
-│                         或端层 Egress 拦截（Sidecar 模式）      │
+│  Agent/curl tool ──HTTP──> [Gateway] Higress (Egress) ──> External API  │
+│                         or Edge Egress interception (Sidecar mode)     │
 │                                                              │
-│  特点：非 Sidecar 模式跨网络流量必经管层；Sidecar 模式 Egress  │
-│  由端层 Proxy 代发（见 §3.5）                                   │
+│  Features: Non-Sidecar cross-network traffic must pass through Gateway; Sidecar mode Egress │
+│  is proxied by Edge Proxy (see §3.5)                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-| 流量类型 | 方向 | 拦截层 | 部署模式 |
+| Traffic Type | Direction | Interception Layer | Deployment Mode |
 |---------|------|--------|---------|
-| MCP 工具调用（Sidecar 模式） | 东西向 | 端层 MCP Proxy | Agent 与 Proxy 同 Pod |
-| MCP 工具调用（远程模式） | 南北向 | 管层 Higress (Ingress) | Agent 远程连接 |
-| Agent 外部 HTTP 请求（curl 等） | 南北向（Egress） | 端层 Egress 拦截 / 管层 Egress Proxy | 见 §3.5 |
+| MCP tool call (Sidecar mode) | East-West | Edge MCP Proxy | Agent and Proxy in same Pod |
+| MCP tool call (remote mode) | North-South | Gateway Higress (Ingress) | Agent remote connection |
+| Agent external HTTP request (curl etc.) | North-South (Egress) | Edge Egress interception / Gateway Egress Proxy | See §3.5 |
 
-> **设计决策：Sidecar 模式下管层不参与 MCP 工具调用链**
+> **Design decision: Gateway does not participate in MCP tool call chain under Sidecar mode**
 >
-> 当端层以 MCP Proxy Sidecar 模式部署时，Agent 的 MCP 工具调用走 localhost 直达 Proxy，不经过管层 Higress。这是设计预期行为：端层 Proxy 已内嵌完整安全管线（License + 预检 + engine 终判），管层在此场景下不重复拦截。
+> When the Edge layer is deployed as an MCP Proxy Sidecar, the Agent's MCP tool calls go through localhost directly to the Proxy, bypassing the Gateway Higress. This is expected behavior: the Edge Proxy already embeds a complete security pipeline (License + precheck + engine final judgment), and the Gateway does not re-intervene in this scenario.
 >
-> 管层 Higress 的职责聚焦于：
-> 1. **Ingress**：远程 Agent（非 Sidecar）访问 MCP Server 的南北向流量
-> 2. **Egress**：Agent 业务工具的外部 HTTP 请求（如 `curl` 工具访问外部 API）的网络层管控。注意：仅 MCP 业务工具请求走 Proxy 代发，Agent 框架底层的隐式网络请求（配置拉取/模型下载/心跳等）受 NetworkPolicy 限制，不由 Proxy 代发（详见 [§3.5](ARCHITECTURE.md)）
+> The Gateway Higress responsibilities focus on:
+> 1. **Ingress**: North-South traffic from remote Agents (non-Sidecar) accessing MCP Server
+> 2. **Egress**: Network-layer control of external HTTP requests from Agent business tools (e.g. `curl` tool accessing external APIs). Note: only MCP business tool requests go through the Proxy; implicit network requests from the Agent framework (config fetching, model downloads, heartbeats, etc.) are restricted by NetworkPolicy and are not proxied (see [§3.5](ARCHITECTURE.md))
 >
-> 对于 Sidecar 模式下的 Egress 流量，采用**工具级管控**：MCP 业务工具请求（如 `curl`）由端层 Proxy 在 `tools/call` 拦截阶段做 URL 白名单校验并代发（P0）；Agent 框架底层的隐式网络请求受 K8s NetworkPolicy 限制到白名单目标（P0）；P2 可叠加 eBPF/iptables 透明劫持实现进程级全量出站阻断。
+> For Egress traffic in Sidecar mode, **tool-level control** is adopted: MCP business tool requests (e.g. `curl`) are intercepted by the Edge Proxy at the `tools/call` stage for URL allowlist validation and proxying (P0); implicit network requests from the Agent framework are restricted to allowlist targets by K8s NetworkPolicy (P0); P2 can add eBPF/iptables transparent hijacking for process-level full outbound blocking.
 
-### 1.2 设计原则
+### 1.2 Design Principles
 
-| 原则 | 说明 |
+| Principle | Description |
 |------|------|
-| **控制面统一** | 所有层的策略真源为 virbius-control，各层独立执行但配置同源 |
-| **预检先于执行** | 端层预检 -> 管层/云层终判 -> 端层执行。工具在终判通过后才执行 |
-| **观测与阻断分离** | 观测(eyes)和阻断(hands)由不同技术栈承担。观测随环境降级(eBPF->ptrace->plugin)，阻断始终由端层 Landlock + drop caps 保证(P2) |
-| **观察先行** | P0 只实现观测(Falco + HTTP 层阻断 + session risk 累积)，P2 补 syscall 级阻断 |
-| **eBPF 是增强非依赖** | eBPF 可用时增强观测精度；不可用时端层 Landlock + drop caps + gVisor 仍是完整可用的阻断 |
-| **端层兜底** | 即使管层/云层被绕过，端层预检 + 沙箱仍限制进程行为 |
-| **快速通道** | 低风险工具跳过云层 RPC，端层预检 + 管层本地规则直接放行，目标延迟 <5ms |
-| **职责分离** | Higress 做路由 + 限流 + 安全预检；安全终判收敛到 virbius-engine |
-| **南北东西分离** | 端层（Sidecar）处理东西向 MCP 工具调用，管层（Higress）处理南北向 Ingress/Egress 流量。Sidecar 模式下 MCP 调用不经管层，管层聚焦网络边界安全 |
-| **渐进接入** | 各层可独立开关，兼容仅有端层或仅有管层的轻量部署 |
+| **Unified control plane** | All layers' policy source of truth is virbius-control; each layer executes independently but configuration is from the same source |
+| **Precheck before execution** | Edge precheck -> Gateway/Cloud final judgment -> Edge execution. Tools are executed only after final judgment passes |
+| **Separation of observation and enforcement** | Observation (eyes) and enforcement (hands) are handled by different technology stacks. Observation degrades with environment (eBPF->ptrace->plugin); enforcement is always guaranteed by Edge Landlock + drop caps (P2) |
+| **Observation first** | P0 only implements observation (Falco + HTTP layer blocking + session risk accumulation); P2 adds syscall-level blocking |
+| **eBPF is enhancement, not dependency** | eBPF enhances observation precision when available; when unavailable, Edge Landlock + drop caps + gVisor still provide complete enforcement |
+| **Edge as last resort** | Even if Gateway/Cloud are bypassed, Edge precheck + sandbox still restrict process behavior |
+| **Fast path** | Low-risk tools skip Cloud RPC; Edge precheck + Gateway local rules directly allow; target latency <5ms |
+| **Separation of concerns** | Higress handles routing + rate limiting + security precheck; security final judgment converges on virbius-engine |
+| **North-South/East-West separation** | Edge (Sidecar) handles East-West MCP tool calls; Gateway (Higress) handles North-South Ingress/Egress traffic. In Sidecar mode, MCP calls do not pass through Gateway; Gateway focuses on network boundary security |
+| **Progressive adoption** | Each layer can be independently enabled/disabled; supports lightweight deployments with only Edge or only Gateway |
 
-### 1.3 分阶段规划
+### 1.3 Phased Planning
 
-| 阶段 | 观测(eyes) | 阻断(hands) |
+| Phase | Observation (eyes) | Enforcement (hands) |
 |------|-----------|------------|
-| **P0** | Falco(eBPF/plugin) + access log + Redis 审计流 + STI 审计 + Prompt Gateway(宪法注入) | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 + Runtime License 校验 |
-| **P1** | STI Taint 小模型 + virbius-audit Falco 插件 + 审计完整性 | 人工审批流 + 自适应 risk 模型 + 记忆管控(Memory Interceptor) |
-| **P2** | eBPF 自定义观测(execveat + IPv6) | Landlock + drop caps + gVisor + TEE(金融级) |
+| **P0** | Falco (eBPF/plugin) + access log + Redis audit stream + STI audit + Prompt Gateway (constitutional injection) | HTTP 403 + allowlist + counting + schema validation + risk threshold disconnect + Runtime License validation |
+| **P1** | STI Taint small model + virbius-audit Falco plugin + audit integrity | Manual approval flow + adaptive risk model + memory control (Memory Interceptor) |
+| **P2** | Custom eBPF observation (execveat + IPv6) | Landlock + drop caps + gVisor + TEE (financial grade) |
 
-### 1.4 身份标识体系
+### 1.4 Identity System
 
-本设计沿用 VirbiusLLM 的 `app_id` 作为 **Agent 身份标识（agent_id）**，不区分 Agent 类型与运行实例。
+This design inherits VirbiusLLM's `app_id` as the **Agent identity (agent_id)**, without distinguishing between Agent type and running instance.
 
-VirbiusAgent 代码实现参考 VirbiusLLM，详细复用关系见 10。
+VirbiusAgent code implementation references VirbiusLLM; detailed reuse relationships are in 10.
 
-| 层级 | 标识 | 说明 | 示例 |
+| Layer | Identifier | Description | Example |
 |------|------|------|------|
-| 租户 | `tenant_id` | 组织/租户 | "公司A" |
-| **Agent** | `app_id` | **Agent 身份标识（即 agent_id）** | "code-review-agent" |
-| 会话 | `session_id` | 单次对话/工具调用链 | "sess_abc" |
-| 设备 | `device_id` | 客户端设备（canary 灰度用） | "device_xxx" |
-| 追踪 | `trace_id` | 单次请求追踪 | "uuid" |
+| Tenant | `tenant_id` | Organization/tenant | "CompanyA" |
+| **Agent** | `app_id` | **Agent identity (i.e. agent_id)** | "code-review-agent" |
+| Session | `session_id` | Single conversation/tool call chain | "sess_abc" |
+| Device | `device_id` | Client device (for canary) | "device_xxx" |
+| Trace | `trace_id` | Single request trace | "uuid" |
 
-> **设计决策**：`app_id` 就是 `agent_id`。在 Agent 安全场景下，每个 `app_id` 对应一个具体的 Agent 实体（如"代码审查智能体"、"数据分析智能体"），不需要"类型 vs 实例"的分离。Runtime License、策略、risk_score 均绑 `app_id`。
+> **Design decision**: `app_id` is `agent_id`. In the Agent security scenario, each `app_id` corresponds to a specific Agent entity (e.g. "code review agent", "data analysis agent"); there is no need for "type vs instance" separation. Runtime License, policies, and risk_score are all bound to `app_id`.
 
-**Agent 运行许可证（Runtime License）**：
+**Agent Runtime License**:
 
-virbius-control 为每个 `app_id` 签发运行许可证，各层在关键路径上校验：
+virbius-control issues a Runtime License for each `app_id`; each layer validates on the critical path:
 
 ```
-virbius-control 签发 License（JWT 签名）：
+virbius-control issues License (JWT signed):
 {
-  "app_id": "code-review-agent",      // Agent 身份
-  "tenant_id": "公司A",
+  "app_id": "code-review-agent",      // Agent identity
+  "tenant_id": "CompanyA",
   "allowed_tools": ["read_file", "search", "curl"],
   "allowed_scenes": ["code_review", "data_analysis"],
-  "risk_quota": 60,                    // 最大允许的 session_risk_score
-  "tool_rate_limit": 50,               // 每分钟最大工具调用数
+  "risk_quota": 60,                    // Maximum allowed session_risk_score
+  "tool_rate_limit": 50,               // Maximum tool calls per minute
   "expiry": "2026-07-06T12:00:00Z",
   "signature": "RS256..."
 }
 ```
 
-| 校验点 | 校验内容 |
+| Validation Point | Validation Content |
 |--------|---------|
-| 管层 Higress 入口 | License 签名 + 过期 + 吊销状态 |
-| 端层 virbius-core | License 的 allowed_tools 是否包含当前工具 |
-| 云层 virbius-engine | 当前 session_risk_score 是否超过 License 的 risk_quota |
+| Gateway Higress entry | License signature + expiration + revocation status |
+| Edge virbius-core | Whether License's allowed_tools includes the current tool |
+| Cloud virbius-engine | Whether current session_risk_score exceeds License's risk_quota |
 
-**许可证吊销**：通过 Redis pub/sub 实时通知各层。吊销后该 `app_id` 的所有后续请求被拒绝。
-**会话中过期处理**：License 在会话进行中过期时，当前正在执行的工具调用允许完成（保持原子性），但完成后立即拒绝后续请求并通知 Agent 需要重新授权。端层 virbius-core 在每次预检时校验 License 剩余有效期，剩 5 分钟内到期时发出告警。
+**License revocation**: Real-time notification to all layers via Redis pub/sub. After revocation, all subsequent requests for that `app_id` are rejected.
+**In-session expiration handling**: When a License expires during an active session, the currently executing tool call is allowed to complete (maintaining atomicity), but subsequent requests are immediately rejected after completion and the Agent is notified to re-authorize. Edge virbius-core checks the remaining License validity during each precheck; a warning is issued when less than 5 minutes remain.
 
-### 1.5 三层安全架构
+### 1.5 Three-Layer Security Architecture
 
-端管核云是**部署拓扑视角**（组件在哪里运行），三层安全架构是**功能管控视角**（安全能力如何编排）。两者正交，同一功能可跨多层部署。
+"Edge, Gateway, Kernel, Cloud" is the **deployment topology perspective** (where components run); the three-layer security architecture is the **functional control perspective** (how security capabilities are orchestrated). They are orthogonal; the same function can span multiple layers.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  第一层：身份管控层                                       │
-│  统一身份体系 + 智能体运行许可证                           │
-│  (§1.4)                                                  │
+│  Layer 1: Identity Control Layer                        │
+│  Unified identity system + Agent Runtime License        │
+│  (§1.4)                                                 │
 ├─────────────────────────────────────────────────────────┤
-│  第二层：运行时防护层                                     │
+│  Layer 2: Runtime Protection Layer                      │
 │  ┌─────────┬─────────┬─────────┬─────────┬─────────┐    │
-│  │意图研判 │提示增强 │记忆管控 │工具拦截 │输出审查 │    │
+│  │Intent   │Prompt   │Memory   │Tool     │Output   │    │
+│  │Judgment │Enhance- │Control  │Inter-   │Review   │    │
+│  │         │ment     │         │ception  │         │    │
 │  │§5.3+5.4 │§2.8     │§2.9     │§2.1+3.2 │§2.10    │    │
 │  │+§2.8.7  │         │         │+§5.3    │         │    │
 │  └─────────┴─────────┴─────────┴─────────┴─────────┘    │
 ├─────────────────────────────────────────────────────────┤
-│  第三层：基础设施层                                       │
-│  Landlock沙箱 + 命名空间隔离 + eBPF过滤   │
+│  Layer 3: Infrastructure Layer                          │
+│  Landlock sandbox + Namespace isolation + eBPF filtering │
 │  (§2.3 + §2.4 + §4 + §2.3.1)                            │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**与端管核云的映射关系**：
+**Mapping to Edge/Gateway/Kernel/Cloud**:
 
-| 三层架构 | 端层(Edge) | 管层(Gateway) | 核层(Kernel) | 云层(Cloud) |
+| Three-Layer Architecture | Edge | Gateway | Kernel | Cloud |
 |---------|-----------|--------------|-------------|------------|
-| **身份管控层** | License 校验(allowed_tools) | License 校验(签名/过期/吊销) | — | License 签发 + risk_quota 校验 |
-| **运行时防护层** | 预检 + Prompt Gateway + 记忆管控 + 输出审查 | allowlist + 计数 + engine 调用 | — | Groovy L3 + STI + Prompt 入侵检测 |
-| **基础设施层** | Landlock + gVisor + 命名空间隔离 | — | Falco + eBPF | — |
+| **Identity Control Layer** | License validation (allowed_tools) | License validation (signature/expiry/revocation) | — | License issuance + risk_quota validation |
+| **Runtime Protection Layer** | Precheck + Prompt Gateway + Memory Control + Output Review | allowlist + counting + engine call | — | Groovy L3 + STI + Prompt intrusion detection |
+| **Infrastructure Layer** | Landlock + gVisor + namespace isolation | — | Falco + eBPF | — |
 
-**第一层：身份管控层**
+**Layer 1: Identity Control Layer**
 
-建立统一身份体系（tenant_id → app_id → session_id → device_id → trace_id，§1.4），以 Runtime License 为核心实现 Agent 身份的全生命周期管控：签发（control）、校验（端/管/云三层）、吊销（Redis pub/sub）、过期处理（原子性保证）。详见 §1.4。
+Establish a unified identity system (tenant_id → app_id → session_id → device_id → trace_id, §1.4), with Runtime License as the core to implement full lifecycle management of Agent identity: issuance (control), validation (Edge/Gateway/Cloud three layers), revocation (Redis pub/sub), expiration handling (atomicity guarantee). See §1.4.
 
-**第二层：运行时防护层**
+**Layer 2: Runtime Protection Layer**
 
-以"企业 AI 智能体宪法"为准则，通过五层策略实现 Agent 运行时全流程管控：
+Using the "Enterprise AI Agent Constitution" as the guiding principle, implement full-process control of Agent runtime through five layers of policy:
 
-| 策略 | 职责 | 设计章节 | 性质 |
+| Policy | Responsibility | Design Section | Nature |
 |------|------|---------|------|
-| **意图研判** | 判定 Agent 意图与工具调用链是否安全 | §5.3 Groovy L3 + §5.4 STI Suitability + §2.8.7 Prompt 入侵检测 | 检测 |
-| **提示增强** | 注入宪法约束，预防危险意图产生 | §2.8 Prompt Gateway | 预防 |
-| **记忆管控** | Agent 记忆读写拦截 + 脱敏 + 注入检测 | §2.9 Memory Interceptor | 预防+检测 |
-| **工具拦截** | 参数校验 + allowlist + schema + 工具链检测 | §2.1 端层预检 + §3.2 管层 WASM + §5.3 云层 L3 | 检测+阻断 |
-| **输出审查** | 工具结果内容安全审查 + Agent 最终响应审查 | §2.10 Output Review | 检测+阻断 |
+| **Intent Judgment** | Determine whether Agent intent and tool call chain are safe | §5.3 Groovy L3 + §5.4 STI Suitability + §2.8.7 Prompt intrusion detection | Detection |
+| **Prompt Enhancement** | Inject constitutional constraints to prevent dangerous intent generation | §2.8 Prompt Gateway | Prevention |
+| **Memory Control** | Agent memory read/write interception + desensitization + injection detection | §2.9 Memory Interceptor | Prevention + Detection |
+| **Tool Interception** | Parameter validation + allowlist + schema + tool chain detection | §2.1 Edge precheck + §3.2 Gateway WASM + §5.3 Cloud L3 | Detection + Blocking |
+| **Output Review** | Tool result content security review + Agent final response review | §2.10 Output Review | Detection + Blocking |
 
-运行时防护流程：
+Runtime protection flow:
 
 ```
-用户输入
-  → [意图研判] Prompt 入侵检测（§2.8.7）+ session risk 评估
-  → [提示增强] Prompt Gateway 宪法注入 + PII 脱敏（§2.8）
-  → LLM 推理
-  → [记忆管控] Memory Interceptor 拦截记忆读写（§2.9）
-  → [工具拦截] 端层预检 → 管层规则 → 云层 L3 终判（§2.1 + §3.2 + §5.3）
-  → 工具执行
-  → [输出审查] STI Taint + 最终响应审查（§5.4 + §2.10）
-  → 返回用户
+User input
+  → [Intent Judgment] Prompt intrusion detection (§2.8.7) + session risk assessment
+  → [Prompt Enhancement] Prompt Gateway constitutional injection + PII desensitization (§2.8)
+  → LLM inference
+  → [Memory Control] Memory Interceptor intercepts memory reads/writes (§2.9)
+  → [Tool Interception] Edge precheck → Gateway rules → Cloud L3 final judgment (§2.1 + §3.2 + §5.3)
+  → Tool execution
+  → [Output Review] STI Taint + final response review (§5.4 + §2.10)
+  → Return to user
 ```
 
-**第三层：基础设施层**
+**Layer 3: Infrastructure Layer**
 
-构建安全可信 Agent OS，为运行时防护层提供 syscall 级隔离与观测基座：
+Build a secure and trusted Agent OS, providing syscall-level isolation and observation foundation for the Runtime Protection Layer:
 
-| 能力 | 技术 | 设计章节 | 阶段 |
+| Capability | Technology | Design Section | Phase |
 |------|------|---------|------|
-| 文件路径隔离 | Landlock | §2.3 | P2 |
-| 命名空间隔离 | clone3(CLONE_NEWPID \| CLONE_NEWNS \| CLONE_NEWNET) | §2.3.1 | P2 |
-| capabilities 丢弃 | drop caps | §2.3 | P2 |
-| 不可信代码沙箱 | gVisor runsc 预热池 | §2.4 | P2 |
-| 内核观测 | Falco eBPF + plugin 降级链 | §4 | P0 |
+| File path isolation | Landlock | §2.3 | P2 |
+| Namespace isolation | clone3(CLONE_NEWPID \| CLONE_NEWNS \| CLONE_NEWNET) | §2.3.1 | P2 |
+| Capability dropping | drop caps | §2.3 | P2 |
+| Untrusted code sandbox | gVisor runsc warm pool | §2.4 | P2 |
+| Kernel observation | Falco eBPF + plugin degradation chain | §4 | P0 |
 
 
 ---
 
-## 2. 端层 — Agent 工具调用预检与执行
+## 2. Edge — Agent Tool Call Precheck and Execution
 
-### 2.1 职责
+### 2.1 Responsibilities
 
-| 阶段 | 动作 | 延迟 |
+| Phase | Action | Latency |
 |------|------|------|
-| **预检** | 参数校验、tool allowlist、JSON Schema 校验、本地规则匹配 | <0.5ms |
-| **执行** | P0: 同进程执行 / P2: Landlock / gVisor 沙箱 | P0: <0.1ms / P2: 见 §2.2 |
+| **Precheck** | Parameter validation, tool allowlist, JSON Schema validation, local rule matching | <0.5ms |
+| **Execution** | P0: in-process execution / P2: Landlock / gVisor sandbox | P0: <0.1ms / P2: see §2.2 |
 
-**关键约束**：预检阶段不执行任何工具逻辑。只有终判返回 allow 后才进入执行阶段。
+**Key constraint**: No tool logic is executed during the precheck phase. Only after final judgment returns allow does execution begin.
 
-### 2.2 分层隔离策略(P0 -> P2 渐进)
+### 2.2 Layered Isolation Strategy (P0 -> P2 Progressive)
 
 ```
 ToolCallRequest { name, args }
   |
   +-- sandbox_type = "none" (P0)
-  |    同进程执行（只做预检，不隔离）
-  |    适用：所有工具（P0 阶段不区分沙箱类型）
-  |    延迟：冷 <0.1ms / 热 <0.1ms
-  |    安全保障：HTTP 层阻断 + session risk 累积 + Falco 观测
+  |    in-process execution (precheck only, no isolation)
+  |    Applicable to: all tools (P0 phase does not distinguish sandbox types)
+  |    Latency: cold <0.1ms / hot <0.1ms
+  |    Security: HTTP layer blocking + session risk accumulation + Falco observation
   |
   +-- sandbox_type = "subprocess" (P2)
   |    posix_spawn + Landlock + drop caps
-  |    适用：read_file、write_file、curl（白名单目标）
-  |    延迟：冷 ~2ms / 热 ~1ms
+  |    Applicable to: read_file, write_file, curl (allowlist targets)
+  |    Latency: cold ~2ms / hot ~1ms
   |
   +-- sandbox_type = "gvisor" (P2)
-  |    gVisor runsc 容器（预热池）
-  |    适用：execute_python、shell、任意不可信代码
-  |    延迟：冷 1-5s / 热 ~50ms（预热池命中）
+  |    gVisor runsc container (warm pool)
+  |    Applicable to: execute_python, shell, any untrusted code
+  |    Latency: cold 1-5s / hot ~50ms (warm pool hit)
   |
   +-- deny
-       直接拒绝，不执行
+        Directly rejected, not executed
 ```
 
-> **P0 安全模型**：无 syscall 级隔离。安全保障依赖：
-> 1. HTTP 层阻断（端层 Proxy allow/deny 或管层 Higress allow/deny + engine 终判，取决于部署模式）
-> 2. 参数 schema 校验（path 白名单等）
-> 3. session risk 累积（Falco 检测异常 -> 风险分升高 -> 后续请求阻断）
-> 4. 高风险工具（execute_python、shell）P0 阶段强制人工审批或禁用
+> **P0 Security Model**: No syscall-level isolation. Security relies on:
+> 1. HTTP layer blocking (Edge Proxy allow/deny or Gateway Higress allow/deny + engine final judgment, depending on deployment mode)
+> 2. Parameter schema validation (path allowlist, etc.)
+> 3. Session risk accumulation (Falco detects anomalies -> risk score increases -> subsequent requests blocked)
+> 4. High-risk tools (execute_python, shell) require mandatory manual approval or disablement in P0 phase
 
-### 2.3 P2: Landlock + drop caps 子进程(Linux)
+### 2.3 P2: Landlock + drop caps Subprocess (Linux)
 
-> **P2 实现，P0 不涉及。** 以下为长期设计参考。
+> **P2 implementation, P0 does not involve.** The following is a long-term design reference.
 
-**设计决策**：P2 subprocess 沙箱采用 Landlock + drop caps，不使用 seccomp-notify。
+**Design decision**: P2 subprocess sandbox uses Landlock + drop caps, not seccomp-notify.
 
-| 维度 | Landlock + drop caps | seccomp-notify（原方案，已弃用） |
+| Dimension | Landlock + drop caps | seccomp-notify (original plan, deprecated) |
 |------|---------------------|-------------------------------|
-| 文件路径限制 | ✅ Landlock 文件规则 | ✅ open/openat 拦截 |
-| 网络 IP 限制（SSRF） | ❌ Landlock v4 只限端口不限 IP | ✅ connect 拦截 |
-| supervisor SPOF | ✅ 无 supervisor | ❌ 崩溃=进程挂起 |
-| TOCTOU 风险 | ✅ 内核强制，无竞态 | ❌ 需 ioctl 校验 |
-| 实现复杂度 | ~5w | ~16w |
+| File path restriction | ✅ Landlock file rules | ✅ open/openat interception |
+| Network IP restriction (SSRF) | ❌ Landlock v4 only restricts ports, not IPs | ✅ connect interception |
+| Supervisor SPOF | ✅ No supervisor | ❌ Crash = process hang |
+| TOCTOU risk | ✅ Kernel-enforced, no race conditions | ❌ Requires ioctl validation |
+| Implementation complexity | ~5w | ~16w |
 
-**SSRF 防护补偿**：Landlock 不能按 IP 限制 connect，但 subprocess 沙箱仅用于 `read_file`/`write_file`/`curl（白名单目标）`，不用于 `execute_python`/`shell`（后者走 gVisor）。`curl` 的 URL 在应用层已做 schema 校验 + 白名单校验（Sidecar 模式由端层 MCP Proxy 代发时校验，非 Sidecar 模式由管层 Higress Egress 校验，见 [§3.5](#35-egress-流量管控)），不需要 syscall 级 connect 拦截。网络层由 K8s NetworkPolicy 兜底。
+**SSRF protection compensation**: Landlock cannot restrict connect by IP, but the subprocess sandbox is only used for `read_file`/`write_file`/`curl (allowlist targets)`, not for `execute_python`/`shell` (which go through gVisor). `curl` URLs are already validated at the application layer with schema validation + allowlist validation (in Sidecar mode by the Edge MCP Proxy when proxying; in non-Sidecar mode by the Gateway Higress Egress, see [§3.5](#35-egress-traffic-control)); no syscall-level connect interception is needed. Network layer is backed by K8s NetworkPolicy.
 
-**多线程安全**：Agent 框架基于 tokio 异步运行时，是多线程的。子进程创建使用 `std::process::Command::spawn`（内部走 `fork+exec`），并通过 `pre_exec` hook 在 fork 与 exec 之间应用 Landlock 限制，避免在多线程进程中长期存活子进程的 race。
+**Multi-thread safety**: The Agent framework is based on the tokio async runtime and is multi-threaded. Child process creation uses `std::process::Command::spawn` (which internally does `fork+exec`), and applies Landlock restrictions via the `pre_exec` hook between fork and exec, avoiding races with long-lived child processes in multi-threaded processes.
 
-> **架构变更（方案 B）**：原设计使用 LD_PRELOAD 注入 C 共享库 (`libvirbius_sandbox_preload.so`) 来在子进程 `main()` 前应用 Landlock。已改为 `std::os::unix::process::CommandExt::pre_exec` 在 Rust 侧 fork 与 exec 之间直接调用 Landlock syscall。这样：
-> 1. 零额外构建产物（无需编译/部署 `.so`）
-> 2. 单一构建系统（纯 Cargo）
-> 3. 错误可观测（`pre_exec` 返回 `Err` 会让 `spawn()` 失败，不像 LD_PRELOAD 缺失只打警告继续跑）
-> 4. 所有堆分配在父进程 `PreparedRules::compile` 完成，子进程 `pre_exec` 闭包只读遍历 + raw syscall，遵守 async-signal-safety
+> **Architecture change (Plan B)**: The original design used LD_PRELOAD to inject a C shared library (`libvirbius_sandbox_preload.so`) to apply Landlock before the child process `main()`. This has been changed to use `std::os::unix::process::CommandExt::pre_exec` to directly call Landlock syscalls on the Rust side between fork and exec. This provides:
+> 1. Zero additional build artifacts (no need to compile/deploy `.so`)
+> 2. Single build system (pure Cargo)
+> 3. Observable errors (`pre_exec` returning `Err` causes `spawn()` to fail, unlike LD_PRELOAD absence which only prints a warning and continues)
+> 4. All heap allocations are done in the parent process's `PreparedRules::compile`; the child process `pre_exec` closure only does read-only iteration + raw syscalls, adhering to async-signal-safety
 
-**Landlock（P2 核心）**：
+**Landlock (P2 core)**:
 
 ```rust
 // virbius-core/src/sandbox/landlock.rs (P2)
 //
-// 所有堆分配在父进程的 PreparedRules::compile 里完成；
-// pre_exec 闭包在 fork 后、exec 前的子进程里执行，只能用
-// async-signal-safe 操作（raw syscall / open / close，无 malloc / Mutex）。
+// All heap allocations are done in the parent process's PreparedRules::compile;
+// the pre_exec closure runs in the child process after fork and before exec, using only
+// async-signal-safe operations (raw syscall / open / close, no malloc / Mutex).
 
 pub struct LandlockSandbox {
     config: SandboxConfig,
@@ -304,19 +306,19 @@ pub struct LandlockSandbox {
 }
 
 pub struct LandlockRules {
-    // v1 (kernel 5.13+): 文件路径（glob，父进程展开为具体路径）
-    pub read_paths: Vec<String>,      // 只读路径，如 ["/usr/*", "/lib/*"]
-    pub write_paths: Vec<String>,     // 读写路径，如 ["/tmp/workdir/*"]
-    pub exec_paths: Vec<String>,      // 可执行路径，如 ["/usr/bin/*"]
-    // v4 (kernel 6.7+): 网络端口（可选，不支持则跳过）
-    pub bind_ports: Vec<u16>,         // 允许绑定的端口
-    pub connect_ports: Vec<u16>,     // 允许连接的端口
+    // v1 (kernel 5.13+): file paths (glob, expanded to concrete paths in parent)
+    pub read_paths: Vec<String>,      // read-only paths, e.g. ["/usr/*", "/lib/*"]
+    pub write_paths: Vec<String>,     // read-write paths, e.g. ["/tmp/workdir/*"]
+    pub exec_paths: Vec<String>,      // executable paths, e.g. ["/usr/bin/*"]
+    // v4 (kernel 6.7+): network ports (optional, skipped if unsupported)
+    pub bind_ports: Vec<u16>,         // allowed bind ports
+    pub connect_ports: Vec<u16>,     // allowed connect ports
 }
 
-/// 父进程预编译：glob 展开 + 转 CString，供 pre_exec 闭包只读使用
+/// Parent process pre-compilation: glob expansion + convert to CString, for read-only use by pre_exec closure
 struct PreparedRules {
     abi: LandlockAbi,
-    read_paths: Vec<CString>,   // glob 展开后的具体路径
+    read_paths: Vec<CString>,   // concrete paths after glob expansion
     write_paths: Vec<CString>,
     exec_paths: Vec<CString>,
     bind_ports: Vec<u16>,
@@ -324,16 +326,16 @@ struct PreparedRules {
 }
 
 impl LandlockSandbox {
-    /// spawn + pre_exec(Landlock + drop caps) -> 执行子进程
+    /// spawn + pre_exec(Landlock + drop caps) -> execute child process
     pub fn execute(&self, program: &str, args: &[String]) -> Result<SandboxResult, String> {
-        // 父进程：预编译规则（安全分配）
+        // Parent process: pre-compile rules (safe allocation)
         let prepared = PreparedRules::compile(&self.config.rules);
         let prepared_for_hook = prepared.clone();
 
         let mut child = Command::new(program)
             .args(args)
             .pre_exec(move || {
-                // 子进程内，fork 后 exec 前。async-signal-safe。
+                // Inside child process, after fork, before exec. Async-signal-safe.
                 // 1. landlock_create_ruleset + add_rule(path/net) + restrict_self
                 // 2. capset(drop ALL) + prctl(PR_SET_NO_NEW_PRIVS)
                 apply_landlock(&prepared_for_hook)
@@ -342,29 +344,29 @@ impl LandlockSandbox {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        // 父进程：等待 + 超时 + 读 stdout（无 supervisor，无 /dev/seccomp）
+        // Parent process: wait + timeout + read stdout (no supervisor, no /dev/seccomp)
         // ...
     }
 }
 ```
 
-**pre_exec hook 的工作**（全部用 raw syscall，async-signal-safe）：
+**pre_exec hook operation** (all using raw syscalls, async-signal-safe):
 
 ```rust
 // virbius-core/src/sandbox/landlock.rs
 //
-// 顺序：Landlock -> drop caps（两步，无 seccomp）
+// Order: Landlock -> drop caps (two steps, no seccomp)
 
 fn apply_landlock(rules: &PreparedRules) -> io::Result<ApplyReport> {
     if rules.abi == LandlockAbi::None {
-        // 降级：只 drop caps
+        // Degradation: only drop caps
         return drop_caps_and_no_new_privs();
     }
 
-    // 1. Landlock: 创建 ruleset + 添加规则 + restrict_self
-    //    检测 ABI 版本：v1(5.13+, 文件) / v4(6.7+, 网络)
-    //    不支持网络 v4 则跳过网络规则，只做文件
-    //    Landlock 无 audit 模式，只能 enforce（deny），不产生观测事件
+    // 1. Landlock: create ruleset + add rules + restrict_self
+    //    Detect ABI version: v1(5.13+, file) / v4(6.7+, network)
+    //    Skip network rules if v4 not supported, only do files
+    //    Landlock has no audit mode, only enforce (deny), does not generate observation events
     let fd = syscall(SYS_landlock_create_ruleset, &attr, size, 0)?;
     for path in &rules.read_paths  { add_path_rule(fd, path, ACCESS_FS_READ)?; }
     for path in &rules.write_paths { add_path_rule(fd, path, ACCESS_FS_WRITE)?; }
@@ -376,52 +378,52 @@ fn apply_landlock(rules: &PreparedRules) -> io::Result<ApplyReport> {
     syscall(SYS_landlock_restrict_self, fd, 0)?;
     close(fd);
 
-    // 2. Capabilities: 丢弃所有 CAP_*
-    //    Landlock 不覆盖的威胁面由 drop caps 补充：
-    //    - CAP_NET_RAW: 禁止 raw socket（ping/抓包）
-    //    - CAP_SYS_PTRACE: 禁止 ptrace 注入其他进程（防逃逸）
-    //    - CAP_SYS_ADMIN: 禁止 mount/namespace 操作
-    //    - CAP_NET_ADMIN: 禁止改 iptables/路由
-    //    - CAP_SYS_MODULE: 禁止加载内核模块
+    // 2. Capabilities: drop all CAP_*
+    //    Threat surfaces not covered by Landlock are supplemented by drop caps:
+    //    - CAP_NET_RAW: prohibit raw socket (ping/packet capture)
+    //    - CAP_SYS_PTRACE: prohibit ptrace injection into other processes (escape prevention)
+    //    - CAP_SYS_ADMIN: prohibit mount/namespace operations
+    //    - CAP_NET_ADMIN: prohibit modifying iptables/routing
+    //    - CAP_SYS_MODULE: prohibit loading kernel modules
     drop_caps_and_no_new_privs()?;
 
-    // 3. prctl(PR_SET_NO_NEW_PRIVS) 已包含在上一步
-    // 4. 环境变量无需清理（不再用 LD_PRELOAD / VIRBIUS_* env 传递规则）
+    // 3. prctl(PR_SET_NO_NEW_PRIVS) is already included in the above step
+    // 4. No need to clean environment variables (no longer using LD_PRELOAD / VIRBIUS_* env to pass rules)
     Ok(ApplyReport { landlock_applied: true, caps_dropped: true })
 }
 ```
 
-**Landlock + drop caps 的职责分工**：
+**Landlock + drop caps responsibility division**:
 
-| 威胁 | Landlock 覆盖 | drop caps 覆盖 |
+| Threat | Landlock covers | drop caps covers |
 |------|-------------|---------------|
-| 读越权文件 | ✅ 路径规则 | - |
-| 写越权文件 | ✅ 路径规则 | - |
-| 执行越权二进制 | ✅ 路径规则 | - |
-| raw socket（ping/抓包） | ❌ | ✅ 去 CAP_NET_RAW |
-| ptrace 注入其他进程（逃逸） | ❌ | ✅ 去 CAP_SYS_PTRACE |
-| mount 伪造文件系统 | ❌ | ✅ 去 CAP_SYS_ADMIN |
-| 改 iptables/路由（流量劫持） | ❌ | ✅ 去 CAP_NET_ADMIN |
-| 加载内核模块 | ❌ | ✅ 去 CAP_SYS_MODULE |
+| Read unauthorized files | ✅ Path rules | - |
+| Write unauthorized files | ✅ Path rules | - |
+| Execute unauthorized binaries | ✅ Path rules | - |
+| raw socket (ping/packet capture) | ❌ | ✅ Remove CAP_NET_RAW |
+| ptrace injection into other processes (escape) | ❌ | ✅ Remove CAP_SYS_PTRACE |
+| mount fake filesystem | ❌ | ✅ Remove CAP_SYS_ADMIN |
+| Modify iptables/routing (traffic hijacking) | ❌ | ✅ Remove CAP_NET_ADMIN |
+| Load kernel modules | ❌ | ✅ Remove CAP_SYS_MODULE |
 
-**Landlock ABI 版本适配**：
+**Landlock ABI version adaptation**:
 
 ```rust
 pub fn detect_abi_version() -> LandlockAbi {
-    // 尝试创建 ruleset 测试支持的 ABI 版本
-    // v1 (5.13+): 文件路径
-    // v2 (5.19+): 文件 + 引用
-    // v3 (6.2+):  文件 + 设备
-    // v4 (6.7+): 文件 + 网络
+    // Try creating rulesets to test supported ABI version
+    // v1 (5.13+): file paths
+    // v2 (5.19+): file + references
+    // v3 (6.2+):  file + devices
+    // v4 (6.7+): file + network
     if try_create_ruleset(with_net = true)  { return LandlockAbi::V4; }
     if try_create_ruleset(with_net = false) { return LandlockAbi::V1; }
     LandlockAbi::None
 }
 ```
 
-> **注**：Landlock 网络(v4)需要内核 6.7+，2026 年仍有大量内核不满足。P2 先只做文件路径限制(v1, 5.13+)，网络限制由 NetworkPolicy 承担。
+> **Note**: Landlock network (v4) requires kernel 6.7+, and many kernels still won't meet this requirement in 2026. P2 will first only implement file path restrictions (v1, 5.13+); network restrictions are handled by NetworkPolicy.
 
-**Landlock 规则示例**（read_file 工具）：
+**Landlock rule example** (read_file tool):
 
 ```json
 {
@@ -439,13 +441,13 @@ pub fn detect_abi_version() -> LandlockAbi {
 }
 ```
 
-关于 macOS：不支持 Landlock。macOS 为开发环境，P2 沙箱不启用，降级为同进程执行 + 告警日志。生产环境部署在 Linux/K8s，Landlock 可用。
+Regarding macOS: Landlock is not supported. macOS is a development environment; P2 sandbox is not enabled and degrades to in-process execution with warning logs. Production environments are deployed on Linux/K8s where Landlock is available.
 
-### 2.4 P2: gVisor 子进程 + 预热池
+### 2.4 P2: gVisor Subprocess + Warm Pool
 
-> **P2 实现，P0 不涉及。**
+> **P2 implementation, P0 does not involve.**
 
-对于不可信代码执行，通过 gVisor runsc 启动隔离容器。gVisor 冷启动 1-5 秒，**必须使用预热池**：
+For untrusted code execution, an isolated container is started via gVisor runsc. gVisor cold start is 1-5 seconds; **a warm pool must be used**:
 
 ```rust
 // virbius-core/src/sandbox/gvisor_pool.rs (P2)
@@ -458,8 +460,8 @@ pub struct GvisorPool {
 pub struct GvisorPoolConfig {
     pub runsc_path: String,
     pub rootfs_path: String,
-    pub min_warm: usize,       // 每语言最小预热容器数
-    pub max_idle: usize,       // 每语言最大空闲容器数
+    pub min_warm: usize,       // minimum warm containers per language
+    pub max_idle: usize,       // maximum idle containers per language
     pub memory_limit_bytes: u64,
     pub cpu_quota: f64,
     pub network_disabled: bool,
@@ -467,70 +469,70 @@ pub struct GvisorPoolConfig {
 }
 ```
 
-**执行流程**：`execute(language, code)` → 从预热池获取容器（热路径 ~50ms）→ 写入 stdin → 读取 stdout → 销毁已用容器 → 后台补充新容器。冷启动 1-5s。
+**Execution flow**: `execute(language, code)` → get container from warm pool (hot path ~50ms) → write to stdin → read stdout → destroy used container → background replenishment. Cold start 1-5s.
 
-**降级策略**：gVisor 不可用时（runsc 未安装），自动降级为 Landlock subprocess + 超时 5s 强制 kill + 限制内存。
+**Degradation strategy**: When gVisor is unavailable (runsc not installed), automatically degrade to Landlock subprocess + 5s timeout forced kill + memory limit.
 
-### 2.5 与 virbius-control 的同步
+### 2.5 Synchronization with virbius-control
 
-端层策略复用 virbius-core 现有 manifest 同步机制：
+The Edge layer policy reuses the existing virbius-core manifest synchronization mechanism:
 
 ```rust
-// 扩展 EdgeManifest
+// Extended EdgeManifest
 struct EdgeManifest {
     #[serde(default)]
-    rules: Vec<EdgeRule>,               // 已有：关键词规则
+    rules: Vec<EdgeRule>,               // Existing: keyword rules
     #[serde(default)]
-    dlp_rules: Vec<DlpRule>,            // 已有：DLP 规则
+    dlp_rules: Vec<DlpRule>,            // Existing: DLP rules
     #[serde(default)]
-    tool_policies: Vec<ToolPolicy>,     // 新增：工具策略（allowlist + schema + fast_path）
+    tool_policies: Vec<ToolPolicy>,     // New: tool policies (allowlist + schema + fast_path)
     #[serde(default)]
-    landlock_profiles: HashMap<String, LandlockProfile>, // P2：Landlock 模板
+    landlock_profiles: HashMap<String, LandlockProfile>, // P2: Landlock templates
     sdk_config: SdkConfig,
 }
 ```
 
-> **注**：landlock_profiles 可能体积较大，建议提供独立 fetch 端点 /api/v1/edge/landlock-profiles，不随主 manifest 全量拉取。
+> **Note**: landlock_profiles may be large; it is recommended to provide a separate fetch endpoint `/api/v1/edge/landlock-profiles`, rather than pulling it all at once with the main manifest.
 
 
-### 2.6 MCP Server 集成
+### 2.6 MCP Server Integration
 
-> **本节已拆分至独立文档**：[PROTOCOL.md](PROTOCOL.md) — 包含 MCP Proxy 完整技术方案（架构、协议处理、拦截流程、会话管理、Fallback 策略、错误码定义、配置、部署模式、实现结构、核心代码）。
+> **This section has been split into a separate document**: [PROTOCOL.md](PROTOCOL.md) — Contains the complete MCP Proxy technical solution (architecture, protocol handling, interception flow, session management, fallback strategy, error code definitions, configuration, deployment modes, implementation structure, core code).
 
 ---
 
-### 2.7 快速通道(低风险工具跳过云层)
+### 2.7 Fast Path (Low-Risk Tools Skip Cloud)
 
-对于低风险工具(search、计算器、格式化)，快速通道允许跳过云层 RPC：
+For low-risk tools (search, calculator, formatting), the fast path allows skipping the Cloud RPC:
 
 ```
-低风险工具 (fast_path=true)
-  -> 端层预检 (参数校验 + allowlist)
-  -> 本地 risk 缓存判断 (< threshold?)
-  <- allow (不调 virbius-engine)
-  -> 端层执行 (同进程)
+Low-risk tool (fast_path=true)
+  -> Edge precheck (parameter validation + allowlist)
+  -> Local risk cache check (< threshold?)
+  <- allow (no call to virbius-engine)
+  -> Edge execution (in-process)
 ```
 
-**判断条件（3 项，全部满足才走快速通道）**：
+**Judgment conditions (3 items, all must be satisfied to use fast path)**:
 
-| 条件 | 说明 | 数据来源 |
+| Condition | Description | Data Source |
 |------|------|---------|
-| `fast_path == true` | ToolPolicy 标记为快速通道 | 本地 manifest 缓存 |
-| `sandbox_type == "none"` | 无需沙箱隔离 | 本地 manifest 缓存 |
-| `local_risk < threshold` | 本地缓存的 session 风险分低于阈值（默认 30） | 本地 SessionStateCache |
+| `fast_path == true` | ToolPolicy marked as fast path | Local manifest cache |
+| `sandbox_type == "none"` | No sandbox isolation needed | Local manifest cache |
+| `local_risk < threshold` | Locally cached session risk score below threshold (default 30) | Local SessionStateCache |
 
-任一条件不满足时，回退到全链路。
+If any condition is not met, fall back to the full chain.
 
-> **简化说明**：原设计有 4 个条件（含 `tool_name in fast_allowlist`），但 `fast_path == true` 已是 per-tool 策略标记，与 `fast_allowlist` 语义重复，故合并为 3 项。
+> **Simplification note**: The original design had 4 conditions (including `tool_name in fast_allowlist`), but `fast_path == true` is already a per-tool policy marker, semantically duplicating `fast_allowlist`, so it has been consolidated to 3 items.
 
-**SessionStateCache——本地风险分缓存**：
+**SessionStateCache — Local risk score cache**:
 
-快速通道的核心问题是：`session_risk_score` 由云层 engine 计算，端层如何低延迟获取？答案是端层维护本地缓存，不实时查云层。
+The core issue of the fast path is: `session_risk_score` is computed by the Cloud engine; how can the Edge obtain it with low latency? The answer is that the Edge maintains a local cache and does not query the Cloud in real time.
 
 ```
-┌─── 端层 Proxy / 管层 Higress ──────────────────────┐
+┌─── Edge Proxy / Gateway Higress ──────────────────────┐
 │                                                      │
-│  SessionStateCache (内存 LRU, TTL=60s)               │
+│  SessionStateCache (in-memory LRU, TTL=60s)           │
 │  ┌──────────────────────────────────────────────┐    │
 │  │ session_id -> { risk_score, last_updated }   │    │
 │  │                                              │    │
@@ -538,143 +540,143 @@ struct EdgeManifest {
 │  │ "sess_def" -> { risk: 45, updated: 12:00:15 }│    │
 │  └──────────────────────────────────────────────┘    │
 │                                                      │
-│  更新来源（3 种，互为补充）：                           │
-│  1. 全链路返回时回填：engine /v1/evaluate 响应含        │
-│     risk_score -> 同步更新本地缓存                      │
-│  2. Redis pub/sub 异步推送：engine 计算完风险后发布     │
-│     到 channel "risk:{session_id}" -> 端层订阅更新     │
-│  3. TTL 过期兜底：缓存条目 60s 过期后，下次请求强制      │
-│     走全链路（回退到来源 1 回填）                        │
+│  Update sources (3 types, complementary):             │
+│  1. Full-chain response backfill: engine /v1/evaluate │
+│     response includes risk_score -> sync update local cache  │
+│  2. Redis pub/sub async push: engine publishes after  │
+│     computing risk to channel "risk:{session_id}" -> Edge subscribes  │
+│  3. TTL expiry fallback: cache entry expires after 60s, │
+│     next request forced to full chain (falls back to source 1 backfill) │
 │                                                      │
-│  读取：快速通道判断时直接读内存，零网络开销               │
+│  Read: direct memory read during fast path judgment, zero network overhead │
 └──────────────────────────────────────────────────────┘
 ```
 
-| 更新机制 | 延迟 | 触发条件 | 说明 |
+| Update Mechanism | Latency | Trigger Condition | Description |
 |---------|------|---------|------|
-| 全链路回填 | 实时 | 每次全链路调用返回 | engine 响应 body 含 `risk_score`，Proxy 同步写入缓存 |
-| Redis pub/sub | ~1ms | engine 异步风险更新 | engine 发布 `risk:{session_id}` → Proxy 订阅更新 |
-| TTL 过期 | 60s | 缓存条目超时 | 过期后 `local_risk` 视为 `None`，强制走全链路 |
+| Full-chain backfill | Real-time | Each full-chain call return | engine response body contains `risk_score`, Proxy writes to cache synchronously |
+| Redis pub/sub | ~1ms | engine async risk update | engine publishes `risk:{session_id}` → Proxy subscribes and updates |
+| TTL expiry | 60s | Cache entry timeout | After expiry, `local_risk` is treated as `None`, forcing full chain |
 
-> **设计决策：不主动查 Redis/Engine 获取 risk_score**
+> **Design decision: Do not proactively query Redis/Engine for risk_score**
 >
-> 快速通道的目标是"零网络开销决策"。每次调用都查 Redis（~1ms）或 Engine（~10-50ms）会抵消快速通道的意义。改为：
-> - **写时更新**：全链路调用返回时回填缓存（被动更新）
-> - **推送更新**：engine 异步计算后通过 Redis pub/sub 推送（主动更新）
-> - **过期回退**：缓存 TTL 过期后强制走全链路（安全兜底）
+> The goal of the fast path is "zero network overhead decision making". Querying Redis (~1ms) or Engine (~10-50ms) on every call would negate the benefit of the fast path. Instead:
+> - **Write-update**: backfill cache when full-chain call returns (passive update)
+> - **Push update**: engine asynchronously computes then pushes via Redis pub/sub (active update)
+> - **Expiry fallback**: cache TTL expiry forces full chain (safety fallback)
 >
-> 最坏情况：risk_score 滞后 60s。在此期间若 session 风险已升高但缓存未更新，快速通道可能放行本应拦截的请求。缓解措施：快速通道工具的审计事件全量采样（sample_rate=1.0），engine 异步复核发现违规后通过 pub/sub 提升风险分，后续请求立即退出快速通道。
+> Worst case: risk_score is delayed by 60s. During this time, if the session risk has increased but the cache hasn't been updated, the fast path might allow requests that should have been blocked. Mitigation: fast path tool audit events are fully sampled (sample_rate=1.0); engine async review detects violations and raises the risk score via pub/sub, causing subsequent requests to immediately exit the fast path.
 
-**冷启动防护**：新 session 无缓存条目（`local_risk == None`），前 N 次调用强制走全链路（warmup），N 次后缓存填充完毕且 risk < threshold 才开放快速通道。
+**Cold start protection**: New sessions have no cache entry (`local_risk == None`); the first N calls are forced through the full chain (warmup). After N calls, once the cache is populated and risk < threshold, the fast path is opened.
 
-**fail-open/fail-closed**：virbius-engine 不可用时（网络分区），高风险工具 fail-closed(deny)，低风险工具 fail-open(allow + 全量审计)。
+**fail-open/fail-closed**: When virbius-engine is unavailable (network partition), high-risk tools are fail-closed (deny), low-risk tools are fail-open (allow + full audit).
 
-**风险缓解**：快速通道工具的审计事件全量采样(sample_rate=1.0)，异步送 virbius-engine 复核。若异步复核发现违规，提升 session_risk_score（通过 pub/sub 推送），后续请求自动退出快速通道。
+**Risk mitigation**: Fast path tool audit events are fully sampled (sample_rate=1.0) and sent asynchronously to virbius-engine for review. If async review detects a violation, session_risk_score is raised (via pub/sub push), and subsequent requests automatically exit the fast path.
 
-### 2.8 Prompt Gateway（提示增强）
+### 2.8 Prompt Gateway (Prompt Enhancement)
 
-Prompt Gateway 是端层的**预防性**安全组件，在 Agent 发送 prompt 到 LLM 前注入安全约束。与工具拦截（检测性）互补，形成"预防 + 检测"纵深防御。
+The Prompt Gateway is a **preventive** security component at the Edge layer, injecting safety constraints before the Agent sends prompts to the LLM. It complements tool interception (detective), forming a "prevention + detection" defense-in-depth.
 
 ```
-Agent 生成 prompt
+Agent generates prompt
   |
   v
-Prompt Gateway（嵌入 virbius-core，<0.5ms）
-  |  <- 注入宪法约束（from virbius-control，本地缓存）
-  |  <- 注入工具规则（from License permissions）
-  |  <- 注入动态上下文（session risk + 最近工具调用）
-  |  <- PII 输入脱敏（复用 dlp/engine.rs）
+Prompt Gateway (embedded in virbius-core, <0.5ms)
+  |  <- Inject constitutional constraints (from virbius-control, local cache)
+  |  <- Inject tool rules (from License permissions)
+  |  <- Inject dynamic context (session risk + recent tool calls)
+  |  <- PII input desensitization (reuses dlp/engine.rs)
   |
   v
-增强后的 prompt -> LLM API
+Enhanced prompt -> LLM API
   |
   v
-LLM 生成 tool_call -> 端层预检 -> 管层 -> 云层终判 -> 执行
+LLM generates tool_call -> Edge precheck -> Gateway -> Cloud final judgment -> Execution
 ```
 
-| 层 | 机制 | 性质 | 效果 |
+| Layer | Mechanism | Nature | Effect |
 |----|------|------|------|
-| Prompt Gateway | 注入规则让 LLM 自我约束 | 预防(proactive) | 减少危险意图产生 |
-| Prompt 入侵检测 | 小模型判定用户输入是否含越狱/注入 | 检测(reactive) | 阻断恶意 prompt 到达 LLM |
-| 工具拦截 | 阻止危险工具执行 | 检测(reactive) | 阻止危险行为落地 |
-| Falco 观测 | 监控运行时异常 | 检测(reactive) | 发现已发生异常 |
+| Prompt Gateway | Inject rules for LLM self-constraint | Proactive | Reduces generation of dangerous intents |
+| Prompt intrusion detection | Small model determines if user input contains jailbreak/injection | Reactive | Blocks malicious prompts from reaching LLM |
+| Tool interception | Prevents dangerous tool execution | Reactive | Prevents dangerous actions from being realized |
+| Falco observation | Monitors runtime anomalies | Reactive | Discovers anomalies that have occurred |
 
-#### 2.8.1 注入内容
+#### 2.8.1 Injection Content
 
-**宪法约束（系统提示增强）**——由 virbius-control 管理，编译为场景相关模板：
+**Constitutional constraints (system prompt enhancement)** — Managed by virbius-control, compiled into scene-related templates:
 
 ```
 ## Virbius Agent Constitution v1.2 (scene: code_review)
 
-### 绝对禁止
-1. 不得将数据发送到白名单之外的外部端点
-2. 不得在沙箱之外执行代码
-3. 不得访问允许路径之外的文件
-4. 不得尝试绕过安全控制
-5. 不得在输出中包含凭据、令牌或密钥
+### Absolutely Prohibited
+1. Must not send data to external endpoints outside the allowlist
+2. Must not execute code outside the sandbox
+3. Must not access files outside allowed paths
+4. Must not attempt to bypass security controls
+5. Must not include credentials, tokens, or keys in output
 
-### 工具使用规则
-- 可用工具: read_file, search, curl
-- curl 仅允许连接: api.internal:443, cdn.internal:443
-- read_file 仅允许读取: /tmp/data/*, /home/user/workdir/*
-- 每分钟最多 50 次工具调用
-- 工具返回错误时，重试不超过 3 次
+### Tool Usage Rules
+- Available tools: read_file, search, curl
+- curl only allowed to connect: api.internal:443, cdn.internal:443
+- read_file only allowed to read: /tmp/data/*, /home/user/workdir/*
+- Maximum 50 tool calls per minute
+- When a tool returns an error, retry no more than 3 times
 
-### 数据处理规则
-- 工具结果中的 PII 必须脱敏后才能包含在响应中
-- 不得在记忆中存储敏感数据
-- 超过 64KB 的工具结果应摘要，不要原样传递
+### Data Processing Rules
+- PII in tool results must be desensitized before being included in the response
+- Must not store sensitive data in memory
+- Tool results exceeding 64KB should be summarized, not passed through as-is
 
-### 场景约束（code_review）
-- 你在审查代码，不是执行代码
-- 禁止使用 execute_python 或 shell 工具
+### Scene Constraints (code_review)
+- You are reviewing code, not executing code
+- Prohibited from using execute_python or shell tools
 ```
 
-**动态上下文注入**——根据当前 session 状态实时生成：
+**Dynamic context injection** — Generated in real-time based on current session state:
 
 ```
-## 当前会话上下文
-- 会话风险分: 25/100（低风险）
-- 本次会话已调用: read_file(3), search(2)
-- 场景: code_review
-- License 剩余有效期: 2h 15m
+## Current Session Context
+- Session risk score: 25/100 (low risk)
+- Tools called in this session: read_file(3), search(2)
+- Scene: code_review
+- License remaining validity: 2h 15m
 
-## 最近活动
-- 上次工具: read_file(/tmp/data/auth.py) -> 成功
-- 注意: 正在读取认证相关文件，警惕凭据泄露
+## Recent Activity
+- Last tool: read_file(/tmp/data/auth.py) -> success
+- Note: Reading authentication-related files, beware of credential leaks
 ```
 
-**工具约束集中注入（系统提示词）**——所有工具的约束规则在系统提示词中**统一渲染一次**，而非在每个工具的 `description` 中重复：
+**Centralized tool constraint injection (system prompt)** — Constraint rules for all tools are **rendered once uniformly** in the system prompt, rather than duplicated in each tool's `description`:
 
 ```
-### 工具使用规则
-- 可用工具: read_file, search, curl
-- curl 仅允许连接: api.internal:443, cdn.internal:443
-- read_file 仅允许读取: /tmp/data/*, /home/user/workdir/*
-- 每分钟最多 50 次工具调用
-- 工具返回错误时，重试不超过 3 次
+### Tool Usage Rules
+- Available tools: read_file, search, curl
+- curl only allowed to connect: api.internal:443, cdn.internal:443
+- read_file only allowed to read: /tmp/data/*, /home/user/workdir/*
+- Maximum 50 tool calls per minute
+- When a tool returns an error, retry no more than 3 times
 ```
 
-> **Token 节省对比**（以 10 个工具为例）：
+> **Token savings comparison** (using 10 tools as example):
 >
-> | 方案 | Token 消耗 | 说明 |
+> | Approach | Token Consumption | Description |
 > |------|-----------|------|
-> | ~~旧：description 注入~~ | ~500 token | 每工具 ~50 token × 10 工具 |
-> | 新：系统提示词集中注入 | ~80 token | 约束规则只在 system prompt 出现一次 |
-> | 节省 | ~420 token | **减少 ~84%** |
+> | ~~Old: description injection~~ | ~500 tokens | ~50 tokens per tool × 10 tools |
+> | New: centralized system prompt injection | ~80 tokens | Constraint rules appear only once in system prompt |
+> | Savings | ~420 tokens | **Reduction of ~84%** |
 >
-> 工具 `description` 保持原始简洁文本不变；结构化约束通过 MCP `annotations` 字段传递（[§2.6.1](PROTOCOL.md)），供 MCP 客户端 UI 和预检逻辑消费，不进入 LLM prompt。
+> Tool `description` remains original concise text unchanged; structured constraints are passed through MCP `annotations` field ([§2.6.1](PROTOCOL.md)), consumed by MCP client UI and precheck logic, not entering the LLM prompt.
 
-**PII 输入脱敏**——复用现有 virbius-core/src/dlp/engine.rs，在 prompt 发送前脱敏用户输入。
+**PII input desensitization** — Reuses existing virbius-core/src/dlp/engine.rs to desensitize user input before sending the prompt.
 
-#### 2.8.2 实现
+#### 2.8.2 Implementation
 
 ```rust
 // virbius-core/src/prompt_gateway.rs
 
 pub struct PromptGateway {
-    constitution_cache: RwLock<ConstitutionTemplates>,  // 本地缓存，sync from control
-    dlp_engine: DlpEngine,                               // 复用现有
+    constitution_cache: RwLock<ConstitutionTemplates>,  // local cache, synced from control
+    dlp_engine: DlpEngine,                               // reuses existing
 }
 
 pub struct EnhanceContext<'a> {
@@ -686,27 +688,27 @@ pub struct EnhanceContext<'a> {
 }
 
 impl PromptGateway {
-    /// 增强 prompt，返回增强后的 messages
+    /// Enhance prompt, return enhanced messages
     pub fn enhance(
         &self,
         messages: &mut Vec<ChatMessage>,
         ctx: &EnhanceContext,
     ) -> Result<()> {
-        // 1. 宪法约束注入（prepend to system message）
-        //    含：禁止规则 + 工具使用规则（集中渲染，不修改各工具 description）
+        // 1. Constitutional constraint injection (prepend to system message)
+        //    Includes: prohibition rules + tool usage rules (centrally rendered, does not modify per-tool description)
         let constitution = self.constitution_cache.read();
         let rules = constitution.select(ctx.scene, ctx.license.constitution_version);
-        let system_augment = rules.render(ctx);  // 渲染含 tool_constraints 的完整宪法
+        let system_augment = rules.render(ctx);  // render complete constitution including tool_constraints
         self.prepend_system(messages, &system_augment)?;
 
-        // 2. 动态上下文注入（append to system message）
+        // 2. Dynamic context injection (append to system message)
         let dynamic_ctx = self.render_dynamic_context(ctx);
         self.append_system(messages, &dynamic_ctx)?;
 
-        // （已移除）工具描述增强 —— 不再修改各工具 description，避免 token 膨胀
-        // 工具约束改为在 step 1 的宪法系统提示词中集中渲染（§2.8.1）
+        // (Removed) Tool description enhancement — no longer modifies per-tool description to avoid token bloat
+        // Tool constraints are instead centrally rendered in the constitutional system prompt (step 1) (§2.8.1)
 
-        // 3. PII 输入脱敏（仅 user/assistant 消息，不改 system）
+        // 3. PII input desensitization (user/assistant messages only, not system)
         for msg in messages.iter_mut() {
             if msg.role == Role::User || msg.role == Role::Assistant {
                 msg.content = self.dlp_engine.desensitize_in(
@@ -720,35 +722,35 @@ impl PromptGateway {
 }
 ```
 
-#### 2.8.3 Agent 框架集成
+#### 2.8.3 Agent Framework Integration
 
-| 框架 | 集成方式 | 拦截点 |
+| Framework | Integration Method | Interception Point |
 |------|---------|--------|
-| **OpenAI SDK** | EnhancedOpenAIClient 代理，在 chat.completions.create() 前调 gateway.enhance() | 请求发送前 |
-| **LangChain** | ConstitutionalPromptTemplate，在 LLMChain.invoke() 前增强 | prompt 模板渲染后 |
-| **通用 HTTP proxy** | 独立服务，拦截 LLM API 请求，增强 body 后转发 | HTTP 层 |
-| **MCP proxy 模式** | 复用 [§2.6](PROTOCOL.md) MCP proxy，在转发前增强 | tools/call 前 |
+| **OpenAI SDK** | EnhancedOpenAIClient proxy, calls gateway.enhance() before chat.completions.create() | Before request is sent |
+| **LangChain** | ConstitutionalPromptTemplate, enhances before LLMChain.invoke() | After prompt template rendering |
+| **Generic HTTP proxy** | Standalone service, intercepts LLM API requests, enhances body then forwards | HTTP layer |
+| **MCP proxy mode** | Reuses [§2.6](PROTOCOL.md) MCP proxy, enhances before forwarding | Before tools/call |
 
-#### 2.8.4 宪法模板编译
+#### 2.8.4 Constitutional Template Compilation
 
 ```
 virbius-control
   |
-  +-- tb_constitution（宪法规则表）
+  +-- tb_constitution (constitution rules table)
   |   +-- id, version, category, rule_text, priority, scene_filter
   |
   +-- virbius-compiler
-  |   +-- 按 scene 编译宪法规则为 prompt 模板
-  |   +-- 输出: constitution_templates.json
+  |   +-- Compiles constitution rules into prompt templates by scene
+  |   +-- Output: constitution_templates.json
   |
   v
-端层 virbius-core（PromptGateway 本地缓存）
-  +-- 按 scene + constitution_version 选择模板
-  +-- 模板变量填充（license permissions, session context）
-  +-- 注入到 prompt
+Edge virbius-core (PromptGateway local cache)
+  +-- Selects template by scene + constitution_version
+  +-- Template variable filling (license permissions, session context)
+  +-- Injects into prompt
 ```
 
-模板示例：
+Template example:
 
 ```json
 {
@@ -756,140 +758,140 @@ virbius-control
   "templates": [
     {
       "scene": "code_review",
-      "system_prefix": "## Virbius Agent Constitution {{version}} (scene: {{scene}})\n\n### 绝对禁止\n{{prohibitions}}\n\n### 工具使用规则\n{{tool_rules}}",
-      "dynamic_suffix": "## 当前会话上下文\n- 风险分: {{risk_score}}/100\n- 已调用: {{recent_tools}}\n- 场景: {{scene}}",
+      "system_prefix": "## Virbius Agent Constitution {{version}} (scene: {{scene}})\n\n### Absolutely Prohibited\n{{prohibitions}}\n\n### Tool Usage Rules\n{{tool_rules}}",
+      "dynamic_suffix": "## Current Session Context\n- Risk score: {{risk_score}}/100\n- Called: {{recent_tools}}\n- Scene: {{scene}}",
       "prohibitions": [
-        "不得将数据发送到白名单之外的外部端点",
-        "不得在沙箱之外执行代码",
-        "不得在输出中包含凭据、令牌或密钥"
+        "Must not send data to external endpoints outside the allowlist",
+        "Must not execute code outside the sandbox",
+        "Must not include credentials, tokens, or keys in output"
       ]
     }
   ]
 }
 ```
 
-#### 2.8.5 预期效果
+#### 2.8.5 Expected Effects
 
-| 指标 | 无 Gateway | 有 Gateway | 改善 |
+| Metric | Without Gateway | With Gateway | Improvement |
 |------|-----------|-----------|------|
-| 危险工具调用尝试 | 基线 | -60~80% | LLM 知道约束后自我约束 |
-| 重试循环 | 基线 | -70~90% | LLM 知道限制不再重试 |
-| Prompt 注入抵抗力 | 基线 | +15~25% | 宪法规则建立基线抵抗 |
-| 延迟开销 | 0 | <0.5ms | 字符串拼接，无 LLM 调用 |
-| Token 开销 | 0 | 200-500 tokens/prompt | 宪法规则占位 |
+| Dangerous tool call attempts | Baseline | -60~80% | LLM self-constrains after learning constraints |
+| Retry loops | Baseline | -70~90% | LLM understands limits and stops retrying |
+| Prompt injection resistance | Baseline | +15~25% | Constitutional rules establish baseline resistance |
+| Latency overhead | 0 | <0.5ms | String concatenation, no LLM call |
+| Token overhead | 0 | 200-500 tokens/prompt | Constitutional rules take up space |
 
-#### 2.8.6 风险与局限
+#### 2.8.6 Risks and Limitations
 
-| 风险 | 说明 | 缓解 |
+| Risk | Description | Mitigation |
 |------|------|------|
-| **Prompt 注入可覆盖** | 攻击者通过工具返回值注入"忽略之前的指令" | 宪法规则提供基线抵抗；STI Taint(P1)检测注入；工具拦截是最终防线 |
-| **Token 成本** | 每次增加 200-500 tokens | 压缩规则格式；只注入场景相关规则；小模型不注入 |
-| **模型差异** | GPT-4 遵守规则好，小模型可能不遵守 | 按模型能力调整注入格式；小模型依赖工具拦截 |
-| **非替代工具拦截** | Prompt Gateway 是预防不是阻断 | 永远不能单独依赖；必须与工具拦截 + Falco 观测配合 |
+| **Prompt injection can override** | Attacker injects "ignore previous instructions" via tool return values | Constitutional rules provide baseline resistance; STI Taint (P1) detects injection; tool interception is the final line of defense |
+| **Token cost** | 200-500 tokens added each time | Compress rule format; only inject scene-relevant rules; skip injection for small models |
+| **Model variance** | GPT-4 follows rules well, small models may not | Adjust injection format based on model capability; small models rely on tool interception |
+| **Not a substitute for tool interception** | Prompt Gateway is preventive, not blocking | Must never be relied upon alone; must be combined with tool interception + Falco observation |
 
-#### 2.8.7 Prompt 入侵检测（prompt runtime 重新定位）
+#### 2.8.7 Prompt Intrusion Detection (prompt runtime repositioned)
 
-VirbiusLLM 的 `prompt` rule runtime（NL 描述 → 1B 模型判定文本是否违规）是 LLM 内容审核能力。VirbiusAgent **不复用其内容审核语义**，但**复用其基础设施**（规则 CRUD + mlPredict 调用 + 审计），重新定位为**用户输入越狱/注入检测层**。
+VirbiusLLM's `prompt` rule runtime (NL description → 1B model determines if text violates rules) is an LLM content moderation capability. VirbiusAgent **does not reuse its content moderation semantics**, but **reuses its infrastructure** (rule CRUD + mlPredict call + audit), repositioned as a **user input jailbreak/injection detection layer**.
 
-**设计动机**：Prompt Gateway（§2.8）是预防性机制（注入宪法约束，靠 LLM 自觉遵守），对用户输入本身无检测性判定。`prompt` runtime 重新定位后填补此缺口，形成"预防 + 检测"的 prompt 纵深：
+**Design motivation**: Prompt Gateway (§2.8) is a preventive mechanism (injects constitutional constraints, relies on LLM voluntary compliance); it has no detection-based judgment on user input itself. The `prompt` runtime, after repositioning, fills this gap, forming a "prevention + detection" prompt defense-in-depth:
 
 ```
-用户输入 prompt
+User input prompt
   |
   v
-[检测] prompt runtime（小模型判定越狱/注入）
-  |     +-- 命中 → block 或提升 session_risk_score
-  |     +-- 未命中 → 继续
+[Detection] prompt runtime (small model determines jailbreak/injection)
+  |     +-- Hit → block or raise session_risk_score
+  |     +-- No hit → continue
   v
-[预防] Prompt Gateway（注入宪法约束 + PII 脱敏）
+[Prevention] Prompt Gateway (inject constitutional constraints + PII desensitization)
   |
   v
-增强后的 prompt -> LLM API
+Enhanced prompt -> LLM API
   |
   v
-LLM 生成 tool_call -> 工具拦截（Groovy L3 + schema + allowlist）
+LLM generates tool_call -> Tool interception (Groovy L3 + schema + allowlist)
 ```
 
-**与 VirbiusLLM prompt runtime 的区别**：
+**Differences from VirbiusLLM prompt runtime**:
 
-| 维度 | VirbiusLLM（原用法） | VirbiusAgent（重新定位） |
+| Dimension | VirbiusLLM (original usage) | VirbiusAgent (repositioned) |
 |------|---------------------|------------------------|
-| 判定对象 | prompt + response 文本 | 仅用户输入 prompt |
-| 判定目标 | 内容安全（暴力/色情/违规） | 越狱/注入（DAN/ignore previous/角色劫持） |
-| 模型 | 1B 内容分类模型 | qwen3guard:0.6b（复用 STI Taint 同模型） |
-| 命中动作 | block + 审计 | block 或提升 session_risk_score + 审计 |
-| 规则配置 | NL 描述（运营台 prompt runtime） | 同（复用现有规则 UI） |
-| 与 Prompt Gateway 关系 | 无 | 互补：Gateway 预防，runtime 检测 |
+| Judgment target | prompt + response text | User input prompt only |
+| Judgment goal | Content safety (violence/pornography/violations) | Jailbreak/injection (DAN/ignore previous/role hijacking) |
+| Model | 1B content classification model | qwen3guard:0.6b (reuses same model as STI Taint) |
+| Hit action | block + audit | block or raise session_risk_score + audit |
+| Rule configuration | NL description (ops console prompt runtime) | Same (reuses existing rule UI) |
+| Relationship with Prompt Gateway | None | Complementary: Gateway prevents, runtime detects |
 
-**规则配置**：复用现有运营台 cloud 层 `prompt` runtime 的规则 CRUD（NL 描述 → 触发条件）。运营人员编写如"检测 DAN 越狱尝试"、"检测 ignore previous instructions 注入"等规则，engine 通过 mlPredict 调用小模型判定。
+**Rule configuration**: Reuses existing ops console Cloud layer `prompt` runtime rule CRUD (NL description → trigger conditions). Operators write rules such as "detect DAN jailbreak attempts", "detect ignore previous instructions injection", etc.; the engine uses mlPredict to call the small model for judgment.
 
-**成本控制**：与 STI Taint 共享 qwen3guard:0.6b 小模型（本地 Ollama 部署，单次 <200ms）。仅对用户输入触发，不对工具返回值触发（后者由 STI Taint 覆盖）。
+**Cost control**: Shares qwen3guard:0.6b small model with STI Taint (local Ollama deployment, single call <200ms). Only triggered on user input, not on tool return values (the latter is covered by STI Taint).
 
-**命中策略**：
+**Hit strategy**:
 
-| session_risk_score | 命中动作 | 说明 |
+| session_risk_score | Hit Action | Description |
 |-------------------|---------|------|
-| < 30 | block + 审计 | 低风险 session 直接阻断 |
-| 30-60 | allow + 提升 risk_score + 审计 | 中风险允许但累积风险 |
-| > 60 | block + 审计 | 高风险 session 直接阻断 |
+| < 30 | block + audit | Low-risk session directly blocked |
+| 30-60 | allow + raise risk_score + audit | Medium-risk allowed but risk accumulates |
+| > 60 | block + audit | High-risk session directly blocked |
 
-**与 STI 的分工**：
+**Division of labor with STI**:
 
-| 检测层 | 作用对象 | 触发条件 | 机制 |
+| Detection Layer | Target | Trigger Condition | Mechanism |
 |--------|---------|---------|------|
-| **prompt runtime（本节）** | 用户输入 prompt | 每次用户输入 | 小模型判定越狱/注入 |
-| **STI Taint（§5.4）** | 工具返回值 | 返回值 >2KB 或含注入标记 | 小模型判定返回值是否含注入指令 |
+| **prompt runtime (this section)** | User input prompt | Each user input | Small model determines jailbreak/injection |
+| **STI Taint (§5.4)** | Tool return values | Return value >2KB or contains injection markers | Small model determines if return value contains injection instructions |
 
-两者共同覆盖 prompt 注入的两个入口（用户输入 + 工具返回值），与 Prompt Gateway（预防）和工具拦截（执行阻断）构成四层纵深。
+Both jointly cover the two entry points of prompt injection (user input + tool return values), forming a four-layer defense-in-depth with Prompt Gateway (prevention) and tool interception (execution blocking).
 
-### 2.9 记忆管控（Memory Interceptor）
+### 2.9 Memory Control (Memory Interceptor)
 
-> **P1 实现。** Agent 记忆（long-term memory / vector store）是 prompt 注入的持久化载体——攻击者可通过工具返回值将恶意指令写入记忆，在后续会话中被召回执行。Memory Interceptor 拦截 Agent 记忆的读写，实现脱敏 + 注入检测 + 审计。
+> **P1 implementation.** Agent memory (long-term memory / vector store) is a persistent carrier for prompt injection—attackers can write malicious instructions into memory via tool return values, which are recalled and executed in subsequent sessions. The Memory Interceptor intercepts Agent memory reads and writes, implementing desensitization + injection detection + audit.
 
-**拦截点**：
+**Interception points**:
 
 ```
-Agent 记忆操作
+Agent memory operations
   |
-  +-- 写入（write/save/embed）
-  |    → [脱敏] PII 检测 + 替换（复用 dlp/engine.rs）
-  |    → [注入检测] 小模型判定是否含恶意指令
-  |    → [审计] 记录原始/脱敏后内容 + 检测结果
-  |    → 通过 → 写入记忆存储
-  |    → 拦截 → 丢弃 + 提升 session_risk_score
+  +-- Write (write/save/embed)
+  |    → [Desensitization] PII detection + replacement (reuses dlp/engine.rs)
+  |    → [Injection detection] Small model determines if contains malicious instructions
+  |    → [Audit] Record original/desensitized content + detection result
+  |    → Pass → Write to memory store
+  |    → Intercept → Discard + raise session_risk_score
   |
-  +-- 读取（read/search/recall）
-       → [注入检测] 判定召回内容是否含注入标记
-       → [审计] 记录召回内容 + 检测结果
-       → 通过 → 返回 Agent
-       → 拦截 → 过滤恶意片段 + 告警
+  +-- Read (read/search/recall)
+       → [Injection detection] Determine if recalled content contains injection markers
+       → [Audit] Record recalled content + detection result
+       → Pass → Return to Agent
+       → Intercept → Filter malicious segments + alert
 ```
 
-**框架集成**：
+**Framework integration**:
 
-| 框架 | 集成方式 | 拦截点 |
+| Framework | Integration Method | Interception Point |
 |------|---------|--------|
-| **LangChain** | MemoryInterceptor wrapper，包装 Memory.save_context() / Memory.load_memory_variables() | 记忆读写 API |
-| **OpenAI SDK** | 拦截 Assistants API 的 message create/retrieve | API 调用层 |
-| **通用** | 独立记忆代理服务，Agent 记忆操作经代理转发 | HTTP/gRPC proxy |
+| **LangChain** | MemoryInterceptor wrapper, wrapping Memory.save_context() / Memory.load_memory_variables() | Memory read/write API |
+| **OpenAI SDK** | Intercept Assistants API message create/retrieve | API call layer |
+| **Generic** | Standalone memory proxy service, Agent memory operations go through proxy | HTTP/gRPC proxy |
 
-**数据模型**：
+**Data model**:
 
 ```rust
 // virbius-core/src/memory_interceptor.rs (P1)
 
 pub struct MemoryInterceptor {
-    dlp_engine: DlpEngine,                              // 复用现有 PII 脱敏
-    guard_model: GuardModelClient,                      // qwen3guard:0.6b，复用 STI Taint
+    dlp_engine: DlpEngine,                              // reuses existing PII desensitization
+    guard_model: GuardModelClient,                      // qwen3guard:0.6b, reuses STI Taint
     policies: MemoryPolicies,                           // from virbius-control
 }
 
 pub struct MemoryPolicies {
-    pub desensitize_on_write: bool,                     // 写入时脱敏
-    pub detect_injection_on_write: bool,                // 写入时注入检测
-    pub detect_injection_on_read: bool,                 // 读取时注入检测
-    pub max_memory_entry_size: usize,                   // 单条记忆大小上限（默认 4KB）
-    pub blocked_patterns: Vec<String>,                  // 禁止写入的模式
+    pub desensitize_on_write: bool,                     // desensitize on write
+    pub detect_injection_on_write: bool,                // injection detection on write
+    pub detect_injection_on_read: bool,                 // injection detection on read
+    pub max_memory_entry_size: usize,                   // maximum single memory entry size (default 4KB)
+    pub blocked_patterns: Vec<String>,                  // patterns prohibited from writing
 }
 
 pub struct MemoryAuditEvent {
@@ -904,77 +906,77 @@ pub struct MemoryAuditEvent {
 }
 ```
 
-**脱敏策略**：
+**Desensitization strategy**:
 
-| 场景 | 处理 |
+| Scenario | Handling |
 |------|------|
-| 写入记忆含 PII（手机号/身份证/邮箱/银行卡） | 脱敏后写入（复用 dlp/engine.rs desensitize_in），原始值存 vault |
-| 写入记忆含凭据/密钥模式 | 直接 block + 审计 |
-| 读取召回内容含 PII | 不脱敏（Agent 需原始值执行工具），但审计记录 |
+| Memory write contains PII (phone number/ID number/email/bank card) | Write after desensitization (reuses dlp/engine.rs desensitize_in), store original value in vault |
+| Memory write contains credential/key patterns | Direct block + audit |
+| Read recalled content contains PII | No desensitization (Agent needs original values to execute tools), but audit record |
 
-**注入检测**：
+**Injection detection**:
 
-| 检测项 | 机制 | 命中动作 |
+| Detection Item | Mechanism | Hit Action |
 |--------|------|---------|
-| "ignore previous instructions" 等注入标记 | qwen3guard 小模型判定 | 写入：block；读取：过滤片段 |
-| 工具返回值原样写入记忆（未摘要） | 规则：内容与工具返回值 hash 匹配 | block + 提示 Agent 摘要后写入 |
-| 记忆内容超过 max_memory_entry_size | 规则：size 检查 | block + 提示摘要 |
+| "ignore previous instructions" and other injection markers | qwen3guard small model judgment | Write: block; Read: filter segment |
+| Tool return value written to memory verbatim (not summarized) | Rule: content hash matches tool return value | block + prompt Agent to summarize before writing |
+| Memory content exceeds max_memory_entry_size | Rule: size check | block + prompt summarization |
 
-**与 session risk 联动**：记忆注入检测命中时，session_risk_score +15。同一 session 累计命中 3 次记忆注入，强制断开连接。
+**Integration with session risk**: When memory injection detection hits, session_risk_score +15. If the same session accumulates 3 memory injection hits, force disconnect.
 
-### 2.10 输出审查（Output Review）
+### 2.10 Output Review
 
-> **工具结果审查已实现；Agent 最终输出审查为设计建议，待应用层集成。** 实际实现复用 Engine `/v1/evaluate` 端点，而非新建独立 `OutputReviewer` 类。工具结果审查已在 MCP Proxy 中实现；Agent 最终输出审查（方案 B）需应用层自行调用 `/v1/evaluate`，目前代码库中未包含应用层集成代码。详见 [DESIGN.md §13.7](DESIGN.md#137-输出审查output-review)。
+> **Tool result review is implemented; Agent final output review is a design suggestion pending application layer integration.** The actual implementation reuses the Engine `/v1/evaluate` endpoint, rather than creating a new standalone `OutputReviewer` class. Tool result review is already implemented in the MCP Proxy; Agent final output review (Plan B) requires the application layer to call `/v1/evaluate` itself; the codebase currently does not contain application layer integration code. See [DESIGN.md §13.7](DESIGN.md#137-output-reviewoutput-review).
 
-> STI Taint（§5.4）审查的是**工具返回值**，输出审查审查的是 **Agent 最终返回给用户的响应**——经过 LLM 汇总工具结果后生成的内容。两者覆盖不同阶段。
+> STI Taint (§5.4) reviews **tool return values**; Output Review reviews the **Agent's final response to the user**—content generated by the LLM after summarizing tool results. The two cover different stages.
 
-**审查流程**：
+**Review flow**:
 
 ```
-工具返回结果（egress / non-egress 两条路径）
+Tool returns result (egress / non-egress two paths)
   |
   v
-mask_pii_in_response()    ← PII 脱敏（已有）
+mask_pii_in_response()    ← PII desensitization (existing)
   |
   v
-tag_tool_result()          ← 信任边界标签（已有）
+tag_tool_result()          ← Trust boundary tagging (existing)
   |
   v
-review_tool_output()       ← 内容安全审查（新增）
-  +-- extract_result_text()        从 resp.result.content[].text 提取文本
-  +-- should_review_output()       条件触发：text.len() ≥ 512 || risk_score ≥ 50
-  +-- pipeline.review_output()    调用 POST /v1/evaluate { content, role: "output" }
-  |   +-- Engine 复用 PromptRunner (qwen3guard) + ScriptRuleRunner (groovy) -> PolicyMerger
-  +-- 若 deny -> replace_result_text() 替换为安全提示
-      若 engine 不可用 -> 根据 fail_open 决定放行或拦截
+review_tool_output()       ← Content security review (new)
+  +-- extract_result_text()        extract text from resp.result.content[].text
+  +-- should_review_output()       conditional trigger: text.len() ≥ 512 || risk_score ≥ 50
+  +-- pipeline.review_output()    call POST /v1/evaluate { content, role: "output" }
+  |   +-- Engine reuses PromptRunner (qwen3guard) + ScriptRuleRunner (groovy) -> PolicyMerger
+  +-- if deny -> replace_result_text() replace with safety notice
+       if engine unavailable -> decide allow or block based on fail_open
 
-Agent 最终响应（方案 B：应用层调用，⏳ 设计建议/待应用层集成）
+Agent final response (Plan B: application layer call, ⏳ design suggestion/pending application layer integration)
   |
   v
-应用层 POST /v1/evaluate { content: "<Agent 输出>", role: "output" }
-  +-- Engine 同一管线分类 -> deny 则脱敏/拦截
+Application layer POST /v1/evaluate { content: "<Agent output>", role: "output" }
+  +-- Engine same pipeline classification -> deny then desensitize/block
 ```
 
-**审查维度**：
+**Review dimensions**:
 
-| 维度 | 机制 | 触发条件 | 命中动作 |
+| Dimension | Mechanism | Trigger Condition | Hit Action |
 |------|------|---------|---------|
-| **PII 泄露** | dlp/engine.rs 实体识别（`mask_pii_in_response`） | 每次工具输出 | 脱敏后返回 + 审计 |
-| **凭据泄露** | 正则（API key/token/password 模式） + 小模型辅助 | 每次工具输出 | 脱敏后返回 + 审计 |
-| **内容安全** | qwen3guard 小模型（复用 Engine `prompt` runtime） | 输出 >512 字符 或 session_risk > 50 | block + 审计 + 提升 risk_score |
-| **策略合规** | Groovy 规则引擎（场景相关输出约束） | 每次工具输出 | block 或 challenge + 审计 |
+| **PII leakage** | dlp/engine.rs entity recognition (`mask_pii_in_response`) | Each tool output | Desensitize then return + audit |
+| **Credential leakage** | Regex (API key/token/password patterns) + small model assistance | Each tool output | Desensitize then return + audit |
+| **Content safety** | qwen3guard small model (reuses Engine `prompt` runtime) | Output >512 characters or session_risk > 50 | block + audit + raise risk_score |
+| **Policy compliance** | Groovy rule engine (scene-related output constraints) | Each tool output | block or challenge + audit |
 
-**与 STI Taint 的分工**：
+**Division of labor with STI Taint**:
 
-| 检测层 | 作用对象 | 阶段 | 机制 |
+| Detection Layer | Target | Phase | Mechanism |
 |--------|---------|------|------|
-| **STI Taint（§5.4）** | 工具返回值 | 工具执行后、Agent 汇总前 | 小模型判定注入 |
-| **工具结果审查（本节）** | 工具返回值 | PII 脱敏 + 信任标签之后 | 复用 Engine 规则管线（qwen3guard + groovy） |
-| **Agent 输出审查（方案 B）** | Agent 最终响应 | Agent 汇总后、返回用户前 | 应用层调用 `/v1/evaluate`（⏳ 设计建议/待应用层集成） |
+| **STI Taint (§5.4)** | Tool return values | After tool execution, before Agent summarization | Small model determines injection |
+| **Tool result review (this section)** | Tool return values | After PII desensitization + trust tagging | Reuses Engine rule pipeline (qwen3guard + groovy) |
+| **Agent output review (Plan B)** | Agent final response | After Agent summarization, before returning to user | Application layer calls `/v1/evaluate` (⏳ design suggestion/pending application layer integration) |
 
-> 三层覆盖从工具返回到最终输出的完整审查链路。
+> Three layers cover the complete review chain from tool results to final output.
 
-**实现**（MCP Proxy 侧，非 virbius-core）：
+**Implementation** (MCP Proxy side, not virbius-core):
 
 ```rust
 // virbius-mcp-proxy/src/pipeline.rs
@@ -1039,7 +1041,7 @@ async fn review_tool_output(
 }
 ```
 
-**配置**：
+**Configuration**:
 
 ```toml
 # virbius-mcp-proxy.toml
@@ -1050,55 +1052,55 @@ min_risk_score = 50
 fail_open = true
 ```
 
-**成本控制**：PII/凭据检测为规则+正则，无 LLM 调用。内容安全检测复用 qwen3guard 小模型，仅高风险触发（输出 >512 字符 或 session_risk > 50），非每次调用。
+**Cost control**: PII/credential detection uses rules + regex, no LLM call. Content safety detection reuses qwen3guard small model, only triggered on high risk (output >512 characters or session_risk > 50), not on every call.
 
 
 ---
 
-## 3. 管层 — Higress 南北向安全网关
+## 3. Gateway — Higress North-South Security Gateway
 
-### 3.1 职责
+### 3.1 Responsibilities
 
-管层由 Higress 承担，定位为**南北向流量网关**（Ingress + Egress），基于 Envoy/WASM 实现安全插件：
+The Gateway layer is handled by Higress, positioned as a **North-South traffic gateway** (Ingress + Egress), implementing security plugins based on Envoy/WASM:
 
 ```
-=== Ingress（入站）===
-远程 Agent -> Higress (TLS/限流/安全预检) -> MCP Server (Python/Node)
+=== Ingress (inbound) ===
+Remote Agent -> Higress (TLS/rate-limit/security precheck) -> MCP Server (Python/Node)
               |
-              +-- virbius-gateway WASM 插件
-                  +-- tool allowlist (WASM allowlist 模块)
-                  +-- 计数器 (WASM Redis 模块)
-                  +-- 快速通道判断
-                  +-- 调 virbius-engine (Envoy HTTP client POST /v1/evaluate)
-                  +-- HTTP 层阻断 (Envoy direct response 403)
+              +-- virbius-gateway WASM plugin
+              +-- tool allowlist (WASM allowlist module)
+              +-- counter (WASM Redis module)
+              +-- fast path judgment
+              +-- call virbius-engine (Envoy HTTP client POST /v1/evaluate)
+              +-- HTTP layer blocking (Envoy direct response 403)
 
-=== Egress（出站，非 Sidecar 模式）===
-Agent -> Higress (Egress Proxy) -> 外部 API
+=== Egress (outbound, non-Sidecar mode) ===
+Agent -> Higress (Egress Proxy) -> External API
            |
-           +-- URL 白名单校验
-           +-- 出站限流
-           +-- 审计日志
+           +-- URL allowlist validation
+           +-- Outbound rate limiting
+           +-- Audit log
 ```
 
-> **拓扑说明**：管层处理南北向（跨网络）流量。Sidecar 模式下 MCP 工具调用为东西向流量，不经管层（§1.1）。管层在以下场景发挥作用：
-> - **Ingress**：远程 Agent（非 Sidecar 部署）通过 HTTPS 访问 MCP Server
-> - **Egress**：非 Sidecar 模式下 Agent 发起的外部 HTTP 请求经过管层 Egress Proxy
-> - **Sidecar 模式 Egress**：由端层 Proxy 代发 HTTP 请求（[§2.6.1](PROTOCOL.md)），管层不参与
+> **Topology note**: The Gateway handles North-South (cross-network) traffic. In Sidecar mode, MCP tool calls are East-West traffic and do not pass through the Gateway (§1.1). The Gateway plays a role in the following scenarios:
+> - **Ingress**: Remote Agents (non-Sidecar deployment) access MCP Server via HTTPS
+> - **Egress**: External HTTP requests initiated by Agents in non-Sidecar mode pass through the Gateway Egress Proxy
+> - **Sidecar mode Egress**: Proxied by the Edge Proxy ([§2.6.1](PROTOCOL.md)); the Gateway does not participate
 
-| 能力 | 方向 | 实现方式 |
+| Capability | Direction | Implementation |
 |------|------|---------|
-| TLS 终止 | Ingress | Higress 原生（Envoy） |
-| MCP 协议路由 | Ingress | Higress MCP Gateway（原生 Streamable HTTP/SSE） |
-| 限流 | Ingress + Egress | Envoy rate limit |
-| tool allowlist | Ingress | WASM 插件 allowlist 模块 |
-| 计数器 | Ingress | WASM 插件 Redis 模块 |
-| 调 virbius-engine | Ingress | WASM HTTP call POST /v1/evaluate |
-| HTTP 阻断 | Ingress | Envoy direct response 403 + JSON-RPC error |
-| URL 白名单 | Egress | WASM 插件 egress_url_check |
+| TLS termination | Ingress | Higress native (Envoy) |
+| MCP protocol routing | Ingress | Higress MCP Gateway (native Streamable HTTP/SSE) |
+| Rate limiting | Ingress + Egress | Envoy rate limit |
+| tool allowlist | Ingress | WASM plugin allowlist module |
+| Counter | Ingress | WASM plugin Redis module |
+| Call virbius-engine | Ingress | WASM HTTP call POST /v1/evaluate |
+| HTTP blocking | Ingress | Envoy direct response 403 + JSON-RPC error |
+| URL allowlist | Egress | WASM plugin egress_url_check |
 
-### 3.2 WASM 安全预检
+### 3.2 WASM Security Precheck
 
-基于 Higress WASM 插件实现安全预检（Go 语言，proxy-wasm-go-sdk）：
+Security precheck implemented based on Higress WASM plugin (Go language, proxy-wasm-go-sdk):
 
 ```go
 // virbius-gateway/wasm/access.go
@@ -1107,23 +1109,23 @@ func (p *VirbiusPlugin) onHttpRequestHeaders(ctx wrapper.HttpContext) types.Acti
     toolName := ctx.Headers().Get("x-mcp-tool-name")
     sessionID := ctx.Headers().Get("x-mcp-session-id")
 
-    // 1. tool allowlist (WASM allowlist 模块)
+    // 1. tool allowlist (WASM allowlist module)
     if !p.allowlist.Match("tool-allowlist", toolName) {
         return p.deny(ctx, "tool_not_allowed")
     }
 
-    // 2. 累计计数器 (WASM Redis 异步查询)
+    // 2. Accumulated counter (WASM Redis async query)
     count, err := p.redis.Incr("tool:" + toolName + "-session:" + sessionID)
     if err != nil || count > 50 {
         return p.deny(ctx, "tool_rate_exceeded")
     }
 
-    // 3. 快速通道判断
+    // 3. Fast path judgment
     if p.isFastPath(toolName) && p.getSessionRisk(sessionID) < 30 {
-        return types.ActionContinue // allow, 跳过 engine
+        return types.ActionContinue // allow, skip engine
     }
 
-    // 4. 调 virbius-engine 终判 (HTTP 异步调用)
+    // 4. Call virbius-engine final judgment (HTTP async call)
     decision, err := p.callEngine(ctx, toolName, sessionID)
     if err != nil {
         return p.deny(ctx, "engine_error")
@@ -1135,20 +1137,20 @@ func (p *VirbiusPlugin) onHttpRequestHeaders(ctx wrapper.HttpContext) types.Acti
 }
 ```
 
-> **WASM vs Lua 差异**：WASM 插件中 Redis 和 HTTP 调用均为异步回调模式（不能阻塞），需通过 callback chain 实现顺序逻辑。相比 Lua cosocket 的同步写法，代码结构稍复杂，但获得连接无损热更新能力。组合部署时管层可配置 `evaluate=false`，仅做 allowlist + 限流，避免 WASM 异步回调复杂度。
+> **WASM vs Lua differences**: In WASM plugins, Redis and HTTP calls are both asynchronous callback patterns (cannot block), requiring sequential logic through callback chains. Compared to Lua cosocket's synchronous style, the code structure is slightly more complex, but gains connection-lossless hot update capability. In combined deployments, the Gateway can be configured with `evaluate=false`, only doing allowlist + rate limiting, avoiding WASM async callback complexity.
 
-### 3.3 Higress 路由配置自动生成
+### 3.3 Higress Route Configuration Auto-Generation
 
-MCP 路由由 virbius-control 编译为 Higress CRD 配置：
+MCP routes are compiled by virbius-control into Higress CRD configuration:
 
 ```
-virbius-control -> mcp_routes 表 -> virbius-compiler -> Higress CRD -> K8s APIServer
+virbius-control -> mcp_routes table -> virbius-compiler -> Higress CRD -> K8s APIServer
 ```
 
-示例 Higress CRD 配置：
+Example Higress CRD configuration:
 
 ```yaml
-# McpBridge — MCP Server 注册
+# McpBridge — MCP Server Registration
 apiVersion: networking.higress.io/v1
 kind: McpBridge
 metadata:
@@ -1160,7 +1162,7 @@ spec:
       domain: mcp-github.internal
       port: 8080
 ---
-# McpServer — MCP 路由 + WASM 插件
+# McpServer — MCP Route + WASM Plugin
 apiVersion: networking.higress.io/v1
 kind: McpServer
 metadata:
@@ -1172,62 +1174,62 @@ spec:
     - name: virbius-gateway
 ```
 
-> **热更新**：Higress CRD 更新后，Envoy 通过 xDS 下发新配置，WASM 插件热加载，**SSE 长连接不中断**。相比 Nginx `nginx -s reload`（会短暂断开连接），Higress 实现真正的连接无损热更新。
+> **Hot update**: After Higress CRD update, Envoy distributes new configuration via xDS, WASM plugin hot-reloads, **SSE long connections are not interrupted**. Compared to Nginx `nginx -s reload` (which briefly disconnects), Higress achieves true connection-lossless hot update.
 
-### 3.4 schema 校验和 PII 脱敏的职责下沉
+### 3.4 Schema Validation and PII Desensitization Responsibility Delegation
 
-| 能力 | 位置 | 理由 |
+| Capability | Location | Reason |
 |------|------|------|
-| schema 校验 | 端层 virbius-core (Rust jsonschema crate) | WASM JSON Schema 库能力弱 |
-| 输入 PII 脱敏 | 端层 virbius-core dlp/engine.rs (已有) | 发送 LLM 前脱敏 |
-| 输出 PII 脱敏 | 端层 virbius-core (工具返回前) | 避免管层重复脱敏 |
-| tool allowlist | 管层 Higress WASM | HTTP 层第一道防线 |
-| 计数器 | 管层 Higress WASM | HTTP 层频控 |
-| engine 终判 | 云层 virbius-engine | 复杂语义判断 |
+| schema validation | Edge virbius-core (Rust jsonschema crate) | WASM JSON Schema library capability is weak |
+| Input PII desensitization | Edge virbius-core dlp/engine.rs (existing) | Desensitize before sending to LLM |
+| Output PII desensitization | Edge virbius-core (before tool return) | Avoid repeated desensitization by Gateway |
+| tool allowlist | Gateway Higress WASM | First line of defense at HTTP layer |
+| Counter | Gateway Higress WASM | HTTP layer frequency control |
+| Engine final judgment | Cloud virbius-engine | Complex semantic judgment |
 
-> **删除原设计的 AgentGateway**：Higress 已承担 MCP 路由 + 负载均衡 + 协议转换，不需要额外组件。原 §3.3 AgentGateway 集成和 §3.4 对比表已删除。
+> **Removed original AgentGateway**: Higress already handles MCP routing + load balancing + protocol conversion; no additional component is needed. The original §3.3 AgentGateway integration and §3.4 comparison table have been removed.
 
-### 3.5 Egress 流量管控
+### 3.5 Egress Traffic Control
 
-Agent 发起的外部 HTTP 请求属于南北向 Egress 流量，分为两类：
+External HTTP requests initiated by the Agent belong to North-South Egress traffic, divided into two categories:
 
-| 流量类型 | 来源 | 示例 | 管控方式 |
+| Traffic Type | Source | Example | Control Method |
 |---------|------|------|----------|
-| **业务工具请求** | MCP `tools/call` 中的显式工具 | `curl`/`web_search`/`http_request` | Proxy 代发 + URL 白名单（§3.5 Sidecar 模式）或管层 Egress Proxy（§3.5 非 Sidecar 模式） |
-| **框架隐式请求** | Agent 框架/SDK 底层 | 配置拉取、模型下载、心跳检测、遥测上报 | K8s NetworkPolicy 限制到最小白名单目标 |
+| **Business tool requests** | Explicit tools in MCP `tools/call` | `curl`/`web_search`/`http_request` | Proxy proxying + URL allowlist (§3.5 Sidecar mode) or Gateway Egress Proxy (§3.5 non-Sidecar mode) |
+| **Framework implicit requests** | Agent framework/SDK underlying | Config fetching, model downloads, heartbeat detection, telemetry reporting | K8s NetworkPolicy restrict to minimal allowlist targets |
 
-> **设计决策：工具级管控而非进程级断网**
+> **Design decision: tool-level control instead of process-level network disconnection**
 >
-> 原方案规定“Agent 不具备直接网络出站能力，所有 HTTP 由 Proxy 代发”。但这会破坏存量 Agent 框架兼容性——LangChain、AutoGen、OpenAI SDK 等会隐式发起网络请求，直接断网会导致无法运行。且全量代发（代理 Agent 所有网络流量）需支持 WebSocket 双工、大文件分块上传、HTTP/2 多路复用等全部 HTTP 语义，开发成本极高。
+> The original plan stipulated that "Agents do not have direct network outbound capability; all HTTP is proxied by Proxy". However, this breaks compatibility with existing Agent frameworks—LangChain, AutoGen, OpenAI SDK, etc., all implicitly initiate network requests; directly disconnecting the network would prevent them from running. Furthermore, full proxying (proxying all Agent network traffic) requires supporting all HTTP semantics including WebSocket duplex, large file chunked upload, HTTP/2 multiplexing, etc., with extremely high development cost.
 >
-> 修订后的方案：
-> - **业务工具请求**（`curl`/`web_search` 等显式 MCP 工具）走 Proxy 代发 + URL 白名单校验
-> - **框架隐式请求**（配置拉取、模型下载、心跳等）由 Agent 自身发起，受 NetworkPolicy 限制到白名单目标
-> - **进程级全量出站**（P2 兜底）由 eBPF/iptables 透明劫持
+> Revised plan:
+> - **Business tool requests** (explicit MCP tools like `curl`/`web_search`) go through Proxy proxying + URL allowlist validation
+> - **Framework implicit requests** (config fetching, model downloads, heartbeats, etc.) are initiated by the Agent itself, restricted to allowlist targets by NetworkPolicy
+> - **Process-level full outbound** (P2 fallback) via eBPF/iptables transparent hijacking
 >
-> 这三分法匹配威胁模型：安全威胁来自 Agent 通过业务工具发起的**可控外部请求**，而非框架底层的**固定目标**网络调用。工具级代发只需支持 GET/POST + 流式响应透传（chunked/SSE），reqwest `bytes_stream()` 即可实现，开发成本可控。详见 [§2.6.1](PROTOCOL.md) Egress 流量管控。
+> This tripartite approach matches the threat model: security threats come from **controllable external requests** initiated by the Agent through business tools, not from the framework's underlying **fixed-target** network calls. Tool-level proxying only needs to support GET/POST + streaming response passthrough (chunked/SSE), achievable with reqwest `bytes_stream()`, with manageable development cost. See [§2.6.1](PROTOCOL.md) Egress traffic control.
 
-#### Sidecar 模式——工具级 Proxy 代发
+#### Sidecar Mode — Tool-level Proxy Proxying
 
-Sidecar 模式下，MCP 业务工具调用（`curl` 等）通过 `tools/call` 交给 Proxy 代发。Agent 框架底层的隐式网络请求不由 Proxy 代发，受 NetworkPolicy 限制：
+In Sidecar mode, MCP business tool calls (`curl`, etc.) are handed over to the Proxy for proxying via `tools/call`. Implicit network requests from the Agent framework are not proxied by the Proxy and are restricted by NetworkPolicy:
 
 ```
 Agent ──tools/call("curl", {url: "https://api.internal/..."})──> MCP Proxy
   |
-  +-- 1. 解析 url 参数
-  +-- 2. URL 白名单校验（License allowed_hosts + ToolPolicy allowed_args_schema）
-  +-- 3. 安全管线（预检 -> engine 终判）
-  +-- 4. allow -> Proxy 发起 HTTP 请求（reqwest） -> 外部 API
-  +-- 4. deny  -> 返回 JSON-RPC error
+  +-- 1. Parse url parameter
+  +-- 2. URL allowlist validation (License allowed_hosts + ToolPolicy allowed_args_schema)
+  +-- 3. Security pipeline (precheck -> engine final judgment)
+  +-- 4. allow -> Proxy initiates HTTP request (reqwest) -> External API
+  +-- 4. deny  -> Return JSON-RPC error
   |
   v
-外部 API
+External API
 ```
 
 ```rust
 // virbius-mcp-proxy/src/egress.rs
 
-/// 校验 curl 工具的目标 URL 是否在白名单内
+/// Validate whether the curl tool's target URL is in the allowlist
 fn validate_egress_url(args: &Value, license: &License) -> Result<(), String> {
     let url_str = args.get("url")
         .and_then(|u| u.as_str())
@@ -1235,7 +1237,7 @@ fn validate_egress_url(args: &Value, license: &License) -> Result<(), String> {
     let url = url::Url::parse(url_str).map_err(|e| format!("invalid url: {e}"))?;
     let host = url.host_str().ok_or("url has no host")?;
 
-    // 校验 License allowed_hosts
+    // Validate License allowed_hosts
     let allowed_hosts = license.claims.allowed_hosts
         .iter()
         .filter_map(|h| {
@@ -1255,17 +1257,17 @@ fn validate_egress_url(args: &Value, license: &License) -> Result<(), String> {
     Ok(())
 }
 
-/// 流式代发 HTTP 请求：使用 reqwest bytes_stream() 避免大响应 OOM
+/// Streaming proxy HTTP request: uses reqwest bytes_stream() to avoid OOM on large responses
 ///
-/// 支持两种响应模式：
-/// - 普通响应（JSON/HTML/...）：流式读取 chunk，累计到上限后返回
-/// - SSE 响应（text/event-stream）：逐条解析 event，透传给 Agent
+/// Supports two response modes:
+/// - Normal response (JSON/HTML/...): stream read chunks, accumulate up to limit then return
+/// - SSE response (text/event-stream): parse events one by one, passthrough to Agent
 async fn proxy_egress_request(
     client: &reqwest::Client,
     url: &str,
     method: &str,
     body: Option<&Value>,
-    max_bytes: usize,  // 默认 50MB
+    max_bytes: usize,  // default 50MB
 ) -> Result<EgressResponse, EgressError> {
     let mut req = match method {
         "GET" => client.get(url),
@@ -1292,7 +1294,7 @@ async fn proxy_egress_request(
         .unwrap_or("")
         .to_string();
 
-    // 流式读取响应体，避免大响应 OOM
+    // Stream read response body to avoid OOM on large responses
     use futures_util::StreamExt;
     let mut stream = resp.bytes_stream();
     let mut buf = Vec::new();
@@ -1313,7 +1315,7 @@ async fn proxy_egress_request(
 }
 ```
 
-> License 需扩展 `allowed_hosts` 字段：
+> License needs to be extended with `allowed_hosts` field:
 > ```json
 > {
 >   "app_id": "code-review-agent",
@@ -1323,12 +1325,12 @@ async fn proxy_egress_request(
 > }
 > ```
 
-#### 非 Sidecar 模式——管层 Egress Proxy
+#### Non-Sidecar Mode — Gateway Egress Proxy
 
-非 Sidecar 模式（独立服务部署）下，Agent 直接发起 HTTP 请求，需经过管层 Egress Proxy：
+In non-Sidecar mode (standalone service deployment), the Agent directly initiates HTTP requests, which need to go through the Gateway Egress Proxy:
 
 ```yaml
-# Higress Egress 路由 + WASM 插件
+# Higress Egress route + WASM plugin
 apiVersion: networking.higress.io/v1
 kind: HttpRoute
 metadata:
@@ -1345,21 +1347,21 @@ spec:
       filters:
         - type: ExtensionRef
           extensionRef:
-            name: virbius-gateway-egress  # WASM 插件
+            name: virbius-gateway-egress  # WASM plugin
 ```
 
 ```go
 // virbius-gateway/wasm/egress.go
 
 func (p *VirbiusPlugin) checkUrl(uri, sessionID string) bool {
-    // 从 /egress/<host>/<path> 中解析目标 host
+    // Parse target host from /egress/<host>/<path>
     parts := strings.SplitN(strings.TrimPrefix(uri, "/egress/"), "/", 2)
     if len(parts) == 0 || parts[0] == "" {
         return false
     }
     targetHost := parts[0]
 
-    // 查 Redis 获取 egress allowlist（from License）
+    // Query Redis for egress allowlist (from License)
     allowed, err := p.redis.SIsMember("egress:allowlist:"+sessionID, targetHost)
     if err != nil || !allowed {
         return false
@@ -1368,81 +1370,81 @@ func (p *VirbiusPlugin) checkUrl(uri, sessionID string) bool {
 }
 ```
 
-#### P2 增强——eBPF 透明劫持
+#### P2 Enhancement — eBPF Transparent Hijacking
 
-P0 对业务工具请求依赖 Proxy 代发，对框架隐式请求依赖 NetworkPolicy。如果 Agent 进程绕过 MCP 协议直接发起 TCP 连接（如通过 `shell` 工具执行 `curl` 命令），且目标在 NetworkPolicy 白名单内，P0 无法拦截。P2 通过内核级流量劫持兜底：
+P0 relies on Proxy proxying for business tool requests and NetworkPolicy for framework implicit requests. If the Agent process bypasses the MCP protocol and directly initiates TCP connections (e.g., executing `curl` command via `shell` tool), and the target is within the NetworkPolicy allowlist, P0 cannot intercept. P2 provides a fallback through kernel-level traffic hijacking:
 
 ```
-Agent 进程
+Agent process
   |
-  +-- 正常路径: tools/call -> Proxy 代发（P0 已覆盖）
+  +-- Normal path: tools/call -> Proxy proxying (P0 covers)
   |
-  +-- 绕过路径: 直接 TCP connect()（P2 兜底）
+  +-- Bypass path: direct TCP connect() (P2 fallback)
        |
        v
     eBPF sock_ops / TPROXY
        |
-       +-- 劫持出站 TCP -> 重定向到 Proxy (:9091)
-       +-- 或 iptables REDIRECT -> Egress Gateway
+       +-- Hijack outbound TCP -> Redirect to Proxy (:9091)
+       +-- or iptables REDIRECT -> Egress Gateway
        |
        v
-    URL 白名单校验 -> allow / deny
+    URL allowlist validation -> allow / deny
 ```
 
-| 机制 | 阶段 | 覆盖范围 | 依赖 |
+| Mechanism | Phase | Coverage | Dependency |
 |------|------|---------|------|
-| 工具级 Proxy 代发 + URL 白名单 | P0 | MCP 业务工具调用（`curl`/`web_search` 等） | 无内核依赖 |
-| K8s NetworkPolicy | P0 | Agent 框架隐式出站（配置拉取、模型下载等） | K8s CNI 支持 |
-| 管层 Egress Proxy | P0 | 非 Sidecar 模式的外部 HTTP | Higress 部署 |
-| eBPF sock_ops 透明劫持 | P2 | 进程级所有 TCP 出站 | 内核 5.8+ + CAP_BPF |
-| iptables TPROXY | P2 | 进程级所有 TCP 出站 | NET_ADMIN |
-| NetworkPolicy（增强） | P2 | Pod 级网络隔离 | K8s CNI 支持 |
+| Tool-level Proxy proxying + URL allowlist | P0 | MCP business tool calls (`curl`/`web_search` etc.) | No kernel dependency |
+| K8s NetworkPolicy | P0 | Agent framework implicit outbound (config fetching, model downloads, etc.) | K8s CNI support |
+| Gateway Egress Proxy | P0 | Non-Sidecar mode external HTTP | Higress deployment |
+| eBPF sock_ops transparent hijacking | P2 | Process-level all TCP outbound | Kernel 5.8+ + CAP_BPF |
+| iptables TPROXY | P2 | Process-level all TCP outbound | NET_ADMIN |
+| NetworkPolicy (enhanced) | P2 | Pod-level network isolation | K8s CNI support |
 
 ---
 
-## 4. 核层 — Falco 观测引擎
+## 4. Kernel — Falco Observation Engine
 
-### 4.1 职责
+### 4.1 Responsibilities
 
-核层是运行时观测层，P0 只实现观测(eyes)，P2 补阻断(hands)。
+The Kernel layer is the runtime observation layer. P0 only implements observation (eyes), P2 adds enforcement (hands).
 
-| 范围 | P0 观测 | P2 阻断 |
+| Scope | P0 Observation | P2 Enforcement |
 |------|---------|---------|
-| Agent 进程内 syscall | Falco eBPF 观测(可用时) | Landlock 文件路径阻断 |
-| 容器逃逸检测 | Falco eBPF 观测(可用时) | gVisor 容器隔离 + Landlock 路径阻断 |
-| SSRF / 内网扫描 | Falco eBPF 观测 connect | NetworkPolicy 网络阻断 |
-| 基础设施异常 | Falco plugin (k8saudit + cloudtrail) | 云厂商原生 enforcement |
+| Agent process syscalls | Falco eBPF observation (when available) | Landlock file path enforcement |
+| Container escape detection | Falco eBPF observation (when available) | gVisor container isolation + Landlock path enforcement |
+| SSRF / intranet scanning | Falco eBPF observation of connect | NetworkPolicy network enforcement |
+| Infrastructure anomalies | Falco plugin (k8saudit + cloudtrail) | Cloud provider native enforcement |
 
-**P0 安全模型**：核层只观测不阻断。发现异常 -> 上报审计流 -> 提升 session risk score -> 管层 HTTP 层阻断后续请求。这是"检测 -> 累积风险 -> 阻断后续"模型，对 Agent 多轮调用场景有效。
+**P0 Security Model**: Kernel layer only observes, does not enforce. Anomaly detected -> report audit stream -> raise session risk score -> Gateway HTTP layer blocks subsequent requests. This is a "detect -> accumulate risk -> block subsequent" model, effective for multi-turn Agent call scenarios.
 
-### 4.2 Falco 驱动降级链
+### 4.2 Falco Driver Degradation Chain
 
 ```
 detect_mode()
   |
-  +-- 有 CAP_BPF + 内核 5.8+ + BTF
-  |    -> Falco eBPF 驱动 (观测 only)
+  +-- Has CAP_BPF + kernel 5.8+ + BTF
+  |    -> Falco eBPF driver (observation only)
   |
-  +-- 无 CAP_BPF, 有 CAP_SYS_PTRACE
-  |    -> Falco userspace 驱动 (ptrace, 性能差 5-10x)
+  +-- No CAP_BPF, has CAP_SYS_PTRACE
+  |    -> Falco userspace driver (ptrace, 5-10x worse performance)
   |
-  +-- 无任何特权
-       -> Disabled (无 syscall 可见性)
+  +-- No privileges at all
+       -> Disabled (no syscall visibility)
 ```
 
-> **架构变更（方案 A）**：已移除 `FalcoPlugin` 模式和自定义 `virbius-audit` Go 插件。Falco 退回纯系统级 syscall 观测角色，跨层关联由 Engine `FalcoAlertController` 通过 Redis pidmap 反查完成。无特权环境下 `detect_mode()` 返回 `Disabled`，不降级到 plugin 模式。
+> **Architecture change (Plan A)**: The `FalcoPlugin` mode and custom `virbius-audit` Go plugin have been removed. Falco is reverted to a pure system-level syscall observation role; cross-layer correlation is handled by Engine `FalcoAlertController` via Redis pidmap reverse lookup. In unprivileged environments, `detect_mode()` returns `Disabled`, with no degradation to plugin mode.
 
-**观测与阻断职责分离**：核层（Falco）只负责观测，不做 enforcement。阻断由端层 Landlock + drop caps（文件路径限制）和 gVisor（不可信代码隔离）承担。这种分离确保观测层故障不影响阻断能力，阻断层故障仍留有观测可见性。
+**Separation of observation and enforcement**: The Kernel layer (Falco) is only responsible for observation, not enforcement. Enforcement is handled by the Edge layer's Landlock + drop caps (file path restrictions) and gVisor (untrusted code isolation). This separation ensures that observation layer failures do not affect enforcement capability, and enforcement layer failures still retain observation visibility.
 
-### 4.3 Falco 模式检测逻辑
+### 4.3 Falco Mode Detection Logic
 
 ```rust
 // virbius-kernel/src/detect.rs
 
 pub enum KernelMode {
-    FalcoEbpf,       // eBPF 观测
-    FalcoUserspace,  // ptrace 驱动
-    Disabled,         // 无特权，无 syscall 可见性
+    FalcoEbpf,       // eBPF observation
+    FalcoUserspace,  // ptrace driver
+    Disabled,         // no privileges, no syscall visibility
 }
 
 pub fn detect() -> KernelMode {
@@ -1471,165 +1473,165 @@ pub fn detect() -> KernelMode {
 }
 ```
 
-> **变更**：`FalcoPlugin` 枚举变体已移除。无特权环境直接返回 `Disabled`，不再降级到 plugin 模式。
+> **Change**: The `FalcoPlugin` enum variant has been removed. Unprivileged environments directly return `Disabled`, with no degradation to plugin mode.
 
-Falco eBPF 模式硬性要求：
+Falco eBPF mode hard requirements:
 
-| 检测项 | 要求 | 常见失败原因 |
+| Check Item | Requirement | Common Failure Reasons |
 |--------|------|------------|
-| 内核版本 | >= 5.8 (推荐 5.10+) | 老内核 |
-| **BTF**(最关键) | /sys/kernel/btf/vmlinux 存在且 > 0 字节 | CONFIG_DEBUG_INFO_BTF 未开启 |
-| 内核 config | CONFIG_BPF=y, CONFIG_KPROBES=y, CONFIG_TRACING=y | 硬化内核裁剪 |
-| 权限 | CAP_SYS_ADMIN 或 CAP_BPF+CAP_PERFMON | serverless / PSA restricted |
-| tracefs | /sys/kernel/tracing/ 已挂载 | 容器内未映射 |
-| bpffs | /sys/fs/bpf/ 已挂载 | 容器内未映射 |
+| Kernel version | >= 5.8 (recommended 5.10+) | Old kernel |
+| **BTF** (most critical) | /sys/kernel/btf/vmlinux exists and > 0 bytes | CONFIG_DEBUG_INFO_BTF not enabled |
+| Kernel config | CONFIG_BPF=y, CONFIG_KPROBES=y, CONFIG_TRACING=y | Hardened kernel trimmed |
+| Privilege | CAP_SYS_ADMIN or CAP_BPF+CAP_PERFMON | serverless / PSA restricted |
+| tracefs | /sys/kernel/tracing/ mounted | Not mounted inside container |
+| bpffs | /sys/fs/bpf/ mounted | Not mounted inside container |
 
-> **注**：不再使用 Tetragon 做内核级 enforcement。阻断由端层 Landlock + drop caps（文件路径隔离）和 gVisor（不可信代码沙箱）承担，核层 Falco 专注观测。这简化了部署依赖（无需 CONFIG_BPF_KPROBE_OVERRIDE），且观测与阻断解耦——Falco 故障不影响 Landlock/gVisor 阻断能力。
+> **Note**: Tetragon is no longer used for kernel-level enforcement. Enforcement is handled by the Edge layer's Landlock + drop caps (file path isolation) and gVisor (untrusted code sandbox); the Kernel layer Falco focuses on observation. This simplifies deployment dependencies (no need for CONFIG_BPF_KPROBE_OVERRIDE), and decouples observation from enforcement—Falco failures do not affect Landlock/gVisor enforcement capability.
 
-### 4.4 eBPF 观测程序(P2, eBPF 可用时)
+### 4.4 eBPF Observation Programs (P2, when eBPF is available)
 
-> **P2 实现。** P0 使用 Falco 内置 eBPF 程序，不自研。
+> **P2 implementation.** P0 uses Falco's built-in eBPF programs, not self-developed.
 
-eBPF 观测点(Falco 内置 + 自定义补充)：
+eBPF observation points (Falco built-in + custom supplements):
 
-- execve / execveat 监控（Falco 已覆盖 execve，补充 execveat）
-- tcp_v4_connect + tcp_v6_connect 监控（补 IPv6）
-- mount / nsenter / ptrace 容器逃逸检测
+- execve / execveat monitoring (Falco already covers execve, supplement execveat)
+- tcp_v4_connect + tcp_v6_connect monitoring (supplement IPv6)
+- mount / nsenter / ptrace container escape detection
 
-eBPF Maps(策略数据)：
+eBPF Maps (policy data):
 
-| Map 名称 | 类型 | 用途 |
+| Map Name | Type | Usage |
 |----------|------|------|
-| exec_allowlist | BPF_MAP_TYPE_HASH | 允许执行的二进制路径 |
-| connect_allowlist_ip | BPF_MAP_TYPE_LPM_TRIE | 允许连接的 IP 前缀 |
-| connect_allowlist_port | BPF_MAP_TYPE_HASH | 允许连接的端口 |
-| agent_cgroups | BPF_MAP_TYPE_HASH | 当前受保护 Agent 的 cgroup_id 集合（容器级，fork/exec 不变） |
+| exec_allowlist | BPF_MAP_TYPE_HASH | Allowed executable binary paths |
+| connect_allowlist_ip | BPF_MAP_TYPE_LPM_TRIE | Allowed IP prefixes for connection |
+| connect_allowlist_port | BPF_MAP_TYPE_HASH | Allowed ports for connection |
+| agent_cgroups | BPF_MAP_TYPE_HASH | Current protected Agent's cgroup_id set (container-level, unchanged by fork/exec) |
 
-> **注**：connect_allowlist 分为 IP(LPM_TRIE) 和 Port(HASH) 两个 map，因为 LPM_TRIE 只能匹配 IP 前缀，不能匹配 IP:Port。
+> **Note**: connect_allowlist is split into IP (LPM_TRIE) and Port (HASH) two maps, because LPM_TRIE can only match IP prefixes, not IP:Port.
 
-### 4.5 ~~Falco plugin 模式~~（已移除）
+### 4.5 ~~Falco plugin mode~~ (Removed)
 
-> **架构变更（方案 A）**：自定义 `virbius-audit` Go 插件和 `FalcoPlugin` 模式已移除。原 plugin 模式设计为在 serverless 环境下降级消费日志/审计事件，但实际部署中发现：
-> 1. 插件模式无 syscall 可见性，与 Falco 核心价值冲突
-> 2. 跨层联合判断（syscall 事件 + Agent 上下文在一个条件表达式里）通过 Engine 事后关联即可实现
-> 3. Go C-shared library 构建和维护成本高
+> **Architecture change (Plan A)**: The custom `virbius-audit` Go plugin and `FalcoPlugin` mode have been removed. The original plugin mode was designed to degrade to consuming logs/audit events in serverless environments, but actual deployment revealed:
+> 1. Plugin mode has no syscall visibility, conflicting with Falco's core value
+> 2. Cross-layer combined judgment (syscall events + Agent context in a single conditional expression) can be achieved through post-hoc correlation by Engine
+> 3. Go C-shared library build and maintenance costs are high
 >
-> **替代方案**：Falco 退回纯系统级 syscall 观测，通过 `http_output` 将告警发送到 Engine `FalcoAlertController`，由 Engine 完成 pidmap 反查和 session 关联。无特权环境返回 `Disabled`。
+> **Alternative**: Falco is reverted to pure system-level syscall observation, sending alerts to Engine `FalcoAlertController` via `http_output`, where the Engine completes pidmap reverse lookup and session correlation. Unprivileged environments return `Disabled`.
 
-### 4.6 PID -> trace_id 映射
+### 4.6 PID -> trace_id Mapping
 
-PID 映射的查询路径是端层到核层之间延迟最敏感的链路——Agent 进程启动到首次 syscall 可能 <1ms，不能依赖 Redis 网络 I/O。
+The PID mapping query path is the most latency-sensitive link between the Edge and Kernel layers—an Agent process may execute its first syscall <1ms after startup, and cannot rely on Redis network I/O.
 
-#### Host PID vs Namespace PID 问题
+#### Host PID vs Namespace PID Issue
 
-在容器环境中，存在两类 PID：
+In container environments, there are two types of PIDs:
 
 ```
-┌─── 容器内 (PID namespace) ───┐     ┌─── 宿主机 (init namespace) ───┐
+┌─── Inside container (PID namespace) ───┐     ┌─── Host (init namespace) ───┐
 │                              │     │                               │
-│  Agent 进程: PID = 42        │ ←→ │  Agent 进程: Host PID = 12345  │
-│  Proxy 进程: PID = 43        │     │  Proxy 进程: Host PID = 12346  │
+│  Agent process: PID = 42        │ ←→ │  Agent process: Host PID = 12345  │
+│  Proxy process: PID = 43        │     │  Proxy process: Host PID = 12346  │
 │                              │     │                               │
-│  getpid() → 42              │     │  Falco/eBPF 看到 → 12345       │
+│  getpid() → 42              │     │  Falco/eBPF sees → 12345       │
 └──────────────────────────────┘     └───────────────────────────────┘
 
-virbius-core (容器内) 调 getpid() → 42 (Namespace PID)
-Falco (宿主机) 事件 → host_pid = 12345
+virbius-core (inside container) calls getpid() → 42 (Namespace PID)
+Falco (host) event → host_pid = 12345
 
-如果 pidmap 以 42 为 key，Falco 查 12345 → miss！
+If pidmap uses 42 as key, Falco looks up 12345 → miss!
 ```
 
-| PID 类型 | 谁看到 | 获取方式 | Falco 事件中的字段 |
+| PID Type | Who Sees It | How to Obtain | Falco Event Field |
 |---------|--------|---------|------------------|
-| **Host PID** | 宿主机/内核/Falco/eBPF | `bpf_get_current_pid_tgid() >> 32` | `proc.vpid` (Falco) |
-| **Namespace PID** | 容器内进程 | `getpid()` / `libc::getpid()` | `proc.pid` (Falco) |
+| **Host PID** | Host/kernel/Falco/eBPF | `bpf_get_current_pid_tgid() >> 32` | `proc.vpid` (Falco) |
+| **Namespace PID** | Inside container process | `getpid()` / `libc::getpid()` | `proc.pid` (Falco) |
 
-**解决方案**：pidmap 以 **Host PID** 为主键（与 Falco 事件对齐），**cgroup ID** 为辅助索引（容器级关联，fork/exec 不变）。
+**Solution**: pidmap uses **Host PID** as the primary key (aligned with Falco events), with **cgroup ID** as the secondary index (container-level association, unchanged by fork/exec).
 
 ```
 virbius-core register_agent(ns_pid=getpid())
   |
-  +-- 自动检测 Host PID: 读 /proc/self/status → NSpid 行
-  |   例: "NSpid:\t42\t12345" → host_pid = 12345 (最后一个)
+  +-- Auto-detect Host PID: read /proc/self/status → NSpid line
+  |   e.g. "NSpid:\t42\t12345" → host_pid = 12345 (last one)
   |
-  +-- 自动检测 cgroup ID: 读 /proc/self/cgroup → "0::/kubepods/..." 
+  +-- Auto-detect cgroup ID: read /proc/self/cgroup → "0::/kubepods/..." 
   |   → stat("/sys/fs/cgroup/kubepods/...") → st_ino = cgroup_id
   |
-  +-- 写入 pidmap:
+  +-- Write to pidmap:
   |   by_host_pid[12345] = { host_pid: 12345, ns_pid: 42, cgroup_id: 98765, ... }
-  |   by_cgroup[98765]   = { ... 同上 ... }
+  |   by_cgroup[98765]   = { ... same ... }
   |
-  +-- 异步 Redis 备份: SET pid_trace:12345 '{...}' EX 3600
-  |                       SET cgroup_trace:98765 '{...}' EX 3600  (cgroup 反向索引, P1)
+  +-- Async Redis backup: SET pid_trace:12345 '{...}' EX 3600
+  |                       SET cgroup_trace:98765 '{...}' EX 3600  (cgroup reverse index, P1)
 
-Falco 事件到达 (host_pid=12345)
-  → Engine FalcoAlertController 三级关联链:
-    1. lookupSessionByHostPid(12345) → pid_trace:12345 → session_id  ✅ 命中
-    2. (未命中时) lookupSessionByCgroup(cgroup_id) → cgroup_trace:{id} → session_id
-    3. (未命中时) lookupSessionByHostPid(ppid) → pid_trace:{ppid} → session_id (ppid fallback)
+Falco event arrives (host_pid=12345)
+  → Engine FalcoAlertController three-level correlation chain:
+    1. lookupSessionByHostPid(12345) → pid_trace:12345 → session_id  ✅ hit
+    2. (miss) lookupSessionByCgroup(cgroup_id) → cgroup_trace:{id} → session_id
+    3. (miss) lookupSessionByHostPid(ppid) → pid_trace:{ppid} → session_id (ppid fallback)
 
-eBPF 程序 (bpf_get_current_cgroup_id()=98765)
-  → lookup_by_cgroup(98765) → 命中 by_cgroup[98765] → 补全 trace_id
+eBPF program (bpf_get_current_cgroup_id()=98765)
+  → lookup_by_cgroup(98765) → hit by_cgroup[98765] → fill in trace_id
 ```
 
-#### 三级关联链（P1 实现）
+#### Three-Level Correlation Chain (P1 Implementation)
 
-Engine `FalcoAlertController` 对每条 Falco 告警执行三级 session 关联，优先级从高到低：
+Engine `FalcoAlertController` performs a three-level session correlation for each Falco alert, in descending priority order:
 
-| 优先级 | 关联键 | Redis Key | 覆盖场景 | resolved_by |
+| Priority | Correlation Key | Redis Key | Coverage Scenario | resolved_by |
 |--------|--------|-----------|---------|-------------|
-| 1 | `proc.pid` (Host PID) | `pid_trace:{host_pid}` | Agent 主进程 | `pid` |
-| 2 | `proc.cgroup.id` | `cgroup_trace:{cgroup_id}` | 孙子进程、setsid detach、exec 后 | `cgroup` |
-| 3 | `proc.ppid` | `pid_trace:{ppid}` | 直接子进程（ppid 是 Agent 主进程） | `ppid` |
+| 1 | `proc.pid` (Host PID) | `pid_trace:{host_pid}` | Agent main process | `pid` |
+| 2 | `proc.cgroup.id` | `cgroup_trace:{cgroup_id}` | Grandchild processes, setsid detach, after exec | `cgroup` |
+| 3 | `proc.ppid` | `pid_trace:{ppid}` | Direct child processes (ppid is Agent main process) | `ppid` |
 
-**cgroup 优先于 ppid 的原因**：cgroup 是容器级身份（同一容器内 fork/exec 不变），ppid 是进程级身份（深度>1 或 setsid 后断链）。cgroup 能覆盖孙子进程和 detach 场景，ppid 只能覆盖直接子进程。
+**Why cgroup is preferred over ppid**: cgroup is a container-level identity (unchanged by fork/exec within the same container); ppid is a process-level identity (broken beyond depth>1 or after setsid). cgroup can cover grandchild processes and detach scenarios; ppid can only cover direct child processes.
 
-**降级策略**：
-- cgroup v2 + Falco 0.37+：三级关联完整可用
-- cgroup v1 / 旧 Falco / macOS：`proc.cgroup.id=0` 自动跳过 cgroup 查找，降级到 ppid fallback
-- 无 Redis：全部降级，告警被忽略（不影响 Agent 正常运行）
+**Degradation strategy**:
+- cgroup v2 + Falco 0.37+: Three-level correlation fully available
+- cgroup v1 / old Falco / macOS: `proc.cgroup.id=0` automatically skips cgroup lookup, degrades to ppid fallback
+- No Redis: All degraded, alerts ignored (does not affect normal Agent operation)
 
-#### 存储层级
+#### Storage Hierarchy
 
-| 存储 | Key | Value | 生命周期 | 读取延迟 |
+| Storage | Key | Value | Lifecycle | Read Latency |
 |------|-----|-------|---------|---------|
-| **进程内 pidmap** `by_host_pid`（内存 HashMap, virbius-kernel） | Host PID | trace_id + session_id + ns_pid + cgroup_id | Agent 生命周期 | <1μs（零延迟） |
-| **进程内 pidmap** `by_cgroup`（辅助索引） | cgroup_id | 同上 | 同上 | <1μs |
-| **eBPF agent_cgroups map**（核层, eBPF 可用时, P2） | cgroup_id | 1(标记受监控) | Agent 启动时写入、退出时删除 | <1μs（内核查表） |
-| Redis `pid_trace:{host_pid}`（异步备份） | Host PID | trace_id + session_id + host_pid + cgroup_id | TTL 1h | Engine FalcoAlertController 查询 |
-| Redis `cgroup_trace:{cgroup_id}`（cgroup 反向索引, P1） | cgroup_id | 同上（与 pid_trace 共用 value） | TTL 1h | Engine FalcoAlertController cgroup 关联查询 |
+| **In-process pidmap** `by_host_pid` (in-memory HashMap, virbius-kernel) | Host PID | trace_id + session_id + ns_pid + cgroup_id | Agent lifecycle | <1μs (zero latency) |
+| **In-process pidmap** `by_cgroup` (secondary index) | cgroup_id | Same as above | Same as above | <1μs |
+| **eBPF agent_cgroups map** (Kernel layer, when eBPF available, P2) | cgroup_id | 1 (monitored flag) | Written at Agent startup, removed at exit | <1μs (kernel table lookup) |
+| Redis `pid_trace:{host_pid}` (async backup) | Host PID | trace_id + session_id + host_pid + cgroup_id | TTL 1h | Engine FalcoAlertController query |
+| Redis `cgroup_trace:{cgroup_id}` (cgroup reverse index, P1) | cgroup_id | Same as above (shared value with pid_trace) | TTL 1h | Engine FalcoAlertController cgroup correlation query |
 
-> **eBPF map 改用 cgroup_id 而非 PID**：原设计的 `agent_pids` map 以 PID 为 key，在容器环境中 Host PID 频繁变化（进程 fork/exec）。改用 `agent_cgroups` map 以 cgroup_id 为 key——cgroup 在容器生命周期内不变，eBPF 程序用 `bpf_get_current_cgroup_id()` 查表，无需 PID 翻译。
+> **eBPF map changed to cgroup_id instead of PID**: The original `agent_pids` map used PID as the key, but in container environments, Host PID changes frequently (process fork/exec). Changed to `agent_cgroups` map using cgroup_id as the key—cgroup remains unchanged during the container lifecycle; eBPF programs use `bpf_get_current_cgroup_id()` to look up the table, no PID translation needed.
 
-**查询优先级**：进程内 pidmap `by_host_pid`（最快）→ `by_cgroup`（辅助）→ Redis（兜底）
+**Query priority**: In-process pidmap `by_host_pid` (fastest) → `by_cgroup` (secondary) → Redis (fallback)
 
-**注册时机**：Agent 启动后、执行任何工具前，virbius-core 在 `bootstrap()` 中调用 `register_agent()`。该函数自动从 `/proc/self/status` 和 `/proc/self/cgroup` 检测 Host PID 和 cgroup ID，无需调用方感知容器环境。注册是内存操作，<1μs 完成。
+**Registration timing**: After Agent startup and before executing any tool, virbius-core calls `register_agent()` in `bootstrap()`. This function automatically detects Host PID and cgroup ID from `/proc/self/status` and `/proc/self/cgroup`, without requiring the caller to be aware of the container environment. Registration is a memory operation, completed in <1μs.
 
-**fork/exec 安全性**：
-- **cgroup_id 不变**：同一容器内的 fork/exec 不会改变 cgroup_id，`by_cgroup` 索引始终有效。
-- **Host PID 变化**：Agent fork 出子进程时，子进程有新的 Host PID。若需追踪子进程，由端层 Proxy 在 `posix_spawn` 后立即注册子进程 PID（P2 沙箱场景）。
-- **竞态窗口**：`register_agent` 在 fork 后、子进程执行任何工具前调用。窗口内 Falco 可能观察到未注册的子进程事件——此时事件无 trace_id 关联，但端层 License/预检仍在生效，核层观测为"匿名事件"（标注 `unregistered_pid`）。
+**fork/exec safety**:
+- **cgroup_id unchanged**: fork/exec within the same container does not change cgroup_id; the `by_cgroup` index is always valid.
+- **Host PID changes**: When an Agent forks a child process, the child has a new Host PID. If tracking child processes is needed, the Edge Proxy registers the child process PID immediately after `posix_spawn` (P2 sandbox scenario).
+- **Race window**: `register_agent` is called after fork and before the child process executes any tool. During this window, Falco may observe unregistered child process events—these events have no trace_id association, but the Edge License/precheck are still in effect; the Kernel layer observes these as "anonymous events" (labeled `unregistered_pid`).
 
-> **stale mapping 防护**：Agent 崩溃时无法清理 PID 映射。进程内 pidmap 随进程销毁自动释放；eBPF `agent_cgroups` map 由 cgroup 销毁时内核自动回收；Redis 备份依赖 TTL。
+> **Stale mapping protection**: When an Agent crashes, PID mappings cannot be cleaned up. In-process pidmap is automatically freed when the process is destroyed; eBPF `agent_cgroups` map is automatically reclaimed by the kernel when cgroup is destroyed; Redis backup relies on TTL.
 
-### 4.7 部署模式
+### 4.7 Deployment Modes
 
-| 模式 | 判定条件 | 观测 | 阻断 |
+| Mode | Determination Condition | Observation | Enforcement |
 |------|---------|------|------|
-| host | 裸机/自管 VM + root | Falco eBPF(P2) | Landlock(P2) + gVisor(P2) |
-| daemonset | K8s 标准节点池 + privileged | 同上 | 同上 |
-| pod-observe | serverless(Fargate/Autopilot) | Falco plugin + 云厂商告警 | 端层 Landlock(P2) + NetworkPolicy |
-| audit-only | 前期观测 | 上述观测的只读子集 | 无 |
+| host | Bare metal/self-managed VM + root | Falco eBPF (P2) | Landlock (P2) + gVisor (P2) |
+| daemonset | K8s standard node pool + privileged | Same as above | Same as above |
+| pod-observe | serverless (Fargate/Autopilot) | Falco plugin + cloud vendor alerts | Edge Landlock (P2) + NetworkPolicy |
+| audit-only | Early stage observation | Read-only subset of above observation | None |
 
-> **删除原设计的 sidecar 模式**：sidecar 模式自相矛盾——Falco 也需 eBPF 特权，Landlock 不能由 sidecar 应用到其他容器（必须在 Pod spec 中声明）。serverless 环境下 Landlock profile 通过 mutating admission webhook 注入 Pod spec。
+> **Removed original sidecar mode**: Sidecar mode was self-contradictory—Falco also requires eBPF privileges; Landlock cannot be applied by a sidecar to other containers (must be declared in Pod spec). In serverless environments, Landlock profile is injected into Pod spec via mutating admission webhook.
 
-### 4.8 自定义 Falco 规则管理
+### 4.8 Custom Falco Rule Management
 
-Falco 规则通过云层控制面统一管理，复用 `tb_rules` / `tb_rules_current` 表（`layer='falco'`, `runtime='falco'`），无需独立表。
+Falco rules are centrally managed through the Cloud layer control plane, reusing `tb_rules` / `tb_rules_current` tables (`layer='falco'`, `runtime='falco'`), no separate table needed.
 
-#### 4.8.1 规则格式
+#### 4.8.1 Rule Format
 
-`body` 字段为 JSON：
+`body` field is JSON:
 
 ```json
 {
@@ -1640,35 +1642,35 @@ Falco 规则通过云层控制面统一管理，复用 `tb_rules` / `tb_rules_cu
 }
 ```
 
-| 字段 | 类型 | 说明 | 默认值 |
+| Field | Type | Description | Default Value |
 |------|------|------|--------|
-| `condition` | string | Falco 条件表达式 | `evt.num > 0` |
-| `output` | string | 告警输出模板 | `Falco rule triggered (rule=...)` |
-| `priority` | string | 取自规则行的 `reason_code`，未填时默认 `WARNING` | `WARNING` |
-| `tags` | string[] | 标签数组（可选） | 空 |
+| `condition` | string | Falco condition expression | `evt.num > 0` |
+| `output` | string | Alert output template | `Falco rule triggered (rule=...)` |
+| `priority` | string | Taken from the rule line's `reason_code`, defaults to `WARNING` if not filled | `WARNING` |
+| `tags` | string[] | Tag array (optional) | Empty |
 
-#### 4.8.2 灰度部署
+#### 4.8.2 Canary Deployment
 
-复用 deploy-rollout 状态机（`PENDING → CANARY → FULL → FINALIZED`），使用节点标签 `virbius-falco-canary=true` 区分 canary/stable 池：
+Reuses deploy-rollout state machine (`PENDING → CANARY → FULL → FINALIZED`), using node label `virbius-falco-canary=true` to distinguish canary/stable pools:
 
 ```
 virbius-control
-  +-- FalcoConfigBuilder    读取 tb_rules_current(layer='falco') → 生成 Falco YAML
-  +-- FalcoArtifactStore    Redis 存储规则 YAML + Stream 通知
-  +-- DeployRolloutService  状态机编排
+  +-- FalcoConfigBuilder    reads tb_rules_current(layer='falco') → generates Falco YAML
+  +-- FalcoArtifactStore    Redis stores rule YAML + Stream notifications
+  +-- DeployRolloutService  state machine orchestration
   |
   +-- Redis Stream
-      +-- :canary  → canary Falco 节点
-      +-- :full     → stable Falco 节点
+      +-- :canary  → canary Falco nodes
+      +-- :full     → stable Falco nodes
 
-Falco 节点 Pod 内：
+Falco node Pod:
   config-subscriber (Rust sidecar)
-    Redis Stream 消费 → 写 /etc/falco/falco_rules.d/{tenant}-{target}.yaml → SIGHUP 重载
+    Redis Stream consumption → write /etc/falco/falco_rules.d/{tenant}-{target}.yaml → SIGHUP reload
 ```
 
-#### 4.8.3 Falco http_output 配置（方案 A）
+#### 4.8.3 Falco http_output Configuration (Plan A)
 
-Falco 通过 `http_output` 将告警发送到 Engine `FalcoAlertController`，替代原 `program_output` 模式：
+Falco sends alerts to Engine `FalcoAlertController` via `http_output`, replacing the original `program_output` mode:
 
 ```yaml
 # virbius-kernel/deploy/falco-config.yaml
@@ -1680,37 +1682,37 @@ http_output:
   retry_wait_seconds: 5
 
 rules_file:
-  - /etc/falco/falco_rules.d/   # config-subscriber 热重载目录
+  - /etc/falco/falco_rules.d/   # config-subscriber hot-reload directory
 ```
 
-**数据流**：
+**Data flow**:
 ```
-Falco eBPF → 告警触发 → http_output POST → Engine FalcoAlertController
-  → 三级关联 (pid → cgroup → ppid) → SessionRiskManager.onFalcoAlert()
-  → Redis INCR session:{id}:falco_pending → 下次 updateRiskScore() 消费
+Falco eBPF → alert triggered → http_output POST → Engine FalcoAlertController
+  → three-level correlation (pid → cgroup → ppid) → SessionRiskManager.onFalcoAlert()
+  → Redis INCR session:{id}:falco_pending → next updateRiskScore() consumes
 ```
 
-**Falco 规则 output 字段要求**：规则 `output` 模板必须包含 `%proc.cgroup.id`，否则 cgroup 关联路径无法生效（`proc.cgroup.id` 需要 Falco 0.37+ modern eBPF driver）。
+**Falco rule output field requirement**: The rule `output` template must include `%proc.cgroup.id`, otherwise the cgroup correlation path cannot take effect (`proc.cgroup.id` requires Falco 0.37+ modern eBPF driver).
 
-#### 4.8.3 示例
+#### 4.8.3 Example
 
-详见 [README.md](#快速开始) 或 ops.html 前端操作界面。
+See [README.md](#quick-start) or the ops.html front-end operation interface.
 
-### 4.9 统一沙箱规则管理（Falco + Landlock + gVisor）
+### 4.9 Unified Sandbox Rule Management (Falco + Landlock + gVisor)
 
-核层的三类规则——Falco 观测规则、Landlock 文件隔离规则、gVisor 沙箱配置——统一通过 `tb_rules` 表管理，复用同一套 CRUD + 发布 + 灰度部署流程。
+The three types of rules in the Kernel layer—Falco observation rules, Landlock file isolation rules, and gVisor sandbox configuration—are all managed through the `tb_rules` table, reusing the same CRUD + publish + canary deployment workflow.
 
-#### 4.9.1 规则体系对照
+#### 4.9.1 Rule System Comparison
 
-| 规则类型 | `layer` | `runtime` | `body_json` 内容 | 下发目标 | 下发方式 |
+| Rule Type | `layer` | `runtime` | `body_json` Content | Target | Delivery Method |
 |----------|---------|-----------|------------------|---------|---------|
-| **Falco 观测** | `falco` | `falco` | condition/output/priority/tags | 核层 Falco 节点 | Redis Stream → config-subscriber → YAML |
-| **Landlock 隔离** | `sandbox` | `landlock` | tool_name/read_paths/write_paths/exec_paths | 端层 EdgeManifest | REST → manifest JSON → SDK 拉取 |
-| **gVisor 沙箱** | `sandbox` | `gvisor` | runsc_path/memory_limit/cpu_quota/... | 端层 EdgeManifest | REST → manifest JSON → SDK 拉取 |
+| **Falco observation** | `falco` | `falco` | condition/output/priority/tags | Kernel layer Falco nodes | Redis Stream → config-subscriber → YAML |
+| **Landlock isolation** | `sandbox` | `landlock` | tool_name/read_paths/write_paths/exec_paths | Edge layer EdgeManifest | REST → manifest JSON → SDK pull |
+| **gVisor sandbox** | `sandbox` | `gvisor` | runsc_path/memory_limit/cpu_quota/... | Edge layer EdgeManifest | REST → manifest JSON → SDK pull |
 
-#### 4.9.2 Landlock 规则格式
+#### 4.9.2 Landlock Rule Format
 
-每条 Landlock 规则绑定一个 `tool_name`，定义该工具在沙箱中可访问的路径白名单：
+Each Landlock rule is bound to a `tool_name`, defining the path allowlist accessible to that tool in the sandbox:
 
 ```json
 {
@@ -1721,11 +1723,11 @@ Falco eBPF → 告警触发 → http_output POST → Engine FalcoAlertController
 }
 ```
 
-运营台操作流程：新建规则 → 选择 `sandbox` 层 → 选择 `landlock` runtime → 编辑 JSON body → 保存 → 策略上线 → 部署 → Edge SDK 拉取 manifest → P2 沙箱执行时生效。
+Ops console operation flow: Create new rule → select `sandbox` layer → select `landlock` runtime → edit JSON body → save → policy publish → deploy → Edge SDK pulls manifest → takes effect during P2 sandbox execution.
 
-#### 4.9.3 gVisor 规则格式
+#### 4.9.3 gVisor Rule Format
 
-gVisor 规则为全局配置（首个 `full` 状态的规则生效），定义不可信代码执行容器的资源限制：
+gVisor rules are global configuration (the first rule in `full` state takes effect), defining resource limits for untrusted code execution containers:
 
 ```json
 {
@@ -1740,74 +1742,74 @@ gVisor 规则为全局配置（首个 `full` 状态的规则生效），定义�
 }
 ```
 
-#### 4.9.4 下发链路
+#### 4.9.4 Delivery Chain
 
 ```
-virbius-control（唯一真源）
+virbius-control (single source of truth)
   |
-  +-- tb_rules (layer='falco')    → FalcoConfigBuilder → YAML → Redis Stream → Falco 节点
+  +-- tb_rules (layer='falco')    → FalcoConfigBuilder → YAML → Redis Stream → Falco nodes
   +-- tb_rules (layer='sandbox')  → ArtifactService.buildLandlockProfiles() / buildGvisorConfig()
-  |                                  → EdgeManifest JSON → REST API → Edge SDK 拉取
+  |                                  → EdgeManifest JSON → REST API → Edge SDK pull
   |
-  +-- 运营台 ops.html
-      +-- 导航：🦅 falco / 🔒 沙箱 sandbox
-      +-- 规则编辑器：JSON body + 校验 + 预览
-      +-- 策略上线：draft → dry_run → canary → full（复用现有状态机）
+  +-- Ops console ops.html
+      +-- Navigation: 🦅 falco / 🔒 sandbox
+      +-- Rule editor: JSON body + validation + preview
+      +-- Policy publish: draft → dry_run → canary → full (reuses existing state machine)
 ```
 
-#### 4.9.5 运营台集成
+#### 4.9.5 Ops Console Integration
 
-| 功能 | 实现方式 |
+| Feature | Implementation |
 |------|---------|
-| 规则导航 | ops.html 导航栏新增 `🔒 沙箱 sandbox` 按钮，与 `🦅 falco` 并列 |
-| 层/运行时 | `LAYER_RUNTIMES.sandbox = ['landlock', 'gvisor']`，运营台自动适配 |
-| 规则编辑 | JSON body 编辑器（与 falco 规则编辑体验一致），支持 landlock/gvisor 模板 |
-| 规则校验 | 保存时解析 JSON body，校验必填字段（tool_name / read_paths 等） |
-| 策略上线 | 复用 `draft → dry_run → canary → full` 状态机，与 falco/edge/cloud 规则一致 |
-| 灰度部署 | sandbox 层加入 `DeployRolloutController.diff-rules` 的 layer 列表 |
-| Manifest 下发 | `ArtifactService.writeEdgeManifestFile` 新增 `landlock_profiles` + `gvisor_config` 字段 |
+| Rule navigation | ops.html navigation bar adds `🔒 sandbox` button, alongside `🦅 falco` |
+| Layer/runtime | `LAYER_RUNTIMES.sandbox = ['landlock', 'gvisor']`, ops console auto-adapts |
+| Rule editing | JSON body editor (same experience as falco rule editing), supports landlock/gvisor templates |
+| Rule validation | Parse JSON body on save, validate required fields (tool_name / read_paths, etc.) |
+| Policy publish | Reuses `draft → dry_run → canary → full` state machine, consistent with falco/edge/cloud rules |
+| Canary deployment | sandbox layer added to `DeployRolloutController.diff-rules` layer list |
+| Manifest delivery | `ArtifactService.writeEdgeManifestFile` adds `landlock_profiles` + `gvisor_config` fields |
 
 ---
 
-## 5. 云层 — 统一策略大脑
+## 5. Cloud — Unified Policy Brain
 
-### 5.1 职责
+### 5.1 Responsibilities
 
-参考 VirbiusLLM 的 virbius-engine + virbius-control 设计并做了大量扩展以适应 Agent 专属场景（详见 [§10](DESIGN.md#10-与-virbiusllm-的关系)）。
+References VirbiusLLM's virbius-engine + virbius-control design with extensive extensions for Agent-specific scenarios (see [§10](DESIGN.md#10-relationship-with-virbiusllm)).
 
-### 5.2 新增规则类型
+### 5.2 New Rule Types
 
-| 规则类型 | 说明 | 示例 |
+| Rule Type | Description | Example |
 |----------|------|------|
-| **tool-allowlist** | 允许 Agent 调用的工具白名单 | allow: [read_file, search, curl] |
-| **tool-arg-schema** | 工具参数的 JSON Schema 校验规则 | read_file.path 必须匹配正则 |
-| **tool-rate-limit** | 按 session/工具维度的频率限制 | read_file: 50/min |
-| **tool-chain-detect** | 危险工具调用链检测 | read_secret -> curl = block |
-| **session-risk-threshold** | 会话级风险分阈值 | session_risk > 80 = 断开连接 |
-| **ebpf-policy** | 核层 eBPF/Falco 的白名单配置 | exec_allowlist: [python3, node] |
+| **tool-allowlist** | Allowlist of tools an Agent is permitted to call | allow: [read_file, search, curl] |
+| **tool-arg-schema** | JSON Schema validation rules for tool parameters | read_file.path must match regex |
+| **tool-rate-limit** | Frequency limits per session/tool dimension | read_file: 50/min |
+| **tool-chain-detect** | Dangerous tool call chain detection | read_secret -> curl = block |
+| **session-risk-threshold** | Session-level risk score threshold | session_risk > 80 = disconnect |
+| **ebpf-policy** | eBPF/Falco allowlist configuration for Kernel layer | exec_allowlist: [python3, node] |
 
-### 5.3 Groovy L3 Agent 规则
+### 5.3 Groovy L3 Agent Rules
 
-> **架构变更**：现有 virbius-engine 每次 /v1/evaluate 调用是无状态的。Agent 安全需要跨请求的 session 上下文。新增 Redis session 存储。
+> **Architecture change**: The existing virbius-engine's each /v1/evaluate call is stateless. Agent security requires cross-request session context. New Redis session storage added.
 
-**Session 状态存储(Redis)**：
+**Session State Storage (Redis)**:
 
-| Key | 类型 | TTL | 用途 |
+| Key | Type | TTL | Usage |
 |-----|------|-----|-----|
-| session:{id}:tool_history | List | 1h | 最近 N 次工具调用记录 |
-| session:{id}:risk_score | String | 1h | 会话风险分(0-100) |
-| session:{id}:tool_count:{tool_name} | Counter | 1h | 按工具维度的调用计数 |
-| pid_trace:{host_pid} | String | 1h | Host PID -> trace_id + session_id + cgroup_id 映射 |
+| session:{id}:tool_history | List | 1h | Last N tool call records |
+| session:{id}:risk_score | String | 1h | Session risk score (0-100) |
+| session:{id}:tool_count:{tool_name} | Counter | 1h | Call count per tool dimension |
+| pid_trace:{host_pid} | String | 1h | Host PID -> trace_id + session_id + cgroup_id mapping |
 
-**Redis I/O 优化**：engine 在 evaluate 入口预加载 session 上下文到内存，Groovy ctx 从内存读，不直接查 Redis。避免 N 条规则 = N 次 Redis I/O。
+**Redis I/O optimization**: engine preloads session context into memory at evaluate entry; Groovy ctx reads from memory, not directly from Redis. Avoids N rules = N Redis I/O operations.
 
 ```groovy
-// 规则 ID: agent-tool-chain-detect
+// Rule ID: agent-tool-chain-detect
 def decide(ctx) {
     def history = ctx.sessionHistory(5)
     def tools = history.collect { it.tool_name }
 
-    // 危险链：先读敏感数据，再发到外部（检查顺序）
+    // Dangerous chain: first read sensitive data, then send externally (check order)
     def readSecretIdx = tools.indexOf("read_file")
     def curlIdx = tools.indexOf("curl")
     if (readSecretIdx >= 0 && curlIdx >= 0 && readSecretIdx < curlIdx) {
@@ -1819,7 +1821,7 @@ def decide(ctx) {
         }
     }
 
-    // 重复调用链：最近 N 次工具调用都是同一类
+    // Repeated call chain: last N tool calls are all of the same type
     if (tools.size() >= 10 && tools.every { it == "search" }) {
         ctx.audit("possible data exfiltration via repeated searches")
         ctx.incrementRiskScore(15)
@@ -1830,27 +1832,27 @@ def decide(ctx) {
 }
 ```
 
-**Groovy ctx API**：
+**Groovy ctx API**:
 
-| 函数 | 说明 | 数据来源 |
+| Function | Description | Data Source |
 |------|------|---------|
-| ctx.var(name) | 读取原生变量（如 `tool_name`、`tool_session_key`） | 引擎自动注入 + 调用方传入的 `vars` 映射 |
-| ctx.vars() | 返回全部原生变量只读视图 | 同上 |
-| ctx.sessionHistory(n) | 最近 N 次工具调用 | 预加载自 Redis LRANGE |
-| ctx.sessionRiskScore() | 当前会话风险分 | 预加载自 Redis GET |
-| ctx.incrementRiskScore(delta) | 提升风险分 | 异步写 Redis INCRBY |
-| ctx.isInternalHost(url) | 判断 URL 是否指向内部网络 | 根据 License 或策略中配置的 CIDR/域名列表判断 |
+| ctx.var(name) | Read native variables (e.g. `tool_name`, `tool_session_key`) | Engine auto-injection + `vars` map passed by caller |
+| ctx.vars() | Return read-only view of all native variables | Same as above |
+| ctx.sessionHistory(n) | Last N tool calls | Preloaded from Redis LRANGE |
+| ctx.sessionRiskScore() | Current session risk score | Preloaded from Redis GET |
+| ctx.incrementRiskScore(delta) | Raise risk score | Async write Redis INCRBY |
+| ctx.isInternalHost(url) | Determine if URL points to internal network | Based on CIDR/domain list configured in License or policy |
 
-**`ctx.var()` 原生变量列表**：
+**`ctx.var()` native variable list**:
 
-请求因子（`tb_context_bindings`）和扩展因子（`tb_extended_vars`）已从代码中移除，`ctx.var()` 不再支持用户自定义的上下文绑定和表达式派生变量，仅保留以下引擎自动注入的原生变量：
+Request factors (`tb_context_bindings`) and extended factors (`tb_extended_vars`) have been removed from the code; `ctx.var()` no longer supports user-defined context bindings and expression-derived variables, retaining only the following engine auto-injected native variables:
 
-| 变量名 | 注入时机 | 说明 | 示例值 |
+| Variable Name | Injection Timing | Description | Example Value |
 |--------|---------|------|--------|
-| `tool_name` | `EvaluateOrchestrator` 始终注入 | 当前被调用的工具名 | `read_file`、`curl` |
-| `tool_session_key` | `EvaluateOrchestrator` 在 `toolName` 和 `sessionId` 均非空时注入 | 每个工具在每个会话中的唯一复合 key，用于累计聚合 | `tool:read_file-session:sess-001` |
+| `tool_name` | Always injected by `EvaluateOrchestrator` | Currently called tool name | `read_file`, `curl` |
+| `tool_session_key` | Injected by `EvaluateOrchestrator` when both `toolName` and `sessionId` are non-null | Unique composite key per tool per session, used for cumulative aggregation | `tool:read_file-session:sess-001` |
 
-其他变量（如 `app_id`、`user_id`、`ip`、`command` 等）由调用方（网关 / SDK / 测试脚本）通过请求的 `vars` 字段显式传入，引擎不做任何自动解析或派生。规则脚本需要在 `decide(ctx)` 中先判空再使用：
+Other variables (such as `app_id`, `user_id`, `ip`, `command`, etc.) are explicitly passed by the caller (gateway / SDK / test script) through the request's `vars` field; the engine does not perform any automatic parsing or derivation. Rule scripts need to check for null before use in `decide(ctx)`:
 
 ```groovy
 def appId = ctx.var("app_id")
@@ -1859,96 +1861,95 @@ if (appId != null && appId == "restricted-app") {
 }
 ```
 
-### 5.4 语义审计 — STI 协议
+### 5.4 Semantic Audit — STI Protocol
 
-在 Groovy L3 中实现 STI(Suitability、Taint、Integrity)语义审计，仅对高风险场景按需调用 LLM：
+Implement STI (Suitability, Taint, Integrity) semantic audit in Groovy L3, calling LLM on-demand only for high-risk scenarios:
 
-| 维度 | 触发条件 | LLM 调用 | 说明 |
+| Dimension | Trigger Condition | LLM Call | Description |
 |------|---------|---------|------|
-| **Suitability** | session_risk > 50 或工具首次在该 scene 调用 | 否(规则) | 校验 tool_name + args 是否符合场景最小权限 |
-| **Taint** | 工具返回值长度 > 2KB 或含注入标记 | 是(LLM) | 检查工具返回值中是否含外部注入指令 |
-| **Integrity** | 参数类型与 schema 不符或含 Base64/Hex | 否(规则) | 校验参数是否被篡改 |
+| **Suitability** | session_risk > 50 or tool first called in this scene | No (rules) | Validate tool_name + args comply with scene's least privilege |
+| **Taint** | Tool return value length > 2KB or contains injection markers | Yes (LLM) | Check if external injection instructions are present in tool return values |
+| **Integrity** | Parameter type does not match schema or contains Base64/Hex | No (rules) | Validate if parameters have been tampered with |
 
-> **成本控制**：STI 的 LLM 调用通过 mlPredict 走专用小模型(qwen3guard:0.6b)，不走大模型。小模型本地部署(Ollama)，单次调用 <200ms。
+> **Cost control**: STI LLM calls go through mlPredict using a dedicated small model (qwen3guard:0.6b), not the large model. The small model is locally deployed (Ollama), single call <200ms.
 
-### 5.5 控制面统一下发
+### 5.5 Unified Control Plane Delivery
 
 ```
-virbius-control（唯一真源）
+virbius-control (single source of truth)
   |
-  +-- tb_tool_policies        -> 端层 tool policy + schema
-  +-- tb_mcp_routes           -> 管层 Higress MCP route 配置
-  +-- tb_kernel_policies      -> 核层 Falco 规则 + eBPF 白名单 maps
-  +-- tb_rules_current        -> 云层 Groovy L3 + Prompt L1 规则（已有）
-  +-- tb_app_licenses         -> Agent 运行许可证（app_id -> license）
+  +-- tb_tool_policies        -> Edge layer tool policy + schema
+  +-- tb_mcp_routes           -> Gateway layer Higress MCP route configuration
+  +-- tb_kernel_policies      -> Kernel layer Falco rules + eBPF allowlist maps
+  +-- tb_rules_current        -> Cloud layer Groovy L3 + Prompt L1 rules (existing)
+  +-- tb_app_licenses         -> Agent Runtime License (app_id -> license)
   |
-  +-- 运行时状态（Redis，非数据库）
+  +-- Runtime state (Redis, not database)
       +-- session:{id}:tool_history
       +-- session:{id}:risk_score
       +-- session:{id}:tool_count:*
       +-- pid_trace:{pid}
-      +-- license:revoked:{app_id}  -> 吊销标记（pub/sub 通知各层）
+      +-- license:revoked:{app_id}  -> revocation flag (pub/sub notifies each layer)
 ```
 
-发布流程复用现有 PublishOrchestrator：draft -> dry_run -> canary -> full
+Publishing workflow reuses existing PublishOrchestrator: draft -> dry_run -> canary -> full
 
-各层独立放量：
-- 端层 canary：按 device_id hash 灰度
-- 管层 canary：按 tenant_id 灰度
-- 核层 canary：按 Agent PID hash 灰度
-- 云层 canary：按 session_id 灰度（已有）
+Each layer independently controls rollout:
+- Edge canary: by device_id hash
+- Gateway canary: by tenant_id
+- Kernel canary: by Agent PID hash
+- Cloud canary: by session_id (existing)
 
-控制面下发方式：
+Control plane delivery method:
 
 ```
 virbius-control
   |
-  +-- REST (现有)
-  |   +-- -> virbius-engine: Groovy L3 + Prompt L1 规则
-  |   +-- -> Higress: 名单 + 计数 (via WasmPlugin CRD)
+  +-- REST (existing)
+  |   +-- -> virbius-engine: Groovy L3 + Prompt L1 rules
+  |   +-- -> Higress: allowlist + counters (via WasmPlugin CRD)
   |
-  +-- REST (新增)
-  |   +-- -> virbius-kernel: Falco 规则 + eBPF maps
+  +-- REST (new)
+  |   +-- -> virbius-kernel: Falco rules + eBPF maps
   |
-  +-- Higress CRD (新增)
-      +-- -> Higress: MCP route + WasmPlugin 配置 (virbius-compiler 生成)
+  +-- Higress CRD (new)
+      +-- -> Higress: MCP route + WasmPlugin configuration (generated by virbius-compiler)
 ```
 
-### 5.6 审计完整性（Hash Chain）
+### 5.6 Audit Integrity (Hash Chain)
 
-> **✅ 已实现。** 位于 `virbius-control/src/main/java/io/virbius/control/audit/`，详见 [DESIGN.md §13.5](DESIGN.md#135-审计完整性hash-chain)。
+> **✅ Implemented.** Located at `virbius-control/src/main/java/io/virbius/control/audit/`, see [DESIGN.md §13.5](DESIGN.md#135-audit-integrityhash-chain).
 
-防篡改审计链：每条审计事件包含前一条的 SHA-256 hash，形成**按租户隔离**的链式结构。任何篡改都会导致链断裂，可被验证检测。
+Tamper-proof audit chain: each audit event contains the SHA-256 hash of the previous event, forming a **per-tenant isolated** chain structure. Any tampering causes the chain to break, detectable by verification.
 
-**核心组件**：
+**Core components**:
 
-| 组件 | 职责 |
+| Component | Responsibility |
 |------|------|
-| `HashChainOrchestrator` | 为审计事件附加 `audit_seq` / `prev_hash` / `curr_hash`，Redis Lua CAS 原子更新 + MySQL 乐观锁降级 |
-| `HashChainVerifier` | 从 DB 读取事件逐条校验序号连续性 + prev_hash 链 + curr_hash 重算 |
-| `HashChainVerifyTask` | `@Scheduled` 每小时自动验证所有租户近 7 天审计链 |
-| `AuditAdminController` | REST API：`POST /audit/verify`（手动验证）+ `GET /audit/chain/status`（链状态查询） |
+| `HashChainOrchestrator` | Attaches `audit_seq` / `prev_hash` / `curr_hash` to audit events, Redis Lua CAS atomic update + MySQL optimistic lock degradation |
+| `HashChainVerifier` | Reads events from DB and validates sequentially for sequence number continuity + prev_hash chain + curr_hash recomputation |
+| `HashChainVerifyTask` | `@Scheduled` hourly automatic verification of last 7 days of audit chains for all tenants |
+| `AuditAdminController` | REST API: `POST /audit/verify` (manual verification) + `GET /audit/chain/status` (chain status query) |
 
-**数据流**：
+**Data flow**:
 
 ```
-各层审计事件
+Audit events from all layers
   │
   ▼
 virbius-control AuditService
   ├── HashChainOrchestrator.chainBatch(tenantId, events)
-  │     ├── Redis: HSET virbius:audit:chain:{tenantId} (Lua CAS, 3 次重试)
-  │     └── MySQL: tb_audit_chain_state (乐观锁 version, 降级)
+  │     ├── Redis: HSET virbius:audit:chain:{tenantId} (Lua CAS, 3 retries)
+  │     └── MySQL: tb_audit_chain_state (optimistic lock version, degradation)
   ▼
-写入 tb_audit_events (含 audit_seq, prev_hash, curr_hash)
+Write to tb_audit_events (including audit_seq, prev_hash, curr_hash)
   │
   ▼
-HashChainVerifyTask (每小时) → HashChainVerifier → 重算 + 比对 → log.error on break
+HashChainVerifyTask (hourly) → HashChainVerifier → recompute + compare → log.error on break
 ```
 
-**Hash 计算**（13 字段）：`prev_hash | seq | tenant_id | trace_id | event_id | effective_action | layer | reason_code | rule_id | scene | user_id | device_id | intercepted_at`
+**Hash calculation** (13 fields): `prev_hash | seq | tenant_id | trace_id | event_id | effective_action | layer | reason_code | rule_id | scene | user_id | device_id | intercepted_at`
 
-**DB 迁移**：`V8__audit_hash_chain.sql` — `tb_audit_events` 增加 3 列 + `tb_audit_chain_state` 链状态表。
+**DB migration**: `V8__audit_hash_chain.sql` — `tb_audit_events` adds 3 columns + `tb_audit_chain_state` chain state table.
 
 ---
-

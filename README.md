@@ -208,6 +208,7 @@ virbius-agent/
 
 | Document | Description |
 |----------|-------------|
+| [USAGE_GUIDE.md](USAGE_GUIDE.md) | User guide — installation, integration, rule authoring, operations |
 | [DESIGN.md](DESIGN.md) | System architecture design document |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Detailed architecture documentation |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Deployment topology and operations |

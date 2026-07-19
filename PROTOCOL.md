@@ -1,181 +1,181 @@
-# VirbiusAgent 协议设计 — PROTOCOL
+# VirbiusAgent Protocol Design — PROTOCOL
 
-| 项目 | 说明 |
+| Item | Description |
 |------|------|
-| 文档版本 | v3.3 |
-| 状态 | 草案 |
-| 关联 | [DESIGN.md](DESIGN.md)（索引） · [ARCHITECTURE.md](ARCHITECTURE.md) |
-| 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
+| Document Version | v3.3 |
+| Status | Draft |
+| Related | [DESIGN.md](DESIGN.md) (index) · [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Reference Project | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
 
-> 本文件包含 §2.6 MCP Server 集成（含 §2.6.1 MCP Proxy 完整技术方案）。
-> 架构总体设计见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+> This document contains §2.6 MCP Server Integration (including §2.6.1 MCP Proxy Full Technical Solution).
+> See [ARCHITECTURE.md](ARCHITECTURE.md) for the overall architecture design.
 
 ---
 
-### 2.6 MCP Server 集成
+### 2.6 MCP Server Integration
 
-端层 virbius-core 需要集成到 MCP Server(Python/Node)中，包裹工具执行：
+Edge virbius-core needs to be integrated into MCP Server (Python/Node), wrapping tool execution:
 
-| 框架 | 集成方式 | 拦截点 |
+| Framework | Integration Method | Interception Point |
 |------|---------|--------|
-| **Python MCP Server** | virbius-core 编译为 PyO3 扩展，在 tool handler 内调 virbius_core.precheck() + sandbox_execute() | tool handler 内 |
-| **Node MCP Server** | virbius-core 编译为 napi-rs 扩展，同理 | tool handler 内 |
-| **通用 subprocess** | MCP Server 启动工具时 spawn("virbius-sandbox", ...) | 进程启动前 |
-| **LangChain** | SandboxedTool<T> wrapper，包装 Tool::call() | Tool::call() 内 |
-| **OpenAI SDK** | SandboxedOpenAIClient 代理，拦截 tool_calls | 请求序列化前 |
-| **通用 MCP proxy** | 端层启动本地 MCP Server 作为 Agent 和真实工具的中间代理 | tools/call 请求 |
+| **Python MCP Server** | virbius-core compiled as PyO3 extension, calls virbius_core.precheck() + sandbox_execute() within tool handler | inside tool handler |
+| **Node MCP Server** | virbius-core compiled as napi-rs extension, same as above | inside tool handler |
+| **Generic subprocess** | MCP Server spawns("virbius-sandbox", ...) when launching tool | before process start |
+| **LangChain** | SandboxedTool\<T\> wrapper, wrapping Tool::call() | inside Tool::call() |
+| **OpenAI SDK** | SandboxedOpenAIClient proxy, intercepting tool_calls | before request serialization |
+| **Generic MCP proxy** | Edge starts a local MCP Server as an intermediary proxy between Agent and real tools | tools/call request |
 
-通用 MCP proxy 模式：
+Generic MCP proxy mode:
 
 ```
-Agent <-> 本地 MCP Proxy (virbius-core sandbox)
+Agent <-> Local MCP Proxy (virbius-core sandbox)
               |
-              +-- allow -> 转发到远端 MCP Server
-              +-- deny  -> 返回 ToolError
+              +-- allow -> forward to remote MCP Server
+              +-- deny  -> return ToolError
 ```
 
-#### 2.6.1 MCP Proxy 完整技术方案
+#### 2.6.1 MCP Proxy Full Technical Solution
 
-MCP Proxy 是 Agent 框架无关的接入方式：作为独立进程运行在 Agent 和 MCP Server 之间，拦截 MCP 协议的 `tools/call` 请求，执行安全预检 + 云层终判后决定放行或阻断。任何支持 MCP 协议的 Agent 框架（Claude Desktop、LangChain MCP Adapter、自定义 Agent）均可零代码接入。
+MCP Proxy is a framework-agnostic integration method: it runs as an independent process between the Agent and the MCP Server, intercepts the `tools/call` request of the MCP protocol, performs security precheck + cloud final judgment, and decides to allow or block. Any Agent framework that supports the MCP protocol (Claude Desktop, LangChain MCP Adapter, custom Agent) can integrate with zero code changes.
 
-**设计目标**：
-- Agent 框架零改造（MCP 协议透明代理）
-- 单进程支撑多 Agent 会话（stdio 多路复用 / SSE 长连接）
-- 预检延迟 <2ms，全链路（含 engine）延迟 <50ms
-- Engine 不可用时 fail-open（低风险）或 fail-closed（高风险）
+**Design goals**:
+- Zero modification to Agent framework (transparent MCP protocol proxy)
+- Single process supporting multiple Agent sessions (stdio multiplexing / SSE long connections)
+- Precheck latency <2ms, full chain (including engine) latency <50ms
+- Fail-open (low risk) or fail-closed (high risk) when Engine is unavailable
 
-**架构**：
+**Architecture**:
 
 ```
-Agent (任意 MCP Client)
+Agent (any MCP Client)
   |
-  | MCP 协议 (JSON-RPC 2.0)
-  |   - stdio (本地进程)
-  |   - SSE  (远程连接)
+  | MCP Protocol (JSON-RPC 2.0)
+  |   - stdio (local process)
+  |   - SSE  (remote connection)
   v
 +---------------------------------------------------+
 |  virbius-mcp-proxy                                |
 |                                                   |
 |  +-----------+    +--------------------+          |
-|  | MCP 传输层 |    |  会话管理器         |          |
+|  | MCP Transport |  | Session Manager    |          |
 |  | (stdio/SSE)|--->|  session_id -> ctx |          |
 |  +-----+-----+    +--------------------+          |
 |        |                                          |
 |  +-----v----------------------------+             |
-|  | JSON-RPC 路由                    |             |
-|  |  initialize  -> 透传 + 注入      |             |
-|  |  tools/list  -> 透传 + 过滤      |             |
-|  |  tools/call  -> 拦截 -> 预检     |             |
-|  |  *            -> 透传            |             |
+|  | JSON-RPC Router                  |             |
+|  |  initialize  -> passthrough + inject           |
+|  |  tools/list  -> passthrough + filter           |
+|  |  tools/call  -> intercept -> precheck          |
+|  |  *            -> passthrough                   |
 |  +-----+----------------------------+             |
 |        |                                          |
 |  +-----v----------------------------+             |
-|  | 安全管线                         |             |
-|  |  1. License 校验 (virbius-core)  |             |
-|  |  2. 端层预检 (allowlist+schema)  |             |
-|  |  3. 快速通道判断                  |             |
-|  |     +- 命中 -> allow (跳过engine) |             |
-|  |     +- 未命中 -> 调 engine 终判   |             |
-|  |  4. 输出审查 (可选, P1)          |             |
+|  | Security Pipeline                |             |
+|  |  1. License verification (virbius-core)        |
+|  |  2. Edge precheck (allowlist+schema)           |
+|  |  3. Fast path decision                         |
+|  |     +- hit -> allow (skip engine)              |
+|  |     +- miss -> call engine final judgment      |
+|  |  4. Output review (optional, P1)               |
 |  +-----+----------------------------+             |
 |        |                                          |
-|  +-----v----------+  +------------------+        |
-|  | 上游 MCP Client |  | Engine Client     |        |
-|  | (转发到真实     |  | (POST /v1/evaluate|        |
-|  |  MCP Server)    |  |  HTTP)        |        |
-|  +-----------------+  +------------------+        |
+|  +-----v----------+  +------------------+         |
+|  | Upstream MCP Client |  | Engine Client  |         |
+|  | (forward to real    |  | (POST /v1/evaluate     |
+|  |  MCP Server)       |  |  HTTP)                  |
+|  +-----------------+  +------------------+         |
 +---------------------------------------------------+
   |                    |
   v                    v
-真实 MCP Server     virbius-engine (:8082)
+Real MCP Server     virbius-engine (:8082)
 (GitHub/Slack/...)  virbius-control (:8080)
 ```
 
-**MCP 协议处理**：
+**MCP Protocol Handling**:
 
-MCP 使用 JSON-RPC 2.0，传输层支持 stdio 和 SSE。Proxy 对每个 JSON-RPC method 的处理策略：
+MCP uses JSON-RPC 2.0, the transport layer supports stdio and SSE. The Proxy's handling strategy for each JSON-RPC method:
 
-| Method | 处理策略 | 说明 |
+| Method | Strategy | Description |
 |--------|---------|------|
-| `initialize` | 透传 + 注入 | 单上游：转发到上游 MCP Server。多上游：并发转发到所有上游，取首个成功响应。响应中注入 Proxy 能力声明（含 `multiUpstream: true`） |
-| `tools/list` | 透传 + 合并 + 过滤 | 单上游：转发获取工具列表。多上游：并发拉取所有上游工具列表，合并后冲突名称加前缀 `{upstream}__{tool}`。按 License allowed_tools 过滤后返回 Agent |
-| `tools/call` | **拦截** | 执行完整安全管线，allow 则转发，deny 则返回错误。多上游模式下通过工具名路由表解析目标上游 |
-| `resources/*` | 透传 | 不拦截 |
-| `prompts/*` | 透传 | 不拦截 |
-| `notifications/*` | 透传 | 单向通知，不拦截 |
+| `initialize` | passthrough + inject | Single upstream: forward to upstream MCP Server. Multiple upstreams: concurrently forward to all upstreams, take the first successful response. Inject Proxy capability declaration (including `multiUpstream: true`) into the response |
+| `tools/list` | passthrough + merge + filter | Single upstream: forward to get tool list. Multiple upstreams: concurrently fetch all upstream tool lists, add prefix `{upstream}__{tool}` to conflicting names after merging. Filter by License `allowed_tools` before returning to Agent |
+| `tools/call` | **Intercept** | Execute the full Security Pipeline, forward if allow, return error if deny. In multi-upstream mode, resolve the target upstream through the tool name routing table |
+| `resources/*` | passthrough | not intercepted |
+| `prompts/*` | passthrough | not intercepted |
+| `notifications/*` | passthrough | unidirectional notification, not intercepted |
 
-`tools/call` 拦截流程（核心）：
+`tools/call` interception flow (core):
 
 ```
-Agent 发送 tools/call { name, arguments }
+Agent sends tools/call { name, arguments }
   |
   v
-1. 解析请求
+1. Parse request
    - tool_name = request.params.name
    - args = request.params.arguments
-   - session_id = 从 MCP 会话或 _meta 中提取
+   - session_id = extracted from MCP session or _meta
   |
   v
-2. License 校验 (virbius-core::license)
+2. License verification (virbius-core::license)
    - verify(jwt, pubkey, app_id)
-   - 有 License 且有效 -> 继续 step 3
-   - 无 License -> 应用 Fallback 策略 (§2.6.1 Fallback)
-     - minimum_privilege: 高风险工具 deny / 低风险工具 allow(限流)
+   - License present and valid -> continue to step 3
+   - No License -> apply Fallback strategy (§2.6.1 Fallback)
+     - minimum_privilege: high-risk tool deny / low-risk tool allow (rate-limited)
      - default_deny: deny (license_required)
-     - audit_only: allow + 审计 (仅调试)
-   - License 无效(过期/吊销/签名错) -> 返回 JSON-RPC error: license_invalid
+     - audit_only: allow + audit (debug only)
+   - License invalid (expired/revoked/bad signature) -> return JSON-RPC error: license_invalid
   |
   v
-3. 端层预检 (virbius-core::precheck)
-   - License allowed_tools 是否包含 tool_name
-   - ToolPolicy JSON Schema 校验 args
-   - 失败 -> 返回 JSON-RPC error: tool_blocked / schema_violation
+3. Edge precheck (virbius-core::precheck)
+   - Check if tool_name is in License allowed_tools
+   - ToolPolicy JSON Schema validation of args
+   - Failure -> return JSON-RPC error: tool_blocked / schema_violation
   |
   v
-4. 快速通道判断
+4. Fast path decision
    - sandbox_type=="none" && fast_path && session_risk<30 && tool in fast_allowlist
-   - 命中 -> 跳过 step 5，直接 allow
-   - 冷启动：前 N 次调用强制全链路
+   - Hit -> skip step 5, allow directly
+   - Cold start: first N calls force full chain
   |
   v
-5. 云层终判 (virbius-engine POST /v1/evaluate)
-   请求体:
-   {
-     "trace_id": "...",
-     "session_id": "...",
-     "app_id": "...",
-     "tool_name": "read_file",
-     "args": { "path": "/etc/passwd" },
-     "license_risk_quota": 60
-   }
-   响应:
-   {
-     "effective_action": "allow" | "block" | "review",
-     "rule_id": "agent-tool-chain-detect",
-     "reason": "dangerous chain",
-     "risk_score_delta": 20,
-     "session_risk_score": 45
-   }
-   - block -> 返回 JSON-RPC error: engine_blocked
-   - allow/review -> 继续
+5. Cloud final judgment (virbius-engine POST /v1/evaluate)
+    Request body:
+    {
+      "trace_id": "...",
+      "session_id": "...",
+      "app_id": "...",
+      "tool_name": "read_file",
+      "args": { "path": "/etc/passwd" },
+      "license_risk_quota": 60
+    }
+    Response:
+    {
+      "effective_action": "allow" | "block" | "review",
+      "rule_id": "agent-tool-chain-detect",
+      "reason": "dangerous chain",
+      "risk_score_delta": 20,
+      "session_risk_score": 45
+    }
+    - block -> return JSON-RPC error: engine_blocked
+    - allow/review -> continue
   |
   v
-6. 转发到上游 MCP Server
-   - JSON-RPC 透传 tools/call 请求
-   - 超时 30s（可配置）
+6. Forward to upstream MCP Server
+   - JSON-RPC passthrough tools/call request
+   - Timeout 30s (configurable)
   |
   v
-7. 输出审查（可选，P1）
-   - STI Taint 检查工具返回值
-   - PII 脱敏
+7. Output review (optional, P1)
+   - STI Taint check tool return value
+   - PII redaction
   |
   v
-8. 返回结果给 Agent
+8. Return result to Agent
 ```
 
-**会话管理**：
+**Session Management**:
 
-MCP stdio 模式下每个 Agent 进程独立连接，无显式 session_id。Proxy 通过连接 + 初始化参数推导 session：
+In MCP stdio mode, each Agent process has an independent connection with no explicit session_id. The Proxy derives the session from the connection + initialization parameters:
 
 ```rust
 // virbius-mcp-proxy/src/session.rs
@@ -185,11 +185,11 @@ pub struct SessionManager {
 }
 
 pub struct Session {
-    pub session_id: String,           // UUID 或 Agent 传入
+    pub session_id: String,           // UUID or passed by Agent
     pub app_id: String,               // from initialize params
     pub tenant_id: String,
     pub license_jwt: String,          // from initialize params._meta
-    pub trace_id: String,             // per-request 或 per-session
+    pub trace_id: String,             // per-request or per-session
     pub tool_call_count: u32,         // 冷启动 warmup 计数
     pub upstream_initialized: HashMap<String, bool>, // 各上游 MCP Server 是否已 init（key=upstream_name）
     pub session_risk_score: u32,      // 会话累积风险分
@@ -197,7 +197,7 @@ pub struct Session {
 }
 ```
 
-Agent 在 `initialize` 请求的 `_meta` 字段中传入身份信息：
+The Agent passes identity information in the `_meta` field of the `initialize` request:
 
 ```json
 {
@@ -209,7 +209,7 @@ Agent 在 `initialize` 请求的 `_meta` 字段中传入身份信息：
     "clientInfo": { "name": "my-agent", "version": "1.0" },
     "_meta": {
       "app_id": "code-review-agent",
-      "tenant_id": "公司A",
+      "tenant_id": "CompanyA",
       "license_jwt": "eyJ...",
       "session_id": "sess_abc"
     }
@@ -217,13 +217,13 @@ Agent 在 `initialize` 请求的 `_meta` 字段中传入身份信息：
 }
 ```
 
-> **无 License 接入（Fallback 策略）**：若 `_meta` 中无 `license_jwt`，Proxy **不以 audit-only 模式放行**（否则攻击者可通过故意不传 License 绕过所有阻断）。而是应用 Fallback 默认策略，按配置选择安全姿态：
+> **No License Access (Fallback Policy)**: If there is no `license_jwt` in `_meta`, the Proxy does **not allow in audit-only mode** (otherwise an attacker could bypass all blocking by intentionally not passing a License). Instead, it applies the Fallback default policy, selecting a security posture based on configuration:
 >
-> | Fallback 模式 | 行为 | 适用场景 | 配置默认值 |
-> |--------------|------|---------|-----------|
-> | `minimum_privilege` | 仅允许低风险只读工具（search/calculator/format），阻断高风险工具（shell/execute_python/read_file/curl），DLP + schema 校验仍然生效，rate_limit 降至 10/min，risk_quota 降至 30 | **默认值**，试用 + 渐进接入 | **默认** |
-> | `default_deny` | 阻断所有工具调用，仅返回 `license_required` 错误 | 生产环境强制要求 License | 生产部署应设为此值 |
-> | `audit_only` | 只审计不阻断（原设计，已废弃为需显式开启） | 仅限内网调试，**禁止生产使用** | 需显式配置 |
+> | Fallback Mode | Behavior | Applicable Scenario | Config Default |
+> |--------------|---------|-----------|------|
+> | `minimum_privilege` | Only allow low-risk read-only tools (search/calculator/format), block high-risk tools (shell/execute_python/read_file/curl), DLP + schema validation still active, rate_limit reduced to 10/min, risk_quota reduced to 30 | **Default**, trial + gradual onboarding | **Default** |
+> | `default_deny` | Block all tool calls, only return `license_required` error | Production environment requiring License | Should be set to this value for production deployment |
+> | `audit_only` | Only audit, no blocking (original design, deprecated — requires explicit enabling) | Internal debugging only, **prohibited in production** | Requires explicit configuration |
 >
 > ```rust
 > pub enum FallbackPolicy {
@@ -267,13 +267,13 @@ Agent 在 `initialize` 请求的 `_meta` 字段中传入身份信息：
 > ];
 > ```
 >
-> **安全保证**：无论 Fallback 模式如何，以下安全检查**始终生效**，不受 Fallback 策略影响：
-> - DLP 脱敏（输入 + 输出）
-> - JSON Schema 参数校验（若 ToolPolicy 存在）
-> - 审计上报（sample_rate=1.0）
-> - session_risk_score 累积（达到 risk_quota 后阻断）
+> **Security Guarantees**: Regardless of the Fallback mode, the following security checks are **always active** and not affected by the Fallback policy:
+> - DLP redaction (input + output)
+> - JSON Schema parameter validation (if ToolPolicy exists)
+> - Audit reporting (sample_rate=1.0)
+> - session_risk_score accumulation (blocks upon reaching risk_quota)
 
-**tools/list 过滤**：Proxy 转发 `tools/list` 到上游后，按 License `allowed_tools` 过滤响应，并注入结构化 `annotations`（不修改 `description` 文本）：
+**tools/list filtering**: The Proxy forwards `tools/list` to the upstream, then filters the response by License `allowed_tools`, and injects structured `annotations` (without modifying the `description` text):
 
 ```rust
 fn filter_tools_list(response: &mut Value, session: &Session) {
@@ -317,20 +317,20 @@ fn build_tool_annotations(tool_name: &str, license: &License) -> Option<Value> {
 }
 ```
 
-> **设计决策：不在 description 中注入约束文本**
+> **Design Decision: Do not inject constraint text into description**
 >
-> 早期设计将安全约束（如"仅允许连接 api.internal:443"）拼接到每个工具的 `description` 字段中。这导致：
-> 1. **Token 膨胀**：N 个工具 × 每工具 ~50 token 约束文本 = 500+ token 额外消耗，工具数量多时可能超出 LLM 上下文窗口
-> 2. **冗余重复**：通用约束（如"不得绕过安全控制"）在每个工具描述中重复
-> 3. **维护困难**：约束变更需修改所有工具的 description
+> The early design concatenated security constraints (e.g. "only allow connecting to api.internal:443") into each tool's `description` field. This caused:
+> 1. **Token bloat**: N tools × ~50 tokens of constraint text per tool = 500+ tokens extra overhead, potentially exceeding LLM context window when many tools exist
+> 2. **Redundant repetition**: Common constraints (e.g. "shall not bypass security controls") repeated in every tool description
+> 3. **Maintenance difficulty**: Constraint changes require modifying all tools' descriptions
 >
-> **新方案**：约束分两层交付——
-> - **结构化 annotations**：注入到 `tools/list` 响应的 `annotations` 字段（MCP 标准兼容），供 MCP 客户端 UI 展示和本地预检逻辑消费，**不进入 LLM prompt**
-> - **系统提示词集中注入**：所有工具约束由 Prompt Gateway（[§2.8](ARCHITECTURE.md)）渲染到系统提示词的"### 工具使用规则"段落，**只出现一次**而非每个工具重复
+> **New approach**: Constraints delivered in two layers —
+> - **Structured annotations**: Injected into the `annotations` field (MCP standard compatible) of the `tools/list` response, consumed by MCP client UI and local precheck logic, **not entered into the LLM prompt**
+> - **Centralized system prompt injection**: All tool constraints are rendered by the Prompt Gateway ([§2.8](ARCHITECTURE.md)) into the "### Tool Usage Rules" section of the system prompt, **appearing only once** instead of repeating for each tool
 
-**错误响应格式**：
+**Error Response Format**:
 
-遵循 JSON-RPC 2.0 规范，使用保留的 `-32000` ~ `-32099` 区间（implementation-defined server errors）定义 VirbiusAgent 专属错误码。传输层无关（stdio / SSE / WebSocket 均适用）：
+Following the JSON-RPC 2.0 specification, using the reserved `-32000` ~ `-32099` range (implementation-defined server errors) to define VirbiusAgent-specific error codes. Transport layer agnostic (stdio / SSE / WebSocket all applicable):
 
 ```json
 {
@@ -350,23 +350,23 @@ fn build_tool_annotations(tool_name: &str, license: &License) -> Option<Value> {
 }
 ```
 
-> `http_analog` 仅供运营台前端展示参考，不参与协议逻辑。stdio / WebSocket 传输下无 HTTP 语义。
+> `http_analog` is for reference display only on the Operation Dashboard frontend, not part of protocol logic. No HTTP semantics under stdio / WebSocket transport.
 
-**VirbiusAgent JSON-RPC 错误码定义**（-32000 ~ -32099）：
+**VirbiusAgent JSON-RPC Error Code Definitions** (-32000 ~ -32099):
 
-| Code | message | 说明 | http_analog |
+| Code | message | Description | http_analog |
 |------|---------|------|-------------|
-| -32001 | `license_invalid` | License 过期/吊销/签名无效 | 401 |
-| -32002 | `license_required` | 无 License 且 fallback=default_deny | 401 |
-| -32003 | `high_risk_without_license` | 无 License 且 fallback=minimum_privilege，工具为高风险 | 403 |
-| -32004 | `not_in_allowlist` | 工具不在 License allowed_tools 中 | 403 |
-| -32005 | `schema_violation` | 参数不符合 JSON Schema | 400 |
-| -32006 | `engine_blocked` | 云层 Groovy L3 终判 deny | 403 |
-| -32007 | `rate_exceeded` | 工具调用频率超限 | 429 |
-| -32008 | `risk_threshold` | session_risk_score 超过 License risk_quota | 403 |
-| -32009 | `output_review_blocked` | 输出审查阻断(P1) | 403 |
-| -32010 | `fallback_blocked` | Fallback 策略通用阻断 | 403 |
-| -32011 | `challenge_required` | 高风险操作需人工审批（challenge 流程） | 403 |
+| -32001 | `license_invalid` | License expired/revoked/bad signature | 401 |
+| -32002 | `license_required` | No License and fallback=default_deny | 401 |
+| -32003 | `high_risk_without_license` | No License and fallback=minimum_privilege, tool is high-risk | 403 |
+| -32004 | `not_in_allowlist` | Tool not in License allowed_tools | 403 |
+| -32005 | `schema_violation` | Arguments do not conform to JSON Schema | 400 |
+| -32006 | `engine_blocked` | Cloud Groovy L3 final judgment deny | 403 |
+| -32007 | `rate_exceeded` | Tool call frequency exceeded limit | 429 |
+| -32008 | `risk_threshold` | session_risk_score exceeded License risk_quota | 403 |
+| -32009 | `output_review_blocked` | Output review blocked (P1) | 403 |
+| -32010 | `fallback_blocked` | Fallback policy generic block | 403 |
+| -32011 | `challenge_required` | High-risk operation requires human approval (challenge flow) | 403 |
 
 ```rust
 // virbius-mcp-proxy/src/error.rs
@@ -401,11 +401,11 @@ pub fn jsonrpc_error(code: VirbiusErrorCode, id: i64, data: Value) -> Value {
 
 ---
 
-### Challenge 流程（-32011 `challenge_required`）
+### Challenge Flow (-32011 `challenge_required`)
 
-当 Engine 返回 `effective_action = "challenge"` 时，表示该工具调用需要人工审批才能执行。Challenge 支持双路径：**Inline**（即时确认）和 **Dashboard**（异步运营台审批）。
+When the Engine returns `effective_action = "challenge"`, it indicates that the tool call requires human approval before execution. Challenge supports two paths: **Inline** (instant confirmation) and **Dashboard** (asynchronous Operation Dashboard approval).
 
-#### 流程时序
+#### Flow Sequence
 
 ```
 Agent                 Proxy/Gateway          Engine                Control Dashboard
@@ -420,12 +420,12 @@ Agent                 Proxy/Gateway          Engine                Control Dashb
   |    {challenge_id,      |                    |                        |
   |     args_hash}         |                    |                        |
   |                        |                    |                        |
-  | (Agent 轮询 challenge 状态)                 |                        |
+  | (Agent polls challenge status)              |                        |
   |--- GET /v1/challenge/{id}/status ---------->|                        |
   |<-- {status: "pending"} ---------------------|                        |
   |                        |                    |                        |
-  |                        |                    |<-- approve/reject -----|
-  |                        |                    |    (运营台审批)         |
+  |                        |                    |<-- approve/reject ----|
+  |                        |                    |    (Dashboard approval)|
   |                        |                    |                        |
   |--- GET /v1/challenge/{id}/status ---------->|                        |
   |<-- {status: "approved",                     |                        |
@@ -439,7 +439,7 @@ Agent                 Proxy/Gateway          Engine                Control Dashb
   |<-- result -------------|                    |                        |
 ```
 
-#### 错误响应格式（-32011）
+#### Error Response Format (-32011)
 
 ```json
 {
@@ -462,9 +462,9 @@ Agent                 Proxy/Gateway          Engine                Control Dashb
 }
 ```
 
-#### 重试格式（带 challenge token）
+#### Retry Format (with challenge token)
 
-Agent 在收到审批通过后，重试原始 `tools/call` 请求，在 `_meta` 中附带 `challenge_token`：
+After receiving approval, the Agent retries the original `tools/call` request, including `challenge_token` in `_meta`:
 
 ```json
 {
@@ -481,42 +481,42 @@ Agent 在收到审批通过后，重试原始 `tools/call` 请求，在 `_meta` 
 }
 ```
 
-Proxy/Gateway 收到带 `challenge_token` 的请求后：
-1. 调用 Engine `POST /v1/challenge/verify` 验证 token（一次性使用）
-2. 验证通过则转发到上游 MCP Server（移除 `_meta.challenge_token`）
-3. 验证失败返回 `-32011` 错误
+When Proxy/Gateway receives a request with `challenge_token`:
+1. Call Engine `POST /v1/challenge/verify` to validate the token (single-use)
+2. If valid, forward to upstream MCP Server (remove `_meta.challenge_token`)
+3. If validation fails, return `-32011` error
 
-> **Gateway (WASM) 路径**：通过 HTTP Header `X-Virbius-Challenge-Token` 传递 token，而非 `_meta`。
+> **Gateway (WASM) Path**: Token is passed via HTTP Header `X-Virbius-Challenge-Token` instead of `_meta`.
 
 #### Engine Challenge API
 
-| Method | Path | 说明 |
+| Method | Path | Description |
 |--------|------|------|
-| `GET` | `/v1/challenge/{id}/status` | 查询 challenge 状态（pending/approved/rejected/expired） |
-| `POST` | `/v1/challenge/{id}/approve` | 审批通过，生成一次性 token（运营台调用） |
-| `POST` | `/v1/challenge/{id}/reject` | 审批拒绝（运营台调用） |
-| `POST` | `/v1/challenge/verify` | 验证 token 有效性（Proxy/Gateway 调用） |
-| `GET` | `/v1/challenges?tenant_id=default&status=pending` | 列出待审批 challenge（运营台队列） |
+| `GET` | `/v1/challenge/{id}/status` | Query challenge status (pending/approved/rejected/expired) |
+| `POST` | `/v1/challenge/{id}/approve` | Approve, generate single-use token (Dashboard call) |
+| `POST` | `/v1/challenge/{id}/reject` | Reject approval (Dashboard call) |
+| `POST` | `/v1/challenge/verify` | Validate token validity (Proxy/Gateway call) |
+| `GET` | `/v1/challenges?tenant_id=default&status=pending` | List pending challenges (Dashboard queue) |
 
-#### 路径选择配置
+#### Path Selection Configuration
 
-Challenge 路径（Inline vs Dashboard）由以下配置决定：
+The Challenge path (Inline vs Dashboard) is determined by the following configuration:
 
-1. **ToolPolicy**（`virbius-core/src/manifest.rs`）：每个工具可声明 `challenge_method`（`inline` | `dashboard` | `auto`）
-2. **Rule body_json**：规则可覆盖 `challenge_method`
-3. **Agent `initialize._meta`**：Agent 可声明 `challenge_methods: ["inline", "dashboard"]` 表示支持的确认方式
-4. **Engine 配置**（`application.yml`）：`virbius.challenge.ttl-seconds` 和 `virbius.challenge.token-ttl-seconds`
+1. **ToolPolicy** (`virbius-core/src/manifest.rs`): Each tool can declare `challenge_method` (`inline` | `dashboard` | `auto`)
+2. **Rule body_json**: Rules can override `challenge_method`
+3. **Agent `initialize._meta`**: Agent can declare `challenge_methods: ["inline", "dashboard"]` to indicate supported confirmation methods
+4. **Engine config** (`application.yml`): `virbius.challenge.ttl-seconds` and `virbius.challenge.token-ttl-seconds`
 
-默认 `auto`：Engine 根据 Agent 声明的能力选择路径。若 Agent 支持 `inline`，优先使用 Inline；否则使用 Dashboard。
+Default `auto`: Engine selects the path based on Agent's declared capabilities. If Agent supports `inline`, Inline is preferred; otherwise Dashboard is used.
 
-#### 安全保证
+#### Security Guarantees
 
-- **Token 一次性使用**：验证后立即标记为 `used`，二次使用返回 `valid=false`
-- **Args 绑定**：Token 与原始请求的 `tool_name` + `args_hash` 绑定，不可跨请求复用
-- **TTL 限制**：Challenge 记录默认 300s 过期，Token 默认 600s 过期
-- **审计追踪**：所有 challenge 操作（创建/审批/拒绝/验证）均记录审计日志
+- **Single-use Token**: Immediately marked as `used` after verification, second use returns `valid=false`
+- **Args Binding**: Token is bound to the original request's `tool_name` + `args_hash`, cannot be reused across requests
+- **TTL Limits**: Challenge record expires after 300s by default, Token expires after 600s by default
+- **Audit Trail**: All challenge operations (create/approve/reject/verify) are recorded in audit logs
 
-**配置**：
+**Configuration**:
 
 ```toml
 # virbius-mcp-proxy.toml
@@ -524,15 +524,15 @@ Challenge 路径（Inline vs Dashboard）由以下配置决定：
 [proxy]
 listen = "stdio"                    # stdio | tcp://0.0.0.0:9090
 
-# ── 单上游模式（向下兼容）──
-# 以下三个字段等价于 upstreams = [{ name = "default", url = "...", sse_path = "/sse" }]
-upstream_url = "http://mcp-server:8080"  # 真实 MCP Server 地址
+# ── Single upstream mode (backward compatible) ──
+# The following three fields are equivalent to upstreams = [{ name = "default", url = "...", sse_path = "/sse" }]
+upstream_url = "http://mcp-server:8080"  # Real MCP Server address
 upstream_transport = "sse"          # stdio | sse
 upstream_sse_path = "/sse"
 
-# ── 多上游模式（P1 新增，与 upstream_url 二选一）──
-# 配置 upstreams 数组后，upstream_url 字段被忽略
-# 每个上游需指定唯一 name，用于工具名前缀和路由
+# ── Multi-upstream mode (P1 addition, mutually exclusive with upstream_url) ──
+# When upstreams array is configured, the upstream_url field is ignored
+# Each upstream must have a unique name, used for tool name prefix and routing
 upstreams = [
     { name = "filesystem", url = "http://fs-mcp:8081", sse_path = "/sse" },
     { name = "github",     url = "http://gh-mcp:8082", sse_path = "/sse" },
@@ -543,71 +543,71 @@ upstreams = [
 control_base_url = "http://virbius-control:8080"
 engine_url = "http://virbius-engine:8082"
 license_public_key = "/etc/virbius/ed25519-pub.pem"
-fallback_policy = "minimum_privilege"  # 无 License 时的策略: minimum_privilege | default_deny | audit_only
+fallback_policy = "minimum_privilege"  # Policy when no License: minimum_privilege | default_deny | audit_only
 
 [security.fast_path]
 enabled = true
-warmup_calls = 5                    # 前 5 次调用强制全链路
+warmup_calls = 5                    # First 5 calls force full chain
 risk_threshold = 30
 
 [security.failover]
-high_risk_fail_closed = true        # 高风险工具 engine 不可用时 deny
-low_risk_fail_open = true           # 低风险工具 engine 不可用时 allow + 审计
+high_risk_fail_closed = true        # Deny when engine unavailable for high-risk tools
+low_risk_fail_open = true           # Allow + audit when engine unavailable for low-risk tools
 engine_timeout_ms = 3000
 
 [audit]
 redis_url = "redis://127.0.0.1:6379"
-sample_rate = 1.0                   # 审计采样率
+sample_rate = 1.0                   # Audit sample rate
 ```
 
-**部署模式**：
+**Deployment Modes**:
 
-| 模式 | 适用场景 | 部署方式 | 流量拓扑 |
+| Mode | Applicable Scenario | Deployment Method | Traffic Topology |
 |------|---------|---------|---------|
-| **Sidecar** | K8s Pod 内，Agent 与 Proxy 同 Pod | Agent 容器 + Proxy 容器，共享 localhost | 东西向（MCP 调用不经管层） |
-| **本地进程** | 开发环境 / 单机部署 | Agent 进程 spawn Proxy 子进程 (stdio) | 东西向 |
-| **独立服务** | 多 Agent 共享一个 Proxy | Proxy 独立部署，Agent 通过 SSE 连接 | 南北向（经管层 Ingress） |
+| **Sidecar** | Inside K8s Pod, Agent and Proxy in the same Pod | Agent container + Proxy container, sharing localhost | East-west (MCP calls do not pass through Gateway) |
+| **Local Process** | Development environment / single-machine deployment | Agent process spawns Proxy child process (stdio) | East-west |
+| **Standalone Service** | Multiple Agents share one Proxy | Proxy deployed independently, Agent connects via SSE | North-south (through Gateway Ingress) |
 
-> **Sidecar 模式下的 Egress 流量管控**
+> **Egress Traffic Control in Sidecar Mode**
 >
-> Sidecar 模式中，Agent 的 MCP 工具调用走 localhost 直达 Proxy（东西向），不经过管层。但 Agent 通过 `curl` 等工具发起的外部 HTTP 请求（Egress）不经过 MCP 协议，需要额外管控。
+> In Sidecar mode, the Agent's MCP tool calls go through localhost directly to the Proxy (east-west), without passing through the Gateway. However, external HTTP requests (Egress) initiated by the Agent through tools such as `curl` do not go through the MCP protocol and require additional control.
 >
-> **关键设计决策：工具级管控而非进程级断网**
+> **Key Design Decision: Tool-Level Control Rather Than Process-Level Network Disconnection**
 >
-> Proxy 代发仅针对 MCP 协议中显式定义的业务工具（`curl`/`web_search`/`http_request` 等）。Agent 框架底层的隐式网络请求（LangChain 配置拉取、SDK 模型下载、心跳检测、遥测上报等）**不由 Proxy 代发**，而是由 Agent 自身发起，受 K8s NetworkPolicy 限制到所需的最小白名单目标。
+> Proxy proxying only applies to business tools explicitly defined in the MCP protocol (`curl`/`web_search`/`http_request` etc.). Implicit network requests at the Agent framework level (LangChain config fetching, SDK model downloads, heartbeat detection, telemetry reporting, etc.) are **not proxied by the Proxy** but initiated by the Agent itself, restricted by K8s NetworkPolicy to the minimum whitelist targets.
 >
-> 这一决策基于以下考量：
-> 1. **存量兼容性**：LangChain、AutoGen、OpenAI SDK 等框架会隐式发起网络请求（拉取配置、下载模型、心跳检测），直接断网会导致大量存量 Agent 无法运行
-> 2. **全量代发成本**：全量代发（代理 Agent 所有网络流量）需支持 WebSocket 双工、大文件分块上传、复杂 Header 透传、HTTP/2 多路复用等全部 HTTP 语义，开发成本极高；仅代发 MCP 业务工具可大幅降低复杂度。工具级代发只需支持 GET/POST + 流式响应透传（chunked/SSE），reqwest `bytes_stream()` 即可实现
-> 3. **威胁模型匹配**：安全威胁来自 Agent 通过业务工具（curl/execute_python/shell）发起的**可控外部请求**，而非框架底层的**固定目标**网络调用。前者需要安全管线校验，后者通过 NetworkPolicy 限制目标即可
+> This decision is based on the following considerations:
+> 1. **Backward compatibility**: Frameworks like LangChain, AutoGen, OpenAI SDK implicitly initiate network requests (pulling config, downloading models, heartbeat detection). Direct network disconnection would prevent many existing Agents from running
+> 2. **Full-proxy cost**: Full proxying (proxying all Agent network traffic) requires supporting all HTTP semantics such as WebSocket duplex, large file chunked upload, complex Header passthrough, HTTP/2 multiplexing, etc., with extremely high development cost; proxying only MCP business tools greatly reduces complexity. Tool-level proxying only needs to support GET/POST + streaming response passthrough (chunked/SSE), achievable with reqwest `bytes_stream()`
+> 3. **Threat model match**: Security threats come from **controllable external requests** initiated by the Agent through business tools (curl/execute_python/shell), not from framework-level **fixed-target** network calls. The former requires Security Pipeline validation, the latter only needs NetworkPolicy to restrict targets
 >
-> | 流量类型 | 来源 | P0 管控方式 | 说明 |
+> | Traffic Type | Source | P0 Control Method | Description |
 > |---------|------|-----------|------|
-> | **业务工具请求** | MCP `tools/call` 中的 `curl`/`web_search` 等显式工具 | Proxy 代发 + URL 白名单 | Agent 通过 `tools/call` 交给 Proxy 执行，Proxy 校验 URL 白名单后发起 HTTP 请求 |
-> | **框架隐式请求** | Agent 框架底层（配置拉取、模型下载、心跳、遥测） | K8s NetworkPolicy 限制目标 | Agent 自身发起，NetworkPolicy 限制仅允许白名单目标（如 `*.openai.com`、`registry.internal`） |
-> | **进程级全量出站** | 所有 TCP 连接 | P2: eBPF/iptables 透明劫持 | 进程级兜底，捕获绕过 MCP 协议的直接 TCP 连接 |
+> | **Business tool requests** | Explicit tools in MCP `tools/call` such as `curl`/`web_search` | Proxy proxy + URL whitelist | Agent passes `tools/call` to Proxy for execution, Proxy validates URL whitelist then initiates HTTP request |
+> | **Framework implicit requests** | Agent framework level (config fetching, model download, heartbeat, telemetry) | K8s NetworkPolicy restricts targets | Initiated by Agent itself, NetworkPolicy only allows whitelist targets (e.g. `*.openai.com`, `registry.internal`) |
+> | **Process-level full outbound** | All TCP connections | P2: eBPF/iptables transparent interception | Process-level fallback, captures direct TCP connections bypassing MCP protocol |
 >
-> **P0 方案——工具级 Proxy 代发**：
+> **P0 Solution — Tool-Level Proxy Proxying**:
 >
 > ```
 > Agent ──tools/call(curl, url)──> MCP Proxy
 >                                     |
->                                     +-- URL 白名单校验（License allowed_hosts）
->                                     +-- 预检通过 -> Proxy 发起 HTTP 请求 -> 外部 API
->                                     +-- 预检失败 -> deny
+>                                     +-- URL whitelist validation (License allowed_hosts)
+>                                     +-- precheck pass -> Proxy initiates HTTP request -> External API
+>                                     +-- precheck fail -> deny
 >                                     |
 >                                     v
->                                  外部 API
+>                                   External API
 >
-> Agent ──隐式 HTTP（SDK/框架底层）──> 外部目标（受 NetworkPolicy 限制）
+> Agent ──implicit HTTP (SDK/framework level)──> External targets (restricted by NetworkPolicy)
 >                                     |
->                                     +-- NetworkPolicy 仅放行白名单目标
->                                     +-- 非白名单目标 -> 被 K8s CNI 静默 drop
+>                                     +-- NetworkPolicy only allows whitelist targets
+>                                     +-- Non-whitelist targets -> silently dropped by K8s CNI
 > ```
 >
-> MCP 协议中显式定义的业务工具调用（`curl`/`web_search`/`http_request` 等）通过 `tools/call` 交给 Proxy 代发。Proxy 在应用层校验 URL 白名单后决定放行或阻断。此方案无需内核级网络劫持，P0 即可实现。Agent 框架底层的隐式网络请求不由 Proxy 代发，受 NetworkPolicy 限制到最小白名单目标。
+> Business tool calls explicitly defined in the MCP protocol (`curl`/`web_search`/`http_request` etc.) are handed over to Proxy via `tools/call` for proxying. The Proxy validates URL whitelist at the application layer, then decides to allow or block. This solution requires no kernel-level network interception and can be implemented at P0. Implicit network requests at the Agent framework level are not proxied by the Proxy and are restricted to the minimum whitelist targets via NetworkPolicy.
 >
-> **NetworkPolicy 配置示例**（限制 Agent 容器隐式出站）：
+> **NetworkPolicy Configuration Example** (restrict Agent container implicit outbound):
 >
 > ```yaml
 > apiVersion: networking.k8s.io/v1
@@ -621,24 +621,24 @@ sample_rate = 1.0                   # 审计采样率
 >   policyTypes:
 >   - Egress
 >   egress:
->   # 允许访问同 Pod 的 Proxy（localhost:9090）
+>   # Allow access to same-Pod Proxy (localhost:9090)
 >   - to:
 >     - podSelector:
 >         matchLabels:
 >           app: virbius-mcp-proxy
->   # 允许访问 LLM API（如 OpenAI/Anthropic）
+>   # Allow access to LLM API (e.g. OpenAI/Anthropic)
 >   - to:
 >     - namespaceSelector: {}
 >     ports:
 >     - protocol: TCP
 >       port: 443
->     # 实际中用 IPBlock CIDR 限制具体 LLM API 端点
->   # 允许访问内部镜像/模型仓库
+>     # In practice, use IPBlock CIDR to restrict to specific LLM API endpoints
+>   # Allow access to internal image/model registry
 >   - to:
 >     - podSelector:
 >         matchLabels:
 >           app: model-registry
->   # 允许 DNS 解析
+>   # Allow DNS resolution
 >   - to:
 >     - namespaceSelector:
 >         matchLabels:
@@ -648,21 +648,21 @@ sample_rate = 1.0                   # 审计采样率
 >       port: 53
 > ```
 >
-> **Proxy 代发的 HTTP 能力边界**：
+> **HTTP capability boundary of Proxy proxying**:
 >
-> 由于代发仅限于 MCP 业务工具，Proxy 的 HTTP 客户端能力可按需实现，无需覆盖全部 HTTP 语义：
+> Since proxying is limited to MCP business tools only, the Proxy's HTTP client capabilities can be implemented on demand without covering all HTTP semantics:
 >
-> | 能力 | P0 支持 | P1 增强 | 说明 |
+> | Capability | P0 Support | P1 Enhancement | Description |
 > |------|---------|---------|------|
-> | GET/POST | ✅ | — | 基础 HTTP 方法 |
-> | 自定义 Header | ✅（白名单透传） | — | 仅透传安全 Header，过滤 `Authorization`（由 License 注入） |
-> | 流式响应透传（chunked/SSE） | ✅ | — | reqwest `bytes_stream()` 流式读取，避免大响应 OOM；SSE 事件逐条透传 |
-> | 大文件下载 | ✅（流式，上限 50MB） | ✅（分块写入临时文件） | P0 流式读取 + 内存上限保护，超限返回 413 |
-> | 超时控制 | ✅（30s） | — | 超时返回 504 |
-> | 重定向跟随 | ✅（最多 5 跳） | — | 防止 SSRF via redirect |
-> | HTTPS | ✅ | — | Proxy 发起 TLS，Agent 不接触证书 |
+> | GET/POST | ✅ | — | Basic HTTP methods |
+> | Custom Header | ✅ (whitelist passthrough) | — | Only pass through safe headers, filter `Authorization` (injected by License) |
+> | Streaming response passthrough (chunked/SSE) | ✅ | — | reqwest `bytes_stream()` streaming read, avoid OOM for large responses; passthrough SSE events one by one |
+> | Large file download | ✅ (streaming, 50MB limit) | ✅ (chunked write to temp file) | P0 streaming read + memory limit protection, return 413 on exceed |
+> | Timeout control | ✅ (30s) | — | Return 504 on timeout |
+> | Redirect following | ✅ (max 5 hops) | — | Prevent SSRF via redirect |
+> | HTTPS | ✅ | — | Proxy initiates TLS, Agent does not touch certificates |
 
-Sidecar 部署（K8s）—— 单上游：
+Sidecar deployment (K8s) — single upstream:
 
 ```yaml
 spec:
@@ -671,7 +671,7 @@ spec:
     image: my-agent:latest
     env:
     - name: MCP_SERVER_URL
-      value: "http://localhost:9090"  # 指向同 Pod 的 Proxy
+      value: "http://localhost:9090"  # Points to same-Pod Proxy
   - name: virbius-mcp-proxy
     image: virbius-mcp-proxy:latest
     env:
@@ -683,7 +683,7 @@ spec:
       value: "http://virbius-engine.default.svc:8082"
 ```
 
-Sidecar 部署（K8s）—— 多上游：
+Sidecar deployment (K8s) — multi-upstream:
 
 ```yaml
 spec:
@@ -692,11 +692,11 @@ spec:
     image: my-agent:latest
     env:
     - name: MCP_SERVER_URL
-      value: "http://localhost:9090"  # 指向同 Pod 的 Proxy
+      value: "http://localhost:9090"  # Points to same-Pod Proxy
   - name: virbius-mcp-proxy
     image: virbius-mcp-proxy:latest
     env:
-    # 多上游：JSON 数组格式，每个上游需指定唯一 name
+    # Multi-upstream: JSON array format, each upstream must have a unique name
     - name: VIRBIUS_UPSTREAMS
       value: >-
         [{"name":"filesystem","url":"http://fs-mcp.default.svc:8081","sse_path":"/sse"},{"name":"github","url":"http://gh-mcp.default.svc:8082","sse_path":"/sse"}]
@@ -706,20 +706,20 @@ spec:
       value: "http://virbius-engine.default.svc:8082"
 ```
 
-> **多上游配置说明**：配置 `VIRBIUS_UPSTREAMS` 后，`VIRBIUS_UPSTREAM_URL` 被忽略。
-> 每个上游需指定唯一 `name`，用于工具名冲突时加前缀（如 `filesystem__read_file`）。
-> 详细多上游方案见 [§2.6.2](#262-多上游支持multi-upstream)。
+> **Multi-upstream configuration note**: After configuring `VIRBIUS_UPSTREAMS`, `VIRBIUS_UPSTREAM_URL` is ignored.
+> Each upstream must have a unique `name`, used for prefixing on tool name conflicts (e.g. `filesystem__read_file`).
+> See [§2.6.2](#262-multi-upstreammulti-upstream) for the detailed multi-upstream solution.
 
-本地进程部署（开发）：
+Local process deployment (development):
 
 ```bash
-# 启动 Proxy (stdio 模式)
+# Start Proxy (stdio mode)
 export VIRBIUS_UPSTREAM_URL=http://localhost:8080
 export VIRBIUS_CONTROL_URL=http://localhost:8080
 export VIRBIUS_ENGINE_URL=http://localhost:8082
 virbius-mcp-proxy --transport stdio
 
-# Agent 配置 MCP Server 为 Proxy
+# Agent configures MCP Server as Proxy
 # Claude Desktop config:
 # {
 #   "mcpServers": {
@@ -731,30 +731,30 @@ virbius-mcp-proxy --transport stdio
 # }
 ```
 
-**实现结构**：
+**Implementation Structure**:
 
 ```
 virbius-mcp-proxy/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs              # 入口 + CLI 参数解析
+│   ├── main.rs              # Entry point + CLI argument parsing
 │   ├── transport/
-│   │   ├── mod.rs           # 传输层 trait
-│   │   ├── stdio.rs         # stdio 传输（行分隔 JSON-RPC）
-│   │   └── sse.rs           # SSE 传输（HTTP + Server-Sent Events）
-│   ├── router.rs            # JSON-RPC method 路由
-│   ├── session.rs           # 会话管理（ConnectionId -> Session）
-│   ├── pipeline.rs          # 安全管线（License -> precheck -> engine -> audit）
-│   ├── upstream.rs          # 上游 MCP Client（转发请求）
-│   ├── audit.rs             # 审计事件上报（Redis Stream）
-│   └── config.rs            # 配置加载（TOML + 环境变量）
+│   │   ├── mod.rs           # Transport layer trait
+│   │   ├── stdio.rs         # stdio transport (line-delimited JSON-RPC)
+│   │   └── sse.rs           # SSE transport (HTTP + Server-Sent Events)
+│   ├── router.rs            # JSON-RPC method routing
+│   ├── session.rs           # Session management (ConnectionId -> Session)
+│   ├── pipeline.rs          # Security Pipeline (License -> precheck -> engine -> audit)
+│   ├── upstream.rs          # Upstream MCP Client (forward requests)
+│   ├── audit.rs             # Audit event reporting (Redis Stream)
+│   └── config.rs            # Configuration loading (TOML + environment variables)
 ├── examples/
-│   └── demo_agent.rs        # 模拟 Agent 调用演示
+│   └── demo_agent.rs        # Simulated Agent call demo
 └── tests/
-    └── integration_test.rs  # 端到端集成测试
+    └── integration_test.rs  # End-to-end integration tests
 ```
 
-**核心依赖**：
+**Core Dependencies**:
 
 ```toml
 [dependencies]
@@ -763,14 +763,14 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
-dashmap = "6"                        # 并发会话表
-reqwest = "0.12"                     # HTTP client (调 engine + 上游 SSE)
-toml = "0.8"                         # 配置解析
-tracing = "0.1"                      # 结构化日志
-tokio-util = "0.7"                   # codec (行分隔 JSON)
+dashmap = "6"                        # Concurrent session table
+reqwest = "0.12"                     # HTTP client (call engine + upstream SSE)
+toml = "0.8"                         # Config parsing
+tracing = "0.1"                      # Structured logging
+tokio-util = "0.7"                   # codec (line-delimited JSON)
 ```
 
-**安全管线核心实现**：
+**Security Pipeline Core Implementation**:
 
 ```rust
 // virbius-mcp-proxy/src/pipeline.rs
@@ -790,25 +790,25 @@ impl SecurityPipeline {
         tool_name: &str,
         args: &Value,
     ) -> PipelineResult {
-        // 1. License 校验
+        // 1. License verification
         let license = License::verify(
             &session.license_jwt, &self.license_pubkey, &session.app_id
         ).map_err(|e| PipelineResult::deny("license_invalid", e))?;
 
-        // 2. 端层预检
+        // 2. Edge precheck
         let call = ToolCall { tool_name: tool_name.into(), args: args.clone(), .. };
         let pre = precheck::precheck(&license, &call);
         if !pre.allowed {
             return Ok(PipelineResult::deny("not_in_allowlist", pre.reason));
         }
 
-        // 3. 快速通道
+        // 3. Fast path
         if self.is_fast_path(session, &pre, tool_name) {
             self.audit(Allow, session, tool_name, "fast_path").await;
             return Ok(PipelineResult::allow("fast_path"));
         }
 
-        // 4. 云层终判
+        // 4. Cloud final judgment
         match self.engine_client.evaluate(EvaluateRequest {
             trace_id: &session.trace_id,
             session_id: &session.session_id,
@@ -838,31 +838,31 @@ impl SecurityPipeline {
 }
 ```
 
-#### 2.6.2 多上游支持（Multi-Upstream）
+#### 2.6.2 Multi-Upstream
 
-Proxy 支持同时连接多个 MCP Server，通过工具名路由 `tools/call` 请求到正确的上游。单上游模式是多上游的特例（`len() == 1`），所有旧配置自动归一化为单条目多上游。
+The Proxy supports connecting to multiple MCP Servers simultaneously, routing `tools/call` requests to the correct upstream via tool name. Single-upstream mode is a special case of multi-upstream (`len() == 1`), and all old configurations are automatically normalized to a single-entry multi-upstream.
 
-**设计原则**：
-- **向下兼容**：旧的 `upstream_url` / `VIRBIUS_UPSTREAM_URL` 配置自动归一化为 `upstreams = [{ name: "default", ... }]`
-- **仅冲突加前缀**：非冲突工具名保持原样，仅当多个上游存在同名工具时加前缀 `{upstream_name}__{tool_name}`
-- **安全管线用原始名**：License `allowed_tools` 匹配原始工具名（前缀剥离后），不要求 Agent 感知前缀
-- **转发恢复原始名**：Proxy 转发 `tools/call` 到上游时恢复原始工具名，上游 MCP Server 无感知
+**Design Principles**:
+- **Backward compatible**: Old `upstream_url` / `VIRBIUS_UPSTREAM_URL` configurations are automatically normalized to `upstreams = [{ name: "default", ... }]`
+- **Prefix on conflict only**: Non-conflicting tool names remain unchanged, prefix `{upstream_name}__{tool_name}` is added only when multiple upstreams have identically named tools
+- **Security Pipeline uses original name**: License `allowed_tools` matches the original tool name (after prefix stripping), does not require Agent to be aware of prefixes
+- **Forward restores original name**: Proxy restores the original tool name when forwarding `tools/call` to the upstream, upstream MCP Server is unaware
 
-**架构**：
+**Architecture**:
 
 ```
-Agent (任意 MCP Client)
+Agent (any MCP Client)
   |
-  | MCP 协议 (JSON-RPC 2.0)
+  | MCP Protocol (JSON-RPC 2.0)
   v
 +---------------------------------------------------+
-|  virbius-mcp-proxy (多上游模式)                    |
+|  virbius-mcp-proxy (multi-upstream mode)           |
 |                                                   |
 |  +--------------------+                           |
-|  | JSON-RPC 路由       |                           |
-|  |  initialize  -> 并发转发所有上游                 |
-|  |  tools/list  -> 并发拉取 + 合并 + 前缀处理       |
-|  |  tools/call  -> 路由表解析 -> 转发目标上游       |
+|  | JSON-RPC Router    |                           |
+|  |  initialize  -> concurrently forward all upstreams             |
+|  |  tools/list  -> concurrently fetch + merge + prefix handling   |
+|  |  tools/call  -> routing table resolve -> forward target upstream|
 |  +--------+---------+                             |
 |           |                                       |
 |  +--------v---------+                             |
@@ -881,13 +881,13 @@ Agent (任意 MCP Client)
     search        create_issue   backup
 ```
 
-**工具名冲突处理**：
+**Tool Name Conflict Resolution**:
 
 ```
-上游 filesystem 返回: [read_file, search]
-上游 github     返回: [read_file, create_issue]
+Upstream filesystem returns: [read_file, search]
+Upstream github      returns: [read_file, create_issue]
 
-合并结果（read_file 冲突，加前缀）:
+Merged result (read_file conflicts, add prefix):
   [
     { "name": "filesystem__read_file", "x-virbius-upstream": "filesystem" },
     { "name": "search",                "x-virbius-upstream": "filesystem" },
@@ -895,52 +895,52 @@ Agent (任意 MCP Client)
     { "name": "create_issue",          "x-virbius-upstream": "github" }
   ]
 
-路由表:
+Routing table:
   filesystem__read_file -> (filesystem, read_file)
   search                -> (filesystem, search)
   github__read_file     -> (github, read_file)
   create_issue          -> (github, create_issue)
 
-Agent 调用 tools/call { name: "github__read_file" }:
-  1. 路由表解析: upstream=github, original_name=read_file
-  2. 安全管线: 用 "read_file" 检查 License allowed_tools
-  3. 转发: 恢复 params.name = "read_file"，POST 到 github 上游
+Agent calls tools/call { name: "github__read_file" }:
+  1. Routing table resolve: upstream=github, original_name=read_file
+  2. Security Pipeline: check "read_file" against License allowed_tools
+  3. Forward: restore params.name = "read_file", POST to github upstream
 ```
 
-> **Agent 侧无感知**：Agent 通过 `tools/list` 获取带前缀的工具名，调用时使用带前缀的名称即可。Proxy 自动处理前缀剥离和上游路由。若 Agent 直接调用不带前缀的工具名且该名称无冲突，Proxy 也能正确路由。
+> **Transparent to Agent**: The Agent gets prefixed tool names via `tools/list` and calls them using the prefixed name. The Proxy automatically handles prefix stripping and upstream routing. If the Agent directly calls a non-prefixed tool name and that name has no conflict, the Proxy can also route it correctly.
 
-**配置归一化**：
+**Configuration Normalization**:
 
-| 配置方式 | 等价多上游配置 |
+| Configuration | Equivalent Multi-Upstream Config |
 |---------|-------------|
 | `upstream_url = "http://mcp:8080"` | `upstreams = [{ name: "default", url: "http://mcp:8080", sse_path: "/sse" }]` |
-| `VIRBIUS_UPSTREAM_URL=http://mcp:8080` | 同上 |
-| `upstreams = [{ name = "fs", ... }]` | 直接使用（upstream_url 被忽略） |
-| `VIRBIUS_UPSTREAMS='[{"name":"fs",...}]'` | 直接使用 |
+| `VIRBIUS_UPSTREAM_URL=http://mcp:8080` | Same as above |
+| `upstreams = [{ name = "fs", ... }]` | Used directly (upstream_url ignored) |
+| `VIRBIUS_UPSTREAMS='[{"name":"fs",...}]'` | Used directly |
 
-**环境变量配置多上游**：
+**Environment Variable Configuration for Multi-Upstream**:
 
 ```bash
-# JSON 数组格式
+# JSON array format
 export VIRBIUS_UPSTREAMS='[
   {"name":"filesystem","url":"http://fs-mcp:8081","sse_path":"/sse"},
   {"name":"github","url":"http://gh-mcp:8082","sse_path":"/sse"}
 ]'
 ```
 
-**会话与连接管理**：
+**Session and Connection Management**:
 
-多上游模式下，每个 (session_id, upstream_name) 对维护独立的 SSE 连接：
+In multi-upstream mode, each (session_id, upstream_name) pair maintains an independent SSE connection:
 
 ```rust
-// connections 索引: (session_id, upstream_name) -> UpstreamClient
+// connections index: (session_id, upstream_name) -> UpstreamClient
 connections: DashMap<(String, String), UpstreamClient>
 
-// 会话 TTL 清理: remove(session_id) 清除该会话在所有上游上的连接
-// 断连清理: cleanup_disconnected() 扫描所有连接，移除断开的 SSE 连接
+// Session TTL cleanup: remove(session_id) clears connections across all upstreams for that session
+// Disconnect cleanup: cleanup_disconnected() scans all connections, removes disconnected SSE connections
 ```
 
-**initialize 响应注入**：
+**initialize Response Injection**:
 
 ```json
 {
@@ -957,20 +957,20 @@ connections: DashMap<(String, String), UpstreamClient>
 }
 ```
 
-#### 2.6.3 决策链路追踪（Trace Collector）
+#### 2.6.3 Decision Trace Trace Collector
 
-MCP Proxy 内置 `TraceCollector` 模块，在 `tools/call` 请求生命周期的两个关键点采集 trace 事件，异步写入 Redis Stream `virbius:trace`，由 Control 侧 `TraceIngestService` 消费入库。
+The MCP Proxy has a built-in `TraceCollector` module that collects trace events at two key points in the `tools/call` request lifecycle, writing them asynchronously to Redis Stream `virbius:trace`, consumed by the Control-side `TraceIngestService` for persistence.
 
-**采集点**：
+**Collection Points**:
 
-| 采集点 | event_type | 时机 | 记录内容 |
+| Collection Point | event_type | Timing | Recorded Content |
 |--------|-----------|------|---------|
-| `tool_call` | `tool_call` | 安全管线检查通过后、转发上游前 | tool_name, arguments, step_id, parent_step_id |
-| `tool_result` | `tool_result` | 上游返回后、响应 Agent 前 | tool_name, result, is_error, duration_ms |
+| `tool_call` | `tool_call` | After Security Pipeline check passes, before forwarding to upstream | tool_name, arguments, step_id, parent_step_id |
+| `tool_result` | `tool_result` | After upstream returns, before responding to Agent | tool_name, result, is_error, duration_ms |
 
-**步骤追踪**：
+**Step Tracing**:
 
-每个 Session 维护 `step_seq`（递增序号）和 `last_step_id`（上一步 ID），新步骤的 `parent_step_id` 自动设为 `last_step_id`，构建因果链：
+Each Session maintains a `step_seq` (incrementing sequence number) and `last_step_id` (previous step ID). The new step's `parent_step_id` is automatically set to `last_step_id`, forming a causal chain:
 
 ```
 step-001 (tool_call: read_file)
@@ -979,7 +979,7 @@ step-001 (tool_call: read_file)
             └── step-004 (tool_result: write_file)
 ```
 
-**TraceEvent 格式**：
+**TraceEvent Format**:
 
 ```json
 {
@@ -1000,17 +1000,17 @@ step-001 (tool_call: read_file)
 }
 ```
 
-**配置**（`config.toml`）：
+**Configuration** (`config.toml`):
 
 ```toml
 [trace]
-enabled = true          # 默认 true
+enabled = true          # Default true
 redis_url = "redis://127.0.0.1:6379"
 stream_key = "virbius:trace"
-max_fields_len = 32768  # 单字段最大长度（字节），超长截断
+max_fields_len = 32768  # Max field length (bytes), truncated if exceeded
 ```
 
-**Redis Stream 写入**：
+**Redis Stream Write**:
 
 ```
 XADD virbius:trace * \
@@ -1026,16 +1026,15 @@ XADD virbius:trace * \
   timestamp 2026-07-08T12:00:00.123Z
 ```
 
-**Control 侧消费**：
+**Control Side Consumption**:
 
-`TraceIngestService` 使用 `XREADGROUP` 消费 `virbius:trace`，通过 `JdbcTemplate` 幂等写入 `tb_agent_trace` 表，检查点（last delivered ID）持久化在 `tb_trace_ingest_checkpoint`。
+`TraceIngestService` consumes `virbius:trace` using `XREADGROUP`, writes idempotently to the `tb_agent_trace` table via `JdbcTemplate`, with checkpoint (last delivered ID) persisted in `tb_trace_ingest_checkpoint`.
 
-**REST API**：
+**REST API**:
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Description |
 |------|------|------|
-| GET | `/api/v1/admin/tenants/{tenantId}/trace/session/{sessionId}/timeline` | Session 时间线（按 step_seq 排序） |
-| GET | `/api/v1/admin/tenants/{tenantId}/trace/trace/{traceId}` | Trace 因果链（parent_step_id 递归） |
-| GET | `/api/v1/admin/tenants/{tenantId}/trace/search?toolName=&sessionId=&limit=` | 搜索 |
-| GET | `/api/v1/admin/tenants/{tenantId}/trace/ingest/status` | Ingest 健康状态（pending/lag） |
-
+| GET | `/api/v1/admin/tenants/{tenantId}/trace/session/{sessionId}/timeline` | Session timeline (ordered by step_seq) |
+| GET | `/api/v1/admin/tenants/{tenantId}/trace/trace/{traceId}` | Trace causal chain (parent_step_id recursive) |
+| GET | `/api/v1/admin/tenants/{tenantId}/trace/search?toolName=&sessionId=&limit=` | Search |
+| GET | `/api/v1/admin/tenants/{tenantId}/trace/ingest/status` | Ingest health status (pending/lag) |

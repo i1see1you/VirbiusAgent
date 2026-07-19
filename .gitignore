@@ -30,3 +30,13 @@ data/*.db-*
 *.sqlite
 *.sqlite3
 data/**/*.log
+data/**
+
+# Build artifacts
+dependency-reduced-pom.xml
+
+# Backup files
+*.bak
+
+# Test scripts
+scripts/test*

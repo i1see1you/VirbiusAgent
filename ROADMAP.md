@@ -1,137 +1,137 @@
-# VirbiusAgent 路线图 — ROADMAP
+# VirbiusAgent Roadmap — ROADMAP
 
-| 项目 | 说明 |
-|------|------|
-| 文档版本 | v3.6 |
-| 状态 | 草案 |
-| 关联 | [DESIGN.md](DESIGN.md)（索引） · [ARCHITECTURE.md](ARCHITECTURE.md) |
+| Project | Description |
+|---------|-------------|
+| Doc Version | v3.6 |
+| Status | Draft |
+| Related | [DESIGN.md](DESIGN.md) (Index) · [ARCHITECTURE.md](ARCHITECTURE.md) |
 
-> 本文件包含 §11 路线图（P0/P1/P2 分阶段规划）+ 变更日志。
-
----
-
-## 11. 路线图
-
-### P0 — 核心安全链路（身份 + 观测 + HTTP 阻断 + Prompt Gateway）
-
-| 任务 | 组件 | 估计 |
-|------|------|------|
-| Runtime License 签发 + 校验 + 吊销 | control + 全层 | 3w |
-| Prompt Gateway 基础版（宪法注入 + PII 脱敏） | virbius-core | 3w |
-| 企业 AI 智能体宪法 v1（规则定义 + 编译） | control + compiler | 2w |
-| 端层预检（参数校验 + allowlist + JSON Schema） | virbius-core | 2w |
-| 端层 MCP Server 集成（PyO3 / napi-rs / subprocess） | virbius-core | 3w |
-| MCP Proxy（stdio/SSE 代理 + 安全管线 + 会话管理） | virbius-mcp-proxy | 3w |
-| 管层 Higress WASM 插件（allowlist + 计数 + engine 调用） | virbius-gateway | 3w |
-| 管层 Higress 路由配置自动生成（control -> compiler） | control + compiler | 2w |
-| 云层 Redis session 状态（history + risk + count） | engine | 3w |
-| 云层 Groovy L3 Agent 规则（工具链检测 + 场景匹配） | engine | 2w |
-| 云层 Groovy ctx 扩展（sessionHistory / riskScore，内存预加载） | engine | 2w |
-| 控制面 Agent 规则 CRUD + 发布 | control | 2w |
-| 核层 Falco 部署 + eBPF 驱动（标准节点池） | virbius-kernel | 2w | ✅ 已完成 |
-| 核层 Falco plugin 模式（serverless 降级: k8saudit + filetail） | virbius-kernel | ~~2w~~ | ❌ 已移除（方案 A） |
-| 核层 PID->trace_id 映射 + 审计上报 | virbius-kernel | 1w | ✅ 已完成 |
-| 核层 Falco http_output → Engine FalcoAlertController | virbius-kernel + engine | 1w | ✅ 已完成 |
-| 端到端集成测试 | 全组件 | 3w | ✅ 已完成 |
-| **P0 合计** | | **~36w** |
-
-### P1 — 增强观测 + 记忆管控
-
-| 任务 | 说明 | 状态 |
-|------|------|------|
-| 端层快速通道（低风险工具跳过云层） | 延迟优化 | ✅ 已完成 |
-| 自定义 virbius-audit Falco 插件 | 消费 Redis Stream，Agent 专用规则 | ❌ 已移除（方案 A） |
-| 审计大盘 | session risk + 工具调用 + 告警可视化 | ✅ 已完成 |
-| STI 语义审计（Taint 维度调小模型） | 工具返回值注入检测 | ✅ 已完成 |
-| Prompt 入侵检测（prompt runtime 重新定位） | 用户输入越狱/注入检测，与 STI Taint 共享 qwen3guard 模型 | ✅ 已完成 |
-| 输出 PII 脱敏（端层，工具返回前） | 复用 virbius-core dlp/engine.rs | ✅ 已完成 |
-| Falco 规则库扩充 + 自定义规则管理 | 控制面统一管理 falco 规则，灰度部署 | ✅ 已完成 |
-| Falco http_output 路径 + 三级关联链 (pid→cgroup→ppid) | Engine FalcoAlertController + Redis pidmap/cgroup 反查 | ✅ 已完成 |
-| 高风险工具人工审批流 | engine -> 审批 UI -> 超时 deny | ✅ 已完成 |
-| session risk 自适应模型 | 从规则阈值升级为加权累积 | ✅ 已完成 |
-| 审计完整性（hash chain） | 防篡改 | ✅ 已完成 |
-| 累计计数器 Engine 侧 Ingest（A1） | 配置驱动的工具调用频率熔断 | ✅ 已完成 |
-| 记忆管控（Memory Interceptor） | Agent 记忆读写拦截 + 脱敏 + 注入检测 | ✅ 已完成 |
-| Agent 决策链路追踪 | input → reasoning → tool_call → tool_result → output 全链路 trace | ✅ 已完成 |
-
-### P2 — 阻断(hands) + TEE
-
-| 任务 | 说明 |
-|------|------|
-| Landlock + drop caps 沙箱 | 文件路径限制 + capabilities 丢弃 + ABI 版本适配 |
-| gVisor 预热池 | 不可信代码执行沙箱 |
-| eBPF 自定义观测程序（execveat + IPv6） | 补充 Falco 内置规则 |
-| 端到端红队测试 | 安全验证 |
-
-### 各阶段对照
-
-| 阶段 | 观测(eyes) | 阻断(hands) | 新增能力 |
-|------|-----------|------------|---------|
-| P0 | Falco + access log + Redis 审计 + STI + Prompt Gateway | HTTP 403 + License + allowlist + 计数 + schema + risk 断连 | 身份管控 + 提示增强 |
-| P1 | STI Taint + Prompt 入侵检测 + Falco http_output 三级关联 + 审计完整性 + 决策链路追踪 | 人工审批 + 自适应 risk + 记忆管控 | 记忆管控 + prompt 越狱检测 + 决策链路可视化 |
-| P2 | eBPF 自定义观测 | Landlock + gVisor + TEE | syscall 级隔离 |
+> This document contains §11 Roadmap (P0/P1/P2 phased plan) + Changelog.
 
 ---
 
-## 变更日志
+## 11. Roadmap
+
+### P0 — Core Security Pipeline (Identity + Observability + HTTP Blocking + Prompt Gateway)
+
+| Task | Component | Estimate |
+|------|-----------|----------|
+| Runtime License issuance + verification + revocation | control + all layers | 3w |
+| Prompt Gateway basic (constitution injection + PII desensitization) | virbius-core | 3w |
+| Enterprise AI Agent Constitution v1 (rule definition + compilation) | control + compiler | 2w |
+| Edge layer precheck (arg validation + allowlist + JSON Schema) | virbius-core | 2w |
+| Edge MCP Server integration (PyO3 / napi-rs / subprocess) | virbius-core | 3w |
+| MCP Proxy (stdio/SSE proxy + security pipeline + session management) | virbius-mcp-proxy | 3w |
+| Gateway layer Higress WASM plugin (allowlist + counters + engine call) | virbius-gateway | 3w |
+| Gateway Higress route config auto-generation (control -> compiler) | control + compiler | 2w |
+| Cloud layer Redis session state (history + risk + counts) | engine | 3w |
+| Cloud layer Groovy L3 Agent rules (tool chain detection + scenario matching) | engine | 2w |
+| Cloud layer Groovy ctx extensions (sessionHistory / riskScore, memory preload) | engine | 2w |
+| Control plane Agent rule CRUD + rollout | control | 2w |
+| Kernel layer Falco deployment + eBPF driver (standard node pool) | virbius-kernel | 2w | ✅ Done |
+| Kernel layer Falco plugin mode (serverless fallback: k8saudit + filetail) | virbius-kernel | ~~2w~~ | ❌ Removed (Plan A) |
+| Kernel layer PID→trace_id mapping + audit reporting | virbius-kernel | 1w | ✅ Done |
+| Kernel layer Falco http_output → Engine FalcoAlertController | virbius-kernel + engine | 1w | ✅ Done |
+| End-to-end integration tests | All components | 3w | ✅ Done |
+| **P0 Total** | | **~36w** |
+
+### P1 — Enhanced Observability + Memory Control
+
+| Task | Description | Status |
+|------|-------------|--------|
+| Edge fast path (low-risk tools skip cloud layer) | Latency optimization | ✅ Done |
+| Custom virbius-audit Falco plugin | Consumes Redis Stream, Agent-specific rules | ❌ Removed (Plan A) |
+| Audit dashboard | session risk + tool calls + alert visualization | ✅ Done |
+| STI semantic audit (Taint dimension with small model) | Tool return value injection detection | ✅ Done |
+| Prompt injection detection (prompt runtime repositioned) | User input jailbreak/injection detection, shares qwen3guard with STI Taint | ✅ Done |
+| Output PII desensitization (edge, before tool return) | Reuses virbius-core dlp/engine.rs | ✅ Done |
+| Falco rule library expansion + custom rule management | Control plane unified Falco rule management, canary deployment | ✅ Done |
+| Falco http_output path + 3-level correlation chain (pid→cgroup→ppid) | Engine FalcoAlertController + Redis pidmap/cgroup lookup | ✅ Done |
+| High-risk tool human approval flow | engine → approval UI → timeout deny | ✅ Done |
+| Session risk adaptive model | Upgraded from rule threshold to weighted accumulation | ✅ Done |
+| Audit integrity (hash chain) | Tamper-proof | ✅ Done |
+| Cumulative counter Engine-side Ingest (A1) | Config-driven tool call frequency circuit breaking | ✅ Done |
+| Memory control (Memory Interceptor) | Agent memory read/write interception + desensitization + injection detection | ✅ Done |
+| Agent decision trace | input → reasoning → tool_call → tool_result → output full chain trace | ✅ Done |
+
+### P2 — Enforcement (Hands) + TEE
+
+| Task | Description |
+|------|-------------|
+| Landlock + drop caps sandbox | File path restriction + capabilities dropping + ABI version adaptation |
+| gVisor warm pool | Untrusted code execution sandbox |
+| eBPF custom observability programs (execveat + IPv6) | Supplement Falco built-in rules |
+| End-to-end red team testing | Security verification |
+
+### Phase Comparison
+
+| Phase | Observability (Eyes) | Enforcement (Hands) | New Capabilities |
+|-------|---------------------|--------------------|-----------------|
+| P0 | Falco + access log + Redis audit + STI + Prompt Gateway | HTTP 403 + License + allowlist + counters + schema + risk disconnect | Identity control + prompt enhancement |
+| P1 | STI Taint + Prompt injection detection + Falco http_output 3-level correlation + audit integrity + decision trace | Human approval + adaptive risk + memory control | Memory control + prompt jailbreak detection + decision trace visualization |
+| P2 | eBPF custom observability | Landlock + gVisor + TEE | syscall-level isolation |
+
+---
+
+## Changelog
 
 ### v3.3 (2026-07-08)
 
-**新增功能**
+**New Features**
 
-- **Agent 决策链路追踪系统**：全链路记录 Agent 从输入到输出的每一步决策，支持 session 级时间线、trace 级因果链、工具维度搜索
-  - DB：`tb_agent_trace` 表（V6 迁移）+ `tb_trace_ingest_checkpoint` 检查点表
-  - Proxy：`trace_collector.rs` 模块（TraceEvent + TraceCollector + Redis XADD），`session.rs` 增加 `step_seq` / `last_step_id` 步骤追踪字段，`router.rs` 在 `tool_call` 和 `tool_result` 两个关键点采集 trace 事件
-  - Control：`TraceIngestService` 消费 Redis Stream 写入 DB，`TraceQueryService` 提供 session 时间线 / trace 链路 / 搜索查询，REST API 挂载在 `/api/v1/admin/tenants/{tenantId}/trace/*`
-  - 运营台：新增「决策链路」面板，支持搜索 + 时间线可视化 + Ingest 健康状态
-- **高风险工具人工审批流（P1）**：全链路闭环已完成
-  - Engine：`ChallengeService` Redis 状态机（create → approve/reject → verify token），`EvaluateOrchestrator` 在 `challenge` action 时自动创建审批记录
-  - Control：`ChallengeController` 代理 Engine API 到运营台
-  - Proxy：`PipelineResult::Challenge` 拦截 + `challenge_token` 重试验证
-  - DB：`tb_challenge_audit` 审计持久化（V5 迁移）
-  - 运营台：审批队列面板（5s 轮询 + approve/reject）
+- **Agent decision trace system**: Full-chain recording of every Agent decision from input to output, supporting session-level timeline, trace-level causal chain, and tool-dimension search
+  - DB: `tb_agent_trace` table (V6 migration) + `tb_trace_ingest_checkpoint` checkpoint table
+  - Proxy: `trace_collector.rs` module (TraceEvent + TraceCollector + Redis XADD), `session.rs` adds `step_seq` / `last_step_id` step tracking fields, `router.rs` collects trace events at `tool_call` and `tool_result` key points
+  - Control: `TraceIngestService` consumes Redis Stream and writes to DB, `TraceQueryService` provides session timeline / trace chain / search queries, REST API mounted at `/api/v1/admin/tenants/{tenantId}/trace/*`
+  - Ops console: New "Decision Trace" panel with search + timeline visualization + Ingest health status
+- **High-risk tool human approval flow (P1)**: Full-chain closed loop completed
+  - Engine: `ChallengeService` Redis state machine (create → approve/reject → verify token), `EvaluateOrchestrator` auto-creates approval records on `challenge` action
+  - Control: `ChallengeController` proxies Engine API to ops console
+  - Proxy: `PipelineResult::Challenge` interception + `challenge_token` retry verification
+  - DB: `tb_challenge_audit` audit persistence (V5 migration)
+  - Ops console: Approval queue panel (5s polling + approve/reject)
 
-**文档更新**
+**Documentation Updates**
 
-- 新增 [DESIGN.md §12](DESIGN.md#12-agent-安全风险评估框架) Agent 安全风险评估框架：七维风险评估 + 评估方法论（5 步）+ 安全保障对照表
-- 新增 [DESIGN.md §13](DESIGN.md#13-p1-功能详细设计方案) P1 功能详细设计方案：覆盖 7 项 P1 功能（Prompt 注入检测、STI Taint、Session Risk 自适应、审计完整性 hash chain、记忆管控、输出审查、virbius-audit Falco 插件 + 规则库）+ 实现优先级建议
+- Added [DESIGN.md §12](DESIGN.md#12-agent-security-risk-assessment-framework) Agent Security Risk Assessment Framework: 7-dimensional risk assessment + assessment methodology (5 steps) + security assurance comparison table
+- Added [DESIGN.md §13](DESIGN.md#13-p1-feature-detailed-design) P1 Feature Detailed Design: Covers 7 P1 features (Prompt injection detection, STI Taint, Session Risk adaptive, audit integrity hash chain, memory control, output review, virbius-audit Falco plugin + rule library) + implementation priority recommendations
 
 ### v3.6 (2026-07-18)
 
-**Falco 退回纯系统级 + http_output 路径（方案 A）**
+**Falco Reverted to Pure System-Level + http_output Path (Plan A)**
 
-- **移除自定义 virbius-audit Go 插件**：`virbius-kernel/plugin/` 目录、`falco_plugin.rs` 模块、`KernelMode::FalcoPlugin` 枚举变体全部移除。Falco 退回纯系统级 syscall 观测角色。
-- **P0 打通 syscall 路径**：Falco `http_output` → Engine `FalcoAlertController`（`POST /api/internal/falco-alert`）→ Redis pidmap 反查 → `SessionRiskManager.onFalcoAlert()`。包含 ppid fallback。
-- **P1 cgroup 关联路径**：`pidmap.rs` 增加 `cgroup_trace:{cgroup_id}` Redis 反向索引；`FalcoAlertController` 增加三级关联链 `host_pid → cgroup_id → ppid`，新增 `resolved_by` 返回字段。
-- **修复 Spring 依赖注入 bug**：`PolicyRedisConfig` 的 `@Bean Optional<JedisPool>` 改为 `@Bean JedisPool` + `@ConditionalOnProperty`。
-- **修复 virbius-policy 测试编译错误**：`BindScopeTest` / `ValueResolverVarDimensionTest` 中 `MatchContext.withBind()` 调用对齐当前 7 参数签名。
-- **测试脚本**：`scripts/test-falco-cross-layer.sh` 覆盖 5 个场景（pid 直接命中、ppid fallback、cgroup 孙子进程、cgroup setsid detach、非 Agent 过滤），macOS 模拟模式无需 Falco。
+- **Removed custom virbius-audit Go plugin**: `virbius-kernel/plugin/` directory, `falco_plugin.rs` module, `KernelMode::FalcoPlugin` enum variant all removed. Falco returns to pure system-level syscall observation role.
+- **P0 syscall path completed**: Falco `http_output` → Engine `FalcoAlertController` (`POST /api/internal/falco-alert`) → Redis pidmap lookup → `SessionRiskManager.onFalcoAlert()`. Includes ppid fallback.
+- **P1 cgroup correlation path**: `pidmap.rs` adds `cgroup_trace:{cgroup_id}` Redis reverse index; `FalcoAlertController` adds 3-level correlation chain `host_pid → cgroup_id → ppid`, new `resolved_by` return field.
+- **Fixed Spring dependency injection bug**: `PolicyRedisConfig` `@Bean Optional<JedisPool>` changed to `@Bean JedisPool` + `@ConditionalOnProperty`.
+- **Fixed virbius-policy test compilation errors**: `BindScopeTest` / `ValueResolverVarDimensionTest` `MatchContext.withBind()` calls aligned with current 7-parameter signature.
+- **Test scripts**: `scripts/test-falco-cross-layer.sh` covers 5 scenarios (pid direct hit, ppid fallback, cgroup grandchild process, cgroup setsid detach, non-Agent filtering), macOS simulation mode without Falco.
 
 ### v3.5 (2026-07-13)
 
-**累计计数器 Engine 侧 Ingest（A1）**
+**Cumulative Counter Engine-side Ingest (A1)**
 
-- **配置驱动的累计计数器自动写入**：Engine 在每次工具调用评估后自动遍历 `tb_cumulative` 定义，通过 `ValueResolver` 解析聚合 key 并写入 `CounterStore`，与管层 Lua ingest 对等，零硬编码
-  - `EvaluateOrchestrator`：注入 `tool_name` / `tool_session_key` 到 `vars`，规则评估后调用 `ingestCumulatives()` + `recordToolCall()`
-  - `ScriptRuleRunner`：新增 `ingestCumulatives()` 方法，遍历 `PolicyDataCache` 累计定义并调用 `CounterStore.ingest()`
-  - `ScriptRuleRunner`：新增 `recordToolCall()` 委托方法
-- **SessionStatePreloader Hash 存储改造**：
-  - `preload()`：新增 `HGETALL session:{id}:tool_counts`，修复 `toolCounts` 永远返回空 Map 的缺陷，使 Groovy 规则 `ctx.toolCallCount()` 能正确读取
-  - `recordToolCall()`：从 `INCR session:{id}:tool_count:{tool}` 改为 `HINCRBY session:{id}:tool_counts {tool} 1`，统一 TTL 管理
-- **文档更新**：DESIGN.md 新增 §13.9 累计计数器 Engine 侧 Ingest 设计方案
+- **Config-driven cumulative counter auto-write**: Engine auto-traverses `tb_cumulative` definitions after each tool call evaluation, resolves aggregation keys via `ValueResolver` and writes to `CounterStore`, peer to gateway-layer Lua ingest, zero hardcoding
+  - `EvaluateOrchestrator`: Injects `tool_name` / `tool_session_key` into `vars`, calls `ingestCumulatives()` + `recordToolCall()` after rule evaluation
+  - `ScriptRuleRunner`: New `ingestCumulatives()` method, traverses `PolicyDataCache` cumulative definitions and calls `CounterStore.ingest()`
+  - `ScriptRuleRunner`: New `recordToolCall()` delegation method
+- **SessionStatePreloader Hash storage refactor**:
+  - `preload()`: Added `HGETALL session:{id}:tool_counts`, fixed `toolCounts` always returning empty Map, enabling Groovy rules `ctx.toolCallCount()` to read correctly
+  - `recordToolCall()`: Changed from `INCR session:{id}:tool_count:{tool}` to `HINCRBY session:{id}:tool_counts {tool} 1`, unified TTL management
+- **Documentation updates**: DESIGN.md added §13.9 Cumulative Counter Engine-side Ingest Design
 
 ### v3.4 (2026-07-13)
 
-**Falco 自定义规则管理与灰度部署**
+**Falco Custom Rule Management & Canary Deployment**
 
-- **Go virbius-audit Falco 插件**：`virbius-kernel/plugin/` — Redis Stream 审计消费 + PID map 关联 + C-shared 构建
-- **Falco 规则管理**：复用 `tb_rules` + `layer='falco'`，`RuleLayer.FALCO` 枚举，`FalcoConfigBuilder` 从 `tb_rules_current` 生成 Falco YAML
-- **灰度部署**：`DeployRolloutService` + `FalcoArtifactStore`（Redis 存储 + Stream 通知）复用现有 `PENDING→CANARY→FULL→FINALIZED` 状态机
-- **Rust config_subscriber**：`virbius-kernel/src/config_subscriber.rs` — Redis Stream 消费 → 写 `/etc/falco/falco_rules.d/` → SIGHUP 重载
-- **运营台集成**：falco 层规则编辑器、falco 上线按钮、falco 灰度状态看板
-- **部署文件更新**：`falco-plugin-daemonset.yaml` 新增 config-subscriber sidecar，`falco-plugin-config.yaml` 增加 `rules_file` 加载 rules.d 目录
-- **文档更新**：README.md 添加自定义 Falco 规则示例，ARCHITECTURE.md §4.8 新增 Falco 规则管理章节
+- **Go virbius-audit Falco plugin**: `virbius-kernel/plugin/` — Redis Stream audit consumption + PID map correlation + C-shared build
+- **Falco rule management**: Reuses `tb_rules` + `layer='falco'`, `RuleLayer.FALCO` enum, `FalcoConfigBuilder` generates Falco YAML from `tb_rules_current`
+- **Canary deployment**: `DeployRolloutService` + `FalcoArtifactStore` (Redis storage + Stream notification) reuses existing `PENDING→CANARY→FULL→FINALIZED` state machine
+- **Rust config_subscriber**: `virbius-kernel/src/config_subscriber.rs` — Redis Stream consumption → write `/etc/falco/falco_rules.d/` → SIGHUP reload
+- **Ops console integration**: Falco layer rule editor, Falco rollout button, Falco canary status dashboard
+- **Deployment file updates**: `falco-plugin-daemonset.yaml` adds config-subscriber sidecar, `falco-plugin-config.yaml` adds `rules_file` to load rules.d directory
+- **Documentation updates**: README.md adds custom Falco rule example, ARCHITECTURE.md §4.8 adds Falco rule management chapter
 
 ### v3.2
 
-- 初始路线图发布
+- Initial roadmap release
