@@ -630,10 +630,51 @@
       'tools.header-schema': 'args_schema',
       'tools.header-desc': '描述',
       'tools.btn-save': '保存',
+      'tools.editor-title-new': '新建工具',
+      'tools.fastpath-hint': '跳过 Engine 扫描',
+      'tools.placeholder-desc': '工具描述',
+
+      // Rollout extras
+      'rollout.placeholder-force': 'force 说明（勾选 force 时必填）',
+
+      // Audit extras
+      'audit.placeholder-trace': '输入 trace_id',
+
+      // Trace panel
+      'nav.trace': '决策链路',
+      'trace.title': 'Agent 决策链路追踪',
+      'trace.desc': '追踪 Agent 完整决策链路：输入 → 推理 → 工具调用 → 工具结果 → 输出。点击搜索结果行查看完整 Session 链路时间线。',
+      'trace.placeholder-tool': '工具名',
+      'trace.type-all': '全部类型',
+      'trace.decision-all': '全部决策',
+      'trace.btn-search': '搜索',
+      'trace.btn-refresh': '刷新',
+      'trace.header-type': '类型',
+      'trace.header-tool': '工具',
+      'trace.header-decision': '决策',
+      'trace.header-risk': '风险',
+      'trace.header-duration': '耗时',
+      'trace.header-time': '时间',
+      'trace.empty-hint': '点击「搜索」查看决策链路',
+      'trace.timeline-title': 'Session 时间线',
+      'trace.timeline-hint': '点击上方搜索结果行查看完整链路',
+      'trace.ingest-title': 'Ingest 健康状态',
+
+      // Challenge extras
+      'challenge.kpi-pending': '待审批',
+
+      // Rules extras
+      'rules.compare': '比较',
+      'rules.preset-cum-over-limit': '累计超限',
+      'rules.preset-force-list-hit': '强制名单命中',
+
+      // Top bar extras
+      'topbar.bundle-ver-placeholder': '版本号，留空自动递增',
     },
 
     en: {
       // Nav
+      'nav.title': 'Virbius Ops',
       'nav.tenants': 'Tenants',
       'nav.lists': 'Lists',
       'nav.cumulatives': 'Cumulatives',
@@ -1261,6 +1302,46 @@
       'tools.header-schema': 'args_schema',
       'tools.header-desc': 'Description',
       'tools.btn-save': 'Save',
+      'tools.editor-title-new': 'New Tool',
+      'tools.fastpath-hint': 'skip Engine scan',
+      'tools.placeholder-desc': 'Tool description',
+
+      // Rollout extras
+      'rollout.placeholder-force': 'Force reason (required when force is checked)',
+
+      // Audit extras
+      'audit.placeholder-trace': 'Enter trace_id',
+
+      // Trace panel
+      'nav.trace': 'Decision Trace',
+      'trace.title': 'Agent Decision Trace',
+      'trace.desc': 'Trace the full Agent decision chain: input → reasoning → tool_call → tool_result → output. Click a search result to view the full session timeline.',
+      'trace.placeholder-tool': 'Tool name',
+      'trace.type-all': 'All types',
+      'trace.decision-all': 'All decisions',
+      'trace.btn-search': 'Search',
+      'trace.btn-refresh': 'Refresh',
+      'trace.header-type': 'Type',
+      'trace.header-tool': 'Tool',
+      'trace.header-decision': 'Decision',
+      'trace.header-risk': 'Risk',
+      'trace.header-duration': 'Duration',
+      'trace.header-time': 'Time',
+      'trace.empty-hint': 'Click "Search" to view decision trace',
+      'trace.timeline-title': 'Session Timeline',
+      'trace.timeline-hint': 'Click a search result above to view the full chain',
+      'trace.ingest-title': 'Ingest Health',
+
+      // Challenge extras
+      'challenge.kpi-pending': 'Pending',
+
+      // Rules extras
+      'rules.compare': 'Compare',
+      'rules.preset-cum-over-limit': 'Cumulative over limit',
+      'rules.preset-force-list-hit': 'Force list hit',
+
+      // Top bar extras
+      'topbar.bundle-ver-placeholder': 'Version (auto-increment if empty)',
     }
   };
 

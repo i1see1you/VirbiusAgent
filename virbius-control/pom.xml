@@ -36,7 +36,7 @@
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-jdbc</artifactId>
     </dependency>
-    <!-- PoC 默认 SQLite 文件库；生产可换为 PostgreSQL/MySQL 等，仅需对应 JDBC 驱动依赖 -->
+    <!-- PoC default SQLite file store; for production swap to PostgreSQL/MySQL etc., only the matching JDBC driver dependency is needed -->
     <dependency>
       <groupId>org.xerial</groupId>
       <artifactId>sqlite-jdbc</artifactId>

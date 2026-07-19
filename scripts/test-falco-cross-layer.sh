@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # test-falco-cross-layer.sh
-# 测试 Falco syscall 告警 → Engine 三级关联 (pid → cgroup → ppid) → session 风险评分
+# Test Falco syscall alerts -> Engine three-level correlation (pid -> cgroup -> ppid) -> session risk scoring
 #
-# 在 macOS 上无需 Falco，用 curl 模拟 Falco http_output 的 JSON payload，
-# 验证 FalcoAlertController 的跨层关联逻辑。
+# On macOS, Falco is not required; simulate Falco http_output JSON payload via curl,
+# to verify FalcoAlertController's cross-layer correlation logic.
 #
-# 前置条件:
-#   1. scripts/run-local.sh 已启动 control(8080) + engine(8082) + redis(6379)
-#   2. 或手动启动: redis-server + engine jar
+# Prerequisites:
+#   1. scripts/run-local.sh started control(8080) + engine(8082) + redis(6379)
+#   2. or start manually: redis-server + engine jar
 #
 set -euo pipefail
 
@@ -23,60 +23,60 @@ warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 err()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
 echo -e "${CYAN}========================================${NC}"
-echo -e "${CYAN} Falco 跨层关联测试 (macOS 模拟模式)   ${NC}"
+echo -e "${CYAN} Falco cross-layer correlation test (macOS simulation mode)   ${NC}"
 echo -e "${CYAN}========================================${NC}"
 echo ""
 
-# ─── 0. 前置检查 ───
-info "检查服务可用性..."
+# ─── 0. Pre-flight checks ───
+info "Checking service availability..."
 
 if ! curl -sf "$ENGINE/admin/health" >/dev/null 2>&1; then
-  err "Engine 不可达: $ENGINE"
-  err "请先运行: ./scripts/run-local.sh"
+  err "Engine unreachable: $ENGINE"
+  err "Run first: ./scripts/run-local.sh"
   exit 1
 fi
-ok "Engine 可达"
+ok "Engine reachable"
 
 if ! redis-cli -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
-  err "Redis 不可达: port $REDIS_PORT"
+  err "Redis unreachable: port $REDIS_PORT"
   exit 1
 fi
-ok "Redis 可达"
+ok "Redis reachable"
 echo ""
 
-# ─── 1. 种入 pidmap + cgroup 数据 ───
-info "Step 1: 种入 pidmap + cgroup 数据（模拟 Agent 注册）"
+# ─── 1. Seed pidmap + cgroup data ───
+info "Step 1: Seed pidmap + cgroup data (simulate Agent registration)"
 
-# pidmap JSON value（主索引和 cgroup 反向索引共用同一 value）
+# pidmap JSON value (primary index and cgroup reverse index share the same value)
 PIDMAP_JSON='{"host_pid":12345,"ns_pid":42,"cgroup_id":777,"trace_id":"trace-001","session_id":"sess-test-001","app_id":"test-agent","tenant_id":"default"}'
 
-# 主索引: pid_trace:{host_pid} — Agent 主进程 host_pid=12345
+# Primary index: pid_trace:{host_pid} - Agent main process host_pid=12345
 redis-cli -p "$REDIS_PORT" SET "pid_trace:12345" "$PIDMAP_JSON" EX 3600 >/dev/null
-ok "pid_trace:12345 → session=sess-test-001 (Agent 主进程)"
+ok "pid_trace:12345 -> session=sess-test-001 (Agent main process)"
 
-# 反向索引: cgroup_trace:{cgroup_id} — cgroup_id=777
-# 模拟 pidmap.rs::redis_backup_async() 写入的 cgroup 反向索引
+# Reverse index: cgroup_trace:{cgroup_id} - cgroup_id=777
+# Mirrors the cgroup reverse index written by pidmap.rs::redis_backup_async()
 redis-cli -p "$REDIS_PORT" SET "cgroup_trace:777" "$PIDMAP_JSON" EX 3600 >/dev/null
-ok "cgroup_trace:777 → session=sess-test-001 (cgroup 反向索引)"
+ok "cgroup_trace:777 -> session=sess-test-001 (cgroup reverse index)"
 
-# 场景2: 子进程 host_pid=12346 不注册（模拟 fork 后子进程未在 pidmap 中）
-#       但 ppid=12345 指向主进程，Engine 用 ppid fallback 关联
-info "子进程 pid=12346 不注册（测试 ppid fallback）"
+# Scenario 2: child process host_pid=12346 not registered (simulate forked child absent from pidmap)
+#       but ppid=12345 points to main process; Engine uses ppid fallback for correlation
+info "Child pid=12346 not registered (testing ppid fallback)"
 
-# 场景4: 孙子进程 pid=12347, ppid=12346 都不在 pidmap（ppid 链断）
-#       但 cgroup_id=777 在 cgroup 反向索引中 → cgroup 关联
-info "孙子进程 pid=12347 不注册, ppid=12346 也不在 pidmap（测试 cgroup 关联）"
+# Scenario 4: grandchild pid=12347, ppid=12346 both absent from pidmap (ppid chain broken)
+#       but cgroup_id=777 is in the cgroup reverse index -> cgroup correlation
+info "Grandchild pid=12347 not registered, ppid=12346 also absent from pidmap (testing cgroup correlation)"
 echo ""
 
-# ─── 2. 发送模拟 Falco 告警 ───
-info "Step 2: 发送模拟 Falco 告警"
+# ─── 2. Send simulated Falco alerts ───
+info "Step 2: Send simulated Falco alerts"
 
 echo ""
-echo -e "${YELLOW}--- 场景1: Agent 主进程打开 /etc/shadow (pid 直接命中) ---${NC}"
-echo "  Falco 规则: sensitive_shadow_access"
-echo "  proc.pid=12345 (Agent 主进程, 在 pidmap 中)"
-echo "  proc.cgroup.id=777 (同 cgroup)"
-echo "  预期: resolved_by=pid"
+echo -e "${YELLOW}--- Scenario 1: Agent main process opens /etc/shadow (pid direct hit) ---${NC}"
+echo "  Falco rule: sensitive_shadow_access"
+echo "  proc.pid=12345 (Agent main process, in pidmap)"
+echo "  proc.cgroup.id=777 (same cgroup)"
+echo "  expected: resolved_by=pid"
 echo ""
 
 RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
@@ -98,20 +98,20 @@ RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
     }
   }')
 
-echo "  Engine 响应: $RESULT"
+echo "  Engine response: $RESULT"
 if echo "$RESULT" | grep -q '"sess-test-001"' && echo "$RESULT" | grep -q '"pid"'; then
-  ok "场景1 PASS: 告警关联到 session=sess-test-001 (resolved_by=pid)"
+  ok "Scenario 1 PASS: alert correlated to session=sess-test-001 (resolved_by=pid)"
 else
-  err "场景1 FAIL: 未关联到 session 或 resolved_by 非 pid"
+  err "Scenario 1 FAIL: not correlated to session or resolved_by != pid"
 fi
 echo ""
 
-echo -e "${YELLOW}--- 场景2: Agent fork 子进程外联连接 (ppid fallback) ---${NC}"
-echo "  Falco 规则: agent_child_outbound"
-echo "  proc.pid=12346 (子进程, 不在 pidmap)"
-echo "  proc.ppid=12345 (主进程, 在 pidmap → ppid fallback)"
-echo "  proc.cgroup.id=0 (模拟旧版 Falco 无 cgroup 字段, 测试 ppid 路径)"
-echo "  预期: resolved_by=ppid"
+echo -e "${YELLOW}--- Scenario 2: Agent forked child outbound connection (ppid fallback) ---${NC}"
+echo "  Falco rule: agent_child_outbound"
+echo "  proc.pid=12346 (child process, not in pidmap)"
+echo "  proc.ppid=12345 (main process, in pidmap -> ppid fallback)"
+echo "  proc.cgroup.id=0 (simulate legacy Falco without cgroup field, test ppid path)"
+echo "  expected: resolved_by=ppid"
 echo ""
 
 RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
@@ -134,19 +134,19 @@ RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
     }
   }')
 
-echo "  Engine 响应: $RESULT"
+echo "  Engine response: $RESULT"
 if echo "$RESULT" | grep -q '"sess-test-001"' && echo "$RESULT" | grep -q '"ppid"'; then
-  ok "场景2 PASS: 子进程通过 ppid fallback 关联到 session=sess-test-001 (resolved_by=ppid)"
+  ok "Scenario 2 PASS: child correlated to session=sess-test-001 via ppid fallback (resolved_by=ppid)"
 else
-  err "场景2 FAIL: ppid fallback 未生效或 resolved_by 非 ppid"
+  err "Scenario 2 FAIL: ppid fallback not working or resolved_by != ppid"
 fi
 echo ""
 
-echo -e "${YELLOW}--- 场景3: 非 Agent 进程告警（应被过滤） ---${NC}"
-echo "  Falco 规则: sensitive_shadow_access"
-echo "  proc.pid=99999 (非 Agent 进程, 不在 pidmap, ppid 也不在)"
-echo "  proc.cgroup.id=888 (非 Agent cgroup, 不在 cgroup_trace 中)"
-echo "  预期: pid_not_mapped"
+echo -e "${YELLOW}--- Scenario 3: non-Agent process alert (should be filtered) ---${NC}"
+echo "  Falco rule: sensitive_shadow_access"
+echo "  proc.pid=99999 (non-Agent process, not in pidmap, ppid also absent)"
+echo "  proc.cgroup.id=888 (non-Agent cgroup, not in cgroup_trace)"
+echo "  expected: pid_not_mapped"
 echo ""
 
 RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
@@ -165,20 +165,20 @@ RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
     }
   }')
 
-echo "  Engine 响应: $RESULT"
+echo "  Engine response: $RESULT"
 if echo "$RESULT" | grep -q 'pid_not_mapped'; then
-  ok "场景3 PASS: 非 Agent 进程被过滤 (pid/cgroup/ppid 均未命中)"
+  ok "Scenario 3 PASS: non-Agent process filtered (pid/cgroup/ppid all miss)"
 else
-  err "场景3 FAIL: 非 Agent 进程未被过滤"
+  err "Scenario 3 FAIL: non-Agent process not filtered"
 fi
 echo ""
 
-echo -e "${YELLOW}--- 场景4: Agent 孙子进程外联 (cgroup 关联, ppid 链断) ---${NC}"
-echo "  Falco 规则: agent_child_outbound"
-echo "  proc.pid=12347 (孙子进程, 不在 pidmap)"
-echo "  proc.ppid=12346 (子进程, 也不在 pidmap → ppid 链断)"
-echo "  proc.cgroup.id=777 (与 Agent 同 cgroup → cgroup 命中)"
-echo "  预期: resolved_by=cgroup"
+echo -e "${YELLOW}--- Scenario 4: Agent grandchild outbound (cgroup correlation, ppid chain broken) ---${NC}"
+echo "  Falco rule: agent_child_outbound"
+echo "  proc.pid=12347 (grandchild, not in pidmap)"
+echo "  proc.ppid=12346 (child, also not in pidmap -> ppid chain broken)"
+echo "  proc.cgroup.id=777 (same cgroup as Agent -> cgroup hit)"
+echo "  expected: resolved_by=cgroup"
 echo ""
 
 RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
@@ -201,20 +201,20 @@ RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
     }
   }')
 
-echo "  Engine 响应: $RESULT"
+echo "  Engine response: $RESULT"
 if echo "$RESULT" | grep -q '"sess-test-001"' && echo "$RESULT" | grep -q '"cgroup"'; then
-  ok "场景4 PASS: 孙子进程通过 cgroup 关联到 session=sess-test-001 (resolved_by=cgroup)"
+  ok "Scenario 4 PASS: grandchild correlated to session=sess-test-001 via cgroup (resolved_by=cgroup)"
 else
-  err "场景4 FAIL: cgroup 关联未生效或 resolved_by 非 cgroup"
+  err "Scenario 4 FAIL: cgroup correlation not working or resolved_by != cgroup"
 fi
 echo ""
 
-echo -e "${YELLOW}--- 场景5: setsid detach 后 ppid=1 但 cgroup 命中 ---${NC}"
-echo "  Falco 规则: agent_child_outbound"
-echo "  proc.pid=12348 (detach 后的进程, 不在 pidmap)"
-echo "  proc.ppid=1 (setsid 后 ppid 指向 init, 不在 pidmap → ppid 无用)"
-echo "  proc.cgroup.id=777 (与 Agent 同 cgroup → cgroup 命中)"
-echo "  预期: resolved_by=cgroup (ppid=1 被 init 过滤)"
+echo -e "${YELLOW}--- Scenario 5: after setsid detach ppid=1 but cgroup hit ---${NC}"
+echo "  Falco rule: agent_child_outbound"
+echo "  proc.pid=12348 (detached process, not in pidmap)"
+echo "  proc.ppid=1 (after setsid ppid points to init, not in pidmap -> ppid useless)"
+echo "  proc.cgroup.id=777 (same cgroup as Agent -> cgroup hit)"
+echo "  expected: resolved_by=cgroup (ppid=1 filtered as init)"
 echo ""
 
 RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
@@ -237,40 +237,40 @@ RESULT=$(curl -s -X POST "$ENGINE/api/internal/falco-alert" \
     }
   }')
 
-echo "  Engine 响应: $RESULT"
+echo "  Engine response: $RESULT"
 if echo "$RESULT" | grep -q '"sess-test-001"' && echo "$RESULT" | grep -q '"cgroup"'; then
-  ok "场景5 PASS: setsid detach 后通过 cgroup 关联到 session (resolved_by=cgroup)"
+  ok "Scenario 5 PASS: after setsid detach correlated to session via cgroup (resolved_by=cgroup)"
 else
-  err "场景5 FAIL: setsid 场景 cgroup 关联未生效"
+  err "Scenario 5 FAIL: setsid scenario cgroup correlation not working"
 fi
 echo ""
 
-# ─── 3. 验证风险评分 ───
-info "Step 3: 验证风险评分"
+# ─── 3. Verify risk scoring ───
+info "Step 3: Verify risk scoring"
 echo ""
 
 FALCO_PENDING=$(redis-cli -p "$REDIS_PORT" GET "session:sess-test-001:falco_pending" 2>/dev/null || echo "0")
 echo "  session:sess-test-001:falco_pending = $FALCO_PENDING"
-echo "  (预期值=4: 场景1+2+4+5 各 INCR 一次, 场景3 被过滤不计)"
+echo "  (expected=4: scenarios 1+2+4+5 each INCR once, scenario 3 filtered out)"
 
 if [[ "$FALCO_PENDING" == "4" ]]; then
-  ok "风险评分 PASS: falco_pending=4 (4 条 Agent 告警已计入)"
+  ok "Risk scoring PASS: falco_pending=4 (4 Agent alerts counted)"
 else
-  warn "falco_pending=$FALCO_PENDING (预期 4, 可能 Engine 未连接 Redis 或 onFalcoAlert 未执行)"
+  warn "falco_pending=$FALCO_PENDING (expected 4; Engine may not be connected to Redis or onFalcoAlert not executed)"
 fi
 echo ""
 
-# ─── 4. 通过 Control 配置 Falco 规则（验证下发管线） ───
-info "Step 4: 通过 Control 运营台配置 Falco 规则"
+# ─── 4. Configure Falco rules via Control (verify delivery pipeline) ───
+info "Step 4: Configure Falco rules via Control console"
 echo ""
 
 if ! curl -sf "$CONTROL/api/v1/health" >/dev/null 2>&1; then
-  warn "Control 不可达, 跳过规则下发测试"
+  warn "Control unreachable, skipping rule delivery test"
   echo ""
   exit 0
 fi
 
-info "配置规则: sensitive_shadow_access"
+info "Configuring rule: sensitive_shadow_access"
 curl -s -X POST "$CONTROL/api/v1/admin/tenants/$TENANT/rules" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -281,15 +281,15 @@ curl -s -X POST "$CONTROL/api/v1/admin/tenants/$TENANT/rules" \
     "reason_code": "CRITICAL",
     "risk_score": 50,
     "intent_action": "allow",
-    "scope": {"description": "检测 /etc/shadow 访问"},
+    "scope": {"description": "Detect /etc/shadow access"},
     "body": {
       "condition": "evt.type in (open, openat, openat2) and fd.name=/etc/shadow",
       "output": "Sensitive file access (pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, file=%fd.name, pcmdline=%proc.pcmdline)",
       "tags": "agent,filesystem,sensitive"
     }
-  }' >/dev/null && ok "规则 sensitive_shadow_access 已保存" || warn "保存失败"
+  }' >/dev/null && ok "Rule sensitive_shadow_access saved" || warn "保存失败"
 
-info "配置规则: agent_child_outbound"
+info "Configuring rule: agent_child_outbound"
 curl -s -X POST "$CONTROL/api/v1/admin/tenants/$TENANT/rules" \
   -H 'Content-Type: application/json' \
   -d '{
@@ -300,39 +300,39 @@ curl -s -X POST "$CONTROL/api/v1/admin/tenants/$TENANT/rules" \
     "reason_code": "WARNING",
     "risk_score": 30,
     "intent_action": "allow",
-    "scope": {"description": "检测 Agent 子进程外联"},
+    "scope": {"description": "Detect Agent child process outbound"},
     "body": {
       "condition": "evt.type=connect and not fd.sip in (127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)",
       "output": "Agent outbound (pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, sip=%fd.sip, pcmdline=%proc.pcmdline)",
       "tags": "agent,network,child_process"
     }
-  }' >/dev/null && ok "规则 agent_child_outbound 已保存" || warn "保存失败"
+  }' >/dev/null && ok "Rule agent_child_outbound saved" || warn "保存失败"
 
-info "发布快照（触发 config_subscriber 热重载）"
+info "Publishing snapshot (triggers config_subscriber hot reload)"
 curl -s -X POST "$CONTROL/api/v1/admin/tenants/$TENANT/rules/_/runtime/publish-snapshot" \
-  -H 'Content-Type: application/json' >/dev/null && ok "快照已发布" || warn "发布失败"
+  -H 'Content-Type: application/json' >/dev/null && ok "Snapshot published" || warn "发布失败"
 
 echo ""
 echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN} 测试完成                                 ${NC}"
+echo -e "${GREEN} Test complete                                 ${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
-echo "验证项:"
-echo "  1. Falco JSON → Engine FalcoAlertController 解析"
-echo "  2. proc.pid → Redis pidmap 反查 → session_id (resolved_by=pid)"
-echo "  3. ppid fallback (直接子进程关联, resolved_by=ppid)"
-echo "  4. cgroup 关联 (孙子进程, ppid 链断, resolved_by=cgroup)"
-echo "  5. cgroup 关联 (setsid detach, ppid=1, resolved_by=cgroup)"
-echo "  6. 非 Agent 进程过滤 (pid/cgroup/ppid 均未命中)"
-echo "  7. 风险评分 pending 计数 (4 条 Agent 告警)"
-echo "  8. Control 运营台规则配置 + 下发 (含 proc.cgroup.id 字段)"
+echo "Verification items:"
+echo "  1. Falco JSON -> Engine FalcoAlertController parsing"
+echo "  2. proc.pid -> Redis pidmap lookup -> session_id (resolved_by=pid)"
+echo "  3. ppid fallback (direct child correlation, resolved_by=ppid)"
+echo "  4. cgroup correlation (grandchild, ppid chain broken, resolved_by=cgroup)"
+echo "  5. cgroup correlation (setsid detach, ppid=1, resolved_by=cgroup)"
+echo "  6. non-Agent process filtering (pid/cgroup/ppid all miss)"
+echo "  7. risk scoring pending count (4 Agent alerts)"
+echo "  8. Control console rule config + delivery (incl. proc.cgroup.id field)"
 echo ""
-echo "查看 Engine 日志:"
+echo "View Engine logs:"
 echo "  tail -50 /tmp/virbius-agent/logs/engine.log"
 echo ""
-echo "如需测试真实 Falco (需 Docker):"
+echo "To test real Falco (requires Docker):"
 echo "  brew install --cask docker"
-echo "  # 启动 Docker Desktop 后运行:"
+  echo "  # After starting Docker Desktop, run:"
 echo "  docker run --rm -d --name falco --privileged \\"
 echo "    -v /dev:/dev -v /proc:/host/proc:ro \\"
 echo "    -e FALCO_HTTP_OUTPUT_URL=http://host.docker.internal:8082/api/internal/falco-alert \\"

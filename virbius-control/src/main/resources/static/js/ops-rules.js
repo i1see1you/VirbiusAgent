@@ -362,20 +362,12 @@ return currentLayer;
           cat: 'context'
         };
       });
-      const extVars = (extendedVars || []).filter(v => v.logical).map(v => {
-        const short = v.expr ? (v.expr.length > 48 ? v.expr.substring(0, 45) + '...' : v.expr) : '';
-        return {
-          label: 'vars.' + v.logical,
-          desc: v.logical + (short ? ' — Lua: ' + short : ''),
-          cat: 'extended'
-        };
-      });
       const colors = {
         builtin: '',
         context: 'background:#dcfce7;color:#166534',
         extended: 'background:#ede9fe;color:#5b21b6'
       };
-      const all = [...builtin, ...ctxVars, ...extVars];
+      const all = [...builtin, ...ctxVars];
       const palette = document.getElementById('asyncVarPalette');
       palette.innerHTML = all.map(v =>
         '<span class="async-var-chip" data-var="\{\{' + escAttr(v.label) + '}}" title="' + escAttr(v.desc) + '" style="' + (colors[v.cat] || '') + '">\{\{' + esc(v.label) + '}}</span>'
@@ -704,7 +696,6 @@ return currentLayer;
           'user_id', 'device_id', 'client_ip', 'session_id', 'content', 'scene', 'route_uri'
         ]);
         (contextVars || []).forEach(v => { if (v.logical) declared.add(v.logical); });
-        (extendedVars || []).forEach(v => { if (v.logical) declared.add(v.logical); });
         const warned = new Set();
         const re = /ctx\.var\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
         let m;
@@ -881,12 +872,6 @@ return currentLayer;
       const seen = new Set();
       let opts = '<option value="content">content</option>';
       (contextVars || []).forEach(v => {
-        if (v.logical && !seen.has(v.logical)) {
-          seen.add(v.logical);
-          opts += `<option value="var:${escAttr(v.logical)}">var:${esc(v.logical)}</option>`;
-        }
-      });
-      (extendedVars || []).forEach(v => {
         if (v.logical && !seen.has(v.logical)) {
           seen.add(v.logical);
           opts += `<option value="var:${escAttr(v.logical)}">var:${esc(v.logical)}</option>`;
@@ -1089,8 +1074,7 @@ return currentLayer;
       }
       if (kind === 'var') {
         return [
-          ...contextVars.map(v => v.logical),
-          ...(extendedVars || []).map(v => v.logical)
+          ...contextVars.map(v => v.logical)
         ].filter(Boolean).filter(match).map(n => ({ label: n, insert: n }));
       }
       if (kind === 'api') {

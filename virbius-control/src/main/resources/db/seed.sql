@@ -1,5 +1,5 @@
--- PoC 种子（PostgreSQL / MySQL / SQLite 通用）
--- 幂等：INSERT ... SELECT ... WHERE NOT EXISTS（不依赖 INSERT OR IGNORE / ON CONFLICT）
+-- PoC seed data (PostgreSQL / MySQL / SQLite compatible)
+-- Idempotent: INSERT ... SELECT ... WHERE NOT EXISTS (no INSERT OR IGNORE / ON CONFLICT dependency)
 
 INSERT INTO tb_tenants (tenant_id, name)
 SELECT 'default', 'Default Tenant' FROM (SELECT 1) AS _one
@@ -16,22 +16,6 @@ WHERE NOT EXISTS (
 UPDATE tb_bundles
 SET metadata_json = '{"scope":{"tenants":["default"],"scenes":["beta_chat","medical-prod_chat","medical-prod_clinical"],"apps":["beta","medical-prod"]},"scene_registry":{"version":1,"fail_on_unknown_app":false,"fail_on_unresolved_scene":false,"scenes":{"beta_chat":{"app_id":"beta","default":true,"uris":["/v1/chat/completions"],"priority":0},"medical-prod_chat":{"app_id":"medical-prod","default":true,"uris":["/v1/chat/completions"],"priority":0},"medical-prod_clinical":{"app_id":"medical-prod","uris":["/v1/chat/completions"],"priority":10,"match":{"query":{"mode":"clinical"}}}}},"gateway":{"evaluate":true,"fail_mode":"open","cloud_scan":{"agent_url":"http://127.0.0.1:9070","timeout_ms":3000},"routes":[{"uri":"/v1/chat/completions","methods":["POST"]}]}}'
 WHERE tenant_id = 'default' AND bundle_id = 'poc-default' AND version = '0.1.0';
-
--- 请求因子种子（从 metadata_json 迁出至独立表）
-INSERT INTO tb_context_bindings (tenant_id, bundle_id, version, logical, src_from, src_name, src_field, scope_json, deleted_at, updated_at)
-SELECT 'default', 'poc-default', '0.1.0', 'app_id', 'header', 'X-App-Id', NULL, NULL, NULL, CURRENT_TIMESTAMP
-FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_context_bindings WHERE tenant_id='default' AND bundle_id='poc-default' AND version='0.1.0' AND logical='app_id');
-
-INSERT INTO tb_context_bindings (tenant_id, bundle_id, version, logical, src_from, src_name, src_field, scope_json, deleted_at, updated_at)
-SELECT 'default', 'poc-default', '0.1.0', 'debug_flag', 'query', 'debug', NULL, NULL, NULL, CURRENT_TIMESTAMP
-FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_context_bindings WHERE tenant_id='default' AND bundle_id='poc-default' AND version='0.1.0' AND logical='debug_flag');
-
-INSERT INTO tb_context_bindings (tenant_id, bundle_id, version, logical, src_from, src_name, src_field, scope_json, deleted_at, updated_at)
-SELECT 'default', 'poc-default', '0.1.0', 'model_name', 'query', 'model', NULL, NULL, NULL, CURRENT_TIMESTAMP
-FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_context_bindings WHERE tenant_id='default' AND bundle_id='poc-default' AND version='0.1.0' AND logical='model_name');
 
 INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
 SELECT 'default', 'deny', 'keyword', '招嫖' FROM (SELECT 1) AS _one
@@ -69,7 +53,7 @@ INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
 SELECT 'default', 'deny', 'var', 'app_id=evil' FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'var' AND value = 'app_id=evil');
 
--- Named access lists (ListStore → gateway memory_lists / engine PolicyDataCache)
+-- Named access lists (ListStore -> gateway memory_lists / engine PolicyDataCache)
 INSERT INTO tb_access_list_meta (tenant_id, list_name, dimension, remark)
 SELECT 'default', 'deny_keyword', 'keyword', 'PoC content deny keywords' FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_access_list_meta WHERE tenant_id = 'default' AND list_name = 'deny_keyword');
@@ -114,7 +98,7 @@ INSERT INTO tb_access_list_entry (tenant_id, list_name, value)
 SELECT 'default', 'deny_var', 'evil' FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_access_list_entry WHERE tenant_id = 'default' AND list_name = 'deny_var' AND value = 'evil');
 
--- rule_history（revision=1）
+-- rule_history (revision=1)
 INSERT INTO tb_rule_history (
     tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
                   reason_code, risk_score, intent_action, scope_json, body_json,
@@ -505,8 +489,8 @@ FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_tenant_api_credential WHERE credential_id = 'poc-platform-admin-cred');
 
 -- ============================================================
--- Qwen3Guard 安全分类规则 (2026-07-04)
--- 与 application.yml 中 category-rule-mapping 对应
+-- Qwen3Guard safety classification rules (2026-07-04)
+-- Corresponds to category-rule-mapping in application.yml
 -- ============================================================
 
 INSERT INTO tb_rule_history (

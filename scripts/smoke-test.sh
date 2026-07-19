@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 端到端冒烟测试：验证 VirbiusAgent 核心组件就绪
+# End-to-end smoke test: verify VirbiusAgent core components are ready
 set -euo pipefail
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -12,7 +12,7 @@ failed=0
 
 info "===== VirbiusAgent Smoke Test ====="
 
-# 1. Rust 编译检查
+# 1. Rust compilation check
 info "Checking Rust compilation..."
 if cargo check -p virbius-core -p virbius-kernel --quiet 2>/dev/null; then
   ok "virbius-core + virbius-kernel compile"
@@ -20,7 +20,7 @@ else
   err "cargo check failed"
 fi
 
-# 2. Rust 单元测试
+# 2. Rust unit tests
 info "Running Rust unit tests..."
 cargo test -p virbius-core -p virbius-kernel 2>&1 | tail -3
 if [[ ${PIPESTATUS[0]} -eq 0 ]]; then
@@ -29,7 +29,7 @@ else
   err "Unit tests failed"
 fi
 
-# 3. 集成测试
+# 3. Integration tests
 if [[ -f virbius-core/tests/integration_test.rs ]]; then
   info "Running integration tests..."
   if cargo test -p virbius-core --test integration_test 2>&1 | tail -3; then
@@ -39,7 +39,7 @@ if [[ -f virbius-core/tests/integration_test.rs ]]; then
   fi
 fi
 
-# 4. 服务健康检查
+# 4. Service health checks
 check_service() {
   local url=$1 name=$2
   if curl -sf "$url" >/dev/null 2>&1; then
@@ -52,7 +52,7 @@ check_service() {
 check_service "http://127.0.0.1:8080/api/v1/health" "virbius-control" || true
 check_service "http://127.0.0.1:8082/admin/health" "virbius-engine" || true
 
-# 5. License + Precheck 功能测试
+# 5. License + Precheck functional test
 info "Running functional test..."
 cat > /tmp/virbius_smoke_test.py << 'PYEOF'
 import json, sys
@@ -62,7 +62,7 @@ import json, sys
 print("  Functional check: License + Precheck logic verified via Rust tests")
 PYEOF
 
-# 6. 版本信息
+# 6. Version info
 echo ""
 info "Component versions:"
 for pkg in virbius-core virbius-kernel; do

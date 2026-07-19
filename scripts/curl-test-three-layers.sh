@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # curl-test-three-layers.sh
-# 通过 virbius-control + engine 测试 global / service / tool 三层规则
+# Test global / service / tool three-layer rules via virbius-control + engine
 #
-# 前置条件:
-#   virbius-control 运行在 8080 端口
-#   virbius-engine  运行在 8082 端口
-#   tenant "default" 已存在
+# Prerequisites:
+#   virbius-control running on port 8080
+#   virbius-engine  running on port 8082
+#   tenant "default" already exists
 #
-# 说明:
-#   三条规则全用 cloud/groovy 运行时，因为 engine 只评估 cloud 层。
-#   tool 层的 BindScope 匹配需要 matchCtx.toolName()，但 engine 的
-#   EvaluateHttpController 未设置该字段，因此 tool 层判断在 Groovy 脚本
-#   内通过 ctx.var('tool_name') 实现。
+# Notes:
+#   All three rules use the cloud/groovy runtime, because the engine only
+#   evaluates the cloud layer. The tool layer's BindScope match needs
+#   matchCtx.toolName(), but the engine's EvaluateHttpController does not set
+#   that field, so the tool-layer decision is implemented inside the Groovy
+#   script via ctx.var('tool_name').
 #
 set -euo pipefail
 
@@ -88,19 +89,19 @@ print(json.dumps(req))
 ")"
 }
 
-echo "===== 三层规则测试 ====="
+echo "===== Three-layer rule test ====="
 echo "  Control: $BASE"
 echo "  Engine:  $ENGINE"
 echo "  Tenant:  $TENANT"
 echo ""
 
-# ─── 前置检查 ───
+# ─── Pre-flight checks ───
 info "Checking health..."
 curl -sf "$BASE/api/v1/health" >/dev/null 2>&1 || fail "virbius-control not ready"
 curl -sf "$ENGINE/admin/health" >/dev/null 2>&1 || fail "virbius-engine not ready"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# ─── 清理旧测试规则 ───
+# ─── Clean up old test rules ───
 info "Cleaning old test rules..."
 for rid in test_global_deny test_service_deny test_tool_challenge; do
   curl -s -X PATCH "$BASE/api/v1/admin/tenants/$TENANT/rules/$rid/status" \
@@ -109,9 +110,9 @@ done
 sleep 1
 
 # ──────────────────────────────────────────────
-# 1. global 层规则: 所有 delete_file 均 deny
+# 1. global-layer rule: deny all delete_file
 # ──────────────────────────────────────────────
-info "=== 1) global 层: 所有 app 的 delete_file 均 deny ==="
+info "=== 1) global layer: deny delete_file for all apps ==="
 upsert_rule "test_global_deny" '{
   "rule_id": "test_global_deny",
   "layer": "cloud",
@@ -125,9 +126,9 @@ upsert_rule "test_global_deny" '{
 }'
 
 # ──────────────────────────────────────────────
-# 2. service 层规则: 仅 medical-prod 的 db_write deny
+# 2. service-layer rule: deny db_write only for medical-prod
 # ──────────────────────────────────────────────
-info "=== 2) service 层: 仅 medical-prod 的 db_write deny ==="
+info "=== 2) service layer: deny db_write only for medical-prod ==="
 upsert_rule "test_service_deny" '{
   "rule_id": "test_service_deny",
   "layer": "cloud",
@@ -144,11 +145,11 @@ upsert_rule "test_service_deny" '{
 }'
 
 # ──────────────────────────────────────────────
-# 3. tool 层规则: 仅 delete_file 走 challenge
+# 3. tool-layer rule: challenge only for delete_file
 # ──────────────────────────────────────────────
-# 注: engine 的 MatchContext.toolName 为 null，bind_scope=tool 不匹配
-# 改用 bind_scope=service（app_id 维度），groovy 脚本内部判断 tool_name
-info "=== 3) tool 层: 仅 medical-prod 的 delete_file 触发 challenge ==="
+# Note: engine's MatchContext.toolName is null, so bind_scope=tool does not match.
+# Use bind_scope=service (app_id dimension) instead; the Groovy script checks tool_name internally.
+info "=== 3) tool layer: trigger challenge on delete_file for medical-prod ==="
 upsert_rule "test_tool_challenge" '{
   "rule_id": "test_tool_challenge",
   "layer": "cloud",
@@ -165,9 +166,9 @@ upsert_rule "test_tool_challenge" '{
 }'
 
 # ──────────────────────────────────────────────
-# 4. 激活 + 发布 + 重启 engine
+# 4. Activate + publish + restart engine
 # ──────────────────────────────────────────────
-info "=== 4) 激活并发布 ==="
+info "=== 4) Activate and publish ==="
 for rid in test_global_deny test_service_deny test_tool_challenge; do
   activate_rule "$rid"
   set_canary "$rid"
@@ -176,10 +177,10 @@ publish_rules
 restart_engine
 
 # ──────────────────────────────────────────────
-# 5. 验证三层命中
+# 5. Verify the three layers are hit
 # ──────────────────────────────────────────────
 info ""
-info "=== 5) 验证三层命中 ==="
+info "=== 5) Verify three-layer hits ==="
 
 assert_action() {
   local label="$1" app_id="$2" tool_name="$3" tool_args="$4" expect="$5"
@@ -199,35 +200,35 @@ print(r.get('effective_action', '?'))
   fi
 }
 
-# 5a: global 层 — global 规则对所有 app 生效
-assert_action "5a  global 层: medical-prod 调 delete_file → block" \
+# 5a: global layer — global rule applies to all apps
+assert_action "5a  global layer: medical-prod delete_file → block" \
   "medical-prod" "delete_file" '{"path":"/tmp/x"}' "block"
 
-# 5b: service 层 — beta 不应命中 medical-prod 规则
-assert_action "5b  service 层: beta 调 db_write → allow (非 medical-prod)" \
+# 5b: service layer — beta should not hit the medical-prod rule
+assert_action "5b  service layer: beta db_write → allow (not medical-prod)" \
   "beta" "db_write" '{"sql":"select 1"}' "allow"
 
-# 5c: service 层 — medical-prod 调 db_write → block
-assert_action "5c  service 层: medical-prod 调 db_write → block" \
+# 5c: service layer — medical-prod db_write → block
+assert_action "5c  service layer: medical-prod db_write → block" \
   "medical-prod" "db_write" '{"sql":"select 1"}' "block"
 
-# 5d: tool 层 — read_file 不应命中 delete_file 规则
-assert_action "5d  tool 层: medical-prod 调 read_file → allow（不是 delete_file）" \
+# 5d: tool layer — read_file should not hit the delete_file rule
+assert_action "5d  tool layer: medical-prod read_file → allow (not delete_file)" \
   "medical-prod" "read_file" '{"path":"/etc/hosts"}' "allow"
 
-# 5e: tool 层 — delete_file → challenge
-assert_action "5e  tool 层: medical-prod 调 delete_file → challenge" \
+# 5e: tool layer — delete_file → challenge
+assert_action "5e  tool layer: medical-prod delete_file → challenge" \
   "medical-prod" "delete_file" '{"path":"/tmp/x"}' "challenge"
 
 # ──────────────────────────────────────────────
-# 6. 清理
+# 6. Cleanup
 # ──────────────────────────────────────────────
 info ""
-info "=== 6) 清理测试规则 ==="
+info "=== 6) Clean up test rules ==="
 for rid in test_global_deny test_service_deny test_tool_challenge; do
   curl -s -X PATCH "$BASE/api/v1/admin/tenants/$TENANT/rules/$rid/status" \
     -H 'Content-Type: application/json' -d '{"rule_status":"archived"}' >/dev/null && ok "Archived $rid" || true
 done
 
 echo ""
-echo -e "${GREEN}===== 测试完成 =====${NC}"
+echo -e "${GREEN}===== Test complete =====${NC}"

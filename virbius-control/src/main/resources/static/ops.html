@@ -276,7 +276,7 @@
         <button type="button" class="nav-item" data-tab="audit-center"><span class="nav-icon">🔍</span><span class="nav-label" data-i18n="nav.audit-center">审计中心</span></button>
         <button type="button" class="nav-item" data-tab="monitor"><span class="nav-icon">📈</span><span class="nav-label" data-i18n="nav.monitor">监控中心</span></button>
 <button type="button" class="nav-item" data-tab="challenge"><span class="nav-icon">🔐</span><span class="nav-label" data-i18n="nav.challenge">审批队列</span></button>
-        <button type="button" class="nav-item" data-tab="trace"><span class="nav-icon">🧬</span><span class="nav-label">决策链路</span></button>
+        <button type="button" class="nav-item" data-tab="trace"><span class="nav-icon">🧬</span><span class="nav-label" data-i18n="nav.trace">决策链路</span></button>
       </nav>
     </aside>
 
@@ -290,15 +290,15 @@
         <button type="button" id="btnLangSwitch" class="secondary" style="margin-left:0.5rem;font-size:0.75rem;padding:0.25rem 0.5rem" onclick="setLocale(window._locale === 'zh' ? 'en' : 'zh')">EN</button>
       </header>
       <input type="hidden" id="bundleId" value="poc-default" />
-        <input type="text" id="bundleVer" placeholder="版本号，留空自动递增" size="14" style="display:none" />
+        <input type="text" id="bundleVer" data-i18n-placeholder="topbar.bundle-ver-placeholder" placeholder="版本号，留空自动递增" size="14" style="display:none" />
       <div class="main-scroll">
 
   <div id="panel-tenants" class="panel card">
     <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="tenants.title">租户与 API 凭证</h2>
     <p class="hint" data-i18n-html="tenants.desc">角色：<code>tenant_viewer</code>（Edge manifest + 只读）、<code>tenant_admin</code>（写/放量/发布/本租户 Key）、<code>platform_admin</code>（租户管理）。鉴权开启时（<code>VIRBIUS_API_KEY_AUTH_ENABLED=true</code>）请在顶栏填写 API Key。</p>
     <div class="row" style="margin-bottom:0.75rem">
-      <input id="newTenantId" placeholder="tenant_id (小写)" size="14" />
-      <input id="newTenantName" placeholder="显示名称" size="18" />
+      <input id="newTenantId" data-i18n-placeholder="tenants.placeholder-id" placeholder="tenant_id (小写)" size="14" />
+      <input id="newTenantName" data-i18n-placeholder="tenants.placeholder-name" placeholder="显示名称" size="18" />
       <button type="button" id="btnCreateTenant" data-i18n="tenants.btn-create">新建租户</button>
       <button type="button" id="btnReloadTenants" data-i18n="common.refresh">刷新</button>
     </div>
@@ -312,7 +312,7 @@
         <option value="tenant_viewer">tenant_viewer</option>
         <option value="tenant_admin">tenant_admin</option>
       </select>
-      <input id="issueCredLabel" placeholder="备注（可选）" size="20" />
+      <input id="issueCredLabel" data-i18n-placeholder="tenants.remark-label" placeholder="备注（可选）" size="20" />
       <button type="button" id="btnIssueCred" data-i18n="tenants.btn-issue-key">签发 Key</button>
       <button type="button" id="btnIssuePlatformCred" data-i18n="tenants.btn-issue-platform">签发 platform_admin</button>
     </div>
@@ -333,7 +333,7 @@
 <tbody id="toolTableBody"></tbody>
 </table>
 <div id="toolEditor" style="display:none;margin-top:0.5rem;padding:0.75rem;border:1px solid var(--border);border-radius:4px">
-  <h3 style="margin:0 0 0.5rem;font-size:0.9rem" id="toolEditorTitle">新建工具</h3>
+  <h3 style="margin:0 0 0.5rem;font-size:0.9rem" id="toolEditorTitle" data-i18n="tools.editor-title-new">新建工具</h3>
   <div class="row" style="flex-wrap:wrap;gap:0.5rem">
     <label>tool_name <input id="fToolName" placeholder="read_file" style="min-width:10rem" /></label>
     <label>risk_class
@@ -352,7 +352,7 @@
       </select>
     </label>
     <label>timeout_ms <input id="fToolTimeoutMs" type="number" min="1000" max="300000" value="30000" style="width:6rem" /></label>
-    <label><input type="checkbox" id="fToolFastPath" /> fast_path (跳过 Engine 扫描)</label>
+    <label><input type="checkbox" id="fToolFastPath" /> fast_path (<span data-i18n="tools.fastpath-hint">跳过 Engine 扫描</span>)</label>
   </div>
   <div class="row" style="margin-top:0.5rem">
     <label style="flex:1">allowed_args_schema (JSON Schema)
@@ -360,7 +360,7 @@
     </label>
   </div>
   <div class="row" style="margin-top:0.5rem">
-    <label style="flex:1">description <input id="fToolDescription" placeholder="工具描述" style="width:100%" /></label>
+    <label style="flex:1">description <input id="fToolDescription" data-i18n-placeholder="tools.placeholder-desc" placeholder="工具描述" style="width:100%" /></label>
   </div>
   <div class="row" style="margin-top:0.5rem">
     <button type="button" id="btnSaveTool" data-i18n="tools.btn-save">保存</button>
@@ -384,17 +384,17 @@
       <span id="listVarWrap" style="display:none">
         <label><span data-i18n="lists.dim-logical">逻辑变量</span>
           <select id="listVarLogical" style="min-width:8rem"></select>
-          <input id="listVarLogicalCustom" placeholder="或输入" style="width:7rem" />
+          <input id="listVarLogicalCustom" data-i18n-placeholder="common.or-enter" placeholder="或输入" style="width:7rem" />
         </label>
       </span>
-      <input id="newListRemark" placeholder="名单备注" style="min-width:10rem" />
+      <input id="newListRemark" data-i18n-placeholder="lists.placeholder-remark-list" placeholder="名单备注" style="min-width:10rem" />
       <button type="button" id="btnListCreate" data-i18n="lists.btn-create">新建名单</button>
     </div>
     <div class="row">
       <select id="entryListName" style="min-width:12rem"><option value="" data-i18n="lists.placeholder-select">选择名单</option></select>
-      <input id="entryVal" placeholder="值" style="min-width:10rem" />
-      <input id="entryExpires" placeholder="过期(ISO，可空)" style="min-width:14rem" />
-      <input id="entryRemark" placeholder="明细备注" style="min-width:8rem" />
+      <input id="entryVal" data-i18n-placeholder="lists.placeholder-value" placeholder="值" style="min-width:10rem" />
+      <input id="entryExpires" data-i18n-placeholder="lists.placeholder-expires" placeholder="过期(ISO，可空)" style="min-width:14rem" />
+      <input id="entryRemark" data-i18n-placeholder="lists.placeholder-remark-entry" placeholder="明细备注" style="min-width:8rem" />
       <button type="button" id="btnListAdd" data-i18n="lists.btn-add-entry">添加明细</button>
     </div>
     <table id="listsTable">
@@ -437,7 +437,7 @@
             </label>
             <label id="cumVarWrap" style="display:none"><span data-i18n="cum.label-logical">逻辑变量</span>
               <select id="cumVarLogical" style="min-width:8rem"></select>
-              <input id="cumVarLogicalCustom" placeholder="或输入" style="width:7rem" />
+              <input id="cumVarLogicalCustom" data-i18n-placeholder="common.or-enter" placeholder="或输入" style="width:7rem" />
             </label>
             <label><span data-i18n="cum.label-status">status</span>
               <select id="cumStatus"><option value="active">active</option><option value="disabled">disabled</option></select>
@@ -489,8 +489,8 @@
       <tbody></tbody>
     </table>
     <div class="row" style="margin-top:0.5rem;flex-wrap:wrap">
-      <input id="srSceneId" placeholder="scene_id（如 beta_chat）" size="18" />
-      <input id="srAppId" placeholder="app_id（如 beta）" size="12" />
+      <input id="srSceneId" data-i18n-placeholder="sr.placeholder-scene" placeholder="scene_id（如 beta_chat）" size="18" />
+      <input id="srAppId" data-i18n-placeholder="sr.placeholder-app" placeholder="app_id（如 beta）" size="12" />
       <label style="flex-direction:row;align-items:center;gap:0.25rem;margin:0"><input type="checkbox" id="srDefault" /> default</label>
       <div id="srUrisContainer" class="uri-chip-container" style="min-width:16rem;flex:1"></div>
       <input id="srPriority" type="number" value="0" style="width:4rem" />
@@ -523,7 +523,7 @@
       <tbody></tbody>
     </table>
     <div class="row" style="margin-top:0.5rem;flex-wrap:wrap">
-      <input id="grUri" placeholder="/v1/chat/* 或 /v1/chat/completions" size="28" />
+      <input id="grUri" data-i18n-placeholder="gw.placeholder-uri" placeholder="/v1/chat/* 或 /v1/chat/completions" size="28" />
       <input id="grMethods" placeholder="POST" size="8" value="POST" />
       <button type="button" id="btnGwRouteAdd" data-i18n="gw.btn-add-uri">添加入口 URI</button>
       <button type="button" id="btnSaveGatewayRoutes" data-i18n="gw.btn-save">保存路由</button>
@@ -610,7 +610,7 @@
           <span id="wListWrap"><label><span data-i18n="lists.title">名单</span> <select id="wListName"></select></label></span>
           <span id="wCumWrap">
             <label><span data-i18n="cum.title">累计</span> <select id="wCumName"></select></label>
-            <label>比较
+            <label><span data-i18n="rules.compare">比较</span>
               <select id="wCompare">
                 <option value="gte">≥</option>
                 <option value="gt">&gt;</option>
@@ -745,8 +745,8 @@
               <option value="clinical_chat">clinical_chat</option>
               <option value="beta_chat">beta_chat</option>
               <option value="l3_prior">L3 + prior_signals</option>
-              <option value="cum_over_limit">累计超限</option>
-              <option value="force_list_hit">强制名单命中</option>
+              <option value="cum_over_limit" data-i18n="rules.preset-cum-over-limit">累计超限</option>
+              <option value="force_list_hit" data-i18n="rules.preset-force-list-hit">强制名单命中</option>
             </select>
           </label>
           <button type="button" class="secondary" id="btnSimFixtureApplyPreset" data-i18n="rules.sim-load-preset">载入预设</button>
@@ -773,7 +773,7 @@
       <p class="hint" data-i18n-html="rollout.machine-deploy-desc">按机器 <code>bucket</code> 分池：<code>PENDING→CANARY(5/20/50)→FULL(100)→FINALIZED</code>。Edge 按 <code>device_id</code> CRC32C hash 分池灰度，与 engine/gateway 共用同一份 canary%。</p>
       <div id="drStatusBar" class="kpi-grid" style="margin-bottom:0.5rem"></div>
       <div id="drActions" class="row" style="flex-wrap:wrap;gap:0.4rem">
-        <input id="drDescription" placeholder="变更说明" size="24" />
+        <input id="drDescription" data-i18n-placeholder="rollout.desc-placeholder" placeholder="变更说明" size="24" />
         <button type="button" id="drPrepareEngine" data-i18n="rollout.btn-prepare-engine">📦 准备 Engine</button>
         <button type="button" id="drPrepareGateway" class="secondary" data-i18n="rollout.btn-prepare-gateway">📦 准备 Gateway</button>
         <button type="button" id="drPrepareEdge" class="secondary" data-i18n="rollout.btn-prepare-edge">📡 准备 Edge</button>
@@ -849,7 +849,7 @@
       <div class="row" style="margin-top:0.5rem;flex-wrap:wrap;align-items:center;gap:0.5rem">
         <button type="button" id="roApply" data-i18n="rollout.btn-next">升级 / 下一步</button>
         <label style="flex-direction:row;align-items:center;gap:0.25rem"><input type="checkbox" id="roForce" /> <span data-i18n="rollout.force-bypass">force 绕过</span></label>
-        <input id="roForceComment" placeholder="force 说明（勾选 force 时必填）" style="min-width:14rem" />
+        <input id="roForceComment" data-i18n-placeholder="rollout.placeholder-force" placeholder="force 说明（勾选 force 时必填）" style="min-width:14rem" />
       </div>
       <p class="hint" id="roSuggestedHint"></p>
     </div>
@@ -890,7 +890,7 @@
     <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="ac.title">审计中心</h2>
     <p class="hint" data-i18n-html="ac.desc">按 <code>trace_id</code> 查询 <code>tb_audit_events</code>（review/block/challenge 及采样命中的 allow 事件）。未采样的 allow 请求仅归档为 JSONL，不在此查询。</p>
     <div class="row">
-      <label>trace_id <input id="acTraceId" placeholder="输入 trace_id" style="min-width:22rem" autocomplete="off" /></label>
+      <label>trace_id <input id="acTraceId" data-i18n-placeholder="audit.placeholder-trace" placeholder="输入 trace_id" style="min-width:22rem" autocomplete="off" /></label>
       <button type="button" id="acSearch" data-i18n="ac.btn-search">查询</button>
     </div>
     <p class="hint" id="acSummary"></p>
@@ -991,7 +991,7 @@
     <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="challenge.title">审批队列</h2>
     <p class="hint" data-i18n-html="challenge.desc">高风险工具调用被 <code>challenge</code> 规则拦截后进入此队列。审批通过后生成一次性 token，Agent 凭 token 重试调用。</p>
     <div class="row" style="align-items:center;margin-bottom:0.5rem">
-      <span class="kpi-card"><span class="label">待审批</span><span class="value" id="chPendingCount">0</span></span>
+      <span class="kpi-card"><span class="label" data-i18n="challenge.kpi-pending">待审批</span><span class="value" id="chPendingCount">0</span></span>
       <button type="button" class="secondary" id="chRefresh" data-i18n="challenge.btn-refresh">刷新</button>
     </div>
     <table class="data-table" style="width:100%">
@@ -1012,13 +1012,13 @@
   </div>
 
   <div id="panel-trace" class="panel card">
-    <h2 style="margin:0 0 0.5rem;font-size:1rem">Agent 决策链路追踪</h2>
-    <p class="hint">追踪 Agent 完整决策链路：输入 → 推理 → 工具调用 → 工具结果 → 输出。点击搜索结果行查看完整 Session 链路时间线。</p>
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="trace.title">Agent 决策链路追踪</h2>
+    <p class="hint" data-i18n-html="trace.desc">追踪 Agent 完整决策链路：输入 → 推理 → 工具调用 → 工具结果 → 输出。点击搜索结果行查看完整 Session 链路时间线。</p>
 
     <div class="row" style="margin-bottom:0.75rem">
-      <input id="traceSearchTool" placeholder="工具名" size="14" />
+      <input id="traceSearchTool" data-i18n-placeholder="trace.placeholder-tool" placeholder="工具名" size="14" />
       <select id="traceSearchType">
-        <option value="">全部类型</option>
+        <option value="" data-i18n="trace.type-all">全部类型</option>
         <option value="input">input</option>
         <option value="reasoning">reasoning</option>
         <option value="tool_call">tool_call</option>
@@ -1026,41 +1026,41 @@
         <option value="output">output</option>
       </select>
       <select id="traceSearchDecision">
-        <option value="">全部决策</option>
+        <option value="" data-i18n="trace.decision-all">全部决策</option>
         <option value="allow">allow</option>
         <option value="block">block</option>
         <option value="challenge">challenge</option>
       </select>
       <input id="traceSearchLimit" type="number" value="50" min="1" max="500" size="5" />
-      <button type="button" id="btnTraceSearch">搜索</button>
-      <button type="button" class="secondary" id="btnTraceRefresh">刷新</button>
+      <button type="button" id="btnTraceSearch" data-i18n="trace.btn-search">搜索</button>
+      <button type="button" class="secondary" id="btnTraceRefresh" data-i18n="trace.btn-refresh">刷新</button>
     </div>
 
     <table class="data-table" style="width:100%;margin-bottom:1.5rem">
       <thead><tr>
         <th>Trace ID</th>
         <th>Session</th>
-        <th>类型</th>
-        <th>工具</th>
-        <th>决策</th>
-        <th>风险</th>
-        <th>耗时</th>
-        <th>时间</th>
+        <th data-i18n="trace.header-type">类型</th>
+        <th data-i18n="trace.header-tool">工具</th>
+        <th data-i18n="trace.header-decision">决策</th>
+        <th data-i18n="trace.header-risk">风险</th>
+        <th data-i18n="trace.header-duration">耗时</th>
+        <th data-i18n="trace.header-time">时间</th>
       </tr></thead>
       <tbody id="traceSearchBody">
-        <tr><td colspan="8" class="empty-state">点击「搜索」查看决策链路</td></tr>
+        <tr><td colspan="8" class="empty-state" data-i18n="trace.empty-hint">点击「搜索」查看决策链路</td></tr>
       </tbody>
     </table>
 
     <h3 style="margin:1rem 0 0.5rem;font-size:0.95rem">
-      Session 时间线 · <code id="traceTimelineSession">—</code>
+      <span data-i18n="trace.timeline-title">Session 时间线</span> · <code id="traceTimelineSession">—</code>
     </h3>
     <div id="traceTimelineContainer" style="min-height:4rem">
-      <p class="hint">点击上方搜索结果行查看完整链路</p>
+      <p class="hint" data-i18n="trace.timeline-hint">点击上方搜索结果行查看完整链路</p>
     </div>
 
     <div class="rollout-section">
-      <h3>Ingest 健康状态</h3>
+      <h3 data-i18n="trace.ingest-title">Ingest 健康状态</h3>
       <div id="traceIngestStatus"></div>
     </div>
   </div>

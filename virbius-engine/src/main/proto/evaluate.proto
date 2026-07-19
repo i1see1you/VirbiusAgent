@@ -15,7 +15,7 @@ message EvaluateRequest {
   string session_id = 4;
   string content = 5;
   bool is_stream_chunk = 6;
-  repeated Signal prior_signals = 7;  // gateway→engine 内部；不出现在响应
+  repeated Signal prior_signals = 7;  // gateway->engine internal; not exposed in response
   string trace_id = 8;
   string user_id = 9;
   string device_id = 10;
@@ -36,7 +36,7 @@ message Signal {
   optional int32 canary_percent = 9;   // optional; 0 = unset
 }
 
-// 对外扁平响应（与 HTTP EvaluateResponseDto / gateway-agent 对齐）
+// Flat external response (aligned with HTTP EvaluateResponseDto / gateway-agent)
 message EvaluateResponse {
   string effective_action = 1;  // allow | block | challenge | review
   int32 max_risk_score = 2;

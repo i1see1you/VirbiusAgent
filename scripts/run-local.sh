@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本地启动 VirbiusAgent（control + engine + tests）
+# Start VirbiusAgent locally (control + engine + tests)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

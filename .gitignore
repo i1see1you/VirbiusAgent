@@ -23,3 +23,10 @@ __pycache__/
 # Generated
 *.log
 .env
+
+# Runtime data (databases, logs, generated artifacts)
+data/*.db
+data/*.db-*
+*.sqlite
+*.sqlite3
+data/**/*.log

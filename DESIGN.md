@@ -2,7 +2,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v3.5 |
+| 文档版本 | v3.6 |
 | 状态 | 草案 |
 | 关联 | [README.md](README.md) |
 | 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
@@ -405,7 +405,7 @@ VirbiusAgent/
 
 ## 12. Agent 安全风险评估框架
 
-> 面向企业安全负责人，提供系统化的 Agent 安全风险评估方法论。本框架从攻击面分析、七维风险评估、评估方法论三个层面展开。
+> 面向企业安全负责人，提供系统化的 Agent 安全风险评估方法论。本框架从攻击面分析、七维风险评估、评估方法论、LASM 七层攻击面模型对照四个层面展开。
 
 ### 12.1 Agent 独有攻击面
 
@@ -597,6 +597,130 @@ if session_risk > 30: 提升审计采样率
 | 决策链路追踪 | Trace Collector + Ingest + 可视化 | P1 | ✅ 已完成 |
 | 显式信任分层 | TrustTagger + TrustViolationDetector | P1.10 | ✅ 已完成（Edge 端包裹 `<trust_boundary>` + Engine 端违规检测，详见 [§13.10](#1310-显式信任分层explicit-trust-layering)） |
 | 规划劫持检测 | IntentAnchor + PlanDriftDetector | P1.11 | ⏳ 设计完成（详见 [§13.11](#1311-规划劫持检测plan-hijacking-detection)） |
+
+### 12.5 LASM 七层攻击面模型对照
+
+> 本节引入 LASM（Layered Attack Surface Model，分层攻击面模型）作为攻击面视角的参考框架，与 §12.1 的攻击面列表、§12.2 的七维风险评估、§12.4 的安全保障对照形成互补。LASM 按**系统结构**归类威胁（"攻击发生在系统的哪一层"），而 §12.1/§12.2 按**攻击类型/评估维度**归类——两者正交。
+>
+> **参考来源**：
+> - LASM 综述论文：[arXiv:2604.23338](https://arxiv.org/abs/2604.23338)（2026-04-25 发布，v2 修订于 2026-05-06，58 页，编码 116 篇论文）
+> - [LASM：用七层地图标出智能体攻击领先于防御的位置](https://www.llm-hacking.com/zh/hacks/lasm-layered-attack-surface-agents.md/)
+> - [LASM：Agent 安全的七层攻击面](https://moanju.org/posts/lasm-agent-security-seven-layers/)
+
+#### 12.5.1 LASM 简介
+
+传统 Agent 安全分类法（如 OWASP LLM Top 10、MITRE ATLAS）按**攻击类型**归类威胁（提示注入、越狱、数据投毒），这对命名一起事件有用，却模糊了*它在系统中的位置*。LASM 改按**结构**归类——威胁究竟存在于智能体的哪个部位，又会在何种时间尺度上展开。
+
+LASM 是一个 **7 层 × 4 类时间性**的网格：
+
+- **纵轴（七层攻击面）**：Agent 技术栈的结构分解（L1~L7，见 §12.5.2）
+- **横轴（四类时间性）**：攻击载荷从植入到造成危害的时间跨度（T1~T4，见 §12.5.3）
+
+论文的核心发现：低层与短时间尺度（L2 Cognitive 层、T1 即时注入）研究拥挤；而**高层（L6 Ecosystem、L7 Governance）以及长周期、跨层传播的格子则稀疏甚至空白**。多个有记录的攻击区域*没有任何对应防御*，而当前基准测试对跨会话或会话内跨层的失效模式*毫无覆盖*。
+
+> **与 VirbiusAgent 视角的关系**：VirbiusAgent 的"端管核云"是**部署拓扑视角**，"三层安全架构"（身份管控 / 运行时防护 / 基础设施）是**功能编排视角**，而 LASM 七层是**攻击面视角**。三者正交互补，同一功能可跨多层部署。
+
+#### 12.5.2 L1~L7 各层定义
+
+> 以下定义严格基于 LASM 原论文（arXiv:2604.23338v2）。
+
+| 层级 | 名称 | 包含内容 | 核心风险 | 典型攻击 |
+|------|------|---------|---------|---------|
+| **L1** | **Foundation**（基础模型层） | 基础模型权重与训练管线 | 模型后门、对齐失效、训练数据污染、对抗提示、jailbreak | 后门模型、训练数据投毒、权重提取 |
+| **L2** | **Cognitive**（认知层） | 推理、规划、提示接口 | **信任倒置**：外部数据被当作高优先级指令执行；规划链路被诱导偏转 | 间接 prompt 注入（工具返回值中嵌入指令）、规划劫持 |
+| **L3** | **Memory**（记忆层） | 跨轮次与跨会话的持久状态 | 记忆投毒、潜伏载荷、慢性漂移 | Trojan Hippo（潜伏记忆外泄）、MemMorph（记忆投毒劫持工具） |
+| **L4** | **Tool Execution**（工具执行层） | 工具/函数调用、代码、外部副作用 | 工具链滥用、权限放大、SSRF、数据外泄 | `read_file` → `write_file` 覆盖关键配置；`http_get` 访问云元数据 |
+| **L5** | **Multi-Agent Coordination**（多 Agent 协同层） | 智能体之间的委派与消息传递 | 委派滥用、消息链路篡改、网络级风险扩散 | 恶意 Agent 向协同网络注入指令；委派权限放大 |
+| **L6** | **Ecosystem**（生态与供应链层） | 注册表、市场、MCP 服务器、插件、框架、提示模板、依赖库 | 供应链篡改、注册表信任滥用、依赖混淆 | skill.md 注册表供应链攻击、恶意 MCP Server、slopsquatting |
+| **L7** | **Governance**（治理层） | 策略、审计、身份、访问控制 | 治理绕过、审计篡改、问责缺失、访问控制失效 | 篡改审计日志绕过追责；策略降级攻击 |
+
+> **关键洞察**（论文原文）：LASM 没有把这七层理解成"七个孤立模块"，而是看作一条**纵向贯通的风险链**——现实中的 Agent 攻击往往从一层进入，穿透到另一层，最后在更高影响的位置释放。例如：工具返回值（L4）改写记忆（L3），记忆随后引导规划（L2）——这就是 T4"会话内跨层传播"。
+
+#### 12.5.3 四类攻击时间性
+
+| 时间性 | 含义 | 示例 |
+|--------|------|------|
+| **T1 即时攻击** | 载荷和危害都发生在同一次推理里 | 经典 prompt injection、越狱 |
+| **T2 单会话持久** | 在同一个会话中持续影响后续多轮行为 | 上下文污染、会话内规划偏转 |
+| **T3 跨会话累积** | 在多个会话中缓慢累积 | 长期记忆投毒、语料缓慢漂移 |
+| **T4 参数级 / 跨层传播** | 深入模型参数/训练过程/生态依赖；或在一次运行内跨层扩散 | 后门模型；工具结果→记忆→规划的跨层传播 |
+
+> 论文指出：当前大量安全防护擅长检测 T1，部分产品可以覆盖 T2，但只要风险变成 T3 或 T4，传统的单轮检测、单次审查、单会话红队方法往往就很难奏效。
+
+#### 12.5.4 VirbiusAgent 对每层的覆盖矩阵
+
+| LASM 层 | VirbiusAgent 能力 | 对应组件 | 设计章节 | 时间性覆盖 | 状态 |
+|---------|-------------------|---------|---------|-----------|------|
+| **L1 Foundation** | ⚠️ 不直接覆盖（模型安全属供应商责任） | — | — | — | ❌ 超出范围 |
+| | 宪法注入约束模型行为（间接缓解） | Prompt Gateway | §2.8 | T1 | 🔧 间接 |
+| **L2 Cognitive** | Prompt 注入检测（qwen3guard:0.6b） | Engine `PromptInjectionDetector` | §13.1 | T1 | ✅ 已完成 |
+| | **显式信任分层**（TrustTagger + TrustBoundaryInjector + TrustViolationDetector） | `virbius-core/src/trust.rs` + Engine | §13.10 | T1/T2 | ✅ 已完成 |
+| | **规划劫持检测**（IntentAnchor + PlanDriftDetector） | Engine | §13.11 | T2/T3 | ⏳ 设计完成 |
+| | STI Taint 语义审计（工具返回值注入检测） | Engine `/v1/tool-result` | §13.2 | T1 | ✅ 已完成 |
+| | Prompt Gateway 宪法注入 + PII 脱敏 | `virbius-core` Prompt Gateway | §2.8 | T1 | ✅ 已完成 |
+| | Session Risk 自适应模型 | Engine `SessionRiskManager` + Redis | §13.3 | T1/T2 | ✅ 已完成 |
+| **L3 Memory** | **记忆管控**（MemoryInterceptor：PII 脱敏 + 凭据检测 + LLM 注入检测） | `virbius-core/src/memory_interceptor.rs` | §13.6 | T2/T3 | 🔧 写入拦截已实现；读取拦截 + 框架集成待实现 |
+| | MCP Proxy 写入拦截（14 种记忆工具前缀匹配） | `virbius-mcp-proxy/router.rs` | §2.9 | T2/T3 | ✅ 已实现 |
+| | Engine `/v1/memory/check`（LLM 注入检测） | `EvaluateOrchestrator.checkMemory` | §13.6 | T2/T3 | ✅ 已实现 |
+| **L4 Tool Execution** | 端层预检（参数校验 + allowlist + JSON Schema） | `virbius-core` + `virbius-mcp-proxy` | §2.1 | T1 | ✅ 已完成 |
+| | 管层 WASM（allowlist + 计数 + 快速通道） | `virbius-gateway/wasm/` | §3.2 | T1 | ✅ 已完成 |
+| | 云层 Groovy L3 终判（工具链检测） | `virbius-groovy-l3` + Engine | §5.3 | T1/T2 | ✅ 已完成 |
+| | 高风险人工审批（Challenge 全链路） | Engine + Control Dashboard | PROTOCOL.md | T1 | ✅ 已完成 |
+| | 累计计数器（双层计数） | Engine `CounterStore.ingest` | §13.9 | T1/T2 | ✅ 已完成 |
+| | 内核级沙箱（Landlock + capset + prctl + gVisor） | `virbius-core/src/sandbox/landlock.rs` | §2.3/§2.4 | T1 | ✅ 已实现 |
+| | 输出审查（工具结果 + Agent 最终响应） | MCP Proxy → Engine `/v1/evaluate` | §13.7 | T1 | ✅ 工具结果审查完成；Agent 最终输出待集成 |
+| **L5 Multi-Agent Coordination** | ⚠️ 几乎未覆盖（当前为单 Agent 架构） | — | — | — | ❌ 缺口 |
+| | MCP Proxy 多上游路由（部分相关） | `virbius-mcp-proxy/upstream.rs` | §2.6.1 | T1 | 🔧 仅路由，无协同安全 |
+| | A2A 路由（设计提及） | §6.1 | — | — | ⏳ 设计提及 |
+| **L6 Ecosystem** | License 签发/校验/吊销（Agent 身份全生命周期） | `virbius-control` + 端/管/云三层校验 | §1.4 | T1/T2 | ✅ 已完成 |
+| | MCP Server 多上游路由 + 工具名冲突防护 | `virbius-mcp-proxy/router.rs` | §2.6.1 | T1 | ✅ 已完成 |
+| | MCP Server 完整性校验 | — | §12.2 维度 7 | — | ❌ 未实现 |
+| | AgentBOM（Agent 物料清单） | — | — | — | ❌ 未实现 |
+| **L7 Governance** | 审计完整性（Hash Chain 防篡改） | `virbius-control/audit/` | §13.5 | T1-T4 | ✅ 已完成 |
+| | 决策链路追踪（tool_call/tool_result 全链路） | `virbius-mcp-proxy/trace_collector.rs` | §6.2.1 | T1/T2 | ✅ 已完成 |
+| | Falco eBPF 观测（syscall/网络/文件） | `virbius-kernel` + Falco 规则库 | §4/§13.4 | T1/T2 | ✅ 已完成 |
+| | 运营台审计大盘（session risk + 告警 + 审批队列） | `virbius-control` | §5.6 | T1-T4 | ✅ 已完成 |
+| | 治理策略下发（灰度发布 + 策略一致性） | `virbius-control` PublishOrchestrator | §7 | T1/T2 | ✅ 已完成 |
+
+#### 12.5.5 覆盖度汇总
+
+**按 LASM 七层**：
+
+```
+L1 Foundation            ░░░░░░░░░░░░░░░░░░░░   5%   超出范围，仅宪法注入间接缓解
+L2 Cognitive             ████████████████████  95%   信任分层 ✅ / 规划劫持 ⏳
+L3 Memory                ████████████████░░░░  80%   写入拦截 ✅ / 读取拦截 ❌
+L4 Tool Execution        ████████████████████ 100%   全链路覆盖
+L5 Multi-Agent           ██░░░░░░░░░░░░░░░░░░  10%   仅多上游路由，无协同安全
+L6 Ecosystem             ██████████████░░░░░░  70%   License ✅ / 完整性校验 ❌ / AgentBOM ❌
+L7 Governance            ████████████████████ 100%   审计 ✅ / 追踪 ✅ / 观测 ✅ / 策略 ✅
+```
+
+**按时间性**：
+
+```
+T1 即时攻击              ████████████████████ 100%   Prompt 注入检测 + 工具拦截 + 沙箱
+T2 单会话持久            ██████████████████░░  90%   Session Risk + 信任分层 + 记忆写入拦截
+T3 跨会话累积            ██████████████░░░░░░  70%   记忆拦截部分覆盖 / 规划劫持检测 ⏳
+T4 参数级/跨层传播       ██████████░░░░░░░░░░  50%   审计 Hash Chain ✅ / 跨层传播检测不足
+```
+
+#### 12.5.6 关键缺口与补齐路径
+
+LASM 论文指出：**高层（Ecosystem、Governance）以及长周期、跨层传播的格子则稀疏甚至空白**。VirbiusAgent 的缺口与此高度吻合：
+
+| LASM 指出的空白格 | VirbiusAgent 缺口 | 补齐方案 | 优先级 |
+|------------------|-------------------|---------|--------|
+| **L5 Multi-Agent**（T2/T3） | 多 Agent 协同安全完全缺失 | A2A 消息链路验证 + 委派权限约束 + Agent 间信任传播追踪 | 高（论文指出防御最薄弱） |
+| **L3 Memory**（T3 跨会话） | 读取拦截 + 框架集成未实现 | `intercept_read()` + LangChain/OpenAI SDK Wrapper | 高 |
+| **L2 Cognitive**（T2/T3 跨轮次） | 规划劫持检测未实现 | P1.11 `IntentAnchor` + `PlanDriftDetector` | 高 |
+| **L6 Ecosystem**（T4） | MCP Server 完整性校验缺失 | MCP Server 来源签名验证 + AgentBOM 物料清单 | 中 |
+| **L1 Foundation**（T4） | 模型后门/训练数据污染无法检测 | 超出 VirbiusAgent 范围（属模型供应商责任） | 不适用 |
+| **跨层传播**（T4） | 工具结果→记忆→规划的跨层传播追踪不足 | 跨层因果链追踪（复用 Trace Collector） | 中 |
+
+> **LASM 的核心启示**（论文原文）："Agent 安全不是'模型安全加一点工具风控'这么简单，而是一个典型的**分布式系统安全问题**。你必须看到组件边界，看到信任边界，看到时间维度，看到供应链，看到治理和问责，否则就很容易在低层做了很多防护，却在高层留下致命空洞。"
+>
+> VirbiusAgent 在 L2/L4/L7 层覆盖扎实，但 **L5 Multi-Agent 层是最大的结构性缺口**——这恰恰是 LASM 论文标记为"防御最薄弱"的区域。
 
 ---
 
