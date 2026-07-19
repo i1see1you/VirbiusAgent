@@ -22,7 +22,7 @@ type (
 	astBinary   struct{ Left, Right astNode; Op string }
 	astMatches  struct{ Left astNode; Pattern string }
 	astContains struct{ Left astNode; Substr string }
-	astIn       struct{ Left astNode; ListName string }
+	astIn       struct{ Left astNode; ListName string; Op string }
 	astCall     struct{ Name string; Arg string }
 )
 
@@ -81,7 +81,7 @@ var infixBP = map[string]bp{
 func Parse(source string) (astNode, error) {
 	var p parser
 	p.scan.Init(strings.NewReader(source))
-	p.scan.Mode = scanner.ScanIdents | scanner.ScanStrings | scanner.ScanInts | scanner.ScanFloats
+	p.scan.Mode = scanner.ScanIdents | scanner.ScanStrings | scanner.ScanInts | scanner.ScanFloats | scanner.ScanChars
 	p.scan.Error = func(s *scanner.Scanner, msg string) {}
 	p.next()
 	result := p.parseExpr(bpLowest)
@@ -110,11 +110,25 @@ func (p *parser) parseExpr(minBP bp) astNode {
 	for p.peek != scanner.EOF {
 		// Check for binary/infix operators
 		op := p.tokenText()
+
+		// Combine two-character operators: ==, ~=, >=, <=
+		// text/scanner scans each char separately, so we peek ahead
+		isMultiCharOp := false
+		if p.peek == '=' || p.peek == '~' || p.peek == '>' || p.peek == '<' {
+			if p.scan.Peek() == '=' {
+				op = string(p.peek) + "="
+				isMultiCharOp = true
+			}
+		}
+
 		bp, ok := infixBP[op]
 		if !ok || bp < minBP {
 			break
 		}
-		p.next() // consume operator
+		p.next()  // consume first char of operator
+		if isMultiCharOp {
+			p.next() // consume second char (=)
+		}
 
 		switch op {
 		case "matches":
@@ -148,7 +162,7 @@ func (p *parser) parseExpr(minBP bp) astNode {
 			if !ok {
 				return nil
 			}
-			left = astBinary{Left: left, Right: &astString{Value: s.Value}, Op: "starts_with"}
+			left = astBinary{Left: left, Right: astString{Value: s.Value}, Op: "starts_with"}
 
 		case "ends_with":
 			right := p.parseExpr(bp)
@@ -159,7 +173,7 @@ func (p *parser) parseExpr(minBP bp) astNode {
 			if !ok {
 				return nil
 			}
-			left = astBinary{Left: left, Right: &astString{Value: s.Value}, Op: "ends_with"}
+			left = astBinary{Left: left, Right: astString{Value: s.Value}, Op: "ends_with"}
 
 		case "in", "not_in":
 			right := p.parseExpr(bp)
@@ -222,9 +236,9 @@ func (p *parser) parsePrefix() astNode {
 			// Check for function call: ident '(' string_literal ')'
 			if p.peek == '(' {
 				p.next() // consume '('
-				if p.peek != scanner.String {
-					return nil
-				}
+			if p.peek != scanner.String && p.peek != scanner.Char {
+				return nil
+			}
 				argRaw := p.tokenText()
 				p.next()
 				arg := argRaw
@@ -240,10 +254,10 @@ func (p *parser) parsePrefix() astNode {
 			return astVariable{Parts: parts}
 		}
 
-	case scanner.String:
+	case scanner.String, scanner.Char:
 		raw := p.tokenText()
 		p.next()
-		// Remove quotes
+		// Remove quotes (single or double)
 		s := raw
 		if len(s) >= 2 {
 			s = s[1 : len(s)-1]
@@ -271,4 +285,68 @@ func (p *parser) parsePrefix() astNode {
 	default:
 		return nil
 	}
+}
+
+// --- Type Inference ---
+
+// ExprType represents the inferred static type of an expression.
+type ExprType string
+
+const (
+	TypeUnknown ExprType = "unknown"
+	TypeBool    ExprType = "bool"
+	TypeString  ExprType = "string"
+	TypeNumber  ExprType = "number"
+)
+
+// InferType infers the static type of an AST node.
+//
+// Type rules:
+//   - Literals: astBool→bool, astString→string, astNumber→number
+//   - Variables (ctx.app_id) and calls (ctx.var('x')) → unknown (runtime-dependent)
+//   - Comparisons (==, ~=, >, >=, <, <=) → bool
+//   - Logical (and, or, not) → bool
+//   - String ops (matches, contains, starts_with, ends_with) → bool
+//   - Set membership (in, not_in) → bool
+func InferType(node astNode) ExprType {
+	switch v := node.(type) {
+	case astBool:
+		return TypeBool
+	case astString:
+		return TypeString
+	case astNumber:
+		return TypeNumber
+	case astVariable:
+		return TypeUnknown
+	case astCall:
+		return TypeUnknown // ctx.var() returns a runtime value
+	case astUnary:
+		if v.Op == "not" {
+			return TypeBool
+		}
+		return TypeUnknown
+	case astBinary:
+		switch v.Op {
+		case "==", "~=", ">", ">=", "<", "<=":
+			return TypeBool
+		case "and", "or":
+			return TypeBool
+		case "starts_with", "ends_with":
+			return TypeBool
+		}
+		return TypeUnknown
+	case astMatches:
+		return TypeBool
+	case astContains:
+		return TypeBool
+	case astIn:
+		return TypeBool
+	}
+	return TypeUnknown
+}
+
+// IsBooleanExpression returns true if the expression is guaranteed to
+// evaluate to a boolean at runtime.
+func IsBooleanExpression(node astNode) bool {
+	return InferType(node) == TypeBool
 }

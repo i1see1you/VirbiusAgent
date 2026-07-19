@@ -80,6 +80,30 @@ public final class GroovyL3Executor {
         }
     }
 
+    /**
+     * Run {@code decide(ctx)} and return the raw result Object (without boolean conversion).
+     *
+     * <p>Used by {@link GroovyL3Validator} for trial-execution return-type checking.
+     * The caller is responsible for type verification.
+     *
+     * @return the raw Object returned by the Groovy script's {@code decide(ctx)} method,
+     *         or {@code null} if the script has no explicit return statement
+     */
+    public Object executeRaw(String scriptBody, PolicyContext ctx) throws Exception {
+        Objects.requireNonNull(ctx, "ctx");
+        String body = normalizeBody(scriptBody);
+        String cacheKey = Integer.toHexString(body.hashCode());
+        Class<? extends Script> scriptClass = scriptClassCache.computeIfAbsent(cacheKey, k -> compileClass(body));
+
+        Future<Object> future = executor.submit(() -> runRaw(scriptClass, ctx));
+        try {
+            return future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            throw new TimeoutException("groovy L3 exceeded " + timeoutMs + "ms");
+        }
+    }
+
     @SuppressWarnings("unchecked")
     private Class<? extends Script> compileClass(String body) {
         Class<?> clazz = classLoader.parseClass(wrapScript(body), "L3_" + Integer.toHexString(body.hashCode()));
@@ -94,6 +118,17 @@ public final class GroovyL3Executor {
 
     private static boolean runDecide(Class<? extends Script> scriptClass, PolicyContext ctx)
             throws ReflectiveOperationException {
+        Object raw = runRaw(scriptClass, ctx);
+        return toBoolean(raw);
+    }
+
+    /**
+     * Execute the script and return the raw Object result without boolean conversion.
+     * Sets up the same Binding variables as {@link #runDecide} so that trial
+     * execution mirrors production behavior.
+     */
+    private static Object runRaw(Class<? extends Script> scriptClass, PolicyContext ctx)
+            throws ReflectiveOperationException {
         Script instance = scriptClass.getDeclaredConstructor().newInstance();
         Binding binding = new Binding();
         binding.setVariable("ctx", ctx);
@@ -101,8 +136,7 @@ public final class GroovyL3Executor {
         binding.setVariable("getCumulative", new GetCumulativeClosure(ctx));
         binding.setVariable("mlPredict", new MlPredictClosure());
         instance.setBinding(binding);
-        Object raw = instance.run();
-        return toBoolean(raw);
+        return instance.run();
     }
 
     private static boolean toBoolean(Object raw) {
@@ -156,6 +190,11 @@ public final class GroovyL3Executor {
         public Map<String, Object> doCall(String url, Map<String, Object> features) {
             return mlModel.predict(url, features);
         }
+    }
+
+    /** Shut down the internal thread pool. Call this when the executor is no longer needed. */
+    public void shutdown() {
+        executor.shutdownNow();
     }
 
     static String normalizeBody(String scriptBody) {

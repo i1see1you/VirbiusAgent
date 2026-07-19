@@ -596,7 +596,7 @@ if session_risk > 30: 提升审计采样率
 | 输出安全 | Output Review（PII 脱敏 ✅ + 凭据检测 ✅ + 内容安全 ✅） | P1 | ✅ 工具结果审查已完成（MCP Proxy 复用 Engine `/v1/evaluate` + qwen3guard 规则管线）；Agent 最终输出审查为设计建议，待应用层集成（详见 [§13.7](#137-输出审查output-review)） |
 | 决策链路追踪 | Trace Collector + Ingest + 可视化 | P1 | ✅ 已完成 |
 | 显式信任分层 | TrustTagger + TrustViolationDetector | P1.10 | ✅ 已完成（Edge 端包裹 `<trust_boundary>` + Engine 端违规检测，详见 [§13.10](#1310-显式信任分层explicit-trust-layering)） |
-| 规划劫持检测 | IntentAnchor + PlanDriftDetector | P1.11 | ⏳ 设计完成（详见 [§13.11](#1311-规划劫持检测plan-hijacking-detection)） |
+| 规划劫持检测 | IntentAnchor + PlanDriftDetector | P1.11 | 📋 后续规划（暂不实现，设计已归档于 [§13.11](#1311-规划劫持检测plan-hijacking-detection)） |
 
 ### 12.5 LASM 七层攻击面模型对照
 
@@ -655,7 +655,7 @@ LASM 是一个 **7 层 × 4 类时间性**的网格：
 | | 宪法注入约束模型行为（间接缓解） | Prompt Gateway | §2.8 | T1 | 🔧 间接 |
 | **L2 Cognitive** | Prompt 注入检测（qwen3guard:0.6b） | Engine `PromptInjectionDetector` | §13.1 | T1 | ✅ 已完成 |
 | | **显式信任分层**（TrustTagger + TrustBoundaryInjector + TrustViolationDetector） | `virbius-core/src/trust.rs` + Engine | §13.10 | T1/T2 | ✅ 已完成 |
-| | **规划劫持检测**（IntentAnchor + PlanDriftDetector） | Engine | §13.11 | T2/T3 | ⏳ 设计完成 |
+| | **规划劫持检测**（IntentAnchor + PlanDriftDetector） | Engine | §13.11 | T2/T3 | 📋 后续规划（暂不实现） |
 | | STI Taint 语义审计（工具返回值注入检测） | Engine `/v1/tool-result` | §13.2 | T1 | ✅ 已完成 |
 | | Prompt Gateway 宪法注入 + PII 脱敏 | `virbius-core` Prompt Gateway | §2.8 | T1 | ✅ 已完成 |
 | | Session Risk 自适应模型 | Engine `SessionRiskManager` + Redis | §13.3 | T1/T2 | ✅ 已完成 |
@@ -671,9 +671,9 @@ LASM 是一个 **7 层 × 4 类时间性**的网格：
 | | 累计计数器（双层计数） | Engine `CounterStore.ingest` | §13.9 | T1/T2 | ✅ 已完成 |
 | | 内核级沙箱（Landlock + capset + prctl + gVisor） | `virbius-core/src/sandbox/landlock.rs` | §2.3/§2.4 | T1 | ✅ 已实现 |
 | | 输出审查（工具结果 + Agent 最终响应） | MCP Proxy → Engine `/v1/evaluate` | §13.7 | T1 | ✅ 工具结果审查完成；Agent 最终输出待集成 |
-| **L5 Multi-Agent Coordination** | ⚠️ 几乎未覆盖（当前为单 Agent 架构） | — | — | — | ❌ 缺口 |
+| **L5 Multi-Agent Coordination** | ⚠️ 几乎未覆盖（当前为单 Agent 架构） | — | — | — | 📋 后续规划（暂不实现） |
 | | MCP Proxy 多上游路由（部分相关） | `virbius-mcp-proxy/upstream.rs` | §2.6.1 | T1 | 🔧 仅路由，无协同安全 |
-| | A2A 路由（设计提及） | §6.1 | — | — | ⏳ 设计提及 |
+| | A2A 路由（设计提及） | §6.1 | — | — | 📋 后续规划 |
 | **L6 Ecosystem** | License 签发/校验/吊销（Agent 身份全生命周期） | `virbius-control` + 端/管/云三层校验 | §1.4 | T1/T2 | ✅ 已完成 |
 | | MCP Server 多上游路由 + 工具名冲突防护 | `virbius-mcp-proxy/router.rs` | §2.6.1 | T1 | ✅ 已完成 |
 | | MCP Server 完整性校验 | — | §12.2 维度 7 | — | ❌ 未实现 |
@@ -690,10 +690,10 @@ LASM 是一个 **7 层 × 4 类时间性**的网格：
 
 ```
 L1 Foundation            ░░░░░░░░░░░░░░░░░░░░   5%   超出范围，仅宪法注入间接缓解
-L2 Cognitive             ████████████████████  95%   信任分层 ✅ / 规划劫持 ⏳
+L2 Cognitive             ████████████████████  95%   信任分层 ✅ / 规划劫持 📋 后续规划
 L3 Memory                ████████████████████ 100%   写入拦截 ✅ / 读取拦截 ✅ / 框架集成 ✅
 L4 Tool Execution        ████████████████████ 100%   全链路覆盖
-L5 Multi-Agent           ██░░░░░░░░░░░░░░░░░░  10%   仅多上游路由，无协同安全
+L5 Multi-Agent           ██░░░░░░░░░░░░░░░░░░  10%   仅多上游路由，协同安全 📋 后续规划
 L6 Ecosystem             ██████████████░░░░░░  70%   License ✅ / 完整性校验 ❌ / AgentBOM ❌
 L7 Governance            ████████████████████ 100%   审计 ✅ / 追踪 ✅ / 观测 ✅ / 策略 ✅
 ```
@@ -703,7 +703,7 @@ L7 Governance            ██████████████████�
 ```
 T1 即时攻击              ████████████████████ 100%   Prompt 注入检测 + 工具拦截 + 沙箱
 T2 单会话持久            ██████████████████░░  90%   Session Risk + 信任分层 + 记忆写入拦截
-T3 跨会话累积            ████████████████░░░░  80%   记忆读写拦截 ✅ / 规划劫持检测 ⏳
+T3 跨会话累积            ████████████████░░░░  80%   记忆读写拦截 ✅ / 规划劫持检测 📋 后续规划
 T4 参数级/跨层传播       ██████████░░░░░░░░░░  50%   审计 Hash Chain ✅ / 跨层传播检测不足
 ```
 
@@ -713,16 +713,16 @@ LASM 论文指出：**高层（Ecosystem、Governance）以及长周期、跨层
 
 | LASM 指出的空白格 | VirbiusAgent 缺口 | 补齐方案 | 优先级 |
 |------------------|-------------------|---------|--------|
-| **L5 Multi-Agent**（T2/T3） | 多 Agent 协同安全完全缺失 | A2A 消息链路验证 + 委派权限约束 + Agent 间信任传播追踪 | 高（论文指出防御最薄弱） |
+| **L5 Multi-Agent**（T2/T3） | 多 Agent 协同安全完全缺失 | A2A 消息链路验证 + 委派权限约束 + Agent 间信任传播追踪 | 低（后续规划，暂不实现） |
 | **L3 Memory**（T3 跨会话） | ✅ 已补齐：`intercept_read()` + LangChain/OpenAI SDK Wrapper | ✅ 已实现（详见 [§13.6](#136-记忆管控memory-interceptor)） | — |
-| **L2 Cognitive**（T2/T3 跨轮次） | 规划劫持检测未实现 | P1.11 `IntentAnchor` + `PlanDriftDetector` | 高 |
+| **L2 Cognitive**（T2/T3 跨轮次） | 规划劫持检测未实现 | P1.11 `IntentAnchor` + `PlanDriftDetector` | 低（后续规划，暂不实现） |
 | **L6 Ecosystem**（T4） | MCP Server 完整性校验缺失 | MCP Server 来源签名验证 + AgentBOM 物料清单 | 中 |
 | **L1 Foundation**（T4） | 模型后门/训练数据污染无法检测 | 超出 VirbiusAgent 范围（属模型供应商责任） | 不适用 |
 | **跨层传播**（T4） | 工具结果→记忆→规划的跨层传播追踪不足 | 跨层因果链追踪（复用 Trace Collector） | 中 |
 
 > **LASM 的核心启示**（论文原文）："Agent 安全不是'模型安全加一点工具风控'这么简单，而是一个典型的**分布式系统安全问题**。你必须看到组件边界，看到信任边界，看到时间维度，看到供应链，看到治理和问责，否则就很容易在低层做了很多防护，却在高层留下致命空洞。"
 >
-> VirbiusAgent 在 L2/L4/L7 层覆盖扎实，但 **L5 Multi-Agent 层是最大的结构性缺口**——这恰恰是 LASM 论文标记为"防御最薄弱"的区域。
+> VirbiusAgent 在 L2/L4/L7 层覆盖扎实。**L5 Multi-Agent 层是结构性缺口**（LASM 论文标记为“防御最薄弱”的区域），但当前为单 Agent 架构，已纳入后续规划暂不实现；规划劫持检测（L2 跨轮次）同理降级为后续规划。
 
 ---
 
@@ -2729,9 +2729,17 @@ HGETALL session:{id}:tool_counts  → {read_file: 3, write_file: 5}
 | **P1.7** | virbius-audit Falco 插件（§13.4） | 增强内核级 Agent 专用检测 | Falco plugin SDK |
 | **P1.8** | Falco 规则库扩充（§13.4） | 配合 virbius-audit 插件 | 依赖 P1.7 |
 | **P1.10** | 显式信任分层（§13.10） | 补齐 LASM L2 数据/指令隔离缺口 | 无（零 LLM 调用） |
-| **P1.11** | 规划劫持检测（§13.11） | 补齐 LASM L2 跨轮次规划偏转缺口 | P1.3 Session Risk（复用风险分机制） |
 
-> **关键路径**：P1.1 → P1.2 → P1.3 可并行推进，P1.4 独立。P1.5/P1.6 依赖 P1.1 的模型部署。P1.10/P1.11 零 LLM 依赖，可立即并行推进，P1.11 的渐进式响应依赖 P1.3 的 Session Risk 机制。
+> **📋 后续规划（暂不实现）**：
+>
+> | 规划项 | 功能 | 理由 | 依赖 |
+> |--------|------|------|------|
+> | P1.11 | 规划劫持检测（§13.11） | LASM L2 跨轮次规划偏转检测 | P1.3 Session Risk（复用风险分机制） |
+> | L5 Multi-Agent | 多 Agent 协同安全 | A2A 消息链路验证 + 委派权限约束 + 信任传播 | 架构升级为多 Agent |
+>
+> 优先级较低，设计已归档，待后续版本实现。
+
+> **关键路径**：P1.1 → P1.2 → P1.3 可并行推进，P1.4 独立。P1.5/P1.6 依赖 P1.1 的模型部署。P1.10 零 LLM 依赖，可立即推进。P1.11（规划劫持检测）与 L5 多 Agent 协同安全已降级为后续规划，暂不实现。
 
 ---
 
@@ -3036,6 +3044,10 @@ virbius:
 
 ### 13.11 规划劫持检测（Plan Hijacking Detection）
 
+> **状态**：📋 后续规划（暂不实现）
+>
+> 本节为设计归档，保留完整设计方案供后续版本参考。当前优先级较低，暂不进入实现排期。
+>
 > **对应 LASM L2 认知层缺口**：LASM 指出攻击者可以不直接输出有害内容，而是诱导 Agent 形成错误的规划链路，让它在后续执行中走偏。本方案通过意图锚定 + 行为偏转检测发现此类攻击。
 
 #### 13.11.1 问题分析

@@ -194,6 +194,18 @@ func Eval(expr *Expression, ctx map[string]any) (bool, error) {
 
 func resolveVar(name string, ctx map[string]any) any {
 	parts := strings.Split(name, ".")
+	// Support both "ctx.app_id" and "app_id" as variable names.
+	// If the first part is "ctx" and the ctx map doesn't have a "ctx" key,
+	// fall back to resolving with the remaining parts directly.
+	if len(parts) > 1 && parts[0] == "ctx" {
+		if _, ok := ctx["ctx"]; !ok {
+			if len(parts) == 2 {
+				return ctx[parts[1]]
+			}
+			// For deeper paths like "ctx.foo.bar", try "foo.bar"
+			return resolveVar(strings.Join(parts[1:], "."), ctx)
+		}
+	}
 	current := ctx
 	for i, part := range parts {
 		if i == len(parts)-1 {

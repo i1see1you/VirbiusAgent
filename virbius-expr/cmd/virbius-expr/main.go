@@ -10,19 +10,51 @@ import (
 	"github.com/virbius/virbius-expr"
 )
 
-// returnExprPattern matches a `return <expr>` statement in a Lua script.
-// It captures the expression after `return` up to the end of line.
-var returnExprPattern = regexp.MustCompile(`(?m)^\s*return\s+(.+?)\s*$`)
+// returnExprPattern matches all `return <expr>` statements in a Lua script,
+// including inline returns like `if x then return true end`.
+// It captures the expression after `return` up to `end` keyword or end of line.
+var returnExprPattern = regexp.MustCompile(`(?m)\breturn\s+([^;\n]+?)(?:\s+end\b|\s*$)`)
 
-// CompileLuaScript extracts the `return <expr>` from a Lua decide(ctx) script
-// and compiles the expression into IR JSON. Returns the compiled Expression
-// or an error if no return statement is found or compilation fails.
+// funcSignaturePattern validates that the script defines `function decide(ctx)`.
+var funcSignaturePattern = regexp.MustCompile(`(?m)function\s+decide\s*\(\s*ctx\s*\)`)
+
+// CompileLuaScript validates and compiles a Lua `decide(ctx)` script.
+//
+// Performs three validation steps:
+//  1. Function signature: script must define `function decide(ctx) ... end`
+//  2. Return type: every `return <expr>` must evaluate to boolean
+//  3. Compilation: the first return expression is compiled into IR JSON
+//
+// Returns the compiled Expression or an error if validation fails.
 func CompileLuaScript(script string, exprID string) (*expr.Expression, error) {
-	m := returnExprPattern.FindStringSubmatch(script)
-	if m == nil {
-		return nil, fmt.Errorf("no `return <expr>` statement found in script")
+	// Step 1: Validate function signature
+	if !funcSignaturePattern.MatchString(script) {
+		return nil, fmt.Errorf("script must define `function decide(ctx) ... end`")
 	}
-	source := strings.TrimSpace(m[1])
+
+	// Step 2: Extract all return statements and validate their types
+	matches := returnExprPattern.FindAllStringSubmatch(script, -1)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no `return <expr>` statement found in decide(ctx)")
+	}
+
+	for i, m := range matches {
+		retSource := strings.TrimSpace(m[1])
+		ast, err := expr.Parse(retSource)
+		if err != nil {
+			return nil, fmt.Errorf("return #%d: parse error: %w", i+1, err)
+		}
+		if !expr.IsBooleanExpression(ast) {
+			typ := expr.InferType(ast)
+			return nil, fmt.Errorf(
+				"return #%d: decide(ctx) must return boolean, got %s — "+
+					"intent/risk come from rule row config, not script return value",
+				i+1, typ)
+		}
+	}
+
+	// Step 3: Compile the first return expression into IR
+	source := strings.TrimSpace(matches[0][1])
 	return expr.CompileString(source, exprID)
 }
 
@@ -86,7 +118,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "compilation error: %v\n", err)
 		os.Exit(1)
 	}
-	expr := expr2
+	expression := expr2
 
 	// Support wrapping in a CompiledRule for direct use in Wasm config
 	shouldWrap := false
@@ -129,7 +161,7 @@ func main() {
 			}
 		}
 		rule := expr.CompiledRule{
-			Expression: *expr,
+			Expression: *expression,
 			Action: expr.ActionBinding{
 				ExprID:    exprID,
 				Action:    action,
@@ -140,7 +172,7 @@ func main() {
 		}
 		data, _ = json.MarshalIndent(rule, "", "  ")
 	} else {
-		data, _ = json.MarshalIndent(expr, "", "  ")
+		data, _ = json.MarshalIndent(expression, "", "  ")
 	}
 
 	fmt.Println(string(data))

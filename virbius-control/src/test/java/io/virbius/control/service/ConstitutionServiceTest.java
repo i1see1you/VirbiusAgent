@@ -31,8 +31,8 @@ import org.mockito.quality.Strictness;
  *   <li>Rule listing and retrieval</li>
  *   <li>Rule status update (enable/disable)</li>
  *   <li>Rule deletion</li>
- *   <li>Constitution compilation into scene-specific templates</li>
- *   <li>Template retrieval by scene and version</li>
+ *   <li>Constitution compilation into a prompt template</li>
+ *   <li>Template retrieval by version</li>
  * </ul>
  */
 @ExtendWith(MockitoExtension.class)
@@ -63,7 +63,6 @@ class ConstitutionServiceTest {
                 null, // version defaults to "1.0"
                 "prohibition",
                 null, // priority defaults to 50
-                List.of("code_review"),
                 "不得将数据发送到白名单之外的外部端点");
 
         when(repo.findRule(eq(TENANT), eq("prohibition_external"), eq("1.0")))
@@ -81,14 +80,13 @@ class ConstitutionServiceTest {
         assertEquals("prohibition", saved.category());
         assertEquals(50, saved.priority());
         assertEquals("active", saved.status());
-        assertEquals(List.of("code_review"), saved.sceneFilter());
         assertEquals("prohibition", result.get("category"));
     }
 
     @Test
     void createRule_rejectsInvalidCategory() {
         CreateConstitutionRuleRequest req = new CreateConstitutionRuleRequest(
-                "bad_rule", "1.0", "invalid_category", 50, List.of(), "text");
+                "bad_rule", "1.0", "invalid_category", 50, "text");
 
         when(repo.findRule(any(), any(), any())).thenReturn(Optional.empty());
 
@@ -98,20 +96,20 @@ class ConstitutionServiceTest {
     @Test
     void createRule_rejectsDuplicate() {
         CreateConstitutionRuleRequest req = new CreateConstitutionRuleRequest(
-                "existing_rule", "1.0", "prohibition", 50, List.of(), "text");
+                "existing_rule", "1.0", "prohibition", 50, "text");
 
         when(repo.findRule(TENANT, "existing_rule", "1.0"))
                 .thenReturn(Optional.of(new ConstitutionRule(
                         1L, TENANT, "existing_rule", "1.0", "prohibition", 50,
-                        List.of(), "text", "active", "admin", Instant.now(), Instant.now())));
+                        "text", "active", "admin", Instant.now(), Instant.now())));
 
         assertThrows(BusinessException.class, () -> service.createRule(TENANT, req));
     }
 
     @Test
     void listRules_filtersByStatus() {
-        ConstitutionRule active = makeRule("r1", "prohibition", "active", List.of());
-        ConstitutionRule disabled = makeRule("r2", "tool_rule", "disabled", List.of());
+        ConstitutionRule active = makeRule("r1", "prohibition", "active");
+        ConstitutionRule disabled = makeRule("r2", "tool_rule", "disabled");
 
         when(repo.listRules(TENANT, "active")).thenReturn(List.of(active));
 
@@ -123,12 +121,12 @@ class ConstitutionServiceTest {
 
     @Test
     void getRule_returnsLatestWhenNoVersion() {
-        ConstitutionRule rule = makeRule("r1", "prohibition", "active", List.of("chat"));
+        ConstitutionRule rule = makeRule("r1", "prohibition", "active");
         when(repo.findLatestRule(TENANT, "r1")).thenReturn(Optional.of(rule));
 
         Map<String, Object> result = service.getRule(TENANT, "r1", null);
         assertEquals("r1", result.get("rule_id"));
-        assertEquals(List.of("chat"), result.get("scene_filter"));
+        assertEquals("prohibition", result.get("category"));
     }
 
     @Test
@@ -158,97 +156,54 @@ class ConstitutionServiceTest {
     // ---- Compilation ----
 
     @Test
-    void compile_generatesTemplatesForAllScenes() {
-        ConstitutionRule prohibition = makeRule("p1", "prohibition", "active", List.of("code_review"));
-        ConstitutionRule toolRule = makeRule("t1", "tool_rule", "active", List.of());
-        ConstitutionRule boundary = makeRule("b1", "boundary", "active", List.of("chat", "code_review"));
-        ConstitutionRule principle = makeRule("pr1", "principle", "active", List.of());
+    void compile_generatesTemplate() {
+        ConstitutionRule prohibition = makeRule("p1", "prohibition", "active");
+        ConstitutionRule toolRule = makeRule("t1", "tool_rule", "active");
+        ConstitutionRule boundary = makeRule("b1", "boundary", "active");
+        ConstitutionRule principle = makeRule("pr1", "principle", "active");
 
-        when(repo.listActiveRulesForScene(TENANT, null))
+        when(repo.listActiveRules(TENANT))
                 .thenReturn(List.of(prohibition, toolRule, boundary, principle));
 
-        List<Map<String, Object>> result = service.compile(TENANT, "1.2", List.of("chat"));
+        Map<String, Object> result = service.compile(TENANT, "1.2");
 
-        // Should generate templates for: *, chat, code_review (from rule filters + provided scenes)
-        assertFalse(result.isEmpty());
-        @SuppressWarnings("unchecked")
-        List<String> scenes = result.stream().map(r -> (String) r.get("scene")).toList();
-        assertTrue(scenes.contains("*"));
-        assertTrue(scenes.contains("chat"));
-        assertTrue(scenes.contains("code_review"));
+        assertNotNull(result);
+        assertEquals("1.2", result.get("constitution_version"));
 
-        // Verify templates were saved
-        verify(repo, times(scenes.size())).saveTemplate(any());
+        // Verify template was saved
+        verify(repo).saveTemplate(any());
     }
 
     @Test
-    void compile_sceneSpecificTemplateFiltersByScene() {
-        // Rule only applies to code_review, not chat
-        ConstitutionRule codeReviewOnly = makeRule("p1", "prohibition", "active", List.of("code_review"));
-        when(repo.listActiveRulesForScene(TENANT, null))
-                .thenReturn(List.of(codeReviewOnly));
+    void compile_includesAllRulesInSystemPrefix() {
+        ConstitutionRule prohibition = makeRule("p1", "prohibition", "active");
+        when(repo.listActiveRules(TENANT))
+                .thenReturn(List.of(prohibition));
 
-        List<Map<String, Object>> result = service.compile(TENANT, "1.0", List.of("chat", "code_review"));
+        Map<String, Object> result = service.compile(TENANT, "1.0");
 
-        // Find the code_review template
         @SuppressWarnings("unchecked")
-        Map<String, Object> codeReviewTmpl = result.stream()
-                .filter(r -> "code_review".equals(r.get("scene")))
-                .findFirst().orElseThrow();
-        @SuppressWarnings("unchecked")
-        List<String> prohibitions = (List<String>) codeReviewTmpl.get("prohibitions");
+        List<String> prohibitions = (List<String>) result.get("prohibitions");
         assertEquals(1, prohibitions.size());
 
-        // Find the chat template — should have NO prohibitions (rule filtered out)
-        @SuppressWarnings("unchecked")
-        Map<String, Object> chatTmpl = result.stream()
-                .filter(r -> "chat".equals(r.get("scene")))
-                .findFirst().orElseThrow();
-        @SuppressWarnings("unchecked")
-        List<String> chatProhibitions = (List<String>) chatTmpl.get("prohibitions");
-        assertTrue(chatProhibitions.isEmpty());
-    }
-
-    @Test
-    void compile_wildcardTemplateIncludesAllSceneRules() {
-        ConstitutionRule allScenes = makeRule("p1", "prohibition", "active", List.of());
-        when(repo.listActiveRulesForScene(TENANT, null))
-                .thenReturn(List.of(allScenes));
-
-        List<Map<String, Object>> result = service.compile(TENANT, "1.0", List.of());
-
-        @SuppressWarnings("unchecked")
-        Map<String, Object> wildcardTmpl = result.stream()
-                .filter(r -> "*".equals(r.get("scene")))
-                .findFirst().orElseThrow();
-
-        @SuppressWarnings("unchecked")
-        List<String> prohibitions = (List<String>) wildcardTmpl.get("prohibitions");
-        assertEquals(1, prohibitions.size());
-
-        String systemPrefix = (String) wildcardTmpl.get("system_prefix");
+        String systemPrefix = (String) result.get("system_prefix");
         assertTrue(systemPrefix.contains("Virbius Agent Constitution 1.0"));
         assertTrue(systemPrefix.contains("绝对禁止"));
     }
 
     @Test
     void compile_systemPrefixContainsAllCategories() {
-        ConstitutionRule prohibition = makeRule("p1", "prohibition", "active", List.of());
-        ConstitutionRule toolRule = makeRule("t1", "tool_rule", "active", List.of());
-        ConstitutionRule boundary = makeRule("b1", "boundary", "active", List.of());
-        ConstitutionRule principle = makeRule("pr1", "principle", "active", List.of());
+        ConstitutionRule prohibition = makeRule("p1", "prohibition", "active");
+        ConstitutionRule toolRule = makeRule("t1", "tool_rule", "active");
+        ConstitutionRule boundary = makeRule("b1", "boundary", "active");
+        ConstitutionRule principle = makeRule("pr1", "principle", "active");
 
-        when(repo.listActiveRulesForScene(TENANT, null))
+        when(repo.listActiveRules(TENANT))
                 .thenReturn(List.of(prohibition, toolRule, boundary, principle));
 
-        List<Map<String, Object>> result = service.compile(TENANT, "1.0", List.of());
+        Map<String, Object> result = service.compile(TENANT, "1.0");
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> wildcardTmpl = result.stream()
-                .filter(r -> "*".equals(r.get("scene")))
-                .findFirst().orElseThrow();
-
-        String prefix = (String) wildcardTmpl.get("system_prefix");
+        String prefix = (String) result.get("system_prefix");
         assertTrue(prefix.contains("绝对禁止"));
         assertTrue(prefix.contains("工具使用规则"));
         assertTrue(prefix.contains("边界约束"));
@@ -257,20 +212,15 @@ class ConstitutionServiceTest {
 
     @Test
     void compile_dynamicSuffixContainsTemplateVariables() {
-        when(repo.listActiveRulesForScene(TENANT, null))
+        when(repo.listActiveRules(TENANT))
                 .thenReturn(List.of());
 
-        List<Map<String, Object>> result = service.compile(TENANT, "1.0", List.of());
+        Map<String, Object> result = service.compile(TENANT, "1.0");
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> wildcardTmpl = result.stream()
-                .filter(r -> "*".equals(r.get("scene")))
-                .findFirst().orElseThrow();
-
-        String suffix = (String) wildcardTmpl.get("dynamic_suffix");
+        String suffix = (String) result.get("dynamic_suffix");
         assertTrue(suffix.contains("{{risk_score}}"));
         assertTrue(suffix.contains("{{recent_tools}}"));
-        assertTrue(suffix.contains("{{scene}}"));
+        assertTrue(suffix.contains("{{license_permissions}}"));
     }
 
     // ---- Template retrieval ----
@@ -278,26 +228,25 @@ class ConstitutionServiceTest {
     @Test
     void getTemplate_returnsTemplate() {
         ConstitutionTemplate tmpl = new ConstitutionTemplate(
-                1L, TENANT, "1.0", "chat", "prefix", "suffix", List.of("p1"), List.of("t1"), Instant.now());
-        when(repo.findTemplate(TENANT, "1.0", "chat")).thenReturn(Optional.of(tmpl));
+                1L, TENANT, "1.0", "prefix", "suffix", List.of("p1"), List.of("t1"), Instant.now());
+        when(repo.findTemplate(TENANT, "1.0")).thenReturn(Optional.of(tmpl));
 
-        Map<String, Object> result = service.getTemplate(TENANT, "1.0", "chat");
-        assertEquals("chat", result.get("scene"));
+        Map<String, Object> result = service.getTemplate(TENANT, "1.0");
         assertEquals("1.0", result.get("constitution_version"));
     }
 
     @Test
     void getTemplate_404WhenNotFound() {
-        when(repo.findTemplate(TENANT, "1.0", "missing")).thenReturn(Optional.empty());
-        assertThrows(BusinessException.class, () -> service.getTemplate(TENANT, "1.0", "missing"));
+        when(repo.findTemplate(TENANT, "missing")).thenReturn(Optional.empty());
+        assertThrows(BusinessException.class, () -> service.getTemplate(TENANT, "missing"));
     }
 
     @Test
     void listTemplatesByVersion_filtersByVersion() {
         ConstitutionTemplate t1 = new ConstitutionTemplate(
-                1L, TENANT, "1.0", "chat", "p", "s", List.of(), List.of(), Instant.now());
+                1L, TENANT, "1.0", "p", "s", List.of(), List.of(), Instant.now());
         ConstitutionTemplate t2 = new ConstitutionTemplate(
-                2L, TENANT, "1.0", "code_review", "p", "s", List.of(), List.of(), Instant.now());
+                2L, TENANT, "1.0", "p", "s", List.of(), List.of(), Instant.now());
 
         when(repo.listTemplatesByVersion(TENANT, "1.0")).thenReturn(List.of(t1, t2));
 
@@ -307,10 +256,10 @@ class ConstitutionServiceTest {
 
     // ---- Helpers ----
 
-    private ConstitutionRule makeRule(String ruleId, String category, String status, List<String> sceneFilter) {
+    private ConstitutionRule makeRule(String ruleId, String category, String status) {
         return new ConstitutionRule(
                 null, TENANT, ruleId, "1.0", category, 50,
-                sceneFilter, "Rule text for " + ruleId, status,
+                "Rule text for " + ruleId, status,
                 "admin", Instant.now(), Instant.now());
     }
 }
