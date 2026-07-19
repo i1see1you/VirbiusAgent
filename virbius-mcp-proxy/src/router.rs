@@ -862,6 +862,9 @@ async fn handle_tools_call(
                 mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
                 // ── Trust boundary tagging (high/network risk only) ──
                 tag_tool_result(&mut resp, &original_tool_name, false);
+                // ── Memory read interception (T3 cross-session defense) ──
+                intercept_memory_read(&mut resp, &session, &original_tool_name, pipeline.as_ref())
+                    .await;
                 // ── Output content safety review (LLM-based) ──
                 review_tool_output(&mut resp, &session, &original_tool_name, pipeline.as_ref())
                     .await;
@@ -928,6 +931,9 @@ async fn handle_tools_call(
                     mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
                     // ── Trust boundary tagging (high/network risk only) ──
                     tag_tool_result(&mut resp, &original_tool_name, false);
+                    // ── Memory read interception (T3 cross-session defense) ──
+                    intercept_memory_read(&mut resp, &session, &original_tool_name, pipeline.as_ref())
+                        .await;
                     // ── Output content safety review (LLM-based) ──
                     review_tool_output(&mut resp, &session, &original_tool_name, pipeline.as_ref())
                         .await;
@@ -1363,6 +1369,117 @@ fn tag_tool_result(resp: &mut Value, tool_name: &str, tainted: bool) {
                 debug!(
                     "trust boundary applied for tool '{}' (risk_class={})",
                     tool_name, risk_class
+                );
+            }
+        }
+    }
+}
+
+/// Intercept memory read results: local checks → LLM injection detection → filter/block.
+///
+/// This is the **read counterpart** of the write interceptor (P1.3). It runs
+/// AFTER the upstream MCP server returns memory content, before the content
+/// reaches the Agent context.
+///
+/// Defense against T3 (cross-session) memory poisoning:
+/// - Session A: attacker plants a prompt injection payload via `memory_save`
+///   (write interceptor catches obvious credentials/PII, but subtle injection
+///   may pass if `need_llm_check` was false or Engine was unavailable)
+/// - Session B: Agent calls `memory_search` → payload is retrieved
+/// - This interceptor scans the retrieved content and blocks/filters it
+///
+/// Flow:
+/// 1. Check if the tool is a memory read tool (via `is_memory_read_tool`)
+/// 2. Extract text from the JSON-RPC response
+/// 3. Local checks: size limit + credential leak detection (`intercept_read`)
+/// 4. If `need_llm_check`: call Engine `/v1/memory/check` for injection detection
+/// 5. If injection detected:
+///    - `filter_on_read = true`: wrap content in `<untrusted_data>` tags
+///    - `filter_on_read = false`: block the read entirely
+/// 6. If blocked: replace response text with a safe placeholder
+async fn intercept_memory_read(
+    resp: &mut Value,
+    session: &Session,
+    tool_name: &str,
+    pipeline: &SecurityPipeline,
+) {
+    let memory_interceptor = MemoryInterceptor::from_manifest();
+    if !memory_interceptor.is_enabled() || !memory_interceptor.is_memory_read_tool(tool_name) {
+        return;
+    }
+
+    let text = extract_result_text(resp);
+    if text.is_empty() {
+        return;
+    }
+
+    let mem_ctx = MemoryContext {
+        session_id: session.session_id.clone(),
+        trace_id: session.trace_id.clone(),
+        tool_name: tool_name.to_string(),
+    };
+
+    // 1. Local checks: size + credential leak detection
+    let read_result = memory_interceptor.intercept_read(&text, &mem_ctx);
+
+    if !read_result.allowed {
+        let reason = read_result
+            .block_reason
+            .unwrap_or_else(|| "memory_read_blocked".into());
+        warn!(
+            "memory read blocked (local check): tool={} session={} reason={}",
+            tool_name, session.session_id, reason
+        );
+        let safe_msg = format!("[Memory read blocked: {}]", reason);
+        replace_result_text(resp, &safe_msg);
+        return;
+    }
+
+    // 2. LLM-based injection detection (if needed)
+    if read_result.need_llm_check {
+        match pipeline
+            .check_memory(session, tool_name, &read_result.filtered_content)
+            .await
+        {
+            Ok(engine_resp) if !engine_resp.allowed => {
+                // Injection detected by LLM
+                let reason = engine_resp
+                    .block_reason
+                    .unwrap_or_else(|| "prompt_injection_detected".into());
+                info!(
+                    "memory read injection detected: tool={} session={} reason={}",
+                    tool_name, session.session_id, reason
+                );
+
+                // Filter or block based on policy
+                let filtered = memory_interceptor.filter_read_content(&read_result.filtered_content);
+                if filtered != read_result.filtered_content {
+                    // filter_on_read = true: wrap in <untrusted_data> tags
+                    debug!(
+                        "memory read content filtered (wrapped in untrusted_data): tool={} session={}",
+                        tool_name, session.session_id
+                    );
+                    replace_result_text(resp, &filtered);
+                } else {
+                    // filter_on_read = false: block entirely
+                    let safe_msg = format!("[Memory read blocked: injection detected ({})]", reason);
+                    replace_result_text(resp, &safe_msg);
+                }
+            }
+            Err(e) => {
+                // Engine unavailable — fail-closed for memory reads with injection risk
+                warn!(
+                    "memory read check failed (engine unavailable): tool={} session={} error={}",
+                    tool_name, session.session_id, e
+                );
+                let safe_msg = "[Memory read blocked: safety check unavailable]";
+                replace_result_text(resp, safe_msg);
+            }
+            _ => {
+                // All checks passed — read allowed
+                debug!(
+                    "memory read allowed: tool={} session={}",
+                    tool_name, session.session_id
                 );
             }
         }

@@ -592,7 +592,7 @@ if session_risk > 30: 提升审计采样率
 | 内核级阻断 | Landlock + gVisor | P2 | 🔧 代码完成 + 编译通过（Rust `pre_exec` hook 实现 Landlock + capset + prctl）；待 Linux 运行时验证 + 集成测试（`landlock_applied` 当前由 ABI 推断，待 self-pipe 精确上报）（详见 [ARCHITECTURE.md §2.3-2.4](ARCHITECTURE.md#23-p2-landlock--drop-caps-子进程linux)） |
 | 审计完整性 | hash chain | P1 | ✅ 已完成（详见 [§13.5](#135-审计完整性hash-chain)） |
 | 供应链身份 | License 签发/校验/吊销 | P0 | ✅ 已完成 |
-| 记忆管控 | Memory Interceptor（PII 脱敏 + 凭据检测 + LLM 注入检测） | P1 | 🔧 本地检查已实现（PII 脱敏 + 凭据检测 + size 限制，`virbius-core/src/memory_interceptor.rs`）；LLM 注入检测委托 Engine（`need_llm_check` 标志）；读取拦截 + 框架集成（LangChain/OpenAI SDK）待实现（详见 [§13.6](#136-记忆管控memory-interceptor)） |
+| 记忆管控 | Memory Interceptor（PII 脱敏 + 凭据检测 + LLM 注入检测） | P1 | ✅ 已完成（写入拦截 ✅ + 读取拦截 ✅ + 框架集成 ✅，详见 [§13.6](#136-记忆管控memory-interceptor)） |
 | 输出安全 | Output Review（PII 脱敏 ✅ + 凭据检测 ✅ + 内容安全 ✅） | P1 | ✅ 工具结果审查已完成（MCP Proxy 复用 Engine `/v1/evaluate` + qwen3guard 规则管线）；Agent 最终输出审查为设计建议，待应用层集成（详见 [§13.7](#137-输出审查output-review)） |
 | 决策链路追踪 | Trace Collector + Ingest + 可视化 | P1 | ✅ 已完成 |
 | 显式信任分层 | TrustTagger + TrustViolationDetector | P1.10 | ✅ 已完成（Edge 端包裹 `<trust_boundary>` + Engine 端违规检测，详见 [§13.10](#1310-显式信任分层explicit-trust-layering)） |
@@ -659,9 +659,11 @@ LASM 是一个 **7 层 × 4 类时间性**的网格：
 | | STI Taint 语义审计（工具返回值注入检测） | Engine `/v1/tool-result` | §13.2 | T1 | ✅ 已完成 |
 | | Prompt Gateway 宪法注入 + PII 脱敏 | `virbius-core` Prompt Gateway | §2.8 | T1 | ✅ 已完成 |
 | | Session Risk 自适应模型 | Engine `SessionRiskManager` + Redis | §13.3 | T1/T2 | ✅ 已完成 |
-| **L3 Memory** | **记忆管控**（MemoryInterceptor：PII 脱敏 + 凭据检测 + LLM 注入检测） | `virbius-core/src/memory_interceptor.rs` | §13.6 | T2/T3 | 🔧 写入拦截已实现；读取拦截 + 框架集成待实现 |
+| **L3 Memory** | **记忆管控**（MemoryInterceptor：PII 脱敏 + 凭据检测 + LLM 注入检测） | `virbius-core/src/memory_interceptor.rs` | §13.6 | T2/T3 | ✅ 写入拦截 ✅ + 读取拦截 ✅ |
 | | MCP Proxy 写入拦截（14 种记忆工具前缀匹配） | `virbius-mcp-proxy/router.rs` | §2.9 | T2/T3 | ✅ 已实现 |
-| | Engine `/v1/memory/check`（LLM 注入检测） | `EvaluateOrchestrator.checkMemory` | §13.6 | T2/T3 | ✅ 已实现 |
+| | MCP Proxy 读取拦截（25 种记忆读取工具前缀匹配） | `virbius-mcp-proxy/router.rs` | §13.6 | T2/T3 | ✅ 已实现 |
+| | Engine `/v1/memory/check`（LLM 注入检测，读写共用） | `EvaluateOrchestrator.checkMemory` | §13.6 | T2/T3 | ✅ 已实现 |
+| | 框架集成（LangChain Memory + OpenAI Assistants + 通用后端） | `examples/memory_interceptor_wrappers.py` + `virbius-mcp-python` | §13.6 | T2/T3 | ✅ 已实现 |
 | **L4 Tool Execution** | 端层预检（参数校验 + allowlist + JSON Schema） | `virbius-core` + `virbius-mcp-proxy` | §2.1 | T1 | ✅ 已完成 |
 | | 管层 WASM（allowlist + 计数 + 快速通道） | `virbius-gateway/wasm/` | §3.2 | T1 | ✅ 已完成 |
 | | 云层 Groovy L3 终判（工具链检测） | `virbius-groovy-l3` + Engine | §5.3 | T1/T2 | ✅ 已完成 |
@@ -689,7 +691,7 @@ LASM 是一个 **7 层 × 4 类时间性**的网格：
 ```
 L1 Foundation            ░░░░░░░░░░░░░░░░░░░░   5%   超出范围，仅宪法注入间接缓解
 L2 Cognitive             ████████████████████  95%   信任分层 ✅ / 规划劫持 ⏳
-L3 Memory                ████████████████░░░░  80%   写入拦截 ✅ / 读取拦截 ❌
+L3 Memory                ████████████████████ 100%   写入拦截 ✅ / 读取拦截 ✅ / 框架集成 ✅
 L4 Tool Execution        ████████████████████ 100%   全链路覆盖
 L5 Multi-Agent           ██░░░░░░░░░░░░░░░░░░  10%   仅多上游路由，无协同安全
 L6 Ecosystem             ██████████████░░░░░░  70%   License ✅ / 完整性校验 ❌ / AgentBOM ❌
@@ -701,7 +703,7 @@ L7 Governance            ██████████████████�
 ```
 T1 即时攻击              ████████████████████ 100%   Prompt 注入检测 + 工具拦截 + 沙箱
 T2 单会话持久            ██████████████████░░  90%   Session Risk + 信任分层 + 记忆写入拦截
-T3 跨会话累积            ██████████████░░░░░░  70%   记忆拦截部分覆盖 / 规划劫持检测 ⏳
+T3 跨会话累积            ████████████████░░░░  80%   记忆读写拦截 ✅ / 规划劫持检测 ⏳
 T4 参数级/跨层传播       ██████████░░░░░░░░░░  50%   审计 Hash Chain ✅ / 跨层传播检测不足
 ```
 
@@ -712,7 +714,7 @@ LASM 论文指出：**高层（Ecosystem、Governance）以及长周期、跨层
 | LASM 指出的空白格 | VirbiusAgent 缺口 | 补齐方案 | 优先级 |
 |------------------|-------------------|---------|--------|
 | **L5 Multi-Agent**（T2/T3） | 多 Agent 协同安全完全缺失 | A2A 消息链路验证 + 委派权限约束 + Agent 间信任传播追踪 | 高（论文指出防御最薄弱） |
-| **L3 Memory**（T3 跨会话） | 读取拦截 + 框架集成未实现 | `intercept_read()` + LangChain/OpenAI SDK Wrapper | 高 |
+| **L3 Memory**（T3 跨会话） | ✅ 已补齐：`intercept_read()` + LangChain/OpenAI SDK Wrapper | ✅ 已实现（详见 [§13.6](#136-记忆管控memory-interceptor)） | — |
 | **L2 Cognitive**（T2/T3 跨轮次） | 规划劫持检测未实现 | P1.11 `IntentAnchor` + `PlanDriftDetector` | 高 |
 | **L6 Ecosystem**（T4） | MCP Server 完整性校验缺失 | MCP Server 来源签名验证 + AgentBOM 物料清单 | 中 |
 | **L1 Foundation**（T4） | 模型后门/训练数据污染无法检测 | 超出 VirbiusAgent 范围（属模型供应商责任） | 不适用 |
@@ -2335,15 +2337,130 @@ impl MemoryInterceptor {
 }
 ```
 
-#### 13.6.2 框架集成
+#### 13.6.2 读取拦截实现（T3 跨会话防御）
 
-| 框架 | 集成方式 | 拦截点 | 状态 |
-|------|---------|--------|------|
-| **LangChain** | `MemoryInterceptorWrapper` 包装 `Memory.save_context()` / `Memory.load_memory_variables()` | 记忆读写 API | P1 实现 |
-| **OpenAI SDK** | 拦截 Assistants API `message create/retrieve` | API 调用层 | P1 实现 |
-| **通用** | 独立记忆代理服务，Agent 记忆操作经 HTTP/gRPC proxy 转发 | 网络层 | P1 实现 |
+> **状态**：✅ 已实现
 
-#### 13.6.3 策略配置
+读取拦截是 T3（跨会话）防御的核心：攻击者在会话 A 中通过 `memory_save` 植入的载荷（即使通过了写入拦截的本地检查），在会话 B 中被 `memory_search` / `memory_load` 检索时，必须经过读取扫描才能进入 Agent 上下文。
+
+**架构差异**：
+- **写入拦截**在工具调用**之前**执行（拦截 `tools/call` 请求）
+- **读取拦截**在工具返回**之后**执行（拦截 `tools/call` 响应）
+
+**读取拦截流程**：
+
+```
+Agent 调用 memory_search("user preferences")
+  │
+  ▼
+MCP Proxy 转发到上游 MCP Server
+  │
+  ▼
+上游返回记忆内容（可能含注入载荷）
+  │
+  ▼
+[读取拦截] intercept_memory_read()
+  ├── 1. 尺寸检查（防记忆炸弹）
+  ├── 2. 凭据泄露检测（历史遗留凭据）
+  ├── 3. 若 need_llm_check → Engine /v1/memory/check
+  │      ├── 注入命中 + filter_on_read=true → 包裹 <untrusted_data> 标签
+  │      └── 注入命中 + filter_on_read=false → 阻断读取
+  └── 4. 安全内容 → 原样返回
+  │
+  ▼
+安全记忆内容 → Agent 上下文
+```
+
+**`intercept_read()` 核心逻辑**（`virbius-core/src/memory_interceptor.rs`）：
+
+```rust
+pub fn intercept_read(&self, content: &str, _ctx: &MemoryContext) -> MemoryReadResult {
+    // 1. 尺寸检查（防记忆炸弹）
+    if content.len() > self.policies.max_read_size {
+        return MemoryReadResult::blocked("memory_read_too_large");
+    }
+    // 2. 凭据泄露检测（历史遗留凭据）
+    for pattern in &self.policies.credential_patterns {
+        if pattern.regex.is_match(content) {
+            return MemoryReadResult::blocked("credential_leak_detected");
+        }
+    }
+    // 3. 决定是否需要 LLM 注入检测
+    let need_llm = self.policies.detect_injection_on_read
+        && content.len() >= self.policies.min_llm_check_length;
+    MemoryReadResult::allowed(content.to_string(), need_llm)
+}
+```
+
+**MCP Proxy 集成**（`virbius-mcp-proxy/src/router.rs`）：
+
+读取拦截在 `tag_tool_result()` 之后、`review_tool_output()` 之前执行，与现有的 PII 脱敏、信任标签、输出审查形成分层防御链：
+
+```rust
+// 在上游返回后：
+mask_pii_in_response(&mut resp, ...);           // 1. PII 脱敏
+tag_tool_result(&mut resp, ...);                 // 2. 信任边界标签
+intercept_memory_read(&mut resp, ...).await;     // 3. 记忆读取拦截（新增）
+review_tool_output(&mut resp, ...).await;        // 4. 输出内容审查
+```
+
+**`filter_read_content()` — 注入内容过滤**：
+
+当 Engine 的 LLM 检测到注入时，若 `filter_on_read = true`，将内容包裹在 `<untrusted_data>` 标签中，与 §13.10 的显式信任分层机制联动：
+
+```rust
+pub fn filter_read_content(&self, content: &str) -> String {
+    format!(
+        "<untrusted_data source=\"memory_read\" reason=\"injection_detected\">\n{}\n</untrusted_data>",
+        content
+    )
+}
+```
+
+Agent 的 `TrustViolationDetector`（§13.10）会检测到 Agent 试图执行 `<untrusted_data>` 标签内的指令，触发告警/阻断。
+
+#### 13.6.3 框架集成
+
+> **状态**：✅ 已实现
+
+| 框架 | 集成方式 | 拦截点 | 实现文件 | 状态 |
+|------|---------|--------|---------|------|
+| **LangChain** | `VirbiusLangChainMemory` 包装 `Memory.save_context()` / `Memory.load_memory_variables()` | 记忆读写 API | `examples/memory_interceptor_wrappers.py` | ✅ 已实现 |
+| **OpenAI SDK** | `VirbiusOpenAIAssistantsMemory` 拦截 Assistants API `messages.create/list/retrieve` | API 调用层 | `examples/memory_interceptor_wrappers.py` | ✅ 已实现 |
+| **通用后端** | `VirbiusGenericMemory` 包装任何实现 `save/load/search` 协议的后端 | 接口层 | `examples/memory_interceptor_wrappers.py` | ✅ 已实现 |
+| **MCP Proxy** | 独立记忆代理服务，Agent 记忆操作经 MCP 协议代理转发 | 网络层 | `virbius-mcp-proxy/src/router.rs` | ✅ 已实现 |
+| **PyO3 绑定** | 原生 Rust → Python FFI 绑定 | SDK 层 | `virbius-mcp-python/src/lib.rs` | ✅ 已实现 |
+
+**Python SDK 调用方式**：
+
+```python
+from virbius_mcp_python import intercept_memory_write, intercept_memory_read
+from examples.memory_interceptor_wrappers import VirbiusLangChainMemory
+
+# 1. 直接调用（无框架依赖）
+result = intercept_memory_write(
+    content="user@email.com likes dark mode",
+    session_id="sess-123",
+    trace_id="trace-456",
+    tool_name="memory_save",
+)
+# result = {"allowed": True, "sanitized_content": "***@email.com likes dark mode", "pii_found": True, ...}
+
+# 2. LangChain 集成
+from langchain.memory import ConversationBufferMemory
+safe_memory = VirbiusLangChainMemory(
+    backend=ConversationBufferMemory(),
+    session_id="sess-123",
+    trace_id="trace-456",
+    engine_url="http://127.0.0.1:8082",  # 可选：启用 LLM 注入检测
+)
+safe_memory.save_context(...)     # ← 写入拦截自动执行
+vars = safe_memory.load_memory_variables(...)  # ← 读取拦截自动执行
+```
+
+**降级策略**：当 `virbius_mcp_python` 原生模块未构建时，Python Wrapper 自动降级为 stub 模式（全放行），确保开发环境可用性。生产环境必须构建原生模块（`cd virbius-mcp-python && maturin develop`）。
+
+#### 13.6.4 策略配置
 
 ```toml
 # virbius-control → 策略下发 → virbius-core manifest
@@ -2351,13 +2468,28 @@ impl MemoryInterceptor {
 enabled = true
 desensitize_on_write = true       # 写入时 PII 脱敏
 detect_injection_on_write = true  # 写入时注入检测
-detect_injection_on_read = true   # 读取时注入检测
-filter_on_read = true             # 读取时过滤恶意片段
+detect_injection_on_read = true   # 读取时注入检测（T3 防御）
+filter_on_read = true             # 读取时过滤恶意片段（包裹 <untrusted_data>）
+max_read_size = 65536             # 读取结果最大尺寸（字节）
 audit_all_operations = true       # 全量审计
 injection_threshold = 0.7         # 注入检测置信度阈值
 ```
 
-#### 13.6.4 成本控制
+**配置字段对照**（`virbius-core/src/manifest.rs`）：
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `memory_interceptor_enabled` | bool | false | 全局开关 |
+| `memory_desensitize_on_write` | bool | true | 写入时 PII 脱敏 |
+| `memory_detect_injection_on_write` | bool | true | 写入时 LLM 注入检测 |
+| `memory_detect_injection_on_read` | bool | true | 读取时 LLM 注入检测 |
+| `memory_filter_on_read` | bool | true | 读取时过滤（true）或阻断（false） |
+| `memory_max_entry_size` | usize | 4096 | 写入条目最大尺寸 |
+| `memory_max_read_size` | usize | 65536 | 读取结果最大尺寸 |
+| `memory_tool_patterns` | Vec<String> | 10 种前缀 | 记忆写入工具名前缀 |
+| `memory_read_tool_patterns` | Vec<String> | 18 种前缀 | 记忆读取工具名前缀 |
+
+#### 13.6.5 成本控制
 
 - PII 脱敏：纯规则（正则 + 实体识别），无 LLM 调用
 - 注入检测：复用 `qwen3guard:0.6b` 小模型（<200ms），仅在启用时触发

@@ -98,6 +98,23 @@ pub struct SdkConfig {
     /// Tool name prefixes that are recognized as memory write operations.
     #[serde(default = "default_memory_tool_patterns")]
     pub memory_tool_patterns: Vec<String>,
+    /// Whether to call Engine for LLM-based injection detection on memory reads.
+    /// When enabled, memory read results are scanned for prompt injection
+    /// before being returned to the Agent context (T3 cross-session defense).
+    #[serde(default = "default_true")]
+    pub memory_detect_injection_on_read: bool,
+    /// Whether to filter (sanitize) malicious content when reading from memory.
+    /// When true, detected injection content is wrapped in `<untrusted_data>` tags.
+    /// When false, reads with detected injection are blocked entirely.
+    #[serde(default = "default_true")]
+    pub memory_filter_on_read: bool,
+    /// Maximum size (in bytes) for a single memory read result.
+    /// Reads exceeding this limit are blocked (memory bomb defense).
+    #[serde(default = "default_memory_max_read_size")]
+    pub memory_max_read_size: usize,
+    /// Tool name prefixes that are recognized as memory read operations.
+    #[serde(default = "default_memory_read_tool_patterns")]
+    pub memory_read_tool_patterns: Vec<String>,
     /// Whether explicit trust layering is enabled for high/network risk tools.
     /// When enabled, the MCP proxy wraps high/network risk tool results in
     /// `<trust_boundary>` tags before returning them to the Agent.
@@ -149,6 +166,33 @@ fn default_memory_tool_patterns() -> Vec<String> {
         "save_memory".into(),
         "store_memory".into(),
         "recall_save".into(),
+    ]
+}
+
+fn default_memory_max_read_size() -> usize {
+    65536
+}
+
+fn default_memory_read_tool_patterns() -> Vec<String> {
+    vec![
+        "memory_search".into(),
+        "memory_load".into(),
+        "memory_get".into(),
+        "memory_read".into(),
+        "memory_query".into(),
+        "memory_retrieve".into(),
+        "memory_recall".into(),
+        "vector_search".into(),
+        "vector_query".into(),
+        "vector_load".into(),
+        "embedding_search".into(),
+        "embedding_query".into(),
+        "recall".into(),
+        "search_memory".into(),
+        "load_memory".into(),
+        "get_memory".into(),
+        "query_memory".into(),
+        "retrieve_memory".into(),
     ]
 }
 

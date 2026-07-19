@@ -29,7 +29,8 @@ pub use license::{License, LicenseClaims, LicenseError};
 pub use manifest::ToolPolicy;
 pub use mcp::{execute as mcp_execute, McpToolCall, ToolResult as McpToolResult};
 pub use memory_interceptor::{
-    CredentialPattern, MemoryContext, MemoryInterceptor, MemoryPolicies, MemoryWriteResult,
+    CredentialPattern, MemoryContext, MemoryInterceptor, MemoryPolicies, MemoryReadResult,
+    MemoryWriteResult,
 };
 pub use precheck::{precheck, PrecheckResult, ToolCall};
 pub use sync::EdgeInitConfig;

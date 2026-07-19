@@ -693,7 +693,8 @@ return currentLayer;
       if ((runtime === 'lua' || runtime === 'groovy') && typeof body === 'string') {
         const declared = new Set([
           'rule_id', 'rule_revision', 'tenant_id', 'reason_code', 'intent_action', 'risk_score', 'hit_at',
-          'user_id', 'device_id', 'client_ip', 'session_id', 'content', 'scene', 'route_uri'
+          'user_id', 'device_id', 'client_ip', 'session_id', 'content', 'scene', 'route_uri',
+          'app_id', 'tool_name', 'tool_session_key'
         ]);
         (contextVars || []).forEach(v => { if (v.logical) declared.add(v.logical); });
         const warned = new Set();
