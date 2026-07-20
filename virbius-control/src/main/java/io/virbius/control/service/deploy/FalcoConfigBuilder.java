@@ -22,11 +22,24 @@ public class FalcoConfigBuilder {
         List<RuleRevision> rules = ruleRepo.listCurrentRules(tenantId, "falco");
         StringBuilder sb = new StringBuilder();
         sb.append("# Virbius Falco rules (auto-generated)\n\n");
-        sb.append("- list: virbius_falco_tools\n");
-        sb.append("  items: [curl, wget, scp, sqlite3, mysql, bash, python3]\n\n");
 
+        // ── Phase 1: emit falco_list entries first (lists must precede rules) ──
         for (RuleRevision rule : rules) {
             if (!"falco".equals(rule.layer())) continue;
+            if (!"falco_list".equals(rule.runtime())) continue;
+            String body = rule.body() instanceof String s ? s : String.valueOf(rule.body());
+            String items = extractField(body, "items");
+            if (items == null || items.isBlank()) {
+                items = "[]";
+            }
+            sb.append("- list: ").append(rule.ruleId()).append("\n");
+            sb.append("  items: [").append(items).append("]\n\n");
+        }
+
+        // ── Phase 2: emit falco rules ──
+        for (RuleRevision rule : rules) {
+            if (!"falco".equals(rule.layer())) continue;
+            if ("falco_list".equals(rule.runtime())) continue;
             String body = rule.body() instanceof String s ? s : String.valueOf(rule.body());
             String condition = extractField(body, "condition");
             if (condition == null || condition.isBlank()) {
@@ -76,6 +89,9 @@ public class FalcoConfigBuilder {
         if (body.charAt(start) == '"') {
             int end = body.indexOf('"', start + 1);
             if (end > start) return body.substring(start + 1, end);
+        } else if (body.charAt(start) == '[') {
+            int end = body.indexOf(']', start);
+            if (end > start) return body.substring(start + 1, end).trim();
         } else {
             int end = start;
             while (end < body.length() && body.charAt(end) != ',' && body.charAt(end) != '}') end++;

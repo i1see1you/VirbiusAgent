@@ -13,6 +13,9 @@ target/
 .vscode/
 *~
 
+# Tool private config
+.catpaw/
+
 # macOS
 .DS_Store
 

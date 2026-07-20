@@ -263,7 +263,7 @@ mod tests {
 
     #[test]
     fn scan_rejects_empty_content() {
-        let edge = VirbiusEdge::new();
+        let edge = VirbiusEdge::default();
         assert_eq!(edge.scan(""), Err(VirbiusError::EmptyContent));
     }
 

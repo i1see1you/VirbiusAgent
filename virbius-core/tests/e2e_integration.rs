@@ -3,7 +3,7 @@
 //! These tests validate the full flow:
 //! 1. License verification (edge layer identity check)
 //! 2. Tool pre-check (allowlist + JSON Schema validation)
-//! 3. Prompt Gateway (constitution injection + PII desensitization)
+//! 3. Prompt Gateway (trust directive + PII desensitization)
 //! 4. MCP tool execution (subprocess backend)
 //! 5. Tool result validation (STI taint markers)
 //! 6. Audit trail integrity (trace_id propagation)
@@ -70,7 +70,6 @@ fn make_enhance_context(session_id: &str, license_tools: Vec<&str>) -> EnhanceCo
         risk_score: 0,
         recent_tools: vec![],
         license_tools: license_tools.into_iter().map(String::from).collect(),
-        constitution_version: "v1".into(),
     }
 }
 
@@ -115,7 +114,7 @@ fn e2e_full_allow_path() {
     );
     assert!(precheck_result.reason.is_none());
 
-    // 3. Prompt Gateway: enhance messages with constitution + PII desensitization
+    // 3. Prompt Gateway: enhance messages with trust directive + PII desensitization
     let mut messages = vec![r#"{"role":"user","content":"my phone is 13800138000"}"#.to_string()];
     let ctx = make_enhance_context("sess-e2e-1", vec!["read_file", "search"]);
     let gateway = PromptGateway::new();
@@ -262,10 +261,10 @@ fn e2e_license_revocation() {
     virbius_core::license::unrevoke("revocation-test-agent");
 }
 
-// ─── E2E Test 5: Prompt Gateway constitution injection ──────────
+// ─── E2E Test 5: Prompt Gateway trust directive injection ──────────
 
 #[test]
-fn e2e_prompt_gateway_constitution_injection() {
+fn e2e_prompt_gateway_trust_directive_injection() {
     let mut messages = vec![r#"{"role":"user","content":"hello"}"#.to_string()];
     let ctx = EnhanceContext {
         app_id: "test-agent".into(),
@@ -277,7 +276,6 @@ fn e2e_prompt_gateway_constitution_injection() {
             result_summary: "500 lines of Rust code".into(),
         }],
         license_tools: vec!["read_file".into(), "search".into()],
-        constitution_version: "v1".into(),
     };
 
     let gateway = PromptGateway::new();
@@ -286,7 +284,7 @@ fn e2e_prompt_gateway_constitution_injection() {
         .expect("enhance should succeed");
 
     // A system message should be injected (either new or merged into existing)
-    // when a constitution template is available. If no manifest is loaded,
+    // when a trust directive is available. If no manifest is loaded,
     // the gateway may skip injection — so we check that messages are non-empty
     // and the gateway didn't error.
     //
@@ -296,7 +294,7 @@ fn e2e_prompt_gateway_constitution_injection() {
         !messages.is_empty(),
         "messages should not be empty after enhance"
     );
-    // Check if constitution was actually injected (depends on manifest being loaded)
+    // Check if trust directive was actually injected (depends on manifest being loaded)
     let has_system = messages
         .iter()
         .any(|m| m.contains("\"role\":\"system\"") || m.contains("\"role\": \"system\""));
@@ -462,7 +460,6 @@ fn e2e_multi_tool_session_simulation() {
             "write_file".into(),
             "delete_file".into(),
         ],
-        constitution_version: "v1".into(),
     };
     let gateway = PromptGateway::new();
     gateway

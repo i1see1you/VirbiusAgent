@@ -6,7 +6,7 @@
  *   - Content scanning (DLP / keyword matching)
  *   - License verification (Ed25519 JWT)
  *   - Tool pre-check (allowlist + JSON Schema)
- *   - Prompt enhancement (constitution injection + PII desensitization)
+ *   - Prompt enhancement (trust directive + PII desensitization)
  *
  * Thread safety: All functions are thread-safe after initialization.
  * Memory management: Strings returned in result structs or as return values
@@ -208,10 +208,10 @@ int virbius_precheck(const char *tool_name,
  * ========================================================================= */
 
 /**
- * Enhance a prompt with constitution injection and PII desensitization.
+ * Enhance a prompt with trust boundary directive and PII desensitization.
  *
- * Injects constitutional rules as a system message prefix, adds dynamic context
- * suffix (recent tool activity), and desensitizes PII in user/assistant messages.
+ * Injects trust boundary rules as a system message prefix, adds dynamic context
+ * (recent tool activity), and desensitizes PII in user/assistant messages.
  *
  * @param messages_json  JSON array of message strings (nul-terminated).
  *                       Each message is a JSON-serialized chat message object
@@ -222,8 +222,7 @@ int virbius_precheck(const char *tool_name,
  *                         "session_id": "sess-123",
  *                         "scene": "chat",
  *                         "risk_score": 0,
- *                         "license_tools": ["read_file", "search"],
- *                         "constitution_version": "v1"
+ *                         "license_tools": ["read_file", "search"]
  *                       }
  * @return Heap-allocated JSON array string of enhanced messages on success,
  *         NULL on error. Caller MUST free with virbius_free_string.

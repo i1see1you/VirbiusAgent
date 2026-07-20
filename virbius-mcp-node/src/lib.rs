@@ -77,10 +77,10 @@ pub fn desensitize(text: String, trace_id: String) -> String {
     result.text
 }
 
-/// Enhance a prompt with constitution injection and PII desensitization.
+/// Enhance a prompt with trust boundary directive and PII desensitization.
 ///
 /// `messages_json` is a JSON array of message strings (e.g. `["{...system...}", "{...user...}"]`).
-/// `context_json` contains enhancement context: `{ app_id, session_id, scene, risk_score, license_tools, constitution_version }`.
+/// `context_json` contains enhancement context: `{ app_id, session_id, scene, risk_score, license_tools }`.
 /// Returns the enhanced messages as a JSON array string.
 #[napi]
 pub fn enhance_prompt(messages_json: String, context_json: String) -> Result<String> {
@@ -99,11 +99,6 @@ pub fn enhance_prompt(messages_json: String, context_json: String) -> Result<Str
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        scene: ctx
-            .get("scene")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string(),
         risk_score: ctx.get("risk_score").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         recent_tools: vec![],
         license_tools: ctx
@@ -115,11 +110,6 @@ pub fn enhance_prompt(messages_json: String, context_json: String) -> Result<Str
                     .collect()
             })
             .unwrap_or_default(),
-        constitution_version: ctx
-            .get("constitution_version")
-            .and_then(|v| v.as_str())
-            .unwrap_or("v1")
-            .to_string(),
     };
 
     let mut messages: Vec<String> = serde_json::from_str(&messages_json)

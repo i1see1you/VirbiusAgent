@@ -3,7 +3,7 @@
 mod api;
 mod audit;
 pub mod bootstrap;
-mod dlp;
+pub mod dlp;
 mod enforce;
 mod engine;
 pub mod license;
@@ -381,14 +381,14 @@ pub extern "C" fn virbius_verify_license(
 }
 
 // =========================================================================
-// C ABI: Prompt enhancement (constitution injection + PII desensitization)
+// C ABI: Prompt enhancement (trust directive + PII desensitization)
 // =========================================================================
 
-/// Enhance a prompt with constitution injection and PII desensitization.
+/// Enhance a prompt with trust boundary directive and PII desensitization.
 ///
 /// `messages_json` is a JSON array of message strings.
 /// `context_json` contains enhancement context:
-/// `{ "app_id": "...", "session_id": "...", "risk_score": 0, "license_tools": [...], "constitution_version": "v1" }`
+/// `{ "app_id": "...", "session_id": "...", "risk_score": 0, "license_tools": [...] }`
 ///
 /// Returns a heap-allocated C string containing the enhanced messages JSON array,
 /// or NULL on error. The caller MUST free the returned string with `virbius_free_string`.
@@ -436,11 +436,6 @@ pub extern "C" fn virbius_enhance_prompt(
                     .collect()
             })
             .unwrap_or_default(),
-        constitution_version: ctx
-            .get("constitution_version")
-            .and_then(|v| v.as_str())
-            .unwrap_or("v1")
-            .to_string(),
     };
 
     let mut messages: Vec<String> = match serde_json::from_str(&messages_raw) {

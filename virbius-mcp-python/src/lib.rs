@@ -83,7 +83,7 @@ fn desensitize(text: String, trace_id: String, rules_json: Option<String>) -> Py
     Ok(result.text)
 }
 
-/// Enhance a prompt with constitution and context.
+/// Enhance a prompt with trust directive and PII desensitization.
 #[pyfunction]
 fn enhance_prompt(messages_json: String, context_json: String) -> PyResult<String> {
     let prompt_gateway = virbius_core::prompt_gateway::PromptGateway::new();
@@ -101,11 +101,6 @@ fn enhance_prompt(messages_json: String, context_json: String) -> PyResult<Strin
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
-        scene: ctx
-            .get("scene")
-            .and_then(|v| v.as_str())
-            .unwrap_or("default")
-            .to_string(),
         risk_score: ctx.get("risk_score").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
         recent_tools: vec![],
         license_tools: ctx
@@ -117,11 +112,6 @@ fn enhance_prompt(messages_json: String, context_json: String) -> PyResult<Strin
                     .collect()
             })
             .unwrap_or_default(),
-        constitution_version: ctx
-            .get("constitution_version")
-            .and_then(|v| v.as_str())
-            .unwrap_or("v1")
-            .to_string(),
     };
 
     let mut messages: Vec<String> = serde_json::from_str(&messages_json)
