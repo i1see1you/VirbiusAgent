@@ -134,6 +134,9 @@ pub struct AppState {
     pub egress_client: EgressClient,
     pub egress_hosts: Arc<Vec<String>>,
     pub public_key_pem: Arc<String>,
+    /// Fallback License JWT loaded from config file (used when Agent doesn't
+    /// pass `_meta.license_jwt` in `initialize`).
+    pub fallback_license_jwt: Arc<String>,
     pub trace_collector: SharedTraceCollector,
     /// SSE sessions: session_id -> channel to push JSON-RPC responses
     pub sse_sessions: Arc<DashMap<String, mpsc::Sender<Value>>>,
@@ -249,6 +252,7 @@ async fn handle_post_message(
             &state_clone.egress_client,
             &state_clone.egress_hosts,
             &state_clone.public_key_pem,
+            &state_clone.fallback_license_jwt,
             &state_clone.trace_collector,
             &state_clone.conn_to_session,
         )
@@ -285,6 +289,7 @@ async fn handle_simple_post(State(state): State<AppState>, Json(request): Json<V
         &state.egress_client,
         &state.egress_hosts,
         &state.public_key_pem,
+        &state.fallback_license_jwt,
         &state.trace_collector,
         &state.conn_to_session,
     )

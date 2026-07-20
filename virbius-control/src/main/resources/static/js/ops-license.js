@@ -73,7 +73,7 @@ function hideIssueForm() {
   document.getElementById('licAllowedTools').value = '';
   document.getElementById('licRiskQuota').value = '60';
   document.getElementById('licToolRateLimit').value = '50';
-  document.getElementById('licExpirySeconds').value = '86400';
+  document.getElementById('licExpirySeconds').value = '31536000';
   document.getElementById('licDescription').value = '';
 }
 
@@ -85,7 +85,7 @@ async function doIssueLicense() {
   const allowedTools = toolsRaw ? toolsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
   const riskQuota = parseInt(document.getElementById('licRiskQuota').value) || 60;
   const toolRateLimit = parseInt(document.getElementById('licToolRateLimit').value) || 50;
-  const expirySeconds = parseInt(document.getElementById('licExpirySeconds').value) || 86400;
+  const expirySeconds = parseInt(document.getElementById('licExpirySeconds').value) || 31536000;
   const description = document.getElementById('licDescription').value.trim();
 
   try {

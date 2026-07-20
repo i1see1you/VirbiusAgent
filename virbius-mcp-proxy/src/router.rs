@@ -39,6 +39,7 @@ pub async fn route_request(
     egress_client: &EgressClient,
     egress_hosts: &[String],
     public_key_pem: &str,
+    fallback_license_jwt: &str,
     trace_collector: &SharedTraceCollector,
     conn_to_session: &DashMap<String, String>,
 ) -> Option<Value> {
@@ -71,6 +72,7 @@ pub async fn route_request(
                 session_mgr,
                 upstream_mgr,
                 public_key_pem,
+                fallback_license_jwt,
                 conn_to_session,
             )
             .await
@@ -168,12 +170,24 @@ async fn handle_initialize(
     session_mgr: &SessionManager,
     upstream_mgr: &UpstreamManager,
     _public_key_pem: &str,
+    fallback_license_jwt: &str,
     conn_to_session: &DashMap<String, String>,
 ) -> Option<Value> {
     // Extract session info from _meta; session.session_id comes from
     // _meta.session_id (or auto-generated UUID if not provided).
     let meta = params.get("_meta").unwrap_or(&Value::Null);
     let mut session = Session::from_meta(meta);
+
+    // Fallback: if Agent did not pass _meta.license_jwt, use the License JWT
+    // from config file (if configured).
+    if !session.has_license() && !fallback_license_jwt.is_empty() {
+        session.apply_fallback_license(fallback_license_jwt);
+        info!(
+            "initialize: using fallback license from file, app_id={}",
+            session.app_id
+        );
+    }
+
     let logical_sid = session.session_id.clone();
 
     // Reconnect: preserve accumulated state from the previous connection

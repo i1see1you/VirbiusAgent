@@ -78,6 +78,10 @@ pub struct SecuritySection {
     pub engine_url: String,
     #[serde(default)]
     pub license_public_key: String,
+    /// Path to a file containing a License JWT (Ed25519-signed).
+    /// Used as fallback when Agent does not pass `_meta.license_jwt` in `initialize`.
+    #[serde(default)]
+    pub license_file: String,
     #[serde(default = "default_fallback")]
     pub fallback_policy: String,
     #[serde(default)]
@@ -104,6 +108,7 @@ impl Default for SecuritySection {
             control_base_url: default_control_url(),
             engine_url: default_engine_url(),
             license_public_key: String::new(),
+            license_file: String::new(),
             fallback_policy: default_fallback(),
             fast_path: FastPathConfig::default(),
             failover: FailoverConfig::default(),
@@ -277,6 +282,9 @@ impl ProxyConfig {
         }
         if let Ok(v) = std::env::var("VIRBIUS_LICENSE_PUBLIC_KEY") {
             cfg.security.license_public_key = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_LICENSE_FILE") {
+            cfg.security.license_file = v;
         }
         if let Ok(v) = std::env::var("VIRBIUS_FALLBACK_POLICY") {
             cfg.security.fallback_policy = v;

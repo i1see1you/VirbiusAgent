@@ -213,6 +213,7 @@ async fn route(env: &ProxyEnv, request: &Value, session_id: &str) -> Option<Valu
         &env.egress_client,
         &env.egress_hosts,
         &env.pubkey,
+        "",
         &env.trace_collector,
         &env.conn_to_session,
     )

@@ -133,17 +133,47 @@ impl Session {
     pub fn mark_upstream_initialized(&mut self, name: &str) {
         self.upstream_initialized.insert(name.to_string(), true);
     }
+
+    /// Apply a fallback License JWT (from config file) when the Agent did not
+    /// pass `_meta.license_jwt` in the `initialize` request.
+    ///
+    /// Extracts `app_id`, `tenant_id`, and `allowed_tools` from the JWT claims
+    /// (without signature verification — verification happens at `tools/call`
+    /// time in the security pipeline). If the Agent already provided an
+    /// `app_id` in `_meta`, it is kept; otherwise the `app_id` from the JWT
+    /// claims is used (required for `License::verify` to succeed).
+    pub fn apply_fallback_license(&mut self, jwt: &str) {
+        self.license_jwt = jwt.to_string();
+        self.allowed_tools = extract_allowed_tools_from_jwt(jwt);
+
+        if let Some(claims) = extract_claims_from_jwt(jwt) {
+            // app_id must match between session and JWT for License::verify.
+            // If Agent didn't provide app_id, use the one from JWT.
+            if self.app_id.is_empty() {
+                if let Some(app_id) = claims.get("app_id").and_then(|v| v.as_str()) {
+                    self.app_id = app_id.to_string();
+                }
+            }
+            // Similarly for tenant_id.
+            if self.tenant_id.is_empty() || self.tenant_id == "default" {
+                if let Some(tenant_id) = claims.get("tenant_id").and_then(|v| v.as_str()) {
+                    self.tenant_id = tenant_id.to_string();
+                }
+            }
+        }
+    }
 }
 
-/// Decode the JWT payload (base64url) and extract `allowed_tools`.
+/// Decode the JWT payload (base64url) and extract claims as a JSON Value.
 ///
 /// This does **not** verify the signature — it is used only for display-level
-/// filtering in `tools/list`. The actual security enforcement happens at
-/// `tools/call` time via full License verification in the security pipeline.
-fn extract_allowed_tools_from_jwt(jwt: &str) -> Vec<String> {
+/// filtering in `tools/list` and fallback license injection. The actual
+/// security enforcement happens at `tools/call` time via full License
+/// verification in the security pipeline.
+fn extract_claims_from_jwt(jwt: &str) -> Option<serde_json::Value> {
     let parts: Vec<&str> = jwt.split('.').collect();
     if parts.len() != 3 {
-        return Vec::new();
+        return None;
     }
 
     // Try URL-safe no-pad first, then standard with manual padding
@@ -161,12 +191,21 @@ fn extract_allowed_tools_from_jwt(jwt: &str) -> Vec<String> {
         .unwrap_or_default();
 
     if payload_bytes.is_empty() {
-        return Vec::new();
+        return None;
     }
 
-    let claims: serde_json::Value = match serde_json::from_slice(&payload_bytes) {
-        Ok(v) => v,
-        Err(_) => return Vec::new(),
+    serde_json::from_slice(&payload_bytes).ok()
+}
+
+/// Decode the JWT payload (base64url) and extract `allowed_tools`.
+///
+/// This does **not** verify the signature — it is used only for display-level
+/// filtering in `tools/list`. The actual security enforcement happens at
+/// `tools/call` time via full License verification in the security pipeline.
+fn extract_allowed_tools_from_jwt(jwt: &str) -> Vec<String> {
+    let claims = match extract_claims_from_jwt(jwt) {
+        Some(v) => v,
+        None => return Vec::new(),
     };
 
     claims

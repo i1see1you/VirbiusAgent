@@ -45,7 +45,7 @@ public class LicenseAdminController {
                 body.allowedTools(),
                 body.riskQuota() > 0 ? body.riskQuota() : 60,
                 body.toolRateLimit() > 0 ? body.toolRateLimit() : 50,
-                body.expirySeconds() > 0 ? body.expirySeconds() : 86400L,
+                body.expirySeconds() > 0 ? body.expirySeconds() : 31536000L,
                 body.description() != null ? body.description() : ""));
     }
 

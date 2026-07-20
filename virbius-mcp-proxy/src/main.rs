@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use dashmap::DashMap;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use virbius_core::EdgeInitConfig;
 
 use virbius_mcp_proxy::audit::{AuditBackend, AuditSink};
@@ -34,6 +34,9 @@ async fn main() {
 
     // Load License public key
     let pubkey_pem = load_public_key(&cfg.security.license_public_key);
+
+    // Load fallback License JWT from file (if configured)
+    let fallback_license_jwt = load_license_jwt(&cfg.security.license_file);
 
     // Initialize virbius-core (bootstrap manifest sync)
     if let Err(e) = virbius_core::bootstrap::bootstrap(&EdgeInitConfig::resolve()) {
@@ -128,6 +131,7 @@ async fn main() {
             egress_client,
             egress_hosts,
             pubkey_pem,
+            fallback_license_jwt,
             trace_collector,
             conn_to_session,
         )
@@ -145,6 +149,7 @@ async fn main() {
             egress_client,
             egress_hosts,
             pubkey_pem,
+            fallback_license_jwt,
             trace_collector,
             conn_to_session,
         )
@@ -169,6 +174,7 @@ async fn run_stdio(
     egress_client: EgressClient,
     egress_hosts: Vec<String>,
     pubkey_pem: String,
+    fallback_license_jwt: String,
     trace_collector: Arc<TraceCollector>,
     conn_to_session: Arc<DashMap<String, String>>,
 ) {
@@ -188,6 +194,7 @@ async fn run_stdio(
                 let egress_client = egress_client.clone();
                 let egress_hosts = egress_hosts.clone();
                 let pubkey_pem = pubkey_pem.clone();
+                let fallback_license_jwt = fallback_license_jwt.clone();
                 let session_id = session_id.clone();
                 let trace_collector = trace_collector.clone();
                 let conn_to_session = conn_to_session.clone();
@@ -202,6 +209,7 @@ async fn run_stdio(
                         &egress_client,
                         &egress_hosts,
                         &pubkey_pem,
+                        &fallback_license_jwt,
                         &trace_collector,
                         &conn_to_session,
                     )
@@ -242,6 +250,7 @@ async fn run_sse(
     egress_client: EgressClient,
     egress_hosts: Vec<String>,
     pubkey_pem: String,
+    fallback_license_jwt: String,
     trace_collector: Arc<TraceCollector>,
     conn_to_session: Arc<DashMap<String, String>>,
 ) {
@@ -275,6 +284,7 @@ async fn run_sse(
         egress_client,
         egress_hosts: Arc::new(egress_hosts),
         public_key_pem: Arc::new(pubkey_pem),
+        fallback_license_jwt: Arc::new(fallback_license_jwt),
         trace_collector,
         sse_sessions: Arc::new(DashMap::new()),
         conn_to_session,
@@ -310,6 +320,32 @@ fn load_public_key(path: &str) -> String {
         }
         Err(e) => {
             error!("failed to load license public key from {}: {}", path, e);
+            String::new()
+        }
+    }
+}
+
+/// Load a fallback License JWT from a file.
+///
+/// The file should contain a single line: the Ed25519-signed JWT string.
+/// This JWT is used when the Agent does not pass `_meta.license_jwt` in
+/// the MCP `initialize` request.
+fn load_license_jwt(path: &str) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    match std::fs::read_to_string(path) {
+        Ok(content) => {
+            let jwt = content.trim().to_string();
+            if jwt.is_empty() {
+                warn!("license_file {} is empty, no fallback license loaded", path);
+                return String::new();
+            }
+            info!("loaded fallback license JWT from {} ({} bytes)", path, jwt.len());
+            jwt
+        }
+        Err(e) => {
+            warn!("failed to load license_file from {}: {}", path, e);
             String::new()
         }
     }
