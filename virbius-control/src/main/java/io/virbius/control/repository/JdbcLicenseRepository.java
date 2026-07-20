@@ -25,6 +25,7 @@ public class JdbcLicenseRepository implements LicenseRepository {
 
     private static AgentLicense mapRow(ResultSet rs, int rowNum) throws SQLException {
         AgentLicense lic = new AgentLicense();
+        lic.setLicenseId(rs.getString("license_id"));
         lic.setAppId(rs.getString("app_id"));
         lic.setTenantId(rs.getString("tenant_id"));
         String toolsRaw = rs.getString("allowed_tools");
@@ -73,7 +74,7 @@ public class JdbcLicenseRepository implements LicenseRepository {
     public Optional<AgentLicense> findActiveByAppId(String tenantId, String appId) {
         List<AgentLicense> rows = jdbc.query(
                 """
-                SELECT app_id, tenant_id, allowed_tools, risk_quota,
+                SELECT license_id, app_id, tenant_id, allowed_tools, risk_quota,
                        tool_rate_limit, expiry, issued_at, status, signature_hash,
                        agent_name, description, agent_aid
                 FROM tb_agent_licenses
@@ -89,7 +90,7 @@ public class JdbcLicenseRepository implements LicenseRepository {
     @Override
     public List<AgentLicense> listByTenant(String tenantId, String status) {
         String sql = """
-                SELECT app_id, tenant_id, allowed_tools, risk_quota,
+                SELECT license_id, app_id, tenant_id, allowed_tools, risk_quota,
                        tool_rate_limit, expiry, issued_at, status, signature_hash,
                        agent_name, description, agent_aid
                 FROM tb_agent_licenses
@@ -100,6 +101,14 @@ public class JdbcLicenseRepository implements LicenseRepository {
             return jdbc.query(sql, MAPPER, tenantId, status);
         }
         return jdbc.query(sql, MAPPER, tenantId);
+    }
+
+    @Override
+    public List<String> listAppIds(String tenantId) {
+        return jdbc.queryForList(
+                "SELECT DISTINCT app_id FROM tb_agent_licenses WHERE tenant_id = ? ORDER BY app_id",
+                String.class,
+                tenantId);
     }
 
     @Override

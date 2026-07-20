@@ -124,7 +124,7 @@
       tab-size: 2;
     }
     .script-editor-wrap pre {
-      position: absolute; top: 0; left: 0; pointer-events: none;
+      position: absolute; top: 0; left: 0; bottom: 0; pointer-events: none;
       border-color: transparent; background: #282c34; color: #abb2bf;
       overflow: hidden; z-index: 1;
     }
@@ -258,10 +258,8 @@
         <button type="button" class="nav-item" data-tab="tenants"><span class="nav-icon">🏢</span><span class="nav-label" data-i18n="nav.tenants">租户</span></button>
         <button type="button" class="nav-item active" data-tab="lists"><span class="nav-icon">📋</span><span class="nav-label" data-i18n="nav.lists">名单</span></button>
         <button type="button" class="nav-item" data-tab="cumulatives"><span class="nav-icon">📊</span><span class="nav-label" data-i18n="nav.cumulatives">累计</span></button>
-        <button type="button" class="nav-item" data-tab="scene-registry"><span class="nav-icon">🎭</span><span class="nav-label" data-i18n="nav.scene-registry">场景注册</span></button>
         <button type="button" class="nav-item" data-tab="tools"><span class="nav-icon">🔧</span><span class="nav-label" data-i18n="nav.tools">工具注册</span></button>
-        <button type="button" class="nav-item" data-tab="gateway-routes"><span class="nav-icon">🛣</span><span class="nav-label" data-i18n="nav.gateway-routes">网关路由</span></button>
-        <button type="button" class="nav-item" data-tab="license"><span class="nav-icon">🔑</span><span class="nav-label" data-i18n="nav.license">License</span></button>
+        <button type="button" class="nav-item" data-tab="license"><span class="nav-icon">🔑</span><span class="nav-label" data-i18n="nav.license">Agent 凭证</span></button>
         <div class="nav-group expanded" id="navGroupRules">
           <button type="button" class="nav-item nav-group-head" data-tab="rules" id="navRulesHead">
             <span class="nav-icon">📜</span><span class="nav-label" data-i18n="nav.rules">规则</span><span class="nav-chevron">▼</span>
@@ -474,7 +472,7 @@
     </div>
   </div>
 
-  <div id="panel-scene-registry" class="panel card">
+  <div id="panel-scene-registry" class="panel card" style="display:none">
     <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="sr.title">场景注册（scene_registry）</h2>
     <p class="hint" data-i18n-html="sr.desc">每个 <code>scene_id</code> 归属唯一 <code>app_id</code>；同一 app 可有多个 scene。运行时由 <code>(app_id, uri, match)</code> 解析 scene。<strong>uris</strong> 须已在「网关路由」覆盖（支持 <code>/path/*</code>）。<strong>添加 / 删除 / 改 fail 开关</strong>会写入 DB；点<strong>同步到网关</strong>推产物。</p>
     <div class="row" style="flex-wrap:wrap;gap:0.75rem">
@@ -506,7 +504,7 @@
     </div>
   </div>
 
-  <div id="panel-gateway-routes" class="panel card">
+  <div id="panel-gateway-routes" class="panel card" style="display:none">
     <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="gw.title">网关路由（gateway.routes）</h2>
     <p class="hint" data-i18n-html="gw.desc">定义哪些 URI 进入网关 evaluate（精确 path 或末尾 <code>*</code> 前缀，如 <code>/v1/chat/*</code>）；scene 由「场景注册」解析。保存后需「同步到网关」推产物。</p>
     <div class="row" style="flex-wrap:wrap;gap:0.75rem">
@@ -532,10 +530,10 @@
   </div>
 
   <div id="panel-license" class="panel card">
-    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="license.title">License 管理</h2>
+    <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="license.title">Agent 凭证管理</h2>
     <p class="hint" data-i18n-html="license.desc">管理 Agent 身份凭证，签发/吊销 Ed25519 签名的 Runtime License JWT，用于 Edge 层工具授权和风控配额。</p>
     <div class="row" style="margin-bottom:0.5rem">
-      <button type="button" id="btnLicIssue" data-i18n="license.btn-issue">签发 License</button>
+      <button type="button" id="btnLicIssue" data-i18n="license.btn-issue">签发凭证</button>
       <button type="button" id="btnLicRefresh" class="secondary" data-i18n="common.refresh">刷新</button>
       <button type="button" id="btnLicRotate" class="secondary" data-i18n="license.btn-rotate">轮换签名密钥</button>
     </div>
@@ -562,7 +560,7 @@
     </div>
     <table id="licTable" class="data-table" style="width:100%">
       <thead><tr>
-        <th data-i18n="license.header-id">License ID</th>
+        <th data-i18n="license.header-id">凭证 ID</th>
         <th data-i18n="license.header-app">App ID</th>
         <th data-i18n="license.header-agent">Agent 名称</th>
         <th data-i18n="license.header-quota">风控配额</th>
@@ -577,7 +575,7 @@
     </table>
     <div id="licKeySection" style="margin-top:1rem;display:none">
       <h3 style="font-size:0.95rem" data-i18n="license.key-section">签名密钥</h3>
-      <p class="hint" data-i18n-html="license.key-desc">Edge 节点使用此公钥验证 License JWT 签名。轮换密钥后旧 License 仍有效至过期。</p>
+      <p class="hint" data-i18n-html="license.key-desc">Edge 节点使用此公钥验证 Agent 凭证 JWT 签名。轮换密钥后旧凭证仍有效至过期。</p>
       <div class="row" style="align-items:flex-start">
         <textarea id="licPublicKey" readonly style="width:100%;min-height:6rem;font-family:monospace;font-size:0.75rem" rows="6"></textarea>
       </div>
@@ -587,10 +585,10 @@
     </div>
   </div>
 
-  <!-- License JWT dialog -->
+  <!-- Credential JWT dialog -->
   <div id="licJwtOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center">
     <div style="background:#fff;border-radius:8px;padding:1.5rem;max-width:640px;width:90%">
-      <h3 style="margin:0 0 0.5rem;font-size:1rem"><span id="licJwtLabel">License JWT</span></h3>
+      <h3 style="margin:0 0 0.5rem;font-size:1rem"><span id="licJwtLabel">凭证 JWT</span></h3>
       <p class="hint" style="color:#dc2626" data-i18n="license.jwt-warning">JWT 仅显示一次，请立即保存！</p>
       <textarea id="licJwtText" readonly style="width:100%;min-height:8rem;font-family:monospace;font-size:0.7rem" rows="10"></textarea>
       <div class="row" style="margin-top:0.5rem;justify-content:flex-end">
@@ -600,12 +598,12 @@
     </div>
   </div>
 
-  <!-- License detail dialog -->
+  <!-- Credential detail dialog -->
   <div id="licDetailOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center">
     <div style="background:#fff;border-radius:8px;padding:1.5rem;max-width:560px;width:90%">
-      <h3 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="license.detail-title">License 详情</h3>
+      <h3 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="license.detail-title">凭证详情</h3>
       <table class="data-table" style="width:100%">
-        <tr><td style="width:120px" data-i18n="license.header-id">License ID</td><td><code id="licDetailId"></code></td></tr>
+        <tr><td style="width:120px" data-i18n="license.header-id">凭证 ID</td><td><code id="licDetailId"></code></td></tr>
         <tr><td data-i18n="license.header-app">App ID</td><td><code id="licDetailApp"></code></td></tr>
         <tr><td data-i18n="license.agent-name">Agent 名称</td><td id="licDetailName"></td></tr>
         <tr><td>Agent AID</td><td><code id="licDetailAid"></code></td></tr>
@@ -742,11 +740,13 @@
             <option value="service" data-i18n="gw.scope.service">service（app_ids）</option>
           </select>
         </label>
-        <label id="bindToolWrap" style="display:none">tool_names <input id="fBindTools" placeholder="read_file, write_file" style="min-width:12rem" /></label>
+        <label id="bindToolWrap" style="display:none">tool_names <input id="fBindTools" list="dlToolNames" placeholder="read_file, write_file" style="min-width:12rem" /></label>
       </div>
       <div class="row" id="bindServiceWrap" style="display:none">
-        <label>app_ids <input id="fBindAppIds" placeholder="beta, medical-prod" style="min-width:18rem" /></label>
+        <label>app_ids <input id="fBindAppIds" list="dlAppIds" placeholder="beta, medical-prod" style="min-width:18rem" /></label>
       </div>
+      <datalist id="dlToolNames"></datalist>
+      <datalist id="dlAppIds"></datalist>
       <p id="bindScopeHint" class="hint" style="display:none;margin:0 0 0.5rem" data-i18n-html="gw.scope-hint">
         Tool 绑 <code>tool_names</code>（可选）和 <code>app_ids</code>（可选）。Service 绑 <code>app_ids</code>。<strong>端 edge</strong>：仅 <code>global</code> / <code>service(app_ids)</code>；发布时按 App 拆 manifest，SDK 不做运行时 bind。
       </p>
@@ -1172,23 +1172,23 @@
     </div>
   </div>
 
-  <script src="js/i18n.js?v=20260720"></script>
-  <script src="js/ops-common.js?v=20260720"></script>
-  <script src="js/ops-rules.js?v=20260720"></script>
-  <script src="js/ops-lists.js?v=20260720"></script>
-  <script src="js/ops-cumulatives.js?v=20260720"></script>
-  <script src="js/ops-scene-registry.js?v=20260720"></script>
-<script src="js/ops-tools.js?v=20260720"></script>
-  <script src="js/ops-gw-routes.js?v=20260720"></script>
-  <script src="js/ops-rollout.js?v=20260720"></script>
-  <script src="js/ops-deploy.js?v=20260720"></script>
-  <script src="js/ops-audit.js?v=20260720"></script>
-  <script src="js/ops-tenants.js?v=20260720"></script>
-  <script src="js/ops-monitor.js?v=20260720"></script>
-<script src="js/ops-challenge.js?v=20260720"></script>
-<script src="js/ops-license.js?v=20260720"></script>
-<script src="js/ops-trace.js?v=20260720"></script>
-  <script src="js/ops-nav.js?v=20260720"></script>
+  <script src="js/i18n.js?v=20260720i"></script>
+  <script src="js/ops-common.js?v=20260720i"></script>
+  <script src="js/ops-rules.js?v=20260720i"></script>
+  <script src="js/ops-lists.js?v=20260720g"></script>
+  <script src="js/ops-cumulatives.js?v=20260720g"></script>
+  <script src="js/ops-scene-registry.js?v=20260720g"></script>
+<script src="js/ops-tools.js?v=20260720i"></script>
+  <script src="js/ops-gw-routes.js?v=20260720g"></script>
+  <script src="js/ops-rollout.js?v=20260720g"></script>
+  <script src="js/ops-deploy.js?v=20260720g"></script>
+  <script src="js/ops-audit.js?v=20260720g"></script>
+  <script src="js/ops-tenants.js?v=20260720g"></script>
+  <script src="js/ops-monitor.js?v=20260720g"></script>
+<script src="js/ops-challenge.js?v=20260720g"></script>
+<script src="js/ops-license.js?v=20260720i"></script>
+<script src="js/ops-trace.js?v=20260720g"></script>
+  <script src="js/ops-nav.js?v=20260720g"></script>
 
   <!-- Version input modal for deploy prepare -->
   <div id="drVersionModal" class="modal-overlay" style="display:none">

@@ -1297,8 +1297,6 @@ return currentLayer;
         document.getElementById('scriptValidateRow').style.display = 'none';
         document.getElementById('simulateFixtureRow').style.display = 'none';
         document.getElementById('chkEnableSimulateWrap').style.display = 'none';
-        document.getElementById('bindScopeRow').style.display = 'none';
-        document.getElementById('bindScopeHint').style.display = 'none';
         document.getElementById('asyncWrap').style.display = 'none';
         document.getElementById('fBody').style.display = '';
         clearScriptValidateMsg();
@@ -1366,6 +1364,8 @@ return currentLayer;
       const service = bs === 'service';
       document.getElementById('bindToolWrap').style.display = tool ? '' : 'none';
       document.getElementById('bindServiceWrap').style.display = service ? '' : 'none';
+      if (tool) refreshToolNamesDatalist();
+      if (tool || service) refreshAppIdsDatalist();
     }
 
     function syncBindScopeUi(runtime) {
@@ -1400,6 +1400,48 @@ return currentLayer;
       }
       if (Object.keys(ref).length) scope.bind_ref = ref;
       return scope;
+    }
+
+    /** Regex for validating individual tool_name / app_id tokens. */
+    const TOOL_NAME_RE = /^[a-z][a-z0-9_-]*$/;
+    const APP_ID_RE = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
+
+    /** Populate the tool_names datalist from the global toolRegistry. */
+    function refreshToolNamesDatalist() {
+      const dl = document.getElementById('dlToolNames');
+      if (!dl) return;
+      const names = (typeof toolRegistry !== 'undefined' && Array.isArray(toolRegistry))
+        ? toolRegistry.map(t => t.tool_name).filter(Boolean)
+        : [];
+      dl.innerHTML = names.map(n => '<option value="' + escAttr(n) + '"></option>').join('');
+    }
+
+    /** Fetch and populate the app_ids datalist from the license registry. */
+    let appIdsCache = null;
+    function refreshAppIdsDatalist() {
+      const dl = document.getElementById('dlAppIds');
+      if (!dl) return;
+      if (appIdsCache) {
+        dl.innerHTML = appIdsCache.map(a => '<option value="' + escAttr(a) + '"></option>').join('');
+        return;
+      }
+      admin('/licenses/app-ids').then(list => {
+        appIdsCache = Array.isArray(list) ? list : [];
+        dl.innerHTML = appIdsCache.map(a => '<option value="' + escAttr(a) + '"></option>').join('');
+      }).catch(() => {});
+    }
+
+    /** Validate comma-separated tokens against a regex. Returns error message or null. */
+    function validateCommaList(inputId, regex, labelKey) {
+      const raw = document.getElementById(inputId).value;
+      if (!raw.trim()) return null;
+      const tokens = raw.split(',').map(s => s.trim()).filter(Boolean);
+      for (const t of tokens) {
+        if (!regex.test(t)) {
+          return __(labelKey, t);
+        }
+      }
+      return null;
     }
 
     function loadBindUiFromScope(scope) {
@@ -1612,6 +1654,15 @@ return currentLayer;
       }
       const layer = isNewRule ? effectiveLayerForNewRule() : editRuleMeta.layer;
       const runtime = isNewRule ? document.getElementById('fRuntime').value : editRuleMeta.runtime;
+      const bs = document.getElementById('fBindScope').value || 'global';
+      if (bs === 'tool') {
+        const toolErr = validateCommaList('fBindTools', TOOL_NAME_RE, 'rules.tool-name-invalid');
+        if (toolErr) { log(toolErr, 'warn'); return; }
+      }
+      if (bs === 'tool' || bs === 'service') {
+        const appErr = validateCommaList('fBindAppIds', APP_ID_RE, 'rules.app-id-invalid');
+        if (appErr) { log(appErr, 'warn'); return; }
+      }
       const scope = buildRuleScope();
       if (isEdgeFormRuntime(runtime) && scope.bind_scope === 'service') {
         const ids = scope.bind_ref && scope.bind_ref.app_ids;

@@ -2,9 +2,7 @@
       await loadTenantSelect();
       await loadLists();
       await loadCumulatives();
-      await loadSceneRegistry();
       await loadToolRegistry();
-      await loadGatewayRoutes();
       await loadRules();
       if (document.getElementById('panel-rollout').classList.contains('active')) {
         await refreshRolloutDashboard();

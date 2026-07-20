@@ -12,6 +12,9 @@ public interface LicenseRepository {
 
     List<AgentLicense> listByTenant(String tenantId, String status);
 
+    /** Returns the distinct set of app_ids that have been issued a license (any status). */
+    List<String> listAppIds(String tenantId);
+
     void revoke(String licenseId, String revokedBy, String reason);
 
     void saveKeyPair(String keyId, String tenantId, String publicKeyPem, String encryptedPrivateKey);

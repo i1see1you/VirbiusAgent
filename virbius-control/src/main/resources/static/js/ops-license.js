@@ -1,4 +1,4 @@
-// ── License management page ──
+// ── Agent credential management page ──
 
 async function loadLicenses() {
   try {
@@ -117,7 +117,7 @@ async function doIssueLicense() {
 function showJwtDialog(jwt, licId) {
   const overlay = document.getElementById('licJwtOverlay');
   document.getElementById('licJwtText').value = jwt;
-  document.getElementById('licJwtLabel').textContent = 'License JWT (' + licId + ')';
+  document.getElementById('licJwtLabel').textContent = __('license.jwt-label') + ' (' + licId + ')';
   overlay.style.display = 'flex';
 }
 

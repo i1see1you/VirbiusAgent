@@ -66,6 +66,11 @@ public class LicenseAdminController {
         return ApiResult.ok(licenseService.listLicenses(tenantId, status));
     }
 
+    @GetMapping("/app-ids")
+    public ApiResult<List<String>> listAppIds(@PathVariable("tenantId") String tenantId) {
+        return ApiResult.ok(licenseService.listAppIds(tenantId));
+    }
+
     @GetMapping("/public-key")
     public ApiResult<Map<String, String>> getPublicKey(
             @PathVariable("tenantId") String tenantId) {

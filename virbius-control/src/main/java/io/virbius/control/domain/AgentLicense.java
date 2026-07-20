@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 
 public class AgentLicense {
+    private String licenseId;
     private String appId;
     private String tenantId;
     private List<String> allowedTools;
@@ -18,6 +19,9 @@ public class AgentLicense {
     private String agentAid;
 
     public AgentLicense() {}
+
+    public String getLicenseId() { return licenseId; }
+    public void setLicenseId(String licenseId) { this.licenseId = licenseId; }
 
     public String getAppId() { return appId; }
     public void setAppId(String appId) { this.appId = appId; }

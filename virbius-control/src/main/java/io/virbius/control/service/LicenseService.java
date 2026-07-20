@@ -157,6 +157,14 @@ public class LicenseService {
     }
 
     /**
+     * List distinct app_ids that have been issued a license (any status).
+     * Used by the UI for datalist autocomplete.
+     */
+    public List<String> listAppIds(String tenantId) {
+        return repo.listAppIds(tenantId);
+    }
+
+    /**
      * Get the public key PEM for a tenant (for edge nodes to verify License JWTs).
      */
     public String getPublicKey(String tenantId) {
