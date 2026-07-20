@@ -522,6 +522,7 @@ return currentLayer;
           conditionLeaves = [];
           syncDlpIntentReadonly();
         }
+        syncEditorModeUi();
         syncScriptAssistUi(nextRt);
         clearScriptValidateMsg();
       };
@@ -1343,12 +1344,18 @@ return currentLayer;
       const sel = document.getElementById('fBindScope');
       const current = sel.value || 'global';
       const edge = isEdgeFormRuntime(runtime);
-      sel.innerHTML = edge
-        ? '<option value="global">' + __('gw.scope.edge-global') + '</option>'
-          + '<option value="service">' + __('gw.scope.edge-service') + '</option>'
-        : '<option value="global">' + __('gw.scope.global') + '</option>'
+      const falco = isFalcoRuntime(runtime);
+      if (edge) {
+        sel.innerHTML = '<option value="global">' + __('gw.scope.edge-global') + '</option>'
+          + '<option value="service">' + __('gw.scope.edge-service') + '</option>';
+      } else if (falco) {
+        sel.innerHTML = '<option value="global">' + __('gw.scope.global') + '</option>'
+          + '<option value="service">' + __('gw.scope.service') + '</option>';
+      } else {
+        sel.innerHTML = '<option value="global">' + __('gw.scope.global') + '</option>'
           + '<option value="tool">' + __('gw.scope.tool') + '</option>'
           + '<option value="service">' + __('gw.scope.service') + '</option>';
+      }
       sel.value = [...sel.options].some(o => o.value === current) ? current : 'global';
     }
 
@@ -1362,7 +1369,7 @@ return currentLayer;
     }
 
     function syncBindScopeUi(runtime) {
-      const show = runtime === 'lua' || runtime === 'groovy' || runtime === 'prompt' || isEdgeFormRuntime(runtime);
+      const show = runtime === 'lua' || runtime === 'groovy' || runtime === 'prompt' || isEdgeFormRuntime(runtime) || isFalcoRuntime(runtime);
       document.getElementById('bindScopeRow').style.display = show ? '' : 'none';
       document.getElementById('bindScopeHint').style.display = show ? '' : 'none';
       if (show) {
@@ -1375,6 +1382,9 @@ return currentLayer;
       const runtime = currentEditorRuntime();
       const bs = document.getElementById('fBindScope').value || 'global';
       if (isEdgeFormRuntime(runtime) && bs === 'tool') {
+        return { bind_scope: 'global' };
+      }
+      if (isFalcoRuntime(runtime) && bs === 'tool') {
         return { bind_scope: 'global' };
       }
       const scope = { bind_scope: bs };
@@ -1398,6 +1408,9 @@ return currentLayer;
       syncBindScopeOptions(runtime);
       let bs = s.bind_scope || 'global';
       if (isEdgeFormRuntime(runtime) && bs === 'tool') {
+        bs = 'global';
+      }
+      if (isFalcoRuntime(runtime) && bs === 'tool') {
         bs = 'global';
       }
       document.getElementById('fBindScope').value = bs;
@@ -1573,12 +1586,12 @@ return currentLayer;
       document.getElementById('fBindScope').onchange = () => {
       syncBindScopeFieldsUi();
       const rt = currentEditorRuntime();
-      if (isPromptRuntime(rt) || isEdgeFormRuntime(rt)) updateRuleSummaryCard();
+      if (isPromptRuntime(rt) || isEdgeFormRuntime(rt) || isFalcoRuntime(rt)) updateRuleSummaryCard();
     };
     document.getElementById('fEdgeListType').onchange = () => updateRuleSummaryCard();
     document.getElementById('fEdgeKeywords').oninput = () => updateRuleSummaryCard();
     document.getElementById('fBindAppIds').oninput = () => {
-      if (isEdgeFormRuntime(currentEditorRuntime())) updateRuleSummaryCard();
+      if (isEdgeFormRuntime(currentEditorRuntime()) || isFalcoRuntime(currentEditorRuntime())) updateRuleSummaryCard();
     };
 
     document.getElementById('btnSaveRule').onclick = async () => {

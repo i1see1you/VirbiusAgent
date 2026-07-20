@@ -82,21 +82,6 @@ CREATE INDEX idx_tb_rule_history_tenant_layer
 CREATE INDEX idx_tb_rule_history_effective
     ON tb_rule_history (tenant_id, rule_id, effective_to);
 
-CREATE TABLE tb_access_list (
-    tenant_id    VARCHAR(64) NOT NULL,
-    polarity     VARCHAR(16) NOT NULL,
-    dimension    VARCHAR(32) NOT NULL,
-    value        VARCHAR(512) NOT NULL,
-    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (tenant_id, polarity, dimension, value),
-    CHECK (polarity IN ('deny', 'allow')),
-    CHECK (dimension IN ('keyword', 'user_id', 'device_id', 'ip_cidr', 'var'))
-);
-
-CREATE INDEX idx_tb_access_list_tenant
-    ON tb_access_list (tenant_id, polarity, dimension);
-
--- Named access lists (list_name model; allow/deny via list_match rule risk_score)
 CREATE TABLE tb_access_list_meta (
     tenant_id    VARCHAR(64) NOT NULL,
     list_name    VARCHAR(128) NOT NULL,
@@ -416,7 +401,7 @@ CREATE TABLE tb_agent_licenses (
     expiry          TIMESTAMP    NOT NULL,
     issued_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     status          VARCHAR(16)  NOT NULL DEFAULT 'active',
-    signature       TEXT         NOT NULL,
+    signature_hash   VARCHAR(64)  NOT NULL,
     agent_name      VARCHAR(256) NOT NULL DEFAULT '',
     description     TEXT         NOT NULL DEFAULT '',
     agent_aid       VARCHAR(256) NOT NULL DEFAULT '',
@@ -468,35 +453,6 @@ CREATE TABLE tb_license_revocations (
 
 CREATE INDEX idx_tb_license_revocations_license
     ON tb_license_revocations (license_id);
-
--- ============================================================
--- Challenge approval queue (high-risk tool calls)
--- ============================================================
-
-CREATE TABLE tb_challenge_audit (
-    id              BIGINT       PRIMARY KEY AUTO_INCREMENT,
-    challenge_id    VARCHAR(32)  NOT NULL UNIQUE,
-    tenant_id       VARCHAR(64)  NOT NULL DEFAULT 'default',
-    session_id      VARCHAR(128) NOT NULL,
-    tool_name       VARCHAR(128) NOT NULL,
-    args_hash       VARCHAR(80)  NOT NULL,
-    rule_id         VARCHAR(128),
-    reason_code     VARCHAR(128),
-    risk_score      INTEGER      NOT NULL DEFAULT 0,
-    status          VARCHAR(16)  NOT NULL DEFAULT 'pending',  -- pending | approved | rejected | expired
-    approved_by     VARCHAR(64),
-    approved_at     TIMESTAMP    NULL,
-    rejected_by     VARCHAR(64),
-    rejected_at     TIMESTAMP    NULL,
-    reject_reason   TEXT,
-    token           VARCHAR(64),  -- one-time-use token (masked, for audit trail)
-    token_expires_at TIMESTAMP   NULL,
-    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expires_at      TIMESTAMP    NOT NULL,
-    INDEX idx_challenge_tenant_status (tenant_id, status),
-    INDEX idx_challenge_created (created_at),
-    INDEX idx_challenge_tool (tool_name)
-);
 
 -- ============================================================
 -- Agent decision-chain trace

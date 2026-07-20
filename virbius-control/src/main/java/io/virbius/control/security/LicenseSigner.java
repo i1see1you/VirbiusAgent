@@ -81,6 +81,29 @@ public class LicenseSigner {
      *
      * @return [privateKeyBytes (32), publicKeyBytes (32)]
      */
+    /**
+     * Compute the SHA-256 hex digest of a JWT string.
+     * <p>Used to store a non-reversible fingerprint of the License JWT
+     * for audit/identification purposes. The original JWT is only returned
+     * once at issuance time.
+     *
+     * @param jwt the signed JWT string
+     * @return 64-character lowercase hex string
+     */
+    public static String sha256Hex(String jwt) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(jwt.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(64);
+            for (byte b : hash) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            throw new IllegalStateException("failed to hash jwt: " + e.getMessage(), e);
+        }
+    }
+
     public KeyPairResult generateKeyPair() {
         try {
             java.security.KeyPairGenerator kpg = java.security.KeyPairGenerator.getInstance("Ed25519");

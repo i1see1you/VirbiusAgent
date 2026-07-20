@@ -2,7 +2,11 @@ package io.virbius.engine.api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.virbius.engine.cache.RuleCache;
+import io.virbius.engine.cache.RuleEntry;
 import io.virbius.engine.eval.SessionRiskManager;
+import io.virbius.policy.BindScope;
+import io.virbius.policy.MatchContext;
 import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -76,13 +80,16 @@ public class FalcoAlertController {
     private final SessionRiskManager riskManager;
     private final Optional<JedisPool> jedisPool;
     private final ObjectMapper mapper;
+    private final RuleCache ruleCache;
 
     public FalcoAlertController(
             SessionRiskManager riskManager,
-            Optional<JedisPool> jedisPool) {
+            Optional<JedisPool> jedisPool,
+            RuleCache ruleCache) {
         this.riskManager = riskManager;
         this.jedisPool = jedisPool;
         this.mapper = new ObjectMapper();
+        this.ruleCache = ruleCache;
     }
 
     /**
@@ -118,61 +125,73 @@ public class FalcoAlertController {
         }
 
         // ── 2. Three-tier session correlation: host_pid → cgroup → ppid ──
-        String sessionId = lookupSessionByHostPid(hostPid);
+        JsonNode pidmapEntry = lookupPidmapEntry(hostPid);
         String resolvedBy = "pid";
 
-        if (sessionId == null && cgroupId > 0) {
+        if (pidmapEntry == null && cgroupId > 0) {
             // Cgroup correlation: covers grandchild processes, detached
             // children (setsid), and exec'd processes within the same cgroup.
             // Preferred over ppid because cgroup is container-level (stable
             // across fork layers) while ppid breaks at depth > 1.
-            sessionId = lookupSessionByCgroup(cgroupId);
-            if (sessionId != null) {
+            pidmapEntry = lookupPidmapEntryByCgroup(cgroupId);
+            if (pidmapEntry != null) {
                 resolvedBy = "cgroup";
                 log.debug("falco alert pid={} resolved via cgroup={} to session={}",
-                        hostPid, cgroupId, sessionId);
+                        hostPid, cgroupId, extractSessionId(pidmapEntry));
             }
         }
 
-        if (sessionId == null && ppid > 0) {
+        if (pidmapEntry == null && ppid > 0) {
             // Parent PID fallback: only covers direct children whose parent
             // is the registered Agent process. Last resort.
-            sessionId = lookupSessionByHostPid(ppid);
-            if (sessionId != null) {
+            pidmapEntry = lookupPidmapEntry(ppid);
+            if (pidmapEntry != null) {
                 resolvedBy = "ppid";
                 log.debug("falco alert pid={} resolved via ppid={} to session={}",
-                        hostPid, ppid, sessionId);
+                        hostPid, ppid, extractSessionId(pidmapEntry));
             }
         }
 
+        String sessionId = extractSessionId(pidmapEntry);
         if (sessionId == null) {
             log.debug("falco alert pid={} (cgroup={}, ppid={}) not mapped, ignoring: rule={}",
                     hostPid, cgroupId, ppid, rule);
             return Map.of("status", "ignored", "reason", "pid_not_mapped");
         }
 
-        // ── 3. Forward to risk manager ──
+        // ── 3. bind_scope filtering (kernel-layer service scoping) ──
+        // Falco rules are deployed globally; filter at ingestion time based
+        // on the rule's bind_scope and the alert's app_id from pidmap.
+        String appId = extractAppId(pidmapEntry);
+        String tenantId = extractTenantId(pidmapEntry);
+        if (!shouldProcessAlert(tenantId, rule, appId)) {
+            return Map.of("status", "filtered", "reason", "bind_scope_mismatch",
+                    "rule", rule, "app_id", appId != null ? appId : "");
+        }
+
+        // ── 4. Forward to risk manager ──
         riskManager.onFalcoAlert(sessionId);
-        log.info("falco alert received: session={} pid={} cgroup={} ppid={} resolved_by={} rule={} priority={}",
-                sessionId, hostPid, cgroupId, ppid, resolvedBy, rule, priority);
-        return Map.of("status", "ok", "session_id", sessionId, "resolved_by", resolvedBy);
+        log.info("falco alert received: session={} pid={} cgroup={} ppid={} resolved_by={} rule={} priority={} app_id={}",
+                sessionId, hostPid, cgroupId, ppid, resolvedBy, rule, priority, appId);
+        return Map.of("status", "ok", "session_id", sessionId, "resolved_by", resolvedBy,
+                "app_id", appId != null ? appId : "");
     }
 
     /**
-     * Lookup session_id from Redis pidmap (primary index).
+     * Lookup pidmap entry from Redis (primary index by host PID).
      *
      * <p>Key format: {@code pid_trace:{host_pid}} — written by the Rust pidmap
      * module ({@code virbius-kernel/src/pidmap.rs}) on agent registration via
      * {@code register_agent()}. The value is a JSON object containing
-     * {@code session_id}, {@code trace_id}, {@code app_id}, etc.
+     * {@code session_id}, {@code trace_id}, {@code app_id}, {@code tenant_id}, etc.
      *
      * <p>Falco's {@code proc.pid} is the <strong>Host PID</strong> (visible in
      * the initial PID namespace), which matches the key written by pidmap.
      *
      * @param hostPid the host PID from Falco's {@code proc.pid} or {@code proc.ppid} field
-     * @return the session ID, or {@code null} if not found or Redis unavailable
+     * @return the pidmap JSON node, or {@code null} if not found or Redis unavailable
      */
-    private String lookupSessionByHostPid(long hostPid) {
+    private JsonNode lookupPidmapEntry(long hostPid) {
         if (jedisPool.isEmpty()) {
             log.debug("Redis not configured, cannot lookup pidmap for pid={}", hostPid);
             return null;
@@ -182,9 +201,7 @@ public class FalcoAlertController {
             if (val == null) {
                 return null;
             }
-            JsonNode node = mapper.readTree(val);
-            String sessionId = node.path("session_id").asText(null);
-            return (sessionId != null && !sessionId.isBlank()) ? sessionId : null;
+            return mapper.readTree(val);
         } catch (Exception e) {
             log.warn("pidmap lookup failed for pid={}: {}", hostPid, e.getMessage());
             return null;
@@ -192,12 +209,114 @@ public class FalcoAlertController {
     }
 
     /**
-     * Lookup session_id from Redis cgroup reverse index.
+     * Lookup session_id from a pidmap JSON node.
+     *
+     * @param node the pidmap JSON node (from {@link #lookupPidmapEntry})
+     * @return the session ID, or {@code null} if absent/blank
+     */
+    private static String extractSessionId(JsonNode node) {
+        if (node == null) {
+            return null;
+        }
+        String sessionId = node.path("session_id").asText(null);
+        return (sessionId != null && !sessionId.isBlank()) ? sessionId : null;
+    }
+
+    /**
+     * Extract app_id from a pidmap JSON node.
+     *
+     * @param node the pidmap JSON node (from {@link #lookupPidmapEntry})
+     * @return the app ID, or {@code null} if absent/blank
+     */
+    private static String extractAppId(JsonNode node) {
+        if (node == null) {
+            return null;
+        }
+        String appId = node.path("app_id").asText(null);
+        return (appId != null && !appId.isBlank()) ? appId : null;
+    }
+
+    /**
+     * Extract tenant_id from a pidmap JSON node.
+     *
+     * @param node the pidmap JSON node (from {@link #lookupPidmapEntry})
+     * @return the tenant ID, or {@code "default"} if absent
+     */
+    private static String extractTenantId(JsonNode node) {
+        if (node == null) {
+            return "default";
+        }
+        String tenantId = node.path("tenant_id").asText(null);
+        return (tenantId != null && !tenantId.isBlank()) ? tenantId : "default";
+    }
+
+    /**
+     * Check whether a Falco rule's {@code bind_scope} allows the given {@code appId}.
+     *
+     * <p>Falco rules are deployed globally to all nodes (Falco is a host-level
+     * DaemonSet and cannot be partitioned by app at deploy time). Instead, the
+     * {@code bind_scope} filter is applied at alert-ingestion time: if the rule
+     * has {@code bind_scope=service} and the alert's {@code app_id} is not in
+     * the rule's {@code bind_ref.app_ids}, the alert is discarded.
+     *
+     * <p>This mirrors the runtime matching used by the cloud/gateway layers
+     * ({@link BindScope#matches}), reusing the same {@link MatchContext} and
+     * {@link BindScope} infrastructure. The key difference is the filter
+     * location: cloud/gateway filter before rule execution, kernel filters
+     * after alert generation (because Falco cannot do app-level filtering
+     * itself).
+     *
+     * <p>Fail-open policy: if the rule is not found in cache (e.g., newly
+     * created and cache not yet synced), the alert is allowed through.
+     *
+     * @param tenantId the tenant ID from pidmap
+     * @param ruleId the Falco rule name (maps to rule_id in the registry)
+     * @param appId the app ID from pidmap correlation
+     * @return {@code true} if the alert should be processed, {@code false} if filtered
+     */
+    @SuppressWarnings("unchecked")
+    private boolean shouldProcessAlert(String tenantId, String ruleId, String appId) {
+        if (ruleId == null || ruleId.isBlank()) {
+            return true; // no rule name — fail open
+        }
+        RuleEntry rule = ruleCache.get(tenantId, ruleId);
+        if (rule == null) {
+            return true; // rule not in cache — fail open
+        }
+        Object scopeRaw = rule.scope();
+        if (!(scopeRaw instanceof Map<?, ?> scopeMap)) {
+            return true; // no scope → global
+        }
+        Map<String, Object> scope = (Map<String, Object>) scopeMap;
+        String bindScope = BindScope.scopeFromRuleScope(scope);
+        if (BindScope.GLOBAL.equals(bindScope)) {
+            return true; // global rules always pass
+        }
+        if (appId == null || appId.isBlank()) {
+            log.debug("falco alert filtered: rule={} bind_scope={} but no app_id in pidmap",
+                    ruleId, bindScope);
+            return false;
+        }
+        Map<String, Object> bindRef = BindScope.bindRefFromScope(scope);
+        MatchContext ctx = MatchContext.forToolCall(
+                null, null, null, null, null,
+                Map.of("app_id", appId),
+                null);
+        boolean matched = BindScope.matches(bindScope, bindRef, ctx);
+        if (!matched) {
+            log.debug("falco alert filtered by bind_scope: rule={} scope={} app_id={}",
+                    ruleId, bindScope, appId);
+        }
+        return matched;
+    }
+
+    /**
+     * Lookup pidmap entry from Redis cgroup reverse index.
      *
      * <p>Key format: {@code cgroup_trace:{cgroup_id}} — written by
      * {@code pidmap.rs::redis_backup_async()} alongside the primary
      * {@code pid_trace:{host_pid}} key. Both keys point to the same JSON
-     * value, so the session_id extraction logic is identical.
+     * value, so the extraction logic is identical.
      *
      * <p>The cgroup index survives fork/exec/detach within the same cgroup,
      * making it the preferred fallback when the direct PID lookup misses:
@@ -212,9 +331,9 @@ public class FalcoAlertController {
      * and the caller falls back to ppid.
      *
      * @param cgroupId the cgroup v2 inode ID from Falco's {@code proc.cgroup.id}
-     * @return the session ID, or {@code null} if not found or Redis unavailable
+     * @return the pidmap JSON node, or {@code null} if not found or Redis unavailable
      */
-    private String lookupSessionByCgroup(long cgroupId) {
+    private JsonNode lookupPidmapEntryByCgroup(long cgroupId) {
         if (jedisPool.isEmpty()) {
             log.debug("Redis not configured, cannot lookup cgroup for cgroup={}", cgroupId);
             return null;
@@ -224,9 +343,7 @@ public class FalcoAlertController {
             if (val == null) {
                 return null;
             }
-            JsonNode node = mapper.readTree(val);
-            String sessionId = node.path("session_id").asText(null);
-            return (sessionId != null && !sessionId.isBlank()) ? sessionId : null;
+            return mapper.readTree(val);
         } catch (Exception e) {
             log.warn("cgroup lookup failed for cgroup={}: {}", cgroupId, e.getMessage());
             return null;

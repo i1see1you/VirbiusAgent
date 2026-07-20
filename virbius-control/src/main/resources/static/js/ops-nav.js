@@ -73,6 +73,9 @@
       if (tab === 'tools') {
         loadToolRegistry().catch(e => log(e.message, 'err'));
       }
+      if (tab === 'license') {
+        loadLicensePage().catch(e => log(e.message, 'err'));
+      }
     }
 
     document.getElementById('btnSidebarToggle').onclick = () => {

@@ -12,7 +12,7 @@ public class AgentLicense {
     private Instant expiry;
     private Instant issuedAt;
     private String status;
-    private String signature;
+    private String signatureHash;
     private String agentName;
     private String description;
     private String agentAid;
@@ -43,8 +43,8 @@ public class AgentLicense {
     public String getStatus() { return status; }
     public void setStatus(String status) { this.status = status; }
 
-    public String getSignature() { return signature; }
-    public void setSignature(String signature) { this.signature = signature; }
+    public String getSignatureHash() { return signatureHash; }
+    public void setSignatureHash(String signatureHash) { this.signatureHash = signatureHash; }
 
     public String getAgentName() { return agentName; }
     public void setAgentName(String agentName) { this.agentName = agentName; }

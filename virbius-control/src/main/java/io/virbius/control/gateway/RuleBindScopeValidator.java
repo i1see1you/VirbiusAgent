@@ -42,6 +42,9 @@ public final class RuleBindScopeValidator {
         if ("edge".equalsIgnoreCase(req.layer())) {
             validateEdgeBind(req, bundleMetadata);
         }
+        if ("falco".equalsIgnoreCase(req.layer()) || "kernel".equalsIgnoreCase(req.layer())) {
+            validateFalcoBind(req, bundleMetadata);
+        }
     }
 
     /** Edge rules: {@code service} app_ids required; tool scope always valid (tool_names optional). */
@@ -57,6 +60,31 @@ public final class RuleBindScopeValidator {
             if (appIds.isEmpty()) {
                 throw new IllegalArgumentException("bind_ref.app_ids required for service bind (rule "
                         + req.ruleId() + ")");
+            }
+        }
+    }
+
+    /**
+     * Falco/kernel rules: {@code global} and {@code service} are allowed;
+     * {@code tool} scope is rejected (Falco monitors syscalls, not tools).
+     * {@code service} requires {@code bind_ref.app_ids}.
+     */
+    public static void validateFalcoBind(UpsertRuleRequest req, Map<String, Object> bundleMetadata) {
+        Map<String, Object> scope = req.scope();
+        if (scope == null || scope.isEmpty()) {
+            return;
+        }
+        String bind = BindScope.scopeFromRuleScope(scope);
+        if (BindScope.TOOL.equals(bind)) {
+            throw new IllegalArgumentException(
+                    "tool bind_scope not supported for falco rules (rule " + req.ruleId() + ")");
+        }
+        if (BindScope.SERVICE.equals(bind)) {
+            Map<String, Object> ref = BindScope.bindRefFromScope(scope);
+            List<String> appIds = EdgeManifestFilter.appIdsFromBindRef(ref);
+            if (appIds.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "bind_ref.app_ids required for service bind (rule " + req.ruleId() + ")");
             }
         }
     }

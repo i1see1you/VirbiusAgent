@@ -75,20 +75,6 @@ CREATE INDEX IF NOT EXISTS idx_tb_rule_history_effective
 -- risk_score：0=放行，1–99=灰区，100=应拦截
 -- 旧库请 VIRBIUS_REBUILD_DB=1 重建
 
-CREATE TABLE IF NOT EXISTS tb_access_list (
-    tenant_id    VARCHAR(64) NOT NULL,
-    polarity     VARCHAR(16) NOT NULL,
-    dimension    VARCHAR(32) NOT NULL,
-    value        VARCHAR(512) NOT NULL,
-    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (tenant_id, polarity, dimension, value),
-    CHECK (polarity IN ('deny', 'allow')),
-    CHECK (dimension IN ('keyword', 'user_id', 'device_id', 'ip_cidr', 'var'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_tb_access_list_tenant
-    ON tb_access_list (tenant_id, polarity, dimension);
-
 -- Named access lists (list_name model; allow/deny via list_match rule risk_score)
 CREATE TABLE IF NOT EXISTS tb_access_list_meta (
     tenant_id    VARCHAR(64) NOT NULL,
@@ -390,39 +376,9 @@ CREATE INDEX IF NOT EXISTS idx_tb_deploy_event_deploy
 CREATE INDEX IF NOT EXISTS idx_tb_deploy_event_rule
     ON tb_deploy_event (tenant_id, rule_id);
 
--- Challenge approval audit trail (primary storage is Redis, this is for persistence/analytics)
-CREATE TABLE IF NOT EXISTS tb_challenge_audit (
-    id              BIGINT       PRIMARY KEY ,
-    challenge_id    VARCHAR(32)  NOT NULL UNIQUE,
-    tenant_id       VARCHAR(64)  NOT NULL DEFAULT 'default',
-    session_id      VARCHAR(128) NOT NULL,
-    tool_name       VARCHAR(128) NOT NULL,
-    args_hash       VARCHAR(80)  NOT NULL,
-    rule_id         VARCHAR(128),
-    reason_code     VARCHAR(128),
-    risk_score      INTEGER      NOT NULL DEFAULT 0,
-    status          VARCHAR(16)  NOT NULL DEFAULT 'pending',
-    approved_by     VARCHAR(64),
-    approved_at     TIMESTAMP    NULL,
-    rejected_by     VARCHAR(64),
-    rejected_at     TIMESTAMP    NULL,
-    reject_reason   TEXT,
-    token           VARCHAR(64),
-    token_expires_at TIMESTAMP   NULL,
-    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    expires_at      TIMESTAMP    NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_challenge_tenant_status
-    ON tb_challenge_audit (tenant_id, status);
-CREATE INDEX IF NOT EXISTS idx_challenge_created
-    ON tb_challenge_audit (created_at);
-CREATE INDEX IF NOT EXISTS idx_challenge_tool
-    ON tb_challenge_audit (tool_name);
-
 -- Agent decision chain trace (input → reasoning → tool_call → tool_result → output)
 CREATE TABLE IF NOT EXISTS tb_agent_trace (
-    id               BIGINT       PRIMARY KEY ,
+    id               INTEGER      PRIMARY KEY AUTOINCREMENT,
     trace_id         VARCHAR(128) NOT NULL,
     session_id       VARCHAR(128) NOT NULL,
     tenant_id        VARCHAR(64)  NOT NULL,
@@ -490,3 +446,79 @@ CREATE TABLE IF NOT EXISTS tb_tool_registry (
 
 CREATE INDEX IF NOT EXISTS idx_tb_tool_registry_tenant
     ON tb_tool_registry (tenant_id);
+
+-- ============================================================
+-- License (Agent identity management, Ed25519-signed JWT)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS tb_agent_licenses (
+    license_id      VARCHAR(64)  NOT NULL,
+    tenant_id       VARCHAR(64)  NOT NULL,
+    app_id          VARCHAR(128) NOT NULL,
+    allowed_tools   TEXT         NOT NULL DEFAULT '[]',
+    risk_quota      INTEGER      NOT NULL DEFAULT 60,
+    tool_rate_limit INTEGER      NOT NULL DEFAULT 50,
+    expiry          TIMESTAMP    NOT NULL,
+    issued_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status          VARCHAR(16)  NOT NULL DEFAULT 'active',
+    signature_hash   VARCHAR(64)  NOT NULL,
+    agent_name      VARCHAR(256) NOT NULL DEFAULT '',
+    description     TEXT         NOT NULL DEFAULT '',
+    agent_aid       VARCHAR(256) NOT NULL DEFAULT '',
+    created_by      VARCHAR(64),
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at      TIMESTAMP,
+    revoke_reason   VARCHAR(255),
+    PRIMARY KEY (license_id),
+    CHECK (status IN ('active', 'revoked', 'expired')),
+    CHECK (risk_quota >= 0 AND risk_quota <= 100)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tb_agent_licenses_tenant_app
+    ON tb_agent_licenses (tenant_id, app_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_tb_agent_licenses_app
+    ON tb_agent_licenses (app_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_tb_agent_licenses_aid
+    ON tb_agent_licenses (agent_aid);
+
+CREATE TABLE IF NOT EXISTS tb_license_keys (
+    key_id          VARCHAR(64)  PRIMARY KEY,
+    tenant_id       VARCHAR(64)  NOT NULL,
+    public_key_pem  TEXT         NOT NULL,
+    private_key_enc TEXT         NOT NULL,
+    algorithm       VARCHAR(16)  NOT NULL DEFAULT 'EdDSA',
+    status          VARCHAR(16)  NOT NULL DEFAULT 'active',
+    created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    rotated_at      TIMESTAMP,
+    CHECK (status IN ('active', 'rotated', 'revoked'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tb_license_keys_tenant
+    ON tb_license_keys (tenant_id, status);
+
+CREATE TABLE IF NOT EXISTS tb_license_revocations (
+    id              INTEGER      PRIMARY KEY AUTOINCREMENT,
+    license_id      VARCHAR(64)  NOT NULL,
+    tenant_id       VARCHAR(64)  NOT NULL,
+    app_id          VARCHAR(128) NOT NULL,
+    revoked_by      VARCHAR(64),
+    revoke_reason   VARCHAR(255),
+    revoked_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_tb_license_revocations_license
+    ON tb_license_revocations (license_id);
+
+-- ============================================================
+-- Audit hash chain (per-tenant tamper-evident chain)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS tb_audit_chain_state (
+    tenant_id   VARCHAR(64)  PRIMARY KEY,
+    seq         BIGINT       NOT NULL DEFAULT 0,
+    last_hash   VARCHAR(128) NOT NULL DEFAULT '',
+    version     INT          NOT NULL DEFAULT 0,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

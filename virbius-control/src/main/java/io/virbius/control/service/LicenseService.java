@@ -1,5 +1,6 @@
 package io.virbius.control.service;
 
+import io.virbius.control.common.exception.BusinessException;
 import io.virbius.control.common.exception.ResourceNotFoundException;
 import io.virbius.control.domain.AgentLicense;
 import io.virbius.control.repository.LicenseRepository;
@@ -53,6 +54,14 @@ public class LicenseService {
             long expirySeconds,
             String description) {
 
+        // Reject if there is already an active License for this app_id
+        if (repo.findActiveByAppId(tenantId, appId).isPresent()) {
+            throw new BusinessException(409,
+                    "active license already exists for app '" + appId
+                            + "' in tenant '" + tenantId
+                            + "'; revoke it first before issuing a new one");
+        }
+
         // Ensure tenant has a signing key pair
         String encPrivKey = repo.getActiveEncryptedPrivateKey(tenantId)
                 .orElseGet(() -> {
@@ -80,7 +89,10 @@ public class LicenseService {
         license.setStatus("active");
 
         String jwt = signer.sign(signingKey, license);
-        license.setSignature(jwt);
+        // Store only the SHA-256 hash of the JWT for audit/identification.
+        // The original JWT is returned once to the caller and never persisted.
+        String signatureHash = LicenseSigner.sha256Hex(jwt);
+        license.setSignatureHash(signatureHash);
 
         String licenseId = "lic_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         repo.save(license, licenseId);
@@ -95,6 +107,7 @@ public class LicenseService {
                 Map.entry("agent_name", agentName),
                 Map.entry("agent_aid", agentAid),
                 Map.entry("jwt", jwt),
+                Map.entry("signature_hash", signatureHash),
                 Map.entry("expiry", license.getExpiry().toString()),
                 Map.entry("allowed_tools", allowedTools),
                 Map.entry("risk_quota", riskQuota),

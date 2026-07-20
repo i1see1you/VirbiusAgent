@@ -17,42 +17,6 @@ UPDATE tb_bundles
 SET metadata_json = '{"scope":{"tenants":["default"],"scenes":["beta_chat","medical-prod_chat","medical-prod_clinical"],"apps":["beta","medical-prod"]},"scene_registry":{"version":1,"fail_on_unknown_app":false,"fail_on_unresolved_scene":false,"scenes":{"beta_chat":{"app_id":"beta","default":true,"uris":["/v1/chat/completions"],"priority":0},"medical-prod_chat":{"app_id":"medical-prod","default":true,"uris":["/v1/chat/completions"],"priority":0},"medical-prod_clinical":{"app_id":"medical-prod","uris":["/v1/chat/completions"],"priority":10,"match":{"query":{"mode":"clinical"}}}}},"gateway":{"evaluate":true,"fail_mode":"open","cloud_scan":{"agent_url":"http://127.0.0.1:9070","timeout_ms":3000},"routes":[{"uri":"/v1/chat/completions","methods":["POST"]}]}}'
 WHERE tenant_id = 'default' AND bundle_id = 'poc-default' AND version = '0.1.0';
 
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'keyword', '招嫖' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'keyword' AND value = '招嫖');
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'keyword', '办证' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'keyword' AND value = '办证');
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'keyword', '暴恐' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'keyword' AND value = '暴恐');
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'keyword', '枪支刀具' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'keyword' AND value = '枪支刀具');
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'keyword', '炸弹制作' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'keyword' AND value = '炸弹制作');
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'keyword', 'jailbreak' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'keyword' AND value = 'jailbreak');
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'keyword', '绕过' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'keyword' AND value = '绕过');
-
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'user_id', 'u-banned-poc' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'user_id' AND value = 'u-banned-poc');
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'device_id', 'dev-blocked-poc' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'device_id' AND value = 'dev-blocked-poc');
-
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'var', 'debug_flag=1' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'var' AND value = 'debug_flag=1');
-INSERT INTO tb_access_list (tenant_id, polarity, dimension, value)
-SELECT 'default', 'deny', 'var', 'app_id=evil' FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_access_list WHERE tenant_id = 'default' AND polarity = 'deny' AND dimension = 'var' AND value = 'app_id=evil');
-
 -- Named access lists (ListStore -> gateway memory_lists / engine PolicyDataCache)
 INSERT INTO tb_access_list_meta (tenant_id, list_name, dimension, remark)
 SELECT 'default', 'deny_keyword', 'keyword', 'PoC content deny keywords' FROM (SELECT 1) AS _one
