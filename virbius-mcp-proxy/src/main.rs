@@ -115,6 +115,9 @@ async fn main() {
     // allowed_hosts when that field is added)
     let egress_hosts: Vec<String> = Vec::new();
 
+    // Transport connection ID -> logical session ID mapping
+    let conn_to_session: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
+
     // Start transport
     let listen = cfg.proxy.listen.clone();
     if listen == "stdio" {
@@ -126,6 +129,7 @@ async fn main() {
             egress_hosts,
             pubkey_pem,
             trace_collector,
+            conn_to_session,
         )
         .await;
     } else if listen.starts_with("tcp://") || listen.starts_with("http://") {
@@ -142,6 +146,7 @@ async fn main() {
             egress_hosts,
             pubkey_pem,
             trace_collector,
+            conn_to_session,
         )
         .await;
     } else {
@@ -165,6 +170,7 @@ async fn run_stdio(
     egress_hosts: Vec<String>,
     pubkey_pem: String,
     trace_collector: Arc<TraceCollector>,
+    conn_to_session: Arc<DashMap<String, String>>,
 ) {
     info!("stdio transport mode");
     let (transport, _writer_handle) = transport::StdioTransport::new();
@@ -184,6 +190,7 @@ async fn run_stdio(
                 let pubkey_pem = pubkey_pem.clone();
                 let session_id = session_id.clone();
                 let trace_collector = trace_collector.clone();
+                let conn_to_session = conn_to_session.clone();
 
                 tokio::spawn(async move {
                     if let Some(response) = router::route_request(
@@ -196,6 +203,7 @@ async fn run_stdio(
                         &egress_hosts,
                         &pubkey_pem,
                         &trace_collector,
+                        &conn_to_session,
                     )
                     .await
                     {
@@ -235,6 +243,7 @@ async fn run_sse(
     egress_hosts: Vec<String>,
     pubkey_pem: String,
     trace_collector: Arc<TraceCollector>,
+    conn_to_session: Arc<DashMap<String, String>>,
 ) {
     info!("SSE/HTTP transport mode on {}", addr);
 
@@ -268,6 +277,7 @@ async fn run_sse(
         public_key_pem: Arc::new(pubkey_pem),
         trace_collector,
         sse_sessions: Arc::new(DashMap::new()),
+        conn_to_session,
     };
 
     let app = transport::create_router(state);

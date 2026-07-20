@@ -158,6 +158,7 @@ struct ProxyEnv {
     egress_hosts: Vec<String>,
     pubkey: String,
     trace_collector: SharedTraceCollector,
+    conn_to_session: Arc<DashMap<String, String>>,
 }
 
 async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
@@ -187,6 +188,7 @@ async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
     let egress_hosts = Vec::new();
     let pubkey = String::new();
     let trace_collector = Arc::new(TraceCollector::new(TraceBackend::Disabled));
+    let conn_to_session = Arc::new(DashMap::new());
 
     ProxyEnv {
         session_mgr,
@@ -196,6 +198,7 @@ async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
         egress_hosts,
         pubkey,
         trace_collector,
+        conn_to_session,
     }
 }
 
@@ -211,6 +214,7 @@ async fn route(env: &ProxyEnv, request: &Value, session_id: &str) -> Option<Valu
         &env.egress_hosts,
         &env.pubkey,
         &env.trace_collector,
+        &env.conn_to_session,
     )
     .await
 }
@@ -240,12 +244,12 @@ async fn test_initialize_tools_list_and_call() {
     let env = setup_proxy(&upstream_url).await;
     let sid = "itest-full-flow";
 
-    // 1. Initialize
+    // 1. Initialize (provide session_id in _meta so logical_sid == transport_sid)
     let init_req = json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
-        "params": { "_meta": { "app_id": "test-app" } }
+        "params": { "_meta": { "session_id": sid, "app_id": "test-app" } }
     });
     let resp = route(&env, &init_req, sid).await;
     assert!(resp.is_some(), "initialize should return a response");
@@ -538,7 +542,7 @@ async fn test_concurrent_sessions() {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
-            "params": { "_meta": { "app_id": "test-app" } }
+            "params": { "_meta": { "session_id": *sid, "app_id": "test-app" } }
         });
         let resp = route(&env, &init_req, sid).await;
         assert!(
@@ -726,6 +730,7 @@ async fn test_multi_upstream_no_conflict() {
     ));
 
     let trace_collector = Arc::new(TraceCollector::new(TraceBackend::Disabled));
+    let conn_to_session = Arc::new(DashMap::new());
 
     let env = ProxyEnv {
         session_mgr,
@@ -735,6 +740,7 @@ async fn test_multi_upstream_no_conflict() {
         egress_hosts: Vec::new(),
         pubkey: String::new(),
         trace_collector,
+        conn_to_session,
     };
 
     let sid = "itest-multi-no-conflict";
@@ -744,7 +750,7 @@ async fn test_multi_upstream_no_conflict() {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
-        "params": { "_meta": { "app_id": "test-app" } }
+        "params": { "_meta": { "session_id": sid, "app_id": "test-app" } }
     });
     let resp = route(&env, &init_req, sid).await;
     assert!(
@@ -834,6 +840,7 @@ async fn test_multi_upstream_name_conflict() {
     ));
 
     let trace_collector = Arc::new(TraceCollector::new(TraceBackend::Disabled));
+    let conn_to_session = Arc::new(DashMap::new());
 
     let env = ProxyEnv {
         session_mgr,
@@ -843,6 +850,7 @@ async fn test_multi_upstream_name_conflict() {
         egress_hosts: Vec::new(),
         pubkey: String::new(),
         trace_collector,
+        conn_to_session,
     };
 
     let sid = "itest-multi-conflict";

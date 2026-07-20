@@ -135,8 +135,10 @@ pub struct AppState {
     pub egress_hosts: Arc<Vec<String>>,
     pub public_key_pem: Arc<String>,
     pub trace_collector: SharedTraceCollector,
-    /// SSE sessions: session_id → channel to push JSON-RPC responses
+    /// SSE sessions: session_id -> channel to push JSON-RPC responses
     pub sse_sessions: Arc<DashMap<String, mpsc::Sender<Value>>>,
+    /// Transport connection ID -> logical session ID mapping
+    pub conn_to_session: Arc<DashMap<String, String>>,
 }
 
 /// Create the axum router with all routes.
@@ -173,23 +175,28 @@ async fn handle_sse(State(state): State<AppState>) -> Response {
     debug!("SSE session created: {}", session_id);
 
     // Spawn disconnection monitor: detects when the SSE receiver (held by the
-    // response stream) is dropped, then cleans up all per-session resources.
+    // response stream) is dropped, then cleans up per-connection resources.
+    // The Session itself is NOT removed - it survives for reconnect within TTL.
     {
-        let mon_session_id = session_id.clone();
+        let mon_conn_id = session_id.clone();
         let mon_sse = state.sse_sessions.clone();
-        let mon_session_mgr = state.session_mgr.clone();
+        let mon_conn_to_session = state.conn_to_session.clone();
         let mon_upstream_mgr = state.upstream_mgr.clone();
         tokio::spawn(async move {
             // tx.closed() completes when the Receiver (rx) is dropped,
             // which happens when axum drops the SSE response (client disconnect).
             tx.closed().await;
             debug!(
-                "SSE session {} disconnected, cleaning up resources",
-                mon_session_id
+                "SSE connection {} disconnected, cleaning up resources",
+                mon_conn_id
             );
-            mon_sse.remove(&mon_session_id);
-            mon_session_mgr.remove(&mon_session_id);
-            mon_upstream_mgr.remove(&mon_session_id);
+            // Resolve logical session ID for upstream cleanup
+            if let Some(logical) = mon_conn_to_session.get(&mon_conn_id).map(|e| e.value().clone()) {
+                mon_upstream_mgr.remove(&logical);
+            }
+            mon_sse.remove(&mon_conn_id);
+            mon_conn_to_session.remove(&mon_conn_id);
+            // session_mgr entry stays for reconnect TTL window
         });
     }
 
@@ -230,9 +237,6 @@ async fn handle_post_message(
         None => return StatusCode::NOT_FOUND.into_response(),
     };
 
-    // Touch session to update last_active (if session exists)
-    state.session_mgr.touch(&session_id);
-
     // Spawn task to route the request and send response via SSE
     let state_clone = state.clone();
     tokio::spawn(async move {
@@ -246,6 +250,7 @@ async fn handle_post_message(
             &state_clone.egress_hosts,
             &state_clone.public_key_pem,
             &state_clone.trace_collector,
+            &state_clone.conn_to_session,
         )
         .await;
 
@@ -281,6 +286,7 @@ async fn handle_simple_post(State(state): State<AppState>, Json(request): Json<V
         &state.egress_hosts,
         &state.public_key_pem,
         &state.trace_collector,
+        &state.conn_to_session,
     )
     .await;
 

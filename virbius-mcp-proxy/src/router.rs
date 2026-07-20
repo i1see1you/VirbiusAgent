@@ -5,6 +5,7 @@
 /// - `initialize` is forwarded to all upstreams concurrently
 /// - `tools/list` merges tools from all upstreams, prefixes conflicting names
 /// - `tools/call` routes to the correct upstream via `tool_routes`
+use dashmap::DashMap;
 use serde_json::Value;
 use tracing::{debug, info, warn};
 
@@ -24,12 +25,14 @@ const TOOL_PREFIX_SEP: &str = "__";
 
 /// Process a single JSON-RPC request and return a response.
 ///
-/// `session_id` identifies the logical session (decoupled from TCP connection).
+/// `transport_session_id` identifies the transport connection (SSE channel, stdio).
+/// It is resolved to a logical session ID via `conn_to_session` mapping;
+/// for `initialize` (no mapping yet) it falls back to the transport ID.
 /// Returns `Some(response)` for requests (have `id`), `None` for notifications.
 #[allow(clippy::too_many_arguments)]
 pub async fn route_request(
     request: &Value,
-    session_id: &str,
+    transport_session_id: &str,
     session_mgr: &SessionManager,
     upstream_mgr: &UpstreamManager,
     pipeline: &SharedPipeline,
@@ -37,10 +40,19 @@ pub async fn route_request(
     egress_hosts: &[String],
     public_key_pem: &str,
     trace_collector: &SharedTraceCollector,
+    conn_to_session: &DashMap<String, String>,
 ) -> Option<Value> {
     let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let id = request.get("id").cloned().unwrap_or(Value::Null);
     let params = request.get("params").cloned().unwrap_or(Value::Null);
+
+    // Resolve logical session ID from transport connection ID.
+    // For initialize (no mapping yet) this falls back to transport_session_id.
+    let session_id: String = conn_to_session
+        .get(transport_session_id)
+        .map(|e| e.value().clone())
+        .unwrap_or_else(|| transport_session_id.to_string());
+    session_mgr.touch(&session_id);
 
     // Notifications (no `id`) are forwarded but don't get a response
     let is_notification = request.get("id").is_none();
@@ -55,19 +67,20 @@ pub async fn route_request(
             handle_initialize(
                 &id,
                 &params,
-                session_id,
+                transport_session_id,
                 session_mgr,
                 upstream_mgr,
                 public_key_pem,
+                conn_to_session,
             )
             .await
         }
-        "tools/list" => handle_tools_list(&id, session_id, session_mgr, upstream_mgr).await,
+        "tools/list" => handle_tools_list(&id, &session_id, session_mgr, upstream_mgr).await,
         "tools/call" => {
             handle_tools_call(
                 &id,
                 &params,
-                session_id,
+                &session_id,
                 session_mgr,
                 upstream_mgr,
                 pipeline,
@@ -81,7 +94,7 @@ pub async fn route_request(
             // Transparent forward for all other methods
             if is_notification {
                 if upstream_mgr.is_single_upstream() {
-                    match upstream_mgr.get_or_connect_single(session_id).await {
+                    match upstream_mgr.get_or_connect_single(&session_id).await {
                         Ok(upstream) => {
                             let _ = upstream.forward_notification(request).await;
                         }
@@ -92,7 +105,7 @@ pub async fn route_request(
                 } else {
                     // Multi-upstream: forward to all (best-effort)
                     for name in upstream_mgr.upstream_names() {
-                        if let Ok(upstream) = upstream_mgr.get_or_connect(session_id, name).await {
+                        if let Ok(upstream) = upstream_mgr.get_or_connect(&session_id, name).await {
                             let _ = upstream.forward_notification(request).await;
                         }
                     }
@@ -100,7 +113,7 @@ pub async fn route_request(
                 None
             } else {
                 if upstream_mgr.is_single_upstream() {
-                    match upstream_mgr.get_or_connect_single(session_id).await {
+                    match upstream_mgr.get_or_connect_single(&session_id).await {
                         Ok(upstream) => match upstream.forward(request).await {
                             Ok(resp) => Some(resp),
                             Err(e) => {
@@ -117,7 +130,7 @@ pub async fn route_request(
                     // Multi-upstream: forward to first upstream that succeeds
                     let mut last_err = None;
                     for name in upstream_mgr.upstream_names() {
-                        match upstream_mgr.get_or_connect(session_id, name).await {
+                        match upstream_mgr.get_or_connect(&session_id, name).await {
                             Ok(upstream) => match upstream.forward(request).await {
                                 Ok(resp) => return Some(resp),
                                 Err(e) => {
@@ -144,30 +157,47 @@ pub async fn route_request(
 ///
 /// - Single-upstream: forward to the sole upstream (original behavior).
 /// - Multi-upstream: forward to ALL upstreams concurrently, merge capabilities.
+///
+/// The logical session ID is determined from `_meta.session_id` (or auto-generated).
+/// On reconnect (same logical session ID already in SessionManager), accumulated
+/// state (risk_score, tool_call_count, trace_id, step_seq) is preserved.
 async fn handle_initialize(
     id: &Value,
     params: &Value,
-    session_id: &str,
+    transport_session_id: &str,
     session_mgr: &SessionManager,
     upstream_mgr: &UpstreamManager,
     _public_key_pem: &str,
+    conn_to_session: &DashMap<String, String>,
 ) -> Option<Value> {
-    // Extract session info from _meta
+    // Extract session info from _meta; session.session_id comes from
+    // _meta.session_id (or auto-generated UUID if not provided).
     let meta = params.get("_meta").unwrap_or(&Value::Null);
     let mut session = Session::from_meta(meta);
-    // Use the session_id assigned by the transport layer
-    session.session_id = session_id.to_string();
+    let logical_sid = session.session_id.clone();
+
+    // Reconnect: preserve accumulated state from the previous connection
+    if let Some(old) = session_mgr.get(&logical_sid) {
+        session.session_risk_score = old.session_risk_score;
+        session.tool_call_count = old.tool_call_count;
+        session.trace_id = old.trace_id;
+        session.step_seq = old.step_seq;
+    }
+
     debug!(
         "initialize: app_id={}, session_id={}, has_license={}",
         session.app_id,
-        session.session_id,
+        logical_sid,
         session.has_license()
     );
-    session_mgr.insert(session_id.to_string(), session);
+
+    // Map transport connection ID -> logical session ID, and store session
+    conn_to_session.insert(transport_session_id.to_string(), logical_sid.clone());
+    session_mgr.insert(logical_sid.clone(), session);
 
     if upstream_mgr.is_single_upstream() {
         // ── Single-upstream mode (original behavior) ──
-        let upstream = match upstream_mgr.get_or_connect_single(session_id).await {
+        let upstream = match upstream_mgr.get_or_connect_single(&logical_sid).await {
             Ok(u) => u,
             Err(e) => {
                 return Some(jsonrpc_error(
@@ -187,9 +217,9 @@ async fn handle_initialize(
 
         match upstream.forward(&forward_req).await {
             Ok(resp) => {
-                if let Some(mut s) = session_mgr.get(session_id) {
+                if let Some(mut s) = session_mgr.get(&logical_sid) {
                     s.mark_upstream_initialized("default");
-                    session_mgr.update(session_id.to_string(), s);
+                    session_mgr.update(logical_sid.clone(), s);
                 }
                 Some(inject_proxy_capabilities(resp))
             }
@@ -207,7 +237,7 @@ async fn handle_initialize(
         let mut tasks = Vec::new();
         for name in &upstream_names {
             let name = name.to_string();
-            let sid = session_id.to_string();
+            let sid = logical_sid.clone();
             let id_clone = id.clone();
             let params_clone = params.clone();
             let mgr_ref = upstream_mgr;
@@ -245,9 +275,9 @@ async fn handle_initialize(
         for (name, upstream, forward_req) in &tasks {
             match upstream.forward(forward_req).await {
                 Ok(resp) => {
-                    if let Some(mut s) = session_mgr.get(session_id) {
+                    if let Some(mut s) = session_mgr.get(&logical_sid) {
                         s.mark_upstream_initialized(name);
-                        session_mgr.update(session_id.to_string(), s);
+                        session_mgr.update(logical_sid.clone(), s);
                     }
                     if first_ok.is_none() {
                         first_ok = Some(resp);
