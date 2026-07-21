@@ -267,6 +267,37 @@ Agent 是否在 K8s 集群内？
                               + 方式 2 (Higress) ← 补管层能力
 ```
 
+#### 8.3.7 各方式规则执行流程
+
+> [§6.1](DESIGN.zh.md#61-工具调用请求路径) 描述了四层全覆盖的组合流程。本节以对比表格形式说明三种独立部署方式的规则执行差异。
+
+**三种方式规则执行对比**
+
+| 规则类型 | 方式 1 (Proxy) | 方式 2 (Higress) | 方式 3 (SDK) |
+|---------|:---:|:---:|:---:|
+| **端层** | | | |
+| 端层关键词规则 (`lua-dsl`) | ❌ Proxy 不跑端层关键词 | ❌ | ✅ `engine::scan_once` |
+| 端层 DLP 脱敏 | ❌ | ❌ | ✅ `DlpEngine` 进程内 |
+| Prompt 增强（宪法注入） | ❌ | ❌ | ✅ 仅 SDK |
+| License 校验 | ✅ Proxy 内 | ✅ WASM 内 | ✅ 进程内 |
+| JSON Schema 校验 | ✅ Proxy 内 | ❌ WASM Schema 弱 | ✅ 进程内 |
+| **管层** | | | |
+| 管层表达式规则 (WASM) | ❌ 绕过 | ✅ `virbius-expr` | ❌ |
+| 管层限流 | ❌ 绕过 | ✅ Redis INCR | ❌ |
+| **云层** | | | |
+| 云层 Groovy 规则 | ✅ Engine | ✅ Engine | ✅ Engine（可选） |
+| 云层 Prompt 规则 (1B 模型) | ✅ Engine | ✅ Engine | ✅ Engine（可选） |
+| Prompt 注入检测 | ✅ Engine | ✅ Engine | ✅ Engine |
+| Session Risk | ✅ Engine | ✅ Engine | ✅ Engine |
+| Challenge 人工审批 | ✅ Proxy→Engine | ✅ WASM→Engine | ✅ Engine |
+| **核层** | | | |
+| 核层 Falco 观测 | ✅ DaemonSet | ❌ | ❌ |
+| **其他** | | | |
+| 输出审查（PII 泄露） | ✅ Proxy→Engine | ❌ | ✅ `output_reviewer` |
+| P2 沙箱 (Landlock) | ✅ MCP Server 侧 | ✅ MCP Server 侧 | ✅ Agent 直接沙箱 |
+
+> **组合部署**：当单一方式无法满足安全需求时，可组合部署。方式 1 + 方式 2 实现四层全覆盖（见 [§8.4](#84-四层全覆盖组合部署)）；方式 1/2 + 方式 3 补齐 Prompt 增强能力。
+
 ---
 
 ### 8.4 四层全覆盖（组合部署）

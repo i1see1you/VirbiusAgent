@@ -626,7 +626,7 @@
       // Tool Registry
       'nav.tools': '工具注册',
       'tools.title': '工具注册',
-      'tools.desc': '工具元数据的全局注册表。每个工具定义其风险等级、沙箱类型、超时、快速通道和参数校验 Schema。配置后自动同步到 Edge Manifest 和 Engine Session Risk。',
+      'tools.desc': '工具元数据的全局注册表。每个工具定义其风险等级、沙箱类型、超时、快速通道和参数校验 Schema。保存后需到左侧「<strong>策略上线</strong>」发布生效，同步到 Edge Manifest 和 Engine Session Risk。',
       'tools.btn-new': '新建工具',
       'tools.header-name': 'tool_name',
       'tools.header-risk': 'risk_class',
@@ -1346,7 +1346,7 @@
       // Tool Registry
       'nav.tools': 'Tool Registry',
       'tools.title': 'Tool Registry',
-      'tools.desc': 'Global registry of tool metadata. Each tool defines its risk class, sandbox type, timeout, fast path, and args validation schema. Configurations are automatically synced to Edge Manifest and Engine Session Risk.',
+      'tools.desc': 'Global registry of tool metadata. Each tool defines its risk class, sandbox type, timeout, fast path, and args validation schema. After saving, go to "<strong>Rollout</strong>" on the left to publish and sync to Edge Manifest and Engine Session Risk.',
       'tools.btn-new': 'New Tool',
       'tools.header-name': 'tool_name',
       'tools.header-risk': 'risk_class',

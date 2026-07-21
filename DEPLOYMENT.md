@@ -267,6 +267,37 @@ Is Agent in K8s cluster?
                               + Mode 2 (Higress) ← Supplement Gateway Layer capabilities
 ```
 
+#### 8.3.7 Rule Execution Flow by Mode
+
+> [§6.1](DESIGN.md#61-tool-call-request-path) describes the combined four-layer flow. This section uses a comparison table to illustrate the rule execution differences across the three independent deployment modes.
+
+**Rule Execution Comparison by Mode**
+
+| Rule Type | Mode 1 (Proxy) | Mode 2 (Higress) | Mode 3 (SDK) |
+|---------|:---:|:---:|:---:|
+| **Edge Layer** | | | |
+| Edge keyword rules (`lua-dsl`) | ❌ Proxy doesn't run edge keywords | ❌ | ✅ `engine::scan_once` |
+| Edge DLP desensitization | ❌ | ❌ | ✅ `DlpEngine` in-process |
+| Prompt enhancement (constitutional injection) | ❌ | ❌ | ✅ SDK only |
+| License verification | ✅ In Proxy | ✅ In WASM | ✅ In-process |
+| JSON Schema validation | ✅ In Proxy | ❌ WASM Schema weak | ✅ In-process |
+| **Gateway Layer** | | | |
+| Gateway expression rules (WASM) | ❌ Bypassed | ✅ `virbius-expr` | ❌ |
+| Gateway rate limiting | ❌ Bypassed | ✅ Redis INCR | ❌ |
+| **Cloud Layer** | | | |
+| Cloud Groovy rules | ✅ Engine | ✅ Engine | ✅ Engine (optional) |
+| Cloud Prompt rules (1B model) | ✅ Engine | ✅ Engine | ✅ Engine (optional) |
+| Prompt injection detection | ✅ Engine | ✅ Engine | ✅ Engine |
+| Session Risk | ✅ Engine | ✅ Engine | ✅ Engine |
+| Challenge human approval | ✅ Proxy→Engine | ✅ WASM→Engine | ✅ Engine |
+| **Kernel Layer** | | | |
+| Kernel Falco observation | ✅ DaemonSet | ❌ | ❌ |
+| **Other** | | | |
+| Output review (PII leak) | ✅ Proxy→Engine | ❌ | ✅ `output_reviewer` |
+| P2 sandbox (Landlock) | ✅ MCP Server side | ✅ MCP Server side | ✅ Agent direct sandbox |
+
+> **Combined deployment**: When a single mode cannot meet security requirements, combined deployment is available. Mode 1 + Mode 2 achieves four-layer full coverage (see [§8.4](#84-four-layer-full-coverage-combined-deployment)); Mode 1/2 + Mode 3 supplements Prompt enhancement capability.
+
 ---
 
 ### 8.4 Four-Layer Full Coverage (Combined Deployment)

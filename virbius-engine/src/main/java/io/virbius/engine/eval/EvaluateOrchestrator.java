@@ -109,14 +109,15 @@ public class EvaluateOrchestrator {
                     null));
         }
 
-        MatchContext matchCtx = MatchContext.withBind(
+        MatchContext matchCtx = MatchContext.forToolCallWithRoute(
                 req.content(),
                 req.userId(),
                 req.deviceId(),
                 null,
                 req.sessionId(),
                 vars,
-                req.routeUri());
+                req.routeUri(),
+                toolName);
 
         signals.addAll(promptRunner.run(req.tenantId(), matchCtx));
         signals.addAll(scriptRuleRunner.run(req.tenantId(), matchCtx, req.priorSignals()));
