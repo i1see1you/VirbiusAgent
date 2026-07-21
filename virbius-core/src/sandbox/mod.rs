@@ -58,6 +58,9 @@ pub struct ExecutionResult {
     pub degraded: bool,
     /// Human-readable note about degradation (if any).
     pub degrade_note: Option<String>,
+    /// Whether Landlock file/network restrictions were actually applied
+    /// (reported by the child process via self-pipe, not inferred from ABI).
+    pub landlock_applied: bool,
 }
 
 impl ExecutionResult {
@@ -141,6 +144,7 @@ pub fn execute(req: ExecutionRequest) -> Result<ExecutionResult, String> {
                 sandbox_used: SandboxType::Landlock,
                 degraded,
                 degrade_note,
+                landlock_applied: result.landlock_applied,
             })
         }
 
@@ -159,6 +163,7 @@ pub fn execute(req: ExecutionRequest) -> Result<ExecutionResult, String> {
                     sandbox_used: SandboxType::Gvisor,
                     degraded: false,
                     degrade_note: None,
+                    landlock_applied: false,
                 });
             }
 
@@ -180,6 +185,7 @@ pub fn execute(req: ExecutionRequest) -> Result<ExecutionResult, String> {
                 degrade_note: Some(
                     "gVisor unavailable, degraded to Landlock sandbox (timeout=5s)".to_string(),
                 ),
+                landlock_applied: result.landlock_applied,
             })
         }
     }
@@ -228,6 +234,7 @@ mod tests {
             sandbox_used: SandboxType::None,
             degraded: false,
             degrade_note: None,
+            landlock_applied: false,
         };
         assert!(r.is_success());
     }
@@ -241,6 +248,7 @@ mod tests {
             sandbox_used: SandboxType::None,
             degraded: false,
             degrade_note: None,
+            landlock_applied: false,
         };
         assert!(!r.is_success());
     }

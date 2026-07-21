@@ -14,26 +14,26 @@
 
 ### P0 — Core Security Pipeline (Identity + Observability + HTTP Blocking + Prompt Gateway)
 
-| Task | Component | Estimate |
-|------|-----------|----------|
-| Runtime License issuance + verification + revocation | control + all layers | 3w |
-| Prompt Gateway basic (constitution injection + PII desensitization) | virbius-core | 3w |
-| Enterprise AI Agent Constitution v1 (rule definition + compilation) | control + compiler | 2w |
-| Edge layer precheck (arg validation + allowlist + JSON Schema) | virbius-core | 2w |
-| Edge MCP Server integration (PyO3 / napi-rs / subprocess) | virbius-core | 3w |
-| MCP Proxy (stdio/SSE proxy + security pipeline + session management) | virbius-mcp-proxy | 3w |
-| Gateway layer Higress WASM plugin (allowlist + counters + engine call) | virbius-gateway | 3w |
-| Gateway Higress route config auto-generation (control -> compiler) | control + compiler | 2w |
-| Cloud layer Redis session state (history + risk + counts) | engine | 3w |
-| Cloud layer Groovy L3 Agent rules (tool chain detection + scenario matching) | engine | 2w |
-| Cloud layer Groovy ctx extensions (sessionHistory / riskScore, memory preload) | engine | 2w |
-| Control plane Agent rule CRUD + rollout | control | 2w |
+| Task | Component | Estimate | Status |
+|------|-----------|----------|--------|
+| Runtime License issuance + verification + revocation | control + all layers | 3w | |
+| Prompt Gateway basic (constitution injection + PII desensitization) | virbius-core | 3w | |
+| Enterprise AI Agent Constitution v1 (rule definition + compilation) | control + compiler | 2w | |
+| Edge layer precheck (arg validation + allowlist + JSON Schema) | virbius-core | 2w | |
+| Edge MCP Server integration (PyO3 / napi-rs / subprocess) | virbius-core | 3w | |
+| MCP Proxy (stdio/SSE proxy + security pipeline + session management) | virbius-mcp-proxy | 3w | |
+| Gateway layer Higress WASM plugin (allowlist + counters + engine call) | virbius-gateway | 3w | |
+| Gateway Higress route config auto-generation (control -> compiler) | control + compiler | 2w | |
+| Cloud layer Redis session state (history + risk + counts) | engine | 3w | |
+| Cloud layer Groovy L3 Agent rules (tool chain detection + scenario matching) | engine | 2w | |
+| Cloud layer Groovy ctx extensions (sessionHistory / riskScore, memory preload) | engine | 2w | |
+| Control plane Agent rule CRUD + rollout | control | 2w | |
 | Kernel layer Falco deployment + eBPF driver (standard node pool) | virbius-kernel | 2w | ✅ Done |
 | Kernel layer Falco plugin mode (serverless fallback: k8saudit + filetail) | virbius-kernel | ~~2w~~ | ❌ Removed (Plan A) |
 | Kernel layer PID→trace_id mapping + audit reporting | virbius-kernel | 1w | ✅ Done |
 | Kernel layer Falco http_output → Engine FalcoAlertController | virbius-kernel + engine | 1w | ✅ Done |
 | End-to-end integration tests | All components | 3w | ✅ Done |
-| **P0 Total** | | **~36w** |
+| **P0 Total** | | **~36w** | |
 
 ### P1 — Enhanced Observability + Memory Control
 
@@ -75,27 +75,6 @@
 
 ## Changelog
 
-### v3.3 (2026-07-08)
-
-**New Features**
-
-- **Agent decision trace system**: Full-chain recording of every Agent decision from input to output, supporting session-level timeline, trace-level causal chain, and tool-dimension search
-  - DB: `tb_agent_trace` table (V6 migration) + `tb_trace_ingest_checkpoint` checkpoint table
-  - Proxy: `trace_collector.rs` module (TraceEvent + TraceCollector + Redis XADD), `session.rs` adds `step_seq` / `last_step_id` step tracking fields, `router.rs` collects trace events at `tool_call` and `tool_result` key points
-  - Control: `TraceIngestService` consumes Redis Stream and writes to DB, `TraceQueryService` provides session timeline / trace chain / search queries, REST API mounted at `/api/v1/admin/tenants/{tenantId}/trace/*`
-  - Ops console: New "Decision Trace" panel with search + timeline visualization + Ingest health status
-- **High-risk tool human approval flow (P1)**: Full-chain closed loop completed
-  - Engine: `ChallengeService` Redis state machine (create → approve/reject → verify token), `EvaluateOrchestrator` auto-creates approval records on `challenge` action
-  - Control: `ChallengeController` proxies Engine API to ops console
-  - Proxy: `PipelineResult::Challenge` interception + `challenge_token` retry verification
-  - DB: `tb_challenge_audit` audit persistence (V5 migration)
-  - Ops console: Approval queue panel (5s polling + approve/reject)
-
-**Documentation Updates**
-
-- Added [DESIGN.md §12](DESIGN.md#12-agent-security-risk-assessment-framework) Agent Security Risk Assessment Framework: 7-dimensional risk assessment + assessment methodology (5 steps) + security assurance comparison table
-- Added [DESIGN.md §13](DESIGN.md#13-p1-feature-detailed-design) P1 Feature Detailed Design: Covers 7 P1 features (Prompt injection detection, STI Taint, Session Risk adaptive, audit integrity hash chain, memory control, output review, virbius-audit Falco plugin + rule library) + implementation priority recommendations
-
 ### v3.6 (2026-07-18)
 
 **Falco Reverted to Pure System-Level + http_output Path (Plan A)**
@@ -131,6 +110,27 @@
 - **Ops console integration**: Falco layer rule editor, Falco rollout button, Falco canary status dashboard
 - **Deployment file updates**: `falco-plugin-daemonset.yaml` adds config-subscriber sidecar, `falco-plugin-config.yaml` adds `rules_file` to load rules.d directory
 - **Documentation updates**: README.md adds custom Falco rule example, ARCHITECTURE.md §4.8 adds Falco rule management chapter
+
+### v3.3 (2026-07-08)
+
+**New Features**
+
+- **Agent decision trace system**: Full-chain recording of every Agent decision from input to output, supporting session-level timeline, trace-level causal chain, and tool-dimension search
+  - DB: `tb_agent_trace` table (V6 migration) + `tb_trace_ingest_checkpoint` checkpoint table
+  - Proxy: `trace_collector.rs` module (TraceEvent + TraceCollector + Redis XADD), `session.rs` adds `step_seq` / `last_step_id` step tracking fields, `router.rs` collects trace events at `tool_call` and `tool_result` key points
+  - Control: `TraceIngestService` consumes Redis Stream and writes to DB, `TraceQueryService` provides session timeline / trace chain / search queries, REST API mounted at `/api/v1/admin/tenants/{tenantId}/trace/*`
+  - Ops console: New "Decision Trace" panel with search + timeline visualization + Ingest health status
+- **High-risk tool human approval flow (P1)**: Full-chain closed loop completed
+  - Engine: `ChallengeService` Redis state machine (create → approve/reject → verify token), `EvaluateOrchestrator` auto-creates approval records on `challenge` action
+  - Control: `ChallengeController` proxies Engine API to ops console
+  - Proxy: `PipelineResult::Challenge` interception + `challenge_token` retry verification
+  - DB: `tb_challenge_audit` audit persistence (V5 migration)
+  - Ops console: Approval queue panel (5s polling + approve/reject)
+
+**Documentation Updates**
+
+- Added [DESIGN.md §12](DESIGN.md#12-agent-security-risk-assessment-framework) Agent Security Risk Assessment Framework: 7-dimensional risk assessment + assessment methodology (5 steps) + security assurance comparison table
+- Added [DESIGN.md §13](DESIGN.md#13-p1-feature-detailed-design) P1 Feature Detailed Design: Covers 7 P1 features (Prompt injection detection, STI Taint, Session Risk adaptive, audit integrity hash chain, memory control, output review, virbius-audit Falco plugin + rule library) + implementation priority recommendations
 
 ### v3.2
 

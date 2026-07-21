@@ -116,8 +116,10 @@
           if (decisionBadge || riskBadge || statusBadge) {
             html += `<div class="trace-step-badges">${decisionBadge}${riskBadge}${statusBadge}</div>`;
           }
-          if (s.tool_args_hash) {
-            html += `<div class="trace-step-hash">args: ${esc(s.tool_args_hash).slice(0, 24)}…</div>`;
+          if (s.tool_args) {
+            html += `<div class="trace-step-args"><pre>${esc(JSON.stringify(JSON.parse(s.tool_args), null, 2))}</pre></div>`;
+          } else if (s.tool_args_hash) {
+            html += `<div class="trace-step-hash">args-hash: ${esc(s.tool_args_hash).slice(0, 24)}…</div>`;
           }
           html += `<div class="trace-step-time">${fmtTime(s.occurred_at)}</div>`;
           html += `</div>`;

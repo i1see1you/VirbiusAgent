@@ -14,7 +14,9 @@ import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 /**
@@ -29,11 +31,31 @@ public class LicenseSigner {
 
     private static final Logger log = LoggerFactory.getLogger(LicenseSigner.class);
     private static final String JWT_HEADER = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9";
+    private static final String DEFAULT_KEY = "virbius-default-license-key-change-me";
 
     private final ObjectMapper json = new ObjectMapper();
+    private final Environment env;
+
+    public LicenseSigner(Environment env) {
+        this.env = env;
+    }
 
     @Value("${virbius.license.master-key:virbius-default-license-key-change-me}")
     private String masterKey;
+
+    @PostConstruct
+    public void validateMasterKey() {
+        boolean isProd = env.matchesProfiles("prod");
+        if (DEFAULT_KEY.equals(masterKey)) {
+            if (isProd) {
+                throw new IllegalStateException(
+                    "virbius.license.master-key is set to the insecure default value. " +
+                    "Set the VIRBIUS_LICENSE_MASTER_KEY environment variable to a strong secret before starting in prod profile.");
+            }
+            log.warn("virbius.license.master-key is using the insecure default value. " +
+                "This is acceptable for local development only — set a strong secret for any non-dev deployment.");
+        }
+    }
 
     /**
      * Build a signed License JWT from the given license fields.

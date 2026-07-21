@@ -9,36 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 - Route→Tool migration: replaced `route` bind_scope with `tool` scope for Agent security rules.
+- Falco reverted to a pure system-level syscall observation role (Plan A): cross-layer correlation (syscall events ↔ Agent session context) is now resolved by the Engine's `FalcoAlertController` via Redis pidmap lookup, instead of injecting context fields inside the Falco engine.
+- `virbius-kernel/deploy/falco-config.yaml`: switched from `program_output` to `http_output`, pointing at the Engine internal endpoint, with `connection_keepalive` + `retry_wait_seconds` support.
+- `virbius-kernel/deploy/kustomization.yaml`: removed plugin-specific resource references, added `engine-service.yaml`.
 
-### Architecture — Falco 退回纯系统级 + http_output 路径（方案 A）
+### Added
+- **`virbius-engine/.../FalcoAlertController.java`**: new `POST /api/internal/falco-alert` endpoint that receives Falco `http_output` native JSON, parses `output_fields["proc.pid"]`, resolves session_id via Redis `pid_trace:{host_pid}` reverse lookup, and calls `SessionRiskManager.onFalcoAlert(sessionId)` to increment the `falco_pending` counter. Includes ppid fallback logic.
+- **`FalcoAlertController.lookupSessionByCgroup()`** (P1): three-level correlation chain `host_pid → cgroup_id → ppid`, with a new `resolved_by` response field identifying the hit path (`pid` / `cgroup` / `ppid`). cgroup takes precedence over ppid: cgroup is a container-level identity (stable across fork layers), while ppid is a process-level identity (breaks at depth > 1 or after setsid).
+- **`virbius-kernel/src/pidmap.rs`** (P1): `redis_backup_async()` now writes a `cgroup_trace:{cgroup_id}` Redis reverse index. Agent registration writes both `pid_trace:{host_pid}` (primary index) and `cgroup_trace:{cgroup_id}` (reverse index); both keys point to the same JSON value and share a 3600s TTL. Skipped when cgroup_id = 0 (graceful degradation on macOS / cgroup v1).
+- **`virbius-kernel/deploy/engine-service.yaml`**: new Engine K8s Service definition.
+- **`virbius-kernel/deploy/falco-daemonset.yaml`**: new `config-subscriber` sidecar container that consumes Redis Stream to hot-reload Falco rule files.
+- **`scripts/test-falco-cross-layer.sh`**: new macOS simulation test script covering 5 scenarios — pid direct hit, ppid fallback, cgroup grandchild process (ppid chain broken, cgroup hit), cgroup setsid detach (ppid=1, cgroup hit), and non-Agent filtering.
 
-**背景**：移除自定义 `virbius-audit` Falco 插件（Go C-shared library），Falco 退回纯系统级 syscall 观测角色。跨层关联（syscall 事件 ↔ Agent session 上下文）由 Engine 的 `FalcoAlertController` 通过 Redis pidmap 反查完成，不再依赖插件在 Falco 引擎内注入上下文字段。
+### Removed
+- Custom `virbius-audit` Falco plugin (Go C-shared library):
+  - `virbius-kernel/plugin/` directory (Go virbius-audit plugin source)
+  - `virbius-kernel/src/falco_plugin.rs` module
+  - `KernelMode::FalcoPlugin` enum variant in `detect.rs` (fallback path changed to `Disabled`)
+  - `falco_plugin` module declaration and exports in `lib.rs`
 
-**移除的组件**：
-- `virbius-kernel/plugin/` 目录（Go virbius-audit 插件源码）
-- `virbius-kernel/src/falco_plugin.rs` 模块
-- `detect.rs` 中 `KernelMode::FalcoPlugin` 枚举变体（降级路径改为 `Disabled`）
-- `lib.rs` 中 `falco_plugin` 模块声明和导出
-
-### P0 — 打通 syscall 路径（已完成）
-
-- **`virbius-engine/.../FalcoAlertController.java`**：新增 `POST /api/internal/falco-alert` 端点，接收 Falco `http_output` 原生 JSON，解析 `output_fields["proc.pid"]`，通过 Redis `pid_trace:{host_pid}` 反查 session_id，调用 `SessionRiskManager.onFalcoAlert(sessionId)` 递增 `falco_pending` 计数器。包含 ppid fallback 逻辑。
-- **`virbius-kernel/deploy/falco-config.yaml`**：`program_output` → `http_output`，URL 指向 Engine 内部端点，支持 `connection_keepalive` + `retry_wait_seconds`。
-- **`virbius-kernel/deploy/falco-daemonset.yaml`**：新增 `config-subscriber` sidecar 容器，消费 Redis Stream 热重载 Falco 规则文件。
-- **`virbius-kernel/deploy/kustomization.yaml`**：移除 plugin 专用资源引用，新增 `engine-service.yaml`。
-- **`virbius-kernel/deploy/engine-service.yaml`**：新增，定义 Engine K8s Service。
-- **`virbius-engine/.../config/PolicyRedisConfig.java`**：修复 Spring 依赖注入 bug — `@Bean Optional<JedisPool>` 改为 `@Bean JedisPool` + `@ConditionalOnProperty`，确保 `Optional<JedisPool>` 注入点能正确解析。
-- **`scripts/test-falco-cross-layer.sh`**：新增 macOS 模拟测试脚本，用 curl 模拟 Falco http_output JSON 验证 Engine 关联逻辑。
-
-### P1 — cgroup 关联路径（已完成）
-
-- **`virbius-kernel/src/pidmap.rs`**：`redis_backup_async()` 增加 `cgroup_trace:{cgroup_id}` Redis 反向索引写入。Agent 注册时同时写 `pid_trace:{host_pid}`（主索引）和 `cgroup_trace:{cgroup_id}`（反向索引），两个 key 指向同一 JSON value，共享 TTL 3600s。cgroup_id=0 时跳过（macOS / cgroup v1 优雅降级）。
-- **`virbius-engine/.../FalcoAlertController.java`**：增加 `lookupSessionByCgroup()` 方法，实现三级关联链 `host_pid → cgroup_id → ppid`。新增 `resolved_by` 返回字段标识命中路径（`pid` / `cgroup` / `ppid`）。cgroup 优先于 ppid：cgroup 是容器级身份（跨 fork 层稳定），ppid 是进程级身份（深度>1 或 setsid 后断链）。
-- **`scripts/test-falco-cross-layer.sh`**：新增场景4（孙子进程，ppid 链断，cgroup 命中）和场景5（setsid detach，ppid=1，cgroup 命中），共 5 个场景覆盖三级关联链全部路径。
-
-### Bug 修复
-
-- **`virbius-policy` 测试编译错误**：`BindScopeTest.java` 和 `ValueResolverVarDimensionTest.java` 中 `MatchContext.withBind()` 调用传了多余的 `bindType` 参数（旧签名残留），对齐当前 7 参数签名。
+### Fixed
+- **`virbius-engine/.../config/PolicyRedisConfig.java`**: fixed Spring dependency injection — `@Bean Optional<JedisPool>` changed to `@Bean JedisPool` + `@ConditionalOnProperty`, so `Optional<JedisPool>` injection points resolve correctly.
+- **`virbius-policy` test compilation errors**: `BindScopeTest.java` and `ValueResolverVarDimensionTest.java` passed a stale extra `bindType` argument to `MatchContext.withBind()`; aligned with the current 7-parameter signature.
 
 ## [0.1.0] - 2026-07-14
 

@@ -315,7 +315,7 @@ CREATE TABLE tb_bundle_staging (
     version          INTEGER NOT NULL DEFAULT 1,
     updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (tenant_id, bundle_id, layer),
-    CHECK (layer IN ('edge', 'gateway', 'cloud')),
+    CHECK (layer IN ('edge', 'gateway', 'cloud', 'falco', 'sandbox')),
     CHECK (status IN ('editing', 'deploying', 'deployed'))
 );
 
@@ -334,7 +334,7 @@ CREATE TABLE tb_gateway_artifact_meta (
 CREATE TABLE tb_deploy_rollout (
     deploy_id              VARCHAR(64)  PRIMARY KEY,
     tenant_id              VARCHAR(64)  NOT NULL,
-    bundle_id              VARCHAR(128) NOT NULL DEFAULT 'poc-default',
+    bundle_id              VARCHAR(128) NOT NULL DEFAULT 'demo-default',
     state                  VARCHAR(16)  NOT NULL,
     canary_percent         INTEGER      NOT NULL DEFAULT 0,
     edge_deployed          INTEGER      NOT NULL DEFAULT 0,

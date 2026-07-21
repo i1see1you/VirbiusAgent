@@ -634,7 +634,7 @@ impl SecurityPipeline {
             tool_name,
             args: &serde_json::Value::Null,
             args_json: String::new(),
-            license_risk_quota: 100,
+            license_risk_quota: session.risk_quota,
             content: Some(content),
             role: Some("output"),
         };

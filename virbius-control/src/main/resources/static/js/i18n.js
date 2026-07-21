@@ -307,6 +307,7 @@
       'rollout.btn-prepare-engine': '📦 准备 Engine',
       'rollout.btn-prepare-gateway': '📦 准备 Gateway',
       'rollout.btn-prepare-edge': '📡 准备 Edge',
+      'rollout.btn-prepare-falco': '🦅 准备 Falco',
       'rollout.btn-prepare-all': '🚀 全部部署',
       'rollout.btn-upgrade': '⬆ 升级',
       'rollout.btn-pause': '⏸ 暂停',
@@ -324,6 +325,8 @@
       'rollout.header-gw-stable': 'Gateway 稳定',
       'rollout.header-edge-canary': 'Edge 灰度',
       'rollout.header-edge-stable': 'Edge 稳定',
+'rollout.header-falco-canary': 'Falco 灰度',
+'rollout.header-falco-stable': 'Falco 稳定',
       'rollout.header-operator': '操作者',
       'rollout.header-notes': '备注',
       'rollout.node-dist': '节点分布',
@@ -438,6 +441,7 @@
       'dr.prepare-engine': 'Engine 灰度',
       'dr.prepare-gateway': 'Gateway 灰度',
       'dr.prepare-edge': 'Edge 灰度',
+      'dr.prepare-falco': 'Falco 灰度',
       'dr.prepare-all': '三层灰度',
       'dr.prepared-ok': '{0} 准备完成 deploy_id={1} bundle={2}',
       'dr.prepare-fail': '准备失败: {0}',
@@ -709,6 +713,7 @@
       // Rules extras
       'rules.compare': '比较',
       'rules.preset-cum-over-limit': '累计超限',
+'rules.recipe': '模板',
       'rules.preset-force-list-hit': '强制名单命中',
 
       // Top bar extras
@@ -1022,6 +1027,7 @@
       'rollout.btn-prepare-engine': '📦 Prepare Engine',
       'rollout.btn-prepare-gateway': '📦 Prepare Gateway',
       'rollout.btn-prepare-edge': '📡 Prepare Edge',
+      'rollout.btn-prepare-falco': '🦅 Prepare Falco',
       'rollout.btn-prepare-all': '🚀 Deploy All',
       'rollout.btn-upgrade': '⬆ Upgrade',
       'rollout.btn-pause': '⏸ Pause',
@@ -1039,6 +1045,8 @@
       'rollout.header-gw-stable': 'Gateway Stable',
       'rollout.header-edge-canary': 'Edge Canary',
       'rollout.header-edge-stable': 'Edge Stable',
+'rollout.header-falco-canary': 'Falco Canary',
+'rollout.header-falco-stable': 'Falco Stable',
       'rollout.header-operator': 'Operator',
       'rollout.header-notes': 'Notes',
       'rollout.node-dist': 'Node Distribution',
@@ -1153,6 +1161,7 @@
       'dr.prepare-engine': 'Engine Canary',
       'dr.prepare-gateway': 'Gateway Canary',
       'dr.prepare-edge': 'Edge Canary',
+      'dr.prepare-falco': 'Falco Canary',
       'dr.prepare-all': 'All Layers',
       'dr.prepared-ok': '{0} prepared deploy_id={1} bundle={2}',
       'dr.prepare-fail': 'Prepare failed: {0}',
@@ -1425,6 +1434,7 @@
       // Rules extras
       'rules.compare': 'Compare',
       'rules.preset-cum-over-limit': 'Cumulative over limit',
+'rules.recipe': 'Recipe',
       'rules.preset-force-list-hit': 'Force list hit',
 
       // Top bar extras

@@ -163,7 +163,7 @@ public class EvaluateOrchestrator {
             RiskUpdateInput riskInput = new RiskUpdateInput(
                     sessionId,
                     req.tenantId() != null ? req.tenantId() : "default",
-                    100, // default risk_quota; TODO: load from License
+                    req.riskQuota() > 0 ? req.riskQuota() : 100, // from License JWT, fallback 100
                     injectionHits,
                     injectionResult.hit() ? injectionResult.riskDelta() : 15,
                     chainDelta,

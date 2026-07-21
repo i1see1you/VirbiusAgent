@@ -28,10 +28,11 @@ __pycache__/
 .env
 
 # Runtime data (databases, logs, generated artifacts)
-data/*.db
-data/*.db-*
+*.db
+*.db-*
 *.sqlite
 *.sqlite3
+*.jsonl
 data/**/*.log
 data/**
 

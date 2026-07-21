@@ -11,7 +11,36 @@ English: [README.md](README.md)
 
 AI Agent 安全防护工具 — 端管核云四层架构，基于 [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) 基础平台。
 
+**VirbiusAgent** 是面向 AI Agent 的深度安全防护平台，通过**端—管—核—云**四层纵深防御架构，为 MCP（Model Context Protocol）工具调用提供端到端保护。
+
+基于 [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) 安全平台构建，VirbiusAgent 将 LLM 安全能力扩展到 AI Agent 领域，覆盖工具调用前置检查、运行时观测与执行后审计。
+
 ## 架构
+
+```mermaid
+flowchart TD
+    A["① 端层 — virbius-core<br/>Rust SDK · 预检 + DLP · 亚毫秒"]
+    G["② 管层 — Higress + WASM<br/>限流 · HTTP 阻断 · 审批挑战"]
+    K["③ 核层 — Falco + eBPF<br/>运行时观测 · 自定义规则"]
+    C["④ 云层 — virbius-engine + virbius-control<br/>策略 · LLM 检测 · Groovy L3 · 审计"]
+    MCP["MCP Server / LLM"]
+
+    A -->|tool_call| G
+    G -->|forward| C
+    C -->|effective_action| G
+    G -->|allow| MCP
+    G -.->|block| MCP
+    K -.->|events| C
+
+    CP["控制面 — virbius-control<br/>运营台 UI · 规则注册 · 灰度发布"]
+    COMP["virbius-compiler<br/>规则 → 按应用编译 manifest"]
+
+    CP -.->|publish| A
+    CP -.->|publish| G
+    CP -.->|publish| C
+    CP -.->|publish| K
+    COMP -.->|compile| CP
+```
 
 | 层 | 组件 | 职责 |
 |----|------|------|
@@ -22,20 +51,19 @@ AI Agent 安全防护工具 — 端管核云四层架构，基于 [VirbiusLLM](h
 
 ## 核心能力
 
-| 能力 | 阶段 | 说明 |
-|------|------|------|
-| MCP 安全代理 | P0 | stdio/SSE 代理 + 安全管线（License + allowlist + engine 终判）+ 多上游路由 |
-| 快速通道 | P0/P1 | 低风险工具跳过云层，延迟优化 |
-| Agent 决策链路追踪 | P1 | tool_call/tool_result 全链路 trace，session 时间线 + 因果链可视化 |
-| 高风险人工审批 | P1 | engine challenge → 运营台审批 → token 验证放行 |
-| 运营台审计大盘 | P1 | session risk + 工具调用 + 告警 + 审批队列 + 决策链路可视化 |
-| Prompt 注入检测 | P1 | 多 LLM 协同检测 + 动态风险评分 |
-| STI Taint 污点追踪 | P1 | 跨工具追踪不可信输出，阻断数据泄漏 |
-| Hash Chain 审计完整性 | P1 | SHA-256 哈希链审计日志防篡改 |
-| 记忆管控 | P1/P2 | Agent 写入记忆前的敏感数据脱敏 |
-| 输出审查 | P1/P2 | 工具返回值中的 PII/凭据泄漏检测 |
-| Falco 规则管理 | P1 | 运营台统一管理 eBPF 规则，支持灰度部署 |
-| 内核沙箱 | P2 | Landlock + gVisor 进程隔离执行高风险工具 |
+| 能力 | 说明 |
+|------|------|
+| MCP 安全代理 | stdio/SSE 代理 + 安全管线（License + allowlist + engine 终判）+ 多上游路由 |
+| 快速通道 | 低风险工具跳过云层，延迟优化 |
+| Agent 决策链路追踪 | tool_call/tool_result 全链路 trace，session 时间线 + 因果链可视化 |
+| 高风险人工审批 | engine challenge → 运营台审批 → token 验证放行 |
+| 运营台审计大盘 | session risk + 工具调用 + 告警 + 审批队列 + 决策链路可视化 |
+| Prompt 注入检测 | 多 LLM 协同检测 + 动态风险评分 |
+| STI Taint 污点追踪 | 跨工具追踪不可信输出，阻断数据泄漏 |
+| Hash Chain 审计完整性 | SHA-256 哈希链审计日志防篡改 |
+| 记忆管控 | Agent 写入记忆前的敏感数据脱敏 |
+| 输出审查 | 工具返回值中的 PII/凭据泄漏检测 |
+| Falco 规则管理 | 运营台统一管理 eBPF 规则，支持灰度部署 |
 
 ## 快速开始
 
@@ -88,18 +116,50 @@ virbius-core = { git = "https://github.com/i1see1you/VirbiusAgent" }
 ```
 
 ```bash
-# 离线 demo（使用 fixture manifest）
+# 运行端到端集成测试（无需外部服务）
 cd virbius-core
-cargo run --example rust_client_demo
-
-# 连接控制面（先启动 run-local.sh 并发布 edge 规则）
-export VIRBIUS_CONTROL_BASE_URL=http://127.0.0.1:8080
-export VIRBIUS_TENANT_ID=default
-export VIRBIUS_APP_ID=beta
-cargo run --example rust_client_demo
+cargo test --test e2e_integration -- --nocapture
 ```
 
+该测试套件覆盖完整的端层安全管线：License 验证 → 工具预检 → Prompt 网关 → MCP 执行 → STI 污点检测 → 审计链路追踪。
+
 ## 部署架构
+
+```mermaid
+flowchart TB
+    subgraph AgentProcess["Agent 进程"]
+        EDGE["① virbius-core (Rust SDK)<br/>预检 · DLP · 许可证"]
+    end
+
+    subgraph Gateway["管层"]
+        HIGRESS["Higress :9080<br/>WASM 插件<br/>限流 · 审批挑战"]
+    end
+
+    subgraph Kernel["核层"]
+        FALCO["Falco DaemonSet<br/>eBPF · 自定义规则"]
+        SUB["config-subscriber<br/>Redis → rules.d 热重载"]
+    end
+
+    subgraph Cloud["云层"]
+        ENGINE["virbius-engine :8082<br/>Spring Boot<br/>Prompt 检测 · Groovy L3"]
+        CONTROL["virbius-control :8080<br/>Spring Boot<br/>运营台 UI · 规则注册"]
+    end
+
+    subgraph Infra["基础设施"]
+        REDIS[("Redis :6379<br/>审计流 · 计数器")]
+        DB[("SQLite / MySQL<br/>规则 · 链路 · 事件")]
+    end
+
+    EDGE -->|HTTP| HIGRESS
+    HIGRESS -->|evaluate| ENGINE
+    HIGRESS -->|allow| MCP["MCP Server"]
+    FALCO -.->|audit events| REDIS
+    CONTROL --- DB
+    ENGINE --- REDIS
+    CONTROL -.->|publish| EDGE
+    CONTROL -.->|publish| HIGRESS
+    CONTROL -.->|publish| FALCO
+```
 
 | 组件 | 端口 | 技术栈 | 职责 |
 |------|------|--------|------|
@@ -143,12 +203,15 @@ virbius-agent/
 
 | 文档 | 说明 |
 |------|------|
-| [DESIGN.md](DESIGN.md) | 系统架构设计文档 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | 详细架构说明 |
-| [DEPLOYMENT.md](DEPLOYMENT.md) | 部署拓扑与运维 |
-| [PROTOCOL.md](PROTOCOL.md) | MCP 代理协议规范 |
-| [ROADMAP.md](ROADMAP.md) | 开发路线图 |
-| [CHANGELOG.md](CHANGELOG.md) | 版本历史 |
+| [USAGE_GUIDE.md](USAGE_GUIDE.md)（英文） | 使用指南 — 安装、集成、规则编写、运维 |
+| [DESIGN.zh.md](DESIGN.zh.md) | 系统架构设计文档 |
+| [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md) | 详细架构说明 |
+| [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) | 部署拓扑与运维 |
+| [PROTOCOL.md](PROTOCOL.md)（英文） | MCP 代理协议规范 |
+| [ROADMAP.md](ROADMAP.md)（英文） | 开发路线图与变更日志 |
+| [CHANGELOG.md](CHANGELOG.md)（英文） | 版本历史 |
+
+> 语言说明：DESIGN / ARCHITECTURE / DEPLOYMENT 提供中文版（点击上表链接）；USAGE_GUIDE、PROTOCOL、ROADMAP、CHANGELOG 目前仅提供英文版。
 
 ## 贡献指南
 

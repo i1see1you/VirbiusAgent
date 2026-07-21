@@ -1,10 +1,12 @@
 # VirbiusAgent 架构设计 — ARCHITECTURE
 
+[English](ARCHITECTURE.md)
+
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v3.3 |
+| 文档版本 | v3.6 |
 | 状态 | 草案 |
-| 关联 | [DESIGN.md](DESIGN.md)（索引） · [PROTOCOL.md](PROTOCOL.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [ROADMAP.md](ROADMAP.md) |
+| 关联 | [DESIGN.zh.md](DESIGN.zh.md)（索引） · [PROTOCOL.md](PROTOCOL.md)（英文） · [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) · [ROADMAP.md](ROADMAP.md)（英文） |
 | 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
 
 > 本文件包含 §1 总体架构 · §2 端层 · §3 管层 · §4 核层 · §5 云层。
@@ -28,7 +30,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
     TLS/rate-limit/long-conn + allowlist + counter + engine call + HTTP block
   |
 [3] Kernel - Falco observer (observation layer)
-    eBPF driver (standard node) / plugin mode (serverless fallback)
+    eBPF driver (standard node); unprivileged env -> Disabled (plugin mode removed)
     observe: syscall/net/file + audit stream + session risk
     enforce(P2): Landlock + drop caps (edge) / gVisor (edge)
   |
@@ -77,7 +79,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 >
 > 管层 Higress 的职责聚焦于：
 > 1. **Ingress**：远程 Agent（非 Sidecar）访问 MCP Server 的南北向流量
-> 2. **Egress**：Agent 业务工具的外部 HTTP 请求（如 `curl` 工具访问外部 API）的网络层管控。注意：仅 MCP 业务工具请求走 Proxy 代发，Agent 框架底层的隐式网络请求（配置拉取/模型下载/心跳等）受 NetworkPolicy 限制，不由 Proxy 代发（详见 [§3.5](ARCHITECTURE.md)）
+> 2. **Egress**：Agent 业务工具的外部 HTTP 请求（如 `curl` 工具访问外部 API）的网络层管控。注意：仅 MCP 业务工具请求走 Proxy 代发，Agent 框架底层的隐式网络请求（配置拉取/模型下载/心跳等）受 NetworkPolicy 限制，不由 Proxy 代发（详见 [§3.5](#35-egress-流量管控)）
 >
 > 对于 Sidecar 模式下的 Egress 流量，采用**工具级管控**：MCP 业务工具请求（如 `curl`）由端层 Proxy 在 `tools/call` 拦截阶段做 URL 白名单校验并代发（P0）；Agent 框架底层的隐式网络请求受 K8s NetworkPolicy 限制到白名单目标（P0）；P2 可叠加 eBPF/iptables 透明劫持实现进程级全量出站阻断。
 
@@ -87,7 +89,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 |------|------|
 | **控制面统一** | 所有层的策略真源为 virbius-control，各层独立执行但配置同源 |
 | **预检先于执行** | 端层预检 -> 管层/云层终判 -> 端层执行。工具在终判通过后才执行 |
-| **观测与阻断分离** | 观测(eyes)和阻断(hands)由不同技术栈承担。观测随环境降级(eBPF->ptrace->plugin)，阻断始终由端层 Landlock + drop caps 保证(P2) |
+| **观测与阻断分离** | 观测(eyes)和阻断(hands)由不同技术栈承担。观测随环境降级(eBPF->ptrace)，阻断始终由端层 Landlock + drop caps 保证(P2) |
 | **观察先行** | P0 只实现观测(Falco + HTTP 层阻断 + session risk 累积)，P2 补 syscall 级阻断 |
 | **eBPF 是增强非依赖** | eBPF 可用时增强观测精度；不可用时端层 Landlock + drop caps + gVisor 仍是完整可用的阻断 |
 | **端层兜底** | 即使管层/云层被绕过，端层预检 + 沙箱仍限制进程行为 |
@@ -100,8 +102,8 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 
 | 阶段 | 观测(eyes) | 阻断(hands) |
 |------|-----------|------------|
-| **P0** | Falco(eBPF/plugin) + access log + Redis 审计流 + STI 审计 + Prompt Gateway(宪法注入) | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 + Runtime License 校验 |
-| **P1** | STI Taint 小模型 + virbius-audit Falco 插件 + 审计完整性 | 人工审批流 + 自适应 risk 模型 + 记忆管控(Memory Interceptor) |
+| **P0** | Falco(eBPF) + access log + Redis 审计流 + STI 审计 + Prompt Gateway(宪法注入) | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 + Runtime License 校验 |
+| **P1** | STI Taint 小模型 + Falco http_output 三级关联 + 审计完整性 | 人工审批流 + 自适应 risk 模型 + 记忆管控(Memory Interceptor) |
 | **P2** | eBPF 自定义观测(execveat + IPv6) | Landlock + drop caps + gVisor + TEE(金融级) |
 
 ### 1.4 身份标识体系
@@ -218,7 +220,7 @@ virbius-control 签发 License（JWT 签名）：
 | 命名空间隔离 | clone3(CLONE_NEWPID \| CLONE_NEWNS \| CLONE_NEWNET) | §2.3.1 | P2 |
 | capabilities 丢弃 | drop caps | §2.3 | P2 |
 | 不可信代码沙箱 | gVisor runsc 预热池 | §2.4 | P2 |
-| 内核观测 | Falco eBPF + plugin 降级链 | §4 | P0 |
+| 内核观测 | Falco eBPF | §4 | P0 |
 
 
 ---
@@ -663,7 +665,7 @@ LLM 生成 tool_call -> 端层预检 -> 管层 -> 云层终判 -> 执行
 > | 新：系统提示词集中注入 | ~80 token | 约束规则只在 system prompt 出现一次 |
 > | 节省 | ~420 token | **减少 ~84%** |
 >
-> 工具 `description` 保持原始简洁文本不变；结构化约束通过 MCP `annotations` 字段传递（[§2.6.1](PROTOCOL.md)），供 MCP 客户端 UI 和预检逻辑消费，不进入 LLM prompt。
+> 工具 `description` 保持原始简洁文本不变；结构化约束通过 MCP `annotations` 字段传递（[§2.6.1](PROTOCOL.md#261-mcp-proxy-full-technical-solution)），供 MCP 客户端 UI 和预检逻辑消费，不进入 LLM prompt。
 
 **PII 输入脱敏**——复用现有 virbius-core/src/dlp/engine.rs，在 prompt 发送前脱敏用户输入。
 
@@ -787,7 +789,7 @@ virbius-control
 | **模型差异** | GPT-4 遵守规则好，小模型可能不遵守 | 按模型能力调整注入格式；小模型依赖工具拦截 |
 | **非替代工具拦截** | Prompt Gateway 是预防不是阻断 | 永远不能单独依赖；必须与工具拦截 + Falco 观测配合 |
 
-#### 2.8.7 Prompt 入侵检测（prompt runtime 重新定位）
+#### 2.8.7 Prompt 注入检测（prompt runtime 重新定位）
 
 VirbiusLLM 的 `prompt` rule runtime（NL 描述 → 1B 模型判定文本是否违规）是 LLM 内容审核能力。VirbiusAgent **不复用其内容审核语义**，但**复用其基础设施**（规则 CRUD + mlPredict 调用 + 审计），重新定位为**用户输入越狱/注入检测层**。
 
@@ -924,7 +926,7 @@ pub struct MemoryAuditEvent {
 
 ### 2.10 输出审查（Output Review）
 
-> **工具结果审查已实现；Agent 最终输出审查为设计建议，待应用层集成。** 实际实现复用 Engine `/v1/evaluate` 端点，而非新建独立 `OutputReviewer` 类。工具结果审查已在 MCP Proxy 中实现；Agent 最终输出审查（方案 B）需应用层自行调用 `/v1/evaluate`，目前代码库中未包含应用层集成代码。详见 [DESIGN.md §13.7](DESIGN.md#137-输出审查output-review)。
+> **工具结果审查已实现；Agent 最终输出审查为设计建议，待应用层集成。** 实际实现复用 Engine `/v1/evaluate` 端点，而非新建独立 `OutputReviewer` 类。工具结果审查已在 MCP Proxy 中实现；Agent 最终输出审查（方案 B）需应用层自行调用 `/v1/evaluate`，目前代码库中未包含应用层集成代码。详见 [DESIGN.zh.md §13.7](DESIGN.zh.md#137-输出审查output-review)。
 
 > STI Taint（§5.4）审查的是**工具返回值**，输出审查审查的是 **Agent 最终返回给用户的响应**——经过 LLM 汇总工具结果后生成的内容。两者覆盖不同阶段。
 
@@ -1083,7 +1085,7 @@ Agent -> Higress (Egress Proxy) -> 外部 API
 > **拓扑说明**：管层处理南北向（跨网络）流量。Sidecar 模式下 MCP 工具调用为东西向流量，不经管层（§1.1）。管层在以下场景发挥作用：
 > - **Ingress**：远程 Agent（非 Sidecar 部署）通过 HTTPS 访问 MCP Server
 > - **Egress**：非 Sidecar 模式下 Agent 发起的外部 HTTP 请求经过管层 Egress Proxy
-> - **Sidecar 模式 Egress**：由端层 Proxy 代发 HTTP 请求（[§2.6.1](PROTOCOL.md)），管层不参与
+> - **Sidecar 模式 Egress**：由端层 Proxy 代发 HTTP 请求（[§2.6.1](PROTOCOL.md#261-mcp-proxy-full-technical-solution)），管层不参与
 
 | 能力 | 方向 | 实现方式 |
 |------|------|---------|
@@ -1205,7 +1207,7 @@ Agent 发起的外部 HTTP 请求属于南北向 Egress 流量，分为两类：
 > - **框架隐式请求**（配置拉取、模型下载、心跳等）由 Agent 自身发起，受 NetworkPolicy 限制到白名单目标
 > - **进程级全量出站**（P2 兜底）由 eBPF/iptables 透明劫持
 >
-> 这三分法匹配威胁模型：安全威胁来自 Agent 通过业务工具发起的**可控外部请求**，而非框架底层的**固定目标**网络调用。工具级代发只需支持 GET/POST + 流式响应透传（chunked/SSE），reqwest `bytes_stream()` 即可实现，开发成本可控。详见 [§2.6.1](PROTOCOL.md) Egress 流量管控。
+> 这三分法匹配威胁模型：安全威胁来自 Agent 通过业务工具发起的**可控外部请求**，而非框架底层的**固定目标**网络调用。工具级代发只需支持 GET/POST + 流式响应透传（chunked/SSE），reqwest `bytes_stream()` 即可实现，开发成本可控。详见 [§2.6.1](PROTOCOL.md#261-mcp-proxy-full-technical-solution) Egress 流量管控。
 
 #### Sidecar 模式——工具级 Proxy 代发
 
@@ -1411,7 +1413,7 @@ Agent 进程
 | Agent 进程内 syscall | Falco eBPF 观测(可用时) | Landlock 文件路径阻断 |
 | 容器逃逸检测 | Falco eBPF 观测(可用时) | gVisor 容器隔离 + Landlock 路径阻断 |
 | SSRF / 内网扫描 | Falco eBPF 观测 connect | NetworkPolicy 网络阻断 |
-| 基础设施异常 | Falco plugin (k8saudit + cloudtrail) | 云厂商原生 enforcement |
+| 基础设施异常 | 云审计日志（k8s audit / cloudtrail） | 云厂商原生 enforcement |
 
 **P0 安全模型**：核层只观测不阻断。发现异常 -> 上报审计流 -> 提升 session risk score -> 管层 HTTP 层阻断后续请求。这是"检测 -> 累积风险 -> 阻断后续"模型，对 Agent 多轮调用场景有效。
 
@@ -1618,7 +1620,7 @@ Engine `FalcoAlertController` 对每条 Falco 告警执行三级 session 关联�
 |------|---------|------|------|
 | host | 裸机/自管 VM + root | Falco eBPF(P2) | Landlock(P2) + gVisor(P2) |
 | daemonset | K8s 标准节点池 + privileged | 同上 | 同上 |
-| pod-observe | serverless(Fargate/Autopilot) | Falco plugin + 云厂商告警 | 端层 Landlock(P2) + NetworkPolicy |
+| pod-observe | serverless(Fargate/Autopilot) | 云厂商告警（无 syscall 可见性） | 端层 Landlock(P2) + NetworkPolicy |
 | audit-only | 前期观测 | 上述观测的只读子集 | 无 |
 
 > **删除原设计的 sidecar 模式**：sidecar 模式自相矛盾——Falco 也需 eBPF 特权，Landlock 不能由 sidecar 应用到其他容器（必须在 Pod spec 中声明）。serverless 环境下 Landlock profile 通过 mutating admission webhook 注入 Pod spec。
@@ -1692,9 +1694,9 @@ Falco eBPF → 告警触发 → http_output POST → Engine FalcoAlertController
 
 **Falco 规则 output 字段要求**：规则 `output` 模板必须包含 `%proc.cgroup.id`，否则 cgroup 关联路径无法生效（`proc.cgroup.id` 需要 Falco 0.37+ modern eBPF driver）。
 
-#### 4.8.3 示例
+#### 4.8.4 示例
 
-详见 [README.md](#快速开始) 或 ops.html 前端操作界面。
+详见 [README.zh.md](README.zh.md#快速开始) 或 ops.html 前端操作界面。
 
 ### 4.9 统一沙箱规则管理（Falco + Landlock + gVisor）
 
@@ -1773,7 +1775,7 @@ virbius-control（唯一真源）
 
 ### 5.1 职责
 
-参考 VirbiusLLM 的 virbius-engine + virbius-control 设计并做了大量扩展以适应 Agent 专属场景（详见 [§10](DESIGN.md#10-与-virbiusllm-的关系)）。
+参考 VirbiusLLM 的 virbius-engine + virbius-control 设计并做了大量扩展以适应 Agent 专属场景（详见 [§10](DESIGN.zh.md#10-与-virbiusllm-的关系)）。
 
 ### 5.2 新增规则类型
 
@@ -1916,7 +1918,7 @@ virbius-control
 
 ### 5.6 审计完整性（Hash Chain）
 
-> **✅ 已实现。** 位于 `virbius-control/src/main/java/io/virbius/control/audit/`，详见 [DESIGN.md §13.5](DESIGN.md#135-审计完整性hash-chain)。
+> **✅ 已实现。** 位于 `virbius-control/src/main/java/io/virbius/control/audit/`，详见 [DESIGN.zh.md §13.5](DESIGN.zh.md#135-审计完整性hash-chain)。
 
 防篡改审计链：每条审计事件包含前一条的 SHA-256 hash，形成**按租户隔离**的链式结构。任何篡改都会导致链断裂，可被验证检测。
 

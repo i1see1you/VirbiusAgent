@@ -31,6 +31,8 @@ pub struct Session {
     /// Tools allowed by the License (extracted from JWT payload).
     /// Empty means all tools allowed (or no License).
     pub allowed_tools: Vec<String>,
+    /// Risk quota from the License JWT (0 = unset, engine falls back to 100).
+    pub risk_quota: u32,
     /// Last active timestamp (for TTL cleanup).
     pub last_active: Instant,
     /// Creation timestamp.
@@ -72,10 +74,13 @@ impl Session {
             session_id
         };
 
-        let allowed_tools = if license_jwt.is_empty() {
-            Vec::new()
+        let (allowed_tools, risk_quota) = if license_jwt.is_empty() {
+            (Vec::new(), 0)
         } else {
-            extract_allowed_tools_from_jwt(&license_jwt)
+            (
+                extract_allowed_tools_from_jwt(&license_jwt),
+                extract_risk_quota_from_jwt(&license_jwt),
+            )
         };
 
         Self {
@@ -88,6 +93,7 @@ impl Session {
             upstream_initialized: HashMap::new(),
             session_risk_score: 0,
             allowed_tools,
+            risk_quota,
             last_active: now,
             created_at: now,
             step_seq: 0,
@@ -145,6 +151,7 @@ impl Session {
     pub fn apply_fallback_license(&mut self, jwt: &str) {
         self.license_jwt = jwt.to_string();
         self.allowed_tools = extract_allowed_tools_from_jwt(jwt);
+        self.risk_quota = extract_risk_quota_from_jwt(jwt);
 
         if let Some(claims) = extract_claims_from_jwt(jwt) {
             // app_id must match between session and JWT for License::verify.
@@ -217,6 +224,23 @@ fn extract_allowed_tools_from_jwt(jwt: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Decode the JWT payload (base64url) and extract `risk_quota`.
+///
+/// This does **not** verify the signature — it is used only for populating
+/// `Session.risk_quota` for risk scoring. The actual security enforcement
+/// happens at `tools/call` time via full License verification in the security
+/// pipeline. Returns 0 if the JWT is invalid or the field is absent.
+fn extract_risk_quota_from_jwt(jwt: &str) -> u32 {
+    let claims = match extract_claims_from_jwt(jwt) {
+        Some(v) => v,
+        None => return 0,
+    };
+    claims
+        .get("risk_quota")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32
 }
 
 /// Concurrent session manager keyed by session_id (String).

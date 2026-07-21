@@ -25,7 +25,7 @@ public class BundleMetadataService {
         this.accessListService = accessListService;
     }
 
-    // ===================== metadata 聚合查询 =====================
+    // ===================== metadata aggregate query =====================
 
     public Map<String, Object> getMetadata(String tenantId, String bundleId, String version) {
         BundleVersion bundle = requireBundle(tenantId, bundleId, version);
@@ -43,7 +43,7 @@ public class BundleMetadataService {
         return out;
     }
 
-    // ===================== 场景注册表 =====================
+    // ===================== scene registry =====================
 
     public Map<String, Object> updateSceneRegistry(
             String tenantId, String bundleId, String version, SceneRegistryRequest body, boolean syncArtifacts) {
@@ -71,7 +71,7 @@ public class BundleMetadataService {
         return out;
     }
 
-    // ===================== 网关路由 =====================
+    // ===================== gateway routes =====================
 
     public Map<String, Object> updateGatewayRoutes(
             String tenantId, String bundleId, String version, GatewayRoutesRequest body, boolean syncArtifacts) {
@@ -131,7 +131,7 @@ public class BundleMetadataService {
         return accessListService.syncRules(tenantId);
     }
 
-    // ===================== 辅助 =====================
+    // ===================== helpers =====================
 
     private BundleVersion requireBundle(String tenantId, String bundleId, String version) {
         return store.getBundle(tenantId, bundleId, version)

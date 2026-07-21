@@ -163,9 +163,10 @@ mvn spring-boot:run -Dspring-boot.run.profiles=local
 # Or using the packaged JAR:
 java -jar target/virbius-engine-0.1.0-SNAPSHOT.jar --spring.profiles.active=dev
 
-# 3. Start MCP proxy (port 8083) -- optional, for sidecar mode
+# 3. Start MCP proxy (port 9090) -- optional, for sidecar mode
 cd virbius-mcp-proxy
-cargo run --release -- --upstream-url http://localhost:8080/mcp
+export VIRBIUS_UPSTREAM_URL=http://localhost:8080
+cargo run --release
 ```
 
 ### 2.5 Verify Installation
@@ -203,14 +204,41 @@ This is the recommended mode for most users. It requires zero code changes to th
 
 **Step 1: Configure and start the proxy**
 
+The proxy reads configuration from a TOML file (`virbius-mcp-proxy.toml` in the
+current directory, or `/etc/virbius/mcp-proxy.toml`) and/or environment variables.
+See [PROXY_CONFIG.md](PROXY_CONFIG.md) for the full configuration reference.
+
+**Quick start with environment variables (no config file needed):**
+
 ```bash
-# Start with explicit upstream MCP Server URL
-cargo run --release -p virbius-mcp-proxy -- \
-  --upstream-url http://localhost:8080/mcp \
-  --listen-addr 127.0.0.1:9090 \
-  --control-url http://127.0.0.1:8080 \
-  --tenant-id default \
-  --app-id beta
+export VIRBIUS_TRANSPORT=stdio
+export VIRBIUS_UPSTREAM_URL=http://localhost:8080
+export VIRBIUS_ENGINE_URL=http://localhost:8082
+export VIRBIUS_LICENSE_PUBLIC_KEY=/path/to/license_pub.pem
+export VIRBIUS_LICENSE_FILE=/path/to/agent-license.jwt
+export VIRBIUS_REDIS_URL=localhost:6379
+
+cargo run --release -p virbius-mcp-proxy
+```
+
+**Or with a config file** (`virbius-mcp-proxy.toml`):
+
+```toml
+[proxy]
+listen = "stdio"
+upstream_url = "http://localhost:8080"
+
+[security]
+engine_url = "http://localhost:8082"
+license_public_key = "/path/to/license_pub.pem"
+license_file = "/path/to/agent-license.jwt"
+
+[audit]
+redis_url = "localhost:6379"
+```
+
+```bash
+cargo run --release -p virbius-mcp-proxy
 ```
 
 **Step 2: Configure your Agent**
@@ -406,10 +434,12 @@ func precheckTool() {
 
 ```bash
 cd virbius-core
-cargo run --example rust_client_demo
+cargo test --test e2e_integration -- --nocapture
 ```
 
-This uses a fixture manifest at `virbius-core/fixtures/manifest.json`.
+This runs the end-to-end integration suite against in-process fixtures, exercising
+the full edge-layer pipeline: License verification → precheck → Prompt Gateway →
+MCP execution → STI taint detection → audit trace propagation.
 
 ---
 
@@ -1000,21 +1030,30 @@ The rollout system supports staged canary deployments:
 export VIRBIUS_API_KEY_AUTH_ENABLED=true
 ```
 
-**TLS for MCP Proxy:**
+**SSE/HTTP mode (for remote access):**
 
 ```bash
-cargo run --release -p virbius-mcp-proxy -- \
-  --tls-cert /path/to/cert.pem \
-  --tls-key /path/to/key.pem
+export VIRBIUS_TRANSPORT=tcp://0.0.0.0:9090
+cargo run --release -p virbius-mcp-proxy
 ```
 
-**Production Redis with password and TLS:**
+**Production with Kafka (audit + trace):**
 
 ```bash
-export VIRBIUS_REDIS_URL="rediss://:password@redis-host:6379"
+export VIRBIUS_AUDIT_BACKEND=kafka
+export VIRBIUS_AUDIT_KAFKA_BROKERS=kafka-1:9092,kafka-2:9092
+export VIRBIUS_AUDIT_KAFKA_TOPIC=virbius-audit-events
+export VIRBIUS_TRACE_BACKEND=kafka
+export VIRBIUS_TRACE_KAFKA_BROKERS=kafka-1:9092,kafka-2:9092
+export VIRBIUS_TRACE_KAFKA_TOPIC=virbius-trace-events
+
+cargo run --release -p virbius-mcp-proxy
 ```
 
-**Kernel Layer with eBPF:** Ensure Node has Linux kernel 5.8+ for eBPF features. Falco can fall back to plugin mode if eBPF is unavailable.
+See [PROXY_CONFIG.md](PROXY_CONFIG.md) for Kafka configuration, environment variables,
+and Docker deployment examples.
+
+**Kernel Layer with eBPF:** Ensure Node has Linux kernel 5.8+ for eBPF features. If eBPF is unavailable, the Kernel layer reports Disabled (plugin mode was removed in Plan A); Edge-layer precheck and License verification still apply.
 
 **Combined deployment for full 4-layer coverage:**
 
@@ -1100,10 +1139,10 @@ tail -f /var/log/virbius-kernel.log
 ```
 
 **Solutions:**
-- Ensure the Falco DaemonSet has the correct `virbius-kernel` plugin installed
+- Ensure the Falco DaemonSet is running and the config-subscriber sidecar is healthy
 - Verify Redis connectivity from the node running Falco
 - Check that the kernel layer is enabled and rules are published
-- On macOS, eBPF is not supported; Falco falls back to plugin mode with limited functionality
+- On macOS, eBPF is not supported; the Kernel layer reports Disabled and syscall observation is unavailable (Edge-layer checks still apply)
 
 ### "Rate limit exceeded" despite low traffic
 

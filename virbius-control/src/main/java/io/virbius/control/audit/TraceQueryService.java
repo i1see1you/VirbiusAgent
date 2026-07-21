@@ -27,9 +27,9 @@ public class TraceQueryService {
         return jdbc.query(
                 """
                 SELECT trace_id, session_id, tenant_id, step_id, parent_step_id, step_seq,
-                       step_type, layer, scene, user_id, device_id,
+                       step_type, layer, user_id, device_id,
                        input_role, input_content_hash,
-                       tool_name, tool_args_hash, tool_decision, rule_id, reason_code, risk_score,
+                       tool_name, tool_args_hash, tool_args, tool_decision, rule_id, reason_code, risk_score,
                        tool_status, tool_duration_ms,
                        content_size, content_sampled, dlp_masked, occurred_at
                 FROM tb_agent_trace
@@ -46,13 +46,13 @@ public class TraceQueryService {
                     row.put("step_seq", rs.getInt("step_seq"));
                     row.put("step_type", rs.getString("step_type"));
                     row.put("layer", rs.getString("layer"));
-                    row.put("scene", rs.getString("scene"));
                     row.put("user_id", rs.getString("user_id"));
                     row.put("device_id", rs.getString("device_id"));
                     row.put("input_role", rs.getString("input_role"));
                     row.put("input_content_hash", rs.getString("input_content_hash"));
                     row.put("tool_name", rs.getString("tool_name"));
                     row.put("tool_args_hash", rs.getString("tool_args_hash"));
+                    row.put("tool_args", rs.getString("tool_args"));
                     row.put("tool_decision", rs.getString("tool_decision"));
                     row.put("rule_id", rs.getString("rule_id"));
                     row.put("reason_code", rs.getString("reason_code"));
@@ -76,9 +76,9 @@ public class TraceQueryService {
         return jdbc.query(
                 """
                 SELECT trace_id, session_id, tenant_id, step_id, parent_step_id, step_seq,
-                       step_type, layer, scene, user_id, device_id,
+                       step_type, layer, user_id, device_id,
                        input_role, input_content_hash,
-                       tool_name, tool_args_hash, tool_decision, rule_id, reason_code, risk_score,
+                       tool_name, tool_args_hash, tool_args, tool_decision, rule_id, reason_code, risk_score,
                        tool_status, tool_duration_ms,
                        content_size, content_sampled, dlp_masked, occurred_at
                 FROM tb_agent_trace
@@ -95,13 +95,13 @@ public class TraceQueryService {
                     row.put("step_seq", rs.getInt("step_seq"));
                     row.put("step_type", rs.getString("step_type"));
                     row.put("layer", rs.getString("layer"));
-                    row.put("scene", rs.getString("scene"));
                     row.put("user_id", rs.getString("user_id"));
                     row.put("device_id", rs.getString("device_id"));
                     row.put("input_role", rs.getString("input_role"));
                     row.put("input_content_hash", rs.getString("input_content_hash"));
                     row.put("tool_name", rs.getString("tool_name"));
                     row.put("tool_args_hash", rs.getString("tool_args_hash"));
+                    row.put("tool_args", rs.getString("tool_args"));
                     row.put("tool_decision", rs.getString("tool_decision"));
                     row.put("rule_id", rs.getString("rule_id"));
                     row.put("reason_code", rs.getString("reason_code"));

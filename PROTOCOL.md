@@ -2,7 +2,7 @@
 
 | Item | Description |
 |------|------|
-| Document Version | v3.3 |
+| Document Version | v3.6 |
 | Status | Draft |
 | Related | [DESIGN.md](DESIGN.md) (index) · [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Reference Project | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
@@ -326,7 +326,7 @@ fn build_tool_annotations(tool_name: &str, license: &License) -> Option<Value> {
 >
 > **New approach**: Constraints delivered in two layers —
 > - **Structured annotations**: Injected into the `annotations` field (MCP standard compatible) of the `tools/list` response, consumed by MCP client UI and local precheck logic, **not entered into the LLM prompt**
-> - **Centralized system prompt injection**: All tool constraints are rendered by the Prompt Gateway ([§2.8](ARCHITECTURE.md)) into the "### Tool Usage Rules" section of the system prompt, **appearing only once** instead of repeating for each tool
+> - **Centralized system prompt injection**: All tool constraints are rendered by the Prompt Gateway ([§2.8](ARCHITECTURE.md#28-prompt-gateway-prompt-enhancement)) into the "### Tool Usage Rules" section of the system prompt, **appearing only once** instead of repeating for each tool
 
 **Error Response Format**:
 
@@ -708,7 +708,7 @@ spec:
 
 > **Multi-upstream configuration note**: After configuring `VIRBIUS_UPSTREAMS`, `VIRBIUS_UPSTREAM_URL` is ignored.
 > Each upstream must have a unique `name`, used for prefixing on tool name conflicts (e.g. `filesystem__read_file`).
-> See [§2.6.2](#262-multi-upstreammulti-upstream) for the detailed multi-upstream solution.
+> See [§2.6.2](#262-multi-upstream) for the detailed multi-upstream solution.
 
 Local process deployment (development):
 

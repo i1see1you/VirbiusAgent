@@ -1,5 +1,7 @@
 # Agent Security Protection — Four-Layer Architecture Design (Edge, Gateway, Kernel, Cloud)
 
+[中文版](DESIGN.zh.md)
+
 | Project | Description |
 |---------|-------------|
 | Document Version | v3.6 |
@@ -119,7 +121,7 @@ Audit event format (unified trace_id):
   "exec_time_ms": 12,
   "agent_pid": 12345,
   "session_id": "sess_xxx",
-  "falco_mode": "ebpf | plugin | userspace",
+  "falco_mode": "ebpf | userspace",
   "timestamp": "2026-07-06T10:00:00Z"
 }
 ```
@@ -278,7 +280,7 @@ Rollout states across layers may be out of sync (e.g., edge layer canary=10%, ga
 - virbius-engine — cloud layer final judgment
 
 **Degradable (fallback on failure)**:
-- Falco eBPF driver -> userspace -> plugin degradation chain
+- Falco eBPF driver -> userspace degradation chain (plugin mode removed in Plan A)
 - gVisor -> Landlock subprocess degradation
 - qwen3guard -> any guard model
 
@@ -490,7 +492,7 @@ if session_risk > 30: increase audit sampling rate
 |-------------------|-----------|----------------------|
 | Application layer | tool_call/tool_result full-chain trace | MCP Proxy TraceCollector |
 | HTTP layer | Request-level allowlist/counting/blocking | Higress WASM plugin |
-| Kernel layer | syscall/network/file events | Falco (eBPF/plugin degradation chain) |
+| Kernel layer | syscall/network/file events | Falco (eBPF) |
 | Kernel layer (P2) | Real-time blocking | Landlock + gVisor |
 
 #### Dimension 5: Approval and Blocking Capability (Enforcement)
@@ -585,7 +587,7 @@ Use a matrix to assess each Agent's control coverage:
 | Prompt injection detection | qwen3guard small model | P1 | ✅ Completed (see [§13.1](#131-prompt-injection-detection)) |
 | Tool return value detection | STI Taint semantic audit | P1 | ✅ Completed (see [§13.2](#132-sti-taint-semantic-audit)) |
 | Session risk | Redis session risk + adaptive model | P0/P1 | ✅ Completed (multi-dimensional weighting + decay factor + Redis persistence, see [§13.3](#133-session-risk-adaptive-model)) |
-| Runtime observability | Falco eBPF + plugin degradation chain + decision chain tracing | P0/P1 | P0 ✅ / P1 pending (see [§13.4](#134-custom-virbius-audit-falco-plugin--falco-rule-set-expansion)) |
+| Runtime observability | Falco eBPF + http_output three-level correlation + decision chain tracing | P0/P1 | ✅ Completed (custom Falco plugin removed in Plan A; see [§13.4](#134-custom-virbius-audit-falco-plugin--falco-rule-set-expansion)) |
 | High-risk approval | Challenge full chain (create → approve → token verify) | P1 | ✅ Completed |
 | HTTP blocking | Higress WASM 403 + License revocation | P0 | ✅ Completed |
 | Kernel-level blocking | Landlock + gVisor | P2 | 🔧 Code complete + compiles (Rust `pre_exec` hook implements Landlock + capset + prctl); awaiting Linux runtime verification + integration tests (`landlock_applied` currently inferred from ABI, pending self-pipe accurate reporting) (see [ARCHITECTURE.md §2.3-2.4](ARCHITECTURE.md#23-p2-landlock--drop-caps-subprocess-linux)) |
@@ -650,7 +652,7 @@ The paper's core finding: Low layers and short timescales (L2 Cognitive, T1 imme
 
 | LASM Layer | VirbiusAgent Capability | Corresponding Component | Design Section | Temporality Coverage | Status |
 |------------|------------------------|-------------------------|----------------|---------------------|--------|
-| **L1 Foundation** | ⚠️ Not directly covered (model security is vendor responsibility) | — | — | — | ❌ Out of scope |
+| **L1 Foundation** | Covered via the VirbiusLLM platform (LLM-layer security: prompt runtime content moderation, DLP, guard policies); model weights/training pipeline security remains the model vendor's responsibility | VirbiusLLM platform | — | T1 | ✅ Covered via VirbiusLLM |
 | | Constitution injection constrains model behavior (indirect mitigation) | Prompt Gateway | §2.8 | T1 | 🔧 Indirect |
 | **L2 Cognitive** | Prompt injection detection (qwen3guard:0.6b) | Engine `PromptInjectionDetector` | §13.1 | T1 | ✅ Completed |
 | | **Explicit trust layering** (TrustTagger + TrustBoundaryInjector + TrustViolationDetector) | `virbius-core/src/trust.rs` + Engine | §13.10 | T1/T2 | ✅ Completed |
@@ -688,7 +690,7 @@ The paper's core finding: Low layers and short timescales (L2 Cognitive, T1 imme
 **By LASM seven layers**:
 
 ```
-L1 Foundation            ░░░░░░░░░░░░░░░░░░░░   5%    Out of scope, only constitution injection indirect mitigation
+L1 Foundation            ████████████████░░░░  80%     Covered via VirbiusLLM platform; weights/training pipeline security remains model vendor responsibility
 L2 Cognitive             ████████████████████  95%    Trust layering ✅ / Plan hijacking 📋 future plan
 L3 Memory                ████████████████████ 100%    Write interception ✅ / Read interception ✅ / Framework integration ✅
 L4 Tool Execution        ████████████████████ 100%    Full-chain coverage
@@ -713,10 +715,10 @@ The LASM paper points out: **High layers (Ecosystem, Governance) and long-period
 | LASM Identified Empty Cell | VirbiusAgent Gap | Remediation Plan | Priority |
 |----------------------------|------------------|------------------|----------|
 | **L5 Multi-Agent** (T2/T3) | Multi-Agent coordination security completely missing | A2A message link verification + delegation permission constraints + inter-Agent trust propagation tracing | Low (future plan, not implemented) |
-| **L3 Memory** (T3 cross-session) | ✅ Already filled: `intercept_read()` + LangChain/OpenAI SDK Wrapper | ✅ Already implemented (see [§13.6](#136-memory-control-memory-interceptor)) | — |
 | **L2 Cognitive** (T2/T3 cross-turn) | Plan hijacking detection not implemented | P1.11 `IntentAnchor` + `PlanDriftDetector` | Low (future plan, not implemented) |
 | **L6 Ecosystem** (T4) | MCP Server integrity verification missing | MCP Server source signature verification + AgentBOM bill of materials | Medium |
-| **L1 Foundation** (T4) | Model backdoor/training data contamination undetectable | Beyond VirbiusAgent scope (model vendor responsibility) | N/A |
+| **L1 Foundation** (T4) | Model backdoor/training data contamination detection not in this project's build scope | Covered via the VirbiusLLM platform (model weights/training pipeline security main remains the model vendor's responsibility) | Low |
+| **L1 Foundation** (T1 multimodal) | No multimodal support: adversarial images and image-based jailbreaks against multimodal foundation models are undetectable, and can penetrate downward into L2 (instructions embedded in images are read into context by the VLM) | Multimodal guard model (joint image+text detection); low-cost interim: OCR pre-filter extracts image text and reuses the existing text detection pipeline | Medium |
 | **Cross-layer propagation** (T4) | Tool result → memory → planning cross-layer tracing insufficient | Cross-layer causal chain tracing (reuse Trace Collector) | Medium |
 
 > **LASM's core revelation** (paper original): "Agent security is not simply 'model security plus a bit of tool risk control.' It is a classic **distributed system security problem**. You must see component boundaries, see trust boundaries, see the time dimension, see the supply chain, see governance and accountability. Otherwise, you may build strong defenses at low layers while leaving fatal gaps at high layers."
@@ -733,7 +735,7 @@ The LASM paper points out: **High layers (Ecosystem, Governance) and long-period
 ### 13.1 Prompt Injection Detection
 
 > **Implementation location**: `virbius-engine/src/main/java/io/virbius/engine/eval/PromptInjectionDetector.java`
-> **Existing design**: [ARCHITECTURE.md §2.8.7](ARCHITECTURE.md#287-prompt-injection-detection-prompt-runtime-repositioning) already contains the complete design. This section describes the existing implementation.
+> **Existing design**: [ARCHITECTURE.md §2.8.7](ARCHITECTURE.md#287-prompt-injection-detection-prompt-runtime-repositioned) already contains the complete design. This section describes the existing implementation.
 
 #### 13.1.1 Architecture Positioning
 
@@ -1881,7 +1883,7 @@ benefiting from time decay: a trust violation from 20 minutes ago retains only 5
 > 2. Plugin mode has no syscall visibility, conflicting with Falco's core value
 > 3. Cross-layer correlation can be achieved through post-event correlation via Engine `FalcoAlertController`, no need for joint judgment within the Falco engine
 >
-> **Alternative**: Falco reverts to pure system-level syscall observation, sending alerts to Engine via `http_output`, where Engine completes three-level association (pid → cgroup → ppid) and session risk scoring. See [ARCHITECTURE.md §4.5](ARCHITECTURE.md#45-falco-plugin-mode-removed) and [§4.6 three-level association chain](ARCHITECTURE.md#three-level-association-chain-p1-implementation).
+> **Alternative**: Falco reverts to pure system-level syscall observation, sending alerts to Engine via `http_output`, where Engine completes three-level correlation (pid → cgroup → ppid) and session risk scoring. See [ARCHITECTURE.md §4.5](ARCHITECTURE.md#45-falco-plugin-mode-removed) and [§4.6 three-level correlation chain](ARCHITECTURE.md#three-level-correlation-chain-p1-implementation).
 >
 > The following is the original plugin design (retained as historical reference):
 
@@ -1999,7 +2001,7 @@ plugins:
 **Rule definition examples**:
 
 ```yaml
-# virbius-kernel/rules/virbius-agent-rules.yaml
+# Example custom Falco rules — deployed to /etc/falco/falco_rules.d/ via config-subscriber
 
 - rule: agent_data_exfiltration_db_to_http
   desc: Detect database read then external send pattern (read_db → http_post to external)
@@ -2583,6 +2585,35 @@ fail_open = true            # whether to allow when Engine is unavailable
 
 ---
 
+### 13.8 P1 Feature Implementation Priority
+
+Based on the seven-dimension analysis of the risk assessment framework, the following implementation priority for P1 features is recommended:
+
+| Priority | Feature | Rationale | Dependencies |
+|----------|---------|-----------|-------------|
+| **P1.1** | Prompt injection detection (§13.1) | Prompt injection is the highest-frequency Agent attack surface | qwen3guard model deployment |
+| **P1.2** | STI Taint semantic audit (§13.2) | Tool return value injection is the second largest attack entry | Shares model with P1.1 |
+| **P1.3** | Session Risk adaptive model (§13.3) | Adaptive scoring is the foundation for other detection linkage | None |
+| **P1.4** | Audit integrity hash chain (§13.5) | Audit trustworthiness is the baseline for security compliance | None |
+| **P1.5** | Output review (§13.7) | Covers final output security | Reuses P1.1/P1.2 Engine rule pipeline (zero new endpoints) |
+| **P1.6** | Memory control (§13.6) | Memory poisoning is a persistent attack | Shares model with P1.1 |
+| **P1.7** | virbius-audit Falco plugin (§13.4) | Enhances kernel-level Agent-specific detection | Falco plugin SDK |
+| **P1.8** | Falco rule set expansion (§13.4) | Complements virbius-audit plugin | Depends on P1.7 |
+| **P1.10** | Explicit trust layering (§13.10) | Fills LASM L2 data/instruction isolation gap | None (zero LLM calls) |
+
+> **📋 Future plans (not implemented)**:
+>
+> | Plan Item | Feature | Rationale | Dependencies |
+> |-----------|---------|-----------|-------------|
+> | P1.11 | Plan hijacking detection (§13.11) | LASM L2 cross-turn planning deviation detection | P1.3 Session Risk (reuses risk score mechanism) |
+> | L5 Multi-Agent | Multi-Agent coordination security | A2A message link verification + delegation permission constraints + trust propagation | Architecture upgrade to Multi-Agent |
+>
+> Lower priority; designs are archived, to be implemented in future versions.
+
+> **Critical path**: P1.1 → P1.2 → P1.3 can proceed in parallel; P1.4 is independent. P1.5/P1.6 depend on P1.1 model deployment. P1.10 has zero LLM dependency and can proceed immediately. P1.11 (plan hijacking detection) and L5 Multi-Agent coordination security are downgraded to future plans and will not be implemented for now.
+
+---
+
 ### 13.9 Cumulative Counter Engine-side Ingest (A1)
 
 > **Status**: ✅ Completed
@@ -2714,36 +2745,6 @@ These variables are in `MatchContext.vars`, resolvable by `ValueResolver`'s `VAR
 | `ScriptRuleRunner` | New `recordToolCall()` | Delegate to SessionStatePreloader |
 | `SessionStatePreloader` | `preload()` fix | Add `HGETALL` read of toolCounts |
 | `SessionStatePreloader` | `recordToolCall()` refactoring | `HINCRBY` replaces `INCR` |
-
----
-
-### 13.8 P1 Feature Implementation Priority
-
-Based on the seven-dimension analysis of the risk assessment framework, the following implementation priority for P1 features is recommended:
-
-| Priority | Feature | Rationale | Dependencies |
-|----------|---------|-----------|-------------|
-| **P1.1** | Prompt injection detection (§13.1) | Prompt injection is the highest-frequency Agent attack surface | qwen3guard model deployment |
-| **P1.2** | STI Taint semantic audit (§13.2) | Tool return value injection is the second largest attack entry | Shares model with P1.1 |
-| **P1.3** | Session Risk adaptive model (§13.3) | Adaptive scoring is the foundation for other detection linkage | None |
-| **P1.4** | Audit integrity hash chain (§13.5) | Audit trustworthiness is the baseline for security compliance | None |
-| **P1.5** | Output review (§13.7) | Covers final output security | Reuses P1.1/P1.2 Engine rule pipeline (zero new endpoints) |
-| **P1.6** | Memory control (§13.6) | Memory poisoning is a persistent attack | Shares model with P1.1 |
-| **P1.7** | virbius-audit Falco plugin (§13.4) | Enhances kernel-level Agent-specific detection | Falco plugin SDK |
-| **P1.8** | Falco rule set expansion (§13.4) | Complements virbius-audit plugin | Depends on P1.7 |
-| **P1.10** | Explicit trust layering (§13.10) | Fills LASM L2 data/instruction isolation gap | None (zero LLM calls) |
-
-> **📋 Future plans (not implemented)**:
->
-> | Plan Item | Feature | Rationale | Dependencies |
-> |-----------|---------|-----------|-------------|
-> | P1.11 | Plan hijacking detection (§13.11) | LASM L2 cross-turn planning deviation detection | P1.3 Session Risk (reuses risk score mechanism) |
-> | L5 Multi-Agent | Multi-Agent coordination security | A2A message link verification + delegation permission constraints + trust propagation | Architecture upgrade to Multi-Agent |
->
-> Lower priority; designs are archived, to be implemented in future versions.
-
-> **Critical path**: P1.1 → P1.2 → P1.3 can proceed in parallel; P1.4 is independent. P1.5/P1.6 depend on P1.1 model deployment. P1.10 has zero LLM dependency and can proceed immediately. P1.11 (plan hijacking detection) and L5 Multi-Agent coordination security are downgraded to future plans and will not be implemented for now.
-
 
 ---
 

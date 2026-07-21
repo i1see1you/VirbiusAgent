@@ -26,13 +26,13 @@ public final class PromptAuditJsonParser {
         }
         String trimmed = raw.trim();
 
-        // 尝试 JSON 格式（通用模型 follow system prompt 时）
+        // Try JSON format first (generic models that follow the system prompt)
         PromptAuditResult json = tryParseJson(trimmed);
         if (json != null) {
             return json;
         }
 
-        // 回退 Qwen3Guard 原生格式（Safety:/Categories:）
+        // Fallback to Qwen3Guard native format (Safety:/Categories:)
         return tryParseQwen3Guard(trimmed);
     }
 

@@ -1,8 +1,10 @@
 # VirbiusAgent Deployment View — DEPLOYMENT
 
+[中文版](DEPLOYMENT.zh.md)
+
 | Item | Description |
 |------|------|
-| Document Version | v3.3 |
+| Document Version | v3.6 |
 | Status | Draft |
 | Related | [DESIGN.md](DESIGN.md) (Index) · [ARCHITECTURE.md](ARCHITECTURE.md) |
 
@@ -63,7 +65,7 @@
 
 ┌─── Host ──────────────────────────────────────────────────┐
 |  Falco DaemonSet (Kernel Layer Bypass)                     |
-|  +-- eBPF driver / plugin mode                             |
+|  +-- eBPF driver (no plugin fallback)                      |
 |  +-- Events -> Redis Audit Stream                          |
 └───────────────────────────────────────────────────────────┘
 
@@ -76,7 +78,7 @@
 ```
 
 > In Sidecar mode, MCP tool calls go through localhost (East-West), bypassing the Gateway Layer Higress.
-> External HTTP requests (curl) are proxied by the Proxy, which validates URL allowlist at the application layer ([§3.5](ARCHITECTURE.md)).
+> External HTTP requests (curl) are proxied by the Proxy, which validates URL allowlist at the application layer ([§3.5](ARCHITECTURE.md#35-egress-traffic-control)).
 
 **Mode B: Remote Deployment (North-South, Gateway Layer Ingress)**
 
@@ -101,7 +103,7 @@ Remote Agent Client
 
 ┌─── Host ──────────────────────────────────────────────────┐
 |  Falco DaemonSet (Kernel Layer Bypass)                     |
-|  +-- eBPF driver / plugin mode                             |
+|  +-- eBPF driver (no plugin fallback)                      |
 |  +-- Events -> Redis Audit Stream                          |
 └───────────────────────────────────────────────────────────┘
 
@@ -328,7 +330,7 @@ Remote Agent (outside cluster)
 | **North-South/East-West Separation** | Remote traffic goes through Gateway Layer (TLS/rate limiting/Ingress security), in-cluster traffic goes through Edge Layer (deep precheck/schema/Prompt enhancement), each serves its purpose |
 | **Runtime Observation** | Kernel Layer Falco provides syscall/net/file-level observation, capturing anomalies undetectable by both Edge and Gateway Layers (e.g., container escape, SSRF internal network scanning) |
 | **Single Policy Source** | All four layers share `virbius-control` as the single source of truth for policies, share Redis for session/risk_score storage, ensuring consistent policies and interoperable risk scores |
-| **Graceful Degradation** | When eBPF is unavailable, Kernel Layer degrades to plugin mode (not blind); when engine is unavailable, Edge Layer fail-open/fail-closed; when Gateway Layer is unavailable, Edge Layer independently provides fallback |
+| **Graceful Degradation** | When eBPF is unavailable, Kernel Layer observation is Disabled (plugin mode removed in Plan A) while Edge Layer precheck + License remain active; when engine is unavailable, Edge Layer fail-open/fail-closed; when Gateway Layer is unavailable, Edge Layer independently provides fallback |
 | **Sandbox Isolation (P2)** | Edge Layer Proxy can posix_spawn + Landlock; Gateway and Cloud Layers do not participate in execution, providing clear isolation boundaries |
 | **Full-Chain Auditing** | Gateway Layer records HTTP-level audit, Edge Layer records MCP protocol-level audit, Kernel Layer records syscall-level audit, Cloud Layer aggregates final judgment audit——four-layer complementary auditing with no blind spots |
 
@@ -341,7 +343,7 @@ Remote Agent (outside cluster)
 | **Double Engine Calls** | Gateway Layer and Edge Layer each call `/v1/evaluate` once, doubling engine load | Configure `evaluate=false` on Gateway Layer; only Edge Layer calls engine |
 | **Double Counter Conflict** | Gateway Layer WASM Redis and Edge Layer Fallback rate limiting each count once, causing rate_limit semantics confusion | Unify rate limiting to Gateway Layer; Edge Layer removes Fallback rate_limit |
 | **Operations Cost** | Four-layer components require independent monitoring, logging, and alerting; fault diagnosis requires cross-layer trace_id correlation | Unified trace_id connects four-layer auditing; operations console provides cross-layer call chain visualization |
-| **Resource Overhead** | Additional ~20MB per Agent Pod (Proxy) + ~50MB per node (Falco) + Higress cluster + Engine cluster | Lightweight scenarios can degrade to 2 layers (Edge + Cloud); Falco supports optional plugin mode to reduce overhead |
+| **Resource Overhead** | Additional ~20MB per Agent Pod (Proxy) + ~50MB per node (Falco) + Higress cluster + Engine cluster | Lightweight scenarios can degrade to 2 layers (Edge + Cloud) |
 | **Tandem Configuration Risk** | Behavior unpredictable when Gateway and Edge Layer policies are inconsistent (e.g., Gateway allows but Edge denies) | Single policy source (`virbius-control` unified distribution); Gateway Layer allowlist ⊆ Edge Layer allowlist (Edge is stricter) |
 
 #### 8.4.4 Tandem Division of Responsibilities

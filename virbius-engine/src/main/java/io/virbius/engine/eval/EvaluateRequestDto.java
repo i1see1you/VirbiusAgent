@@ -1,5 +1,6 @@
 package io.virbius.engine.eval;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 import java.util.Map;
 
@@ -19,4 +20,6 @@ public record EvaluateRequestDto(
         String consumerId,
         String apiKeyGroup,
         String toolName,
-        String argsJson) {}
+        String argsJson,
+        @JsonProperty("license_risk_quota") int riskQuota) {
+}

@@ -565,6 +565,54 @@ fn drop_caps_and_no_new_privs() -> io::Result<bool> {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+//  Self-pipe helpers: child→parent ApplyReport transport
+// ──────────────────────────────────────────────────────────────────────────
+
+/// Create a pipe suitable for child→parent ApplyReport transport.
+/// Sets CLOEXEC on the write end so exec closes it automatically.
+fn create_report_pipe() -> io::Result<(i32, i32)> {
+    let mut fds: [i32; 2] = [-1; 2];
+    let ret = unsafe { libc::pipe(fds.as_mut_ptr() as *mut i32) };
+    if ret != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let flags = unsafe { libc::fcntl(fds[1], libc::F_GETFD) };
+    if flags >= 0 {
+        unsafe { libc::fcntl(fds[1], libc::F_SETFD, flags | libc::FD_CLOEXEC) };
+    }
+    Ok((fds[0], fds[1]))
+}
+
+/// Read the child's ApplyReport from the self-pipe.
+///
+/// Uses `poll(2)` with a 100 ms timeout to avoid blocking forever if
+/// the child crashes before writing.  On timeout / error / empty read
+/// falls back to ABI-based inference (the same logic used before the
+/// self-pipe was introduced).
+fn read_report(fd: i32, fallback_abi: LandlockAbi) -> (bool, bool) {
+    let mut pfd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    let ret = unsafe { libc::poll(&mut pfd as *mut libc::pollfd, 1, 100) };
+
+    let mut buf = [0u8; 2];
+    let n = if ret > 0 && (pfd.revents & libc::POLLIN) != 0 {
+        unsafe { libc::read(fd, buf.as_mut_ptr() as *mut libc::c_void, 2) }
+    } else {
+        -1
+    };
+    unsafe { libc::close(fd) };
+
+    if n == 2 {
+        (buf[0] != 0, buf[1] != 0)
+    } else {
+        (fallback_abi.supports_file(), true)
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 //  LandlockSandbox: parent-side executor
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -595,47 +643,52 @@ impl LandlockSandbox {
     /// and drops capabilities before `exec`.  If Landlock is unavailable,
     /// degrades to "drop caps only" mode.
     pub fn execute(&self, program: &str, args: &[String]) -> Result<SandboxResult, String> {
-        // Pre-compile rules in the parent (safe to allocate here).
         let prepared = PreparedRules::compile(&self.config.rules);
-
-        // The pre_exec closure captures `prepared` by move.  It runs in the
-        // forked child and must be async-signal-safe — see `apply_landlock`.
-        //
-        // `pre_exec` is `unsafe` because the closure runs in a forked child
-        // where only async-signal-safe operations are permitted; violating
-        // that is UB.  Our closure only uses raw syscalls and reads
-        // pre-allocated CString paths — async-signal-safe.
         let prepared_for_hook = prepared.clone();
+
+        // Create self-pipe for child→parent ApplyReport.
+        // pipe(2) is async-signal-safe; the write end is CLOEXEC so it
+        // closes automatically on exec.  The child writes a 2-byte report
+        // in pre_exec; the parent reads it after spawn.
+        let (read_fd, write_fd) = create_report_pipe()
+            .map_err(|e| format!("failed to create self-pipe: {e}"))?;
+
         let mut cmd = Command::new(program);
         cmd.args(args);
+
+        // SAFETY: pre_exec runs in the forked child where only
+        // async-signal-safe operations are permitted.  The closure only
+        // calls raw syscalls (apply_landlock, write, close) on
+        // pre-allocated data — all async-signal-safe.
         unsafe {
             cmd.pre_exec(move || {
-                // Runs in the forked child, after fork and before exec.
-                // Must be async-signal-safe — see `apply_landlock`.
-                //
-                // The returned `ApplyReport` cannot be passed back to the
-                // parent through std's `pre_exec` API (only `io::Result<()>`
-                // is supported).  We discard it here and infer the actual
-                // state in the parent from ABI detection.  A future
-                // enhancement could use a self-pipe to report precisely.
-                let _report = apply_landlock(&prepared_for_hook)?;
+                let report = apply_landlock(&prepared_for_hook)?;
+                let buf = [report.landlock_applied as u8, report.caps_dropped as u8];
+                let _ = libc::write(write_fd, buf.as_ptr() as *const libc::c_void, 2);
+                libc::close(write_fd);
                 Ok(())
             });
         }
+
         let mut child = cmd
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("failed to spawn '{program}': {e}"))?;
+            .map_err(|e| {
+                unsafe { libc::close(read_fd) };
+                format!("failed to spawn '{program}': {e}")
+            })?;
 
-        // The pre_exec closure cannot pass the ApplyReport back through
-        // std's API (only `io::Result<()>` is supported).  We infer the
-        // actual state from ABI detection — this is more accurate than the
-        // old LD_PRELOAD design, which always reported success regardless of
-        // whether the .so was even present.  A future enhancement could use a
-        // self-pipe to report the child's actual apply result precisely.
+        // Close parent's copy of write end so the pipe delivers EOF when
+        // the child finishes its report and execs (CLOEXEC).
+        unsafe { libc::close(write_fd) };
+
+        // Read child's ApplyReport (2 bytes) from self-pipe.
+        // Falls back to ABI inference if the child didn't write (should
+        // not happen in normal operation).
+        let (landlock_applied, caps_dropped) = read_report(read_fd, self.abi);
+
         drop(prepared);
-
         let start = Instant::now();
         let timeout = self.config.timeout;
 
@@ -653,11 +706,8 @@ impl LandlockSandbox {
                         stdout,
                         stderr,
                         exit_code,
-                        // If ABI supports file and spawn succeeded, Landlock
-                        // was at least attempted.  restrict_self failures
-                        // degrade to drop-caps-only but don't fail spawn.
-                        landlock_applied: self.abi.supports_file(),
-                        caps_dropped: true,
+                        landlock_applied,
+                        caps_dropped,
                     });
                 }
                 Ok(None) => {

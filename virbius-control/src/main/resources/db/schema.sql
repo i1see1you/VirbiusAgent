@@ -194,12 +194,20 @@ CREATE TABLE IF NOT EXISTS tb_audit_events (
     intercepted_at    TIMESTAMP NOT NULL,
     user_id           VARCHAR(256),
     device_id         VARCHAR(256),
+    audit_seq         BIGINT      NOT NULL DEFAULT 0,
+    prev_hash         VARCHAR(128) NOT NULL DEFAULT '',
+    curr_hash         VARCHAR(128) NOT NULL DEFAULT '',
     created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_tb_audit_events_rule ON tb_audit_events (tenant_id, rule_id, intercepted_at);
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tb_audit_events_event_id ON tb_audit_events (event_id);
+
+CREATE INDEX IF NOT EXISTS idx_audit_tenant_rule_time
+  ON tb_audit_events(tenant_id, rule_id, intercepted_at);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_tenant_seq ON tb_audit_events (tenant_id, audit_seq);
 
 CREATE TABLE IF NOT EXISTS tb_audit_ingest_checkpoint (
     stream_key      VARCHAR(128) PRIMARY KEY,
@@ -304,7 +312,7 @@ CREATE TABLE IF NOT EXISTS tb_bundle_staging (
     version          INTEGER NOT NULL DEFAULT 1,
     updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (tenant_id, bundle_id, layer),
-    CHECK (layer IN ('edge', 'gateway', 'cloud')),
+    CHECK (layer IN ('edge', 'gateway', 'cloud', 'falco', 'sandbox')),
     CHECK (status IN ('editing', 'deploying', 'deployed'))
 );
 
@@ -323,7 +331,7 @@ CREATE TABLE IF NOT EXISTS tb_gateway_artifact_meta (
 CREATE TABLE IF NOT EXISTS tb_deploy_rollout (
     deploy_id              VARCHAR(64)  PRIMARY KEY,
     tenant_id              VARCHAR(64)  NOT NULL,
-    bundle_id              VARCHAR(128) NOT NULL DEFAULT 'poc-default',
+    bundle_id              VARCHAR(128) NOT NULL DEFAULT 'demo-default',
     state                  VARCHAR(16)  NOT NULL,
     canary_percent         INTEGER      NOT NULL DEFAULT 0,
     edge_deployed          INTEGER      NOT NULL DEFAULT 0,
@@ -393,6 +401,7 @@ CREATE TABLE IF NOT EXISTS tb_agent_trace (
     input_content_hash VARCHAR(64),
     tool_name        VARCHAR(128),
     tool_args_hash   VARCHAR(64),
+    tool_args        TEXT,
     tool_decision    VARCHAR(16),
     rule_id          VARCHAR(128),
     reason_code      VARCHAR(64),

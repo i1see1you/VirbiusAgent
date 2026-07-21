@@ -1,10 +1,12 @@
 # VirbiusAgent 部署视图 — DEPLOYMENT
 
+[English](DEPLOYMENT.md)
+
 | 项目 | 说明 |
 |------|------|
-| 文档版本 | v3.3 |
+| 文档版本 | v3.6 |
 | 状态 | 草案 |
-| 关联 | [DESIGN.md](DESIGN.md)（索引） · [ARCHITECTURE.md](ARCHITECTURE.md) |
+| 关联 | [DESIGN.zh.md](DESIGN.zh.md)（索引） · [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md) |
 
 > 本文件包含 §8 部署视图（组件端口 + 部署拓扑 + 接入方式对比 + 四层全覆盖组合部署）。
 
@@ -25,7 +27,7 @@
 
 > **多上游支持**：MCP Proxy 支持同时连接多个 MCP Server（P1 新增），通过工具名路由 `tools/call`。
 > 单上游模式向下兼容（旧 `upstream_url` 配置自动归一化），多上游时冲突工具名自动加前缀 `{upstream}__{tool}`。
-> 详细方案见 [PROTOCOL.md §2.6.2](PROTOCOL.md#262-多上游支持multi-upstream)。
+> 详细方案见 [PROTOCOL.md §2.6.2](PROTOCOL.md#262-multi-upstream)（英文）。
 | **virbius-engine** | 8082 | 云侧 | — |
 | **virbius-control** | 8080 | 云侧 | — |
 | **Falco** (核层观测) | 无（DaemonSet） | Agent 所在宿主机 | 旁路 |
@@ -63,7 +65,7 @@
 
 ┌─── 宿主机 ────────────────────────────────────────────────┐
 |  Falco DaemonSet (核层旁路)                                |
-|  +-- eBPF 驱动 / plugin 模式                               |
+|  +-- eBPF 驱动（无特权环境 Disabled）                     |
 |  +-- 事件 -> Redis Audit Stream                           |
 └───────────────────────────────────────────────────────────┘
 
@@ -76,7 +78,7 @@
 ```
 
 > Sidecar 模式下 MCP 工具调用走 localhost（东西向），不经管层 Higress。
-> 外部 HTTP 请求（curl）由 Proxy 代发，在应用层校验 URL 白名单（[§3.5](ARCHITECTURE.md)）。
+> 外部 HTTP 请求（curl）由 Proxy 代发，在应用层校验 URL 白名单（[§3.5](ARCHITECTURE.zh.md#35-egress-流量管控)）。
 
 **模式 B：远程部署（南北向，管层 Ingress）**
 
@@ -101,7 +103,7 @@
 
 ┌─── 宿主机 ────────────────────────────────────────────────┐
 |  Falco DaemonSet (核层旁路)                                |
-|  +-- eBPF 驱动 / plugin 模式                               |
+|  +-- eBPF 驱动（无特权环境 Disabled）                     |
 |  +-- 事件 -> Redis Audit Stream                           |
 └───────────────────────────────────────────────────────────┘
 
@@ -328,7 +330,7 @@ Agent 是否在 K8s 集群内？
 | **南北东西分离** | 远程流量经管层（TLS/限流/Ingress 安全），集群内流量经端层（深度预检/schema/Prompt 增强），各司其职 |
 | **运行时观测** | 核层 Falco 提供 syscall/net/file 级观测，捕获端层和管层都无法检测的异常（如容器逃逸、SSRF 内网扫描） |
 | **策略同源** | 四层共享 `virbius-control` 作为策略真源，共享 Redis 存储 session/risk_score，策略一致、风险分互通 |
-| **渐进降级** | eBPF 不可用时核层降级为 plugin 模式（不致盲）；engine 不可用时端层 fail-open/fail-closed；管层不可用时端层独立兜底 |
+| **渐进降级** | eBPF 不可用时核层观测 Disabled（方案 A 起无 plugin 兜底），端层预检 + License 仍生效；engine 不可用时端层 fail-open/fail-closed；管层不可用时端层独立兜底 |
 | **沙箱隔离 (P2)** | 端层 Proxy 可 posix_spawn + Landlock，管层和云层不参与执行，隔离边界清晰 |
 | **全链路审计** | 管层记 HTTP 层审计，端层记 MCP 协议层审计，核层记 syscall 级审计，云层汇总终判审计——四层审计互补无死角 |
 
@@ -341,7 +343,7 @@ Agent 是否在 K8s 集群内？
 | **双重 engine 调用** | 管层和端层各调一次 `/v1/evaluate`，engine 负载翻倍 | 管层配置 `evaluate=false`，仅端层调 engine |
 | **双重计数器冲突** | 管层 WASM Redis 和端层 Fallback 限流各计一次，rate_limit 语义混乱 | 限流统一收敛到管层，端层移除 Fallback rate_limit |
 | **运维成本** | 四层组件需独立监控、日志、告警，故障排查需跨层关联 trace_id | 统一 trace_id 串联四层审计；运营台提供跨层调用链可视化 |
-| **资源开销** | 每个 Agent Pod 额外 ~20MB（Proxy）+ 每节点 ~50MB（Falco）+ Higress 集群 + Engine 集群 | 轻量场景可降级为 2 层（端层 + 云层）；Falco 可选 plugin 模式降低开销 |
+| **资源开销** | 每个 Agent Pod 额外 ~20MB（Proxy）+ 每节点 ~50MB（Falco）+ Higress 集群 + Engine 集群 | 轻量场景可降级为 2 层（端层 + 云层） |
 | **串联配置风险** | 管层和端层策略不一致时行为不可预测（如管层 allow 但端层 deny） | 策略同源（`virbius-control` 统一下发）；管层 allowlist ⊆ 端层 allowlist（端层更严格） |
 
 #### 8.4.4 串联分工方案

@@ -173,12 +173,25 @@ jobs:
         run: cargo audit
 
   # ────────────────────────────────────────────────────────────
+  #  Rust sandbox integration tests (Landlock + self-pipe)
+  #  Requires Linux kernel ≥ 5.13; ubuntu-24.04 guarantees 6.8+.
+  # ────────────────────────────────────────────────────────────
+  sandbox-linux:
+    name: Rust sandbox (Landlock integration)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run sandbox integration tests
+        run: cargo test -p virbius-core --test sandbox_integration -- --nocapture
+
+  # ────────────────────────────────────────────────────────────
   #  Aggregate: all checks must pass (useful for branch protection)
   # ────────────────────────────────────────────────────────────
   ci-pass:
     name: CI (all checks)
     runs-on: ubuntu-latest
-    needs: [rust, rust-bindings, java, go, shellcheck, cargo-audit]
+    needs: [rust, rust-bindings, java, go, shellcheck, cargo-audit, sandbox-linux]
     if: always()
     steps:
       - name: Check job results
@@ -189,7 +202,8 @@ jobs:
           echo "go: ${{ needs.go.result }}"
           echo "shellcheck: ${{ needs.shellcheck.result }}"
           echo "cargo-audit: ${{ needs.cargo-audit.result }}"
-          for r in "${{ needs.rust.result }}" "${{ needs.rust-bindings.result }}" "${{ needs.java.result }}" "${{ needs.go.result }}" "${{ needs.shellcheck.result }}" "${{ needs.cargo-audit.result }}"; do
+          echo "sandbox-linux: ${{ needs.sandbox-linux.result }}"
+          for r in "${{ needs.rust.result }}" "${{ needs.rust-bindings.result }}" "${{ needs.java.result }}" "${{ needs.go.result }}" "${{ needs.shellcheck.result }}" "${{ needs.cargo-audit.result }}" "${{ needs.sandbox-linux.result }}"; do
             if [ "$r" != "success" ]; then
               echo "::error::One or more CI checks failed"
               exit 1

@@ -15,7 +15,7 @@ pub mod precheck;
 pub mod prompt_gateway;
 mod runtime;
 #[cfg(target_os = "linux")]
-mod sandbox;
+pub mod sandbox;
 mod sync;
 pub mod trace;
 pub mod trust;

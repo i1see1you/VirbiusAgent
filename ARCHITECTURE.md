@@ -1,8 +1,10 @@
 # VirbiusAgent Architecture Design — ARCHITECTURE
 
+[中文版](ARCHITECTURE.zh.md)
+
 | Project | Description |
 |------|------|
-| Document version | v3.3 |
+| Document version | v3.6 |
 | Status | Draft |
 | Related | [DESIGN.md](DESIGN.md) (index) · [PROTOCOL.md](PROTOCOL.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [ROADMAP.md](ROADMAP.md) |
 | Reference project | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
@@ -28,7 +30,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
     TLS/rate-limit/long-conn + allowlist + counter + engine call + HTTP block
   |
 [3] Kernel - Falco observer (observation layer)
-    eBPF driver (standard node) / plugin mode (serverless fallback)
+    eBPF driver (standard node); unprivileged env -> Disabled (plugin mode removed)
     observe: syscall/net/file + audit stream + session risk
     enforce(P2): Landlock + drop caps (edge) / gVisor (edge)
   |
@@ -77,7 +79,7 @@ The four layers (Edge, Gateway, Kernel, Cloud) are divided into two categories b
 >
 > The Gateway Higress responsibilities focus on:
 > 1. **Ingress**: North-South traffic from remote Agents (non-Sidecar) accessing MCP Server
-> 2. **Egress**: Network-layer control of external HTTP requests from Agent business tools (e.g. `curl` tool accessing external APIs). Note: only MCP business tool requests go through the Proxy; implicit network requests from the Agent framework (config fetching, model downloads, heartbeats, etc.) are restricted by NetworkPolicy and are not proxied (see [§3.5](ARCHITECTURE.md))
+> 2. **Egress**: Network-layer control of external HTTP requests from Agent business tools (e.g. `curl` tool accessing external APIs). Note: only MCP business tool requests go through the Proxy; implicit network requests from the Agent framework (config fetching, model downloads, heartbeats, etc.) are restricted by NetworkPolicy and are not proxied (see [§3.5](#35-egress-traffic-control))
 >
 > For Egress traffic in Sidecar mode, **tool-level control** is adopted: MCP business tool requests (e.g. `curl`) are intercepted by the Edge Proxy at the `tools/call` stage for URL allowlist validation and proxying (P0); implicit network requests from the Agent framework are restricted to allowlist targets by K8s NetworkPolicy (P0); P2 can add eBPF/iptables transparent hijacking for process-level full outbound blocking.
 
@@ -87,7 +89,7 @@ The four layers (Edge, Gateway, Kernel, Cloud) are divided into two categories b
 |------|------|
 | **Unified control plane** | All layers' policy source of truth is virbius-control; each layer executes independently but configuration is from the same source |
 | **Precheck before execution** | Edge precheck -> Gateway/Cloud final judgment -> Edge execution. Tools are executed only after final judgment passes |
-| **Separation of observation and enforcement** | Observation (eyes) and enforcement (hands) are handled by different technology stacks. Observation degrades with environment (eBPF->ptrace->plugin); enforcement is always guaranteed by Edge Landlock + drop caps (P2) |
+| **Separation of observation and enforcement** | Observation (eyes) and enforcement (hands) are handled by different technology stacks. Observation degrades with environment (eBPF->ptrace); enforcement is always guaranteed by Edge Landlock + drop caps (P2) |
 | **Observation first** | P0 only implements observation (Falco + HTTP layer blocking + session risk accumulation); P2 adds syscall-level blocking |
 | **eBPF is enhancement, not dependency** | eBPF enhances observation precision when available; when unavailable, Edge Landlock + drop caps + gVisor still provide complete enforcement |
 | **Edge as last resort** | Even if Gateway/Cloud are bypassed, Edge precheck + sandbox still restrict process behavior |
@@ -100,8 +102,8 @@ The four layers (Edge, Gateway, Kernel, Cloud) are divided into two categories b
 
 | Phase | Observation (eyes) | Enforcement (hands) |
 |------|-----------|------------|
-| **P0** | Falco (eBPF/plugin) + access log + Redis audit stream + STI audit + Prompt Gateway (constitutional injection) | HTTP 403 + allowlist + counting + schema validation + risk threshold disconnect + Runtime License validation |
-| **P1** | STI Taint small model + virbius-audit Falco plugin + audit integrity | Manual approval flow + adaptive risk model + memory control (Memory Interceptor) |
+| **P0** | Falco (eBPF) + access log + Redis audit stream + STI audit + Prompt Gateway (constitutional injection) | HTTP 403 + allowlist + counting + schema validation + risk threshold disconnect + Runtime License validation |
+| **P1** | STI Taint small model + Falco http_output three-level correlation + audit integrity | Manual approval flow + adaptive risk model + memory control (Memory Interceptor) |
 | **P2** | Custom eBPF observation (execveat + IPv6) | Landlock + drop caps + gVisor + TEE (financial grade) |
 
 ### 1.4 Identity System
@@ -220,7 +222,7 @@ Build a secure and trusted Agent OS, providing syscall-level isolation and obser
 | Namespace isolation | clone3(CLONE_NEWPID \| CLONE_NEWNS \| CLONE_NEWNET) | §2.3.1 | P2 |
 | Capability dropping | drop caps | §2.3 | P2 |
 | Untrusted code sandbox | gVisor runsc warm pool | §2.4 | P2 |
-| Kernel observation | Falco eBPF + plugin degradation chain | §4 | P0 |
+| Kernel observation | Falco eBPF | §4 | P0 |
 
 
 ---
@@ -665,7 +667,7 @@ LLM generates tool_call -> Edge precheck -> Gateway -> Cloud final judgment -> E
 > | New: centralized system prompt injection | ~80 tokens | Constraint rules appear only once in system prompt |
 > | Savings | ~420 tokens | **Reduction of ~84%** |
 >
-> Tool `description` remains original concise text unchanged; structured constraints are passed through MCP `annotations` field ([§2.6.1](PROTOCOL.md)), consumed by MCP client UI and precheck logic, not entering the LLM prompt.
+> Tool `description` remains original concise text unchanged; structured constraints are passed through MCP `annotations` field ([§2.6.1](PROTOCOL.md#261-mcp-proxy-full-technical-solution)), consumed by MCP client UI and precheck logic, not entering the LLM prompt.
 
 **PII input desensitization** — Reuses existing virbius-core/src/dlp/engine.rs to desensitize user input before sending the prompt.
 
@@ -789,7 +791,7 @@ Template example:
 | **Model variance** | GPT-4 follows rules well, small models may not | Adjust injection format based on model capability; small models rely on tool interception |
 | **Not a substitute for tool interception** | Prompt Gateway is preventive, not blocking | Must never be relied upon alone; must be combined with tool interception + Falco observation |
 
-#### 2.8.7 Prompt Intrusion Detection (prompt runtime repositioned)
+#### 2.8.7 Prompt Injection Detection (prompt runtime repositioned)
 
 VirbiusLLM's `prompt` rule runtime (NL description → 1B model determines if text violates rules) is an LLM content moderation capability. VirbiusAgent **does not reuse its content moderation semantics**, but **reuses its infrastructure** (rule CRUD + mlPredict call + audit), repositioned as a **user input jailbreak/injection detection layer**.
 
@@ -926,7 +928,7 @@ pub struct MemoryAuditEvent {
 
 ### 2.10 Output Review
 
-> **Tool result review is implemented; Agent final output review is a design suggestion pending application layer integration.** The actual implementation reuses the Engine `/v1/evaluate` endpoint, rather than creating a new standalone `OutputReviewer` class. Tool result review is already implemented in the MCP Proxy; Agent final output review (Plan B) requires the application layer to call `/v1/evaluate` itself; the codebase currently does not contain application layer integration code. See [DESIGN.md §13.7](DESIGN.md#137-output-reviewoutput-review).
+> **Tool result review is implemented; Agent final output review is a design suggestion pending application layer integration.** The actual implementation reuses the Engine `/v1/evaluate` endpoint, rather than creating a new standalone `OutputReviewer` class. Tool result review is already implemented in the MCP Proxy; Agent final output review (Plan B) requires the application layer to call `/v1/evaluate` itself; the codebase currently does not contain application layer integration code. See [DESIGN.md §13.7](DESIGN.md#137-output-review).
 
 > STI Taint (§5.4) reviews **tool return values**; Output Review reviews the **Agent's final response to the user**—content generated by the LLM after summarizing tool results. The two cover different stages.
 
@@ -1085,7 +1087,7 @@ Agent -> Higress (Egress Proxy) -> External API
 > **Topology note**: The Gateway handles North-South (cross-network) traffic. In Sidecar mode, MCP tool calls are East-West traffic and do not pass through the Gateway (§1.1). The Gateway plays a role in the following scenarios:
 > - **Ingress**: Remote Agents (non-Sidecar deployment) access MCP Server via HTTPS
 > - **Egress**: External HTTP requests initiated by Agents in non-Sidecar mode pass through the Gateway Egress Proxy
-> - **Sidecar mode Egress**: Proxied by the Edge Proxy ([§2.6.1](PROTOCOL.md)); the Gateway does not participate
+> - **Sidecar mode Egress**: Proxied by the Edge Proxy ([§2.6.1](PROTOCOL.md#261-mcp-proxy-full-technical-solution)); the Gateway does not participate
 
 | Capability | Direction | Implementation |
 |------|------|---------|
@@ -1207,7 +1209,7 @@ External HTTP requests initiated by the Agent belong to North-South Egress traff
 > - **Framework implicit requests** (config fetching, model downloads, heartbeats, etc.) are initiated by the Agent itself, restricted to allowlist targets by NetworkPolicy
 > - **Process-level full outbound** (P2 fallback) via eBPF/iptables transparent hijacking
 >
-> This tripartite approach matches the threat model: security threats come from **controllable external requests** initiated by the Agent through business tools, not from the framework's underlying **fixed-target** network calls. Tool-level proxying only needs to support GET/POST + streaming response passthrough (chunked/SSE), achievable with reqwest `bytes_stream()`, with manageable development cost. See [§2.6.1](PROTOCOL.md) Egress traffic control.
+> This tripartite approach matches the threat model: security threats come from **controllable external requests** initiated by the Agent through business tools, not from the framework's underlying **fixed-target** network calls. Tool-level proxying only needs to support GET/POST + streaming response passthrough (chunked/SSE), achievable with reqwest `bytes_stream()`, with manageable development cost. See [§2.6.1](PROTOCOL.md#261-mcp-proxy-full-technical-solution) Egress traffic control.
 
 #### Sidecar Mode — Tool-level Proxy Proxying
 
@@ -1413,7 +1415,7 @@ The Kernel layer is the runtime observation layer. P0 only implements observatio
 | Agent process syscalls | Falco eBPF observation (when available) | Landlock file path enforcement |
 | Container escape detection | Falco eBPF observation (when available) | gVisor container isolation + Landlock path enforcement |
 | SSRF / intranet scanning | Falco eBPF observation of connect | NetworkPolicy network enforcement |
-| Infrastructure anomalies | Falco plugin (k8saudit + cloudtrail) | Cloud provider native enforcement |
+| Infrastructure anomalies | Cloud audit logs (k8s audit / cloudtrail) | Cloud provider native enforcement |
 
 **P0 Security Model**: Kernel layer only observes, does not enforce. Anomaly detected -> report audit stream -> raise session risk score -> Gateway HTTP layer blocks subsequent requests. This is a "detect -> accumulate risk -> block subsequent" model, effective for multi-turn Agent call scenarios.
 
@@ -1620,7 +1622,7 @@ Engine `FalcoAlertController` performs a three-level session correlation for eac
 |------|---------|------|------|
 | host | Bare metal/self-managed VM + root | Falco eBPF (P2) | Landlock (P2) + gVisor (P2) |
 | daemonset | K8s standard node pool + privileged | Same as above | Same as above |
-| pod-observe | serverless (Fargate/Autopilot) | Falco plugin + cloud vendor alerts | Edge Landlock (P2) + NetworkPolicy |
+| pod-observe | serverless (Fargate/Autopilot) | Cloud vendor alerts (no syscall visibility) | Edge Landlock (P2) + NetworkPolicy |
 | audit-only | Early stage observation | Read-only subset of above observation | None |
 
 > **Removed original sidecar mode**: Sidecar mode was self-contradictory—Falco also requires eBPF privileges; Landlock cannot be applied by a sidecar to other containers (must be declared in Pod spec). In serverless environments, Landlock profile is injected into Pod spec via mutating admission webhook.
@@ -1694,9 +1696,9 @@ Falco eBPF → alert triggered → http_output POST → Engine FalcoAlertControl
 
 **Falco rule output field requirement**: The rule `output` template must include `%proc.cgroup.id`, otherwise the cgroup correlation path cannot take effect (`proc.cgroup.id` requires Falco 0.37+ modern eBPF driver).
 
-#### 4.8.3 Example
+#### 4.8.4 Example
 
-See [README.md](#quick-start) or the ops.html front-end operation interface.
+See [README.md](README.md#quick-start) or the ops.html front-end operation interface.
 
 ### 4.9 Unified Sandbox Rule Management (Falco + Landlock + gVisor)
 
@@ -1918,7 +1920,7 @@ virbius-control
 
 ### 5.6 Audit Integrity (Hash Chain)
 
-> **✅ Implemented.** Located at `virbius-control/src/main/java/io/virbius/control/audit/`, see [DESIGN.md §13.5](DESIGN.md#135-audit-integrityhash-chain).
+> **✅ Implemented.** Located at `virbius-control/src/main/java/io/virbius/control/audit/`, see [DESIGN.md §13.5](DESIGN.md#135-audit-integrity-hash-chain).
 
 Tamper-proof audit chain: each audit event contains the SHA-256 hash of the previous event, forming a **per-tenant isolated** chain structure. Any tampering causes the chain to break, detectable by verification.
 

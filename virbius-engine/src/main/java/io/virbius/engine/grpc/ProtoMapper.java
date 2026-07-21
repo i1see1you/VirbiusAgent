@@ -34,7 +34,8 @@ public class ProtoMapper {
                 null,
                 null,
                 proto.getToolName(),
-                proto.getArgsJson());
+                proto.getArgsJson(),
+                proto.getRiskQuota());
     }
 
     public EvaluateResponse toProto(EvaluateResponseDto dto) {

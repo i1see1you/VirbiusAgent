@@ -49,9 +49,9 @@ public class TraceEventIngestor {
             String sql = insertIgnorePrefix
                     + " INTO tb_agent_trace ("
                     + "  trace_id, session_id, tenant_id, step_id, parent_step_id, step_seq,"
-                    + "  step_type, layer, scene, user_id, device_id,"
+                    + "  step_type, layer, user_id, device_id,"
                     + "  input_role, input_content_hash,"
-                    + "  tool_name, tool_args_hash, tool_decision, rule_id, reason_code, risk_score,"
+                    + "  tool_name, tool_args_hash, tool_args, tool_decision, rule_id, reason_code, risk_score,"
                     + "  tool_status, tool_duration_ms,"
                     + "  content_size, content_sampled, dlp_masked, occurred_at"
                     + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
@@ -65,13 +65,13 @@ public class TraceEventIngestor {
                     intVal(event.get("step_seq")),
                     str(event.get("step_type")),
                     strOr(event.get("layer"), "edge"),
-                    nullIfBlank(str(event.get("scene"))),
                     nullIfBlank(str(event.get("user_id"))),
                     nullIfBlank(str(event.get("device_id"))),
                     nullIfBlank(str(event.get("input_role"))),
                     nullIfBlank(str(event.get("input_content_hash"))),
                     nullIfBlank(str(event.get("tool_name"))),
                     nullIfBlank(str(event.get("tool_args_hash"))),
+                    toolArgs(event.get("tool_args")),
                     nullIfBlank(str(event.get("tool_decision"))),
                     nullIfBlank(str(event.get("rule_id"))),
                     nullIfBlank(str(event.get("reason_code"))),
@@ -148,6 +148,16 @@ public class TraceEventIngestor {
         if (o == null) return 0;
         if (o instanceof Boolean b) return b ? 1 : 0;
         return "true".equalsIgnoreCase(str(o)) ? 1 : 0;
+    }
+
+    private String toolArgs(Object o) {
+        if (o == null) return null;
+        try {
+            return mapper.writeValueAsString(o);
+        } catch (Exception e) {
+            log.debug("failed to serialize tool_args: {}", e.getMessage());
+            return null;
+        }
     }
 
     public record IngestResult(String status, String message) {

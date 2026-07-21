@@ -22,6 +22,7 @@ message EvaluateRequest {
   map<string, string> vars = 11;
   string tool_name = 12;       // tool being called (for challenge binding)
   string args_json = 13;      // serialized tool args (for challenge args_hash)
+  int32 risk_quota = 14;      // from License JWT (0 = unset, engine falls back to 100)
 }
 
 message Signal {

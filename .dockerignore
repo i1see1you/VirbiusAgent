@@ -1,0 +1,15 @@
+.git
+.gitignore
+target/
+**/target/
+data/
+*.md
+scripts/
+.github/
+.idea/
+.vscode/
+*.log
+*.db
+*.jsonl
+.dockerignore
+docker-compose.yml

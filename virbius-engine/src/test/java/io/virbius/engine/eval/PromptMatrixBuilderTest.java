@@ -22,7 +22,7 @@ class PromptMatrixBuilderTest {
         assertTrue(prompt.endsWith("<|im_start|>assistant\n"));
     }
 
-    // --- JSON 格式（通用模型 follow system prompt） ---
+    // --- JSON format (generic models following system prompt) ---
 
     @Test
     void parsesJsonHit() {
@@ -51,7 +51,7 @@ class PromptMatrixBuilderTest {
         assertFalse(r.hitRule());
     }
 
-    // --- Qwen3Guard 原生格式（Safety:/Categories:） ---
+    // --- Qwen3Guard native format (Safety:/Categories:) ---
 
     @Test
     void parsesQwen3GuardUnsafe() {
@@ -78,7 +78,7 @@ class PromptMatrixBuilderTest {
         assertEquals("PII", r.reason());
     }
 
-    // --- 异常输入 ---
+    // --- Edge cases ---
 
     @Test
     void returnsMissForEmptyInput() {

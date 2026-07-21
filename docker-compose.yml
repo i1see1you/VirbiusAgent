@@ -1,0 +1,119 @@
+# =============================================================================
+#  VirbiusAgent — Docker Compose
+#
+#  Starts the full stack: Redis → virbius-engine → virbius-control → proxy
+#
+#  Usage:
+#    docker compose build         # Build all images
+#    docker compose up -d         # Start all services
+#    docker compose ps            # Check status
+#    docker compose logs -f       # Follow logs
+#    docker compose down          # Stop all
+#
+#  To run only core services (no proxy):
+#    docker compose up -d redis virbius-engine virbius-control
+# =============================================================================
+
+services:
+
+  # ── Redis (required by engine + control + proxy) ────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── virbius-engine (security engine, port 8082) ─────────────────────────
+  virbius-engine:
+    build:
+      context: .
+      target: virbius-engine
+    ports:
+      - "8082:8082"
+    environment:
+      VIRBIUS_REDIS_URL: redis://redis:6379
+      VIRBIUS_CONTROL_BASE_URL: http://virbius-control:8080
+      VIRBIUS_DATA_DIR: /data
+      SPRING_PROFILES_ACTIVE: dev
+    volumes:
+      - engine-data:/data
+      - engine-logs:/var/log/virbius
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8082/admin/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── virbius-control (control plane, port 8080) ──────────────────────────
+  virbius-control:
+    build:
+      context: .
+      target: virbius-control
+    ports:
+      - "8080:8080"
+    environment:
+      VIRBIUS_REDIS_URL: redis://redis:6379
+      VIRBIUS_ENGINE_URL: http://virbius-engine:8082
+      VIRBIUS_DATA_DIR: /data
+      SPRING_PROFILES_ACTIVE: dev
+    volumes:
+      - control-data:/data
+      - control-logs:/var/log/virbius
+    depends_on:
+      redis:
+        condition: service_healthy
+      virbius-engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── virbius-mcp-proxy (MCP proxy, port 9090) ────────────────────────────
+  # Optional: start only when you need to proxy MCP tool calls.
+  # Requires a license key and an upstream MCP server to be useful.
+  virbius-mcp-proxy:
+    profiles:
+      - full              # Start with: docker compose --profile full up
+    build:
+      context: .
+      target: virbius-mcp-proxy
+    ports:
+      - "9090:9090"
+    environment:
+      VIRBIUS_TRANSPORT: sse
+      VIRBIUS_UPSTREAM_URL: ${VIRBIUS_UPSTREAM_URL:-http://host.docker.internal:8080}
+      VIRBIUS_CONTROL_URL: http://virbius-control:8080
+      VIRBIUS_ENGINE_URL: http://virbius-engine:8082
+      VIRBIUS_REDIS_URL: redis://redis:6379
+    volumes:
+      - proxy-logs:/var/log/virbius
+    depends_on:
+      redis:
+        condition: service_healthy
+      virbius-engine:
+        condition: service_healthy
+      virbius-control:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  engine-data:
+  engine-logs:
+  control-data:
+  control-logs:
+  proxy-logs:

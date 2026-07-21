@@ -1,10 +1,12 @@
 # Agent 安全防护 — 端管核云四层架构设计
 
+[English](DESIGN.md)
+
 | 项目 | 说明 |
 |------|------|
 | 文档版本 | v3.6 |
 | 状态 | 草案 |
-| 关联 | [README.md](README.md) |
+| 关联 | [README.zh.md](README.zh.md) |
 | 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
 
 ---
@@ -15,31 +17,31 @@
 
 | 文件 | 内容 | 简述 |
 |------|------|------|
-| **[ARCHITECTURE.md](ARCHITECTURE.md)** | §1 总体架构 · §2 端层 · §3 管层 · §4 核层 · §5 云层 | 四层架构核心设计（端管核云） |
-| **[PROTOCOL.md](PROTOCOL.md)** | §2.6 MCP Server 集成 · §2.6.1 MCP Proxy 完整技术方案 | MCP 协议代理、安全管线、会话管理、错误码 |
-| **[DEPLOYMENT.md](DEPLOYMENT.md)** | §8 部署视图 | 组件端口、部署拓扑（Sidecar / 远程 / SDK）、接入方式对比、四层全覆盖组合部署 |
-| **[ROADMAP.md](ROADMAP.md)** | §11 路线图 · 变更日志 | P0/P1/P2 分阶段规划 + 版本历史 |
-| **DESIGN.md**（本文件） | §6 跨层数据流 · §7 策略一致性 · §9 第三方依赖 · §10 与 VirbiusLLM 关系 · §12 风险评估 · §13 P1 详细设计 | 索引 + 跨层与辅助章节 |
+| **[ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)** | §1 总体架构 · §2 端层 · §3 管层 · §4 核层 · §5 云层 | 四层架构核心设计（端管核云） |
+| **[PROTOCOL.md](PROTOCOL.md)**（英文） | §2.6 MCP Server 集成 · §2.6.1 MCP Proxy 完整技术方案 | MCP 协议代理、安全管线、会话管理、错误码 |
+| **[DEPLOYMENT.zh.md](DEPLOYMENT.zh.md)** | §8 部署视图 | 组件端口、部署拓扑（Sidecar / 远程 / SDK）、接入方式对比、四层全覆盖组合部署 |
+| **[ROADMAP.md](ROADMAP.md)**（英文） | §11 路线图 · 变更日志 | P0/P1/P2 分阶段规划 + 版本历史 |
+| **DESIGN.zh.md**（本文件） | §6 跨层数据流 · §7 策略一致性 · §9 第三方依赖 · §10 与 VirbiusLLM 关系 · §12 风险评估 · §13 P1 详细设计 | 索引 + 跨层与辅助章节 |
 
 ## 目录
 
 | 章节 | 文件 |
 |------|------|
-| §1 总体架构 | [ARCHITECTURE.md](ARCHITECTURE.md#1-总体架构) |
-| §2 端层 — Agent 工具调用预检与执行 | [ARCHITECTURE.md](ARCHITECTURE.md#2-端层--agent-工具调用预检与执行) |
-| §2.6 MCP Server 集成（MCP Proxy） | [PROTOCOL.md](PROTOCOL.md) |
-| §3 管层 — Higress 南北向安全网关 | [ARCHITECTURE.md](ARCHITECTURE.md#3-管层--higress-南北向安全网关) |
-| §4 核层 — Falco 观测引擎 | [ARCHITECTURE.md](ARCHITECTURE.md#4-核层--falco-观测引擎) |
-| §5 云层 — 统一策略大脑 | [ARCHITECTURE.md](ARCHITECTURE.md#5-云层--统一策略大脑) |
+| §1 总体架构 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#1-总体架构) |
+| §2 端层 — Agent 工具调用预检与执行 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#2-端层--agent-工具调用预检与执行) |
+| §2.6 MCP Server 集成（MCP Proxy） | [PROTOCOL.md](PROTOCOL.md)（英文） |
+| §3 管层 — Higress 南北向安全网关 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#3-管层--higress-南北向安全网关) |
+| §4 核层 — Falco 观测引擎 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#4-核层--falco-观测引擎) |
+| §5 云层 — 统一策略大脑 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#5-云层--统一策略大脑) |
 | §6 跨层数据流 | [本文件 §6](#6-跨层数据流) |
 | §7 策略一致性 | [本文件 §7](#7-策略一致性) |
-| §8 部署视图（含接入方式对比 §8.3 + 四层全覆盖 §8.4） | [DEPLOYMENT.md](DEPLOYMENT.md) |
+| §8 部署视图（含接入方式对比 §8.3 + 四层全覆盖 §8.4） | [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) |
 | §9 第三方技术栈依赖与稳定性 | [本文件 §9](#9-第三方技术栈依赖与稳定性) |
 | §10 与 VirbiusLLM 的关系 | [本文件 §10](#10-与-virbiusllm-的关系) |
-| §11 路线图 | [ROADMAP.md](ROADMAP.md) |
+| §11 路线图 | [ROADMAP.md](ROADMAP.md)（英文） |
 | §12 Agent 安全风险评估框架 | [本文件 §12](#12-agent-安全风险评估框架) |
 | §13 P1 功能详细设计方案 | [本文件 §13](#13-p1-功能详细设计方案) |
-| 变更日志 | [ROADMAP.md](ROADMAP.md#变更日志) |
+| 变更日志 | [ROADMAP.md](ROADMAP.md#changelog)（英文） |
 
 ---
 
@@ -119,7 +121,7 @@ MCP Proxy -> Redis Trace Stream (virbius:trace) -> virbius-control TraceIngestSe
   "exec_time_ms": 12,
   "agent_pid": 12345,
   "session_id": "sess_xxx",
-  "falco_mode": "ebpf | plugin | userspace",
+  "falco_mode": "ebpf | userspace",
   "timestamp": "2026-07-06T10:00:00Z"
 }
 ```
@@ -278,7 +280,7 @@ virbius-control
 - virbius-engine — 云层终判
 
 **可降级(失败有 fallback)**：
-- Falco eBPF 驱动 -> userspace -> plugin 降级链
+- Falco eBPF 驱动 -> userspace 降级链（plugin 模式已在方案 A 中移除）
 - gVisor -> Landlock subprocess 降级
 - qwen3guard -> 任意 guard 模型
 
@@ -491,7 +493,7 @@ if session_risk > 30: 提升审计采样率
 |--------|------|------------------|
 | 应用层 | tool_call/tool_result 全链路 trace | MCP Proxy TraceCollector |
 | HTTP 层 | 请求级 allowlist/计数/阻断 | Higress WASM 插件 |
-| 内核层 | syscall/网络/文件事件 | Falco (eBPF/plugin 降级链) |
+| 内核层 | syscall/网络/文件事件 | Falco (eBPF) |
 | 内核层(P2) | 实时阻断 | Landlock + gVisor |
 
 #### 维度 5：审批与阻断能力（Enforcement）
@@ -586,10 +588,10 @@ if session_risk > 30: 提升审计采样率
 | Prompt 注入检测 | qwen3guard 小模型 | P1 | ✅ 已完成（详见 [§13.1](#131-prompt-注入检测)） |
 | 工具返回值检测 | STI Taint 语义审计 | P1 | ✅ 已完成（详见 [§13.2](#132-sti-taint-语义审计)） |
 | 会话风险 | Redis session risk + 自适应模型 | P0/P1 | ✅ 已完成（多维加权 + 衰减因子 + Redis 持久化，详见 [§13.3](#133-session-risk-自适应模型)） |
-| 运行时观测 | Falco eBPF + plugin 降级链 + 决策链路追踪 | P0/P1 | P0 ✅ / P1 待实现（详见 [§13.4](#134-自定义-virbius-audit-falco-插件--falco-规则库扩充)） |
+| 运行时观测 | Falco eBPF + http_output 三级关联 + 决策链路追踪 | P0/P1 | ✅ 已完成（自定义 Falco 插件已在方案 A 中移除；详见 [§13.4](#134-自定义-virbius-audit-falco-插件--falco-规则库扩充)） |
 | 高风险审批 | Challenge 全链路（create → approve → token verify） | P1 | ✅ 已完成 |
 | HTTP 阻断 | Higress WASM 403 + License 吊销 | P0 | ✅ 已完成 |
-| 内核级阻断 | Landlock + gVisor | P2 | 🔧 代码完成 + 编译通过（Rust `pre_exec` hook 实现 Landlock + capset + prctl）；待 Linux 运行时验证 + 集成测试（`landlock_applied` 当前由 ABI 推断，待 self-pipe 精确上报）（详见 [ARCHITECTURE.md §2.3-2.4](ARCHITECTURE.md#23-p2-landlock--drop-caps-子进程linux)） |
+| 内核级阻断 | Landlock + gVisor | P2 | 🔧 代码完成 + 编译通过（Rust `pre_exec` hook 实现 Landlock + capset + prctl）；待 Linux 运行时验证 + 集成测试（`landlock_applied` 当前由 ABI 推断，待 self-pipe 精确上报）（详见 [ARCHITECTURE.zh.md §2.3-2.4](ARCHITECTURE.zh.md#23-p2-landlock--drop-caps-子进程linux)） |
 | 审计完整性 | hash chain | P1 | ✅ 已完成（详见 [§13.5](#135-审计完整性hash-chain)） |
 | 供应链身份 | License 签发/校验/吊销 | P0 | ✅ 已完成 |
 | 记忆管控 | Memory Interceptor（PII 脱敏 + 凭据检测 + LLM 注入检测） | P1 | ✅ 已完成（写入拦截 ✅ + 读取拦截 ✅ + 框架集成 ✅，详见 [§13.6](#136-记忆管控memory-interceptor)） |
@@ -651,7 +653,7 @@ LASM 是一个 **7 层 × 4 类时间性**的网格：
 
 | LASM 层 | VirbiusAgent 能力 | 对应组件 | 设计章节 | 时间性覆盖 | 状态 |
 |---------|-------------------|---------|---------|-----------|------|
-| **L1 Foundation** | ⚠️ 不直接覆盖（模型安全属供应商责任） | — | — | — | ❌ 超出范围 |
+| **L1 Foundation** | 由 VirbiusLLM 平台覆盖（LLM 层安全：prompt 运行时内容审核、DLP、安全防护策略）；模型权重/训练管线安全属模型供应商责任 | VirbiusLLM 平台 | — | T1 | ✅ 基于 VirbiusLLM 已覆盖 |
 | | 宪法注入约束模型行为（间接缓解） | Prompt Gateway | §2.8 | T1 | 🔧 间接 |
 | **L2 Cognitive** | Prompt 注入检测（qwen3guard:0.6b） | Engine `PromptInjectionDetector` | §13.1 | T1 | ✅ 已完成 |
 | | **显式信任分层**（TrustTagger + TrustBoundaryInjector + TrustViolationDetector） | `virbius-core/src/trust.rs` + Engine | §13.10 | T1/T2 | ✅ 已完成 |
@@ -689,7 +691,7 @@ LASM 是一个 **7 层 × 4 类时间性**的网格：
 **按 LASM 七层**：
 
 ```
-L1 Foundation            ░░░░░░░░░░░░░░░░░░░░   5%   超出范围，仅宪法注入间接缓解
+L1 Foundation            ████████████████░░░░  80%   基于 VirbiusLLM 平台覆盖；权重/训练管线安全属模型供应商责任
 L2 Cognitive             ████████████████████  95%   信任分层 ✅ / 规划劫持 📋 后续规划
 L3 Memory                ████████████████████ 100%   写入拦截 ✅ / 读取拦截 ✅ / 框架集成 ✅
 L4 Tool Execution        ████████████████████ 100%   全链路覆盖
@@ -714,10 +716,10 @@ LASM 论文指出：**高层（Ecosystem、Governance）以及长周期、跨层
 | LASM 指出的空白格 | VirbiusAgent 缺口 | 补齐方案 | 优先级 |
 |------------------|-------------------|---------|--------|
 | **L5 Multi-Agent**（T2/T3） | 多 Agent 协同安全完全缺失 | A2A 消息链路验证 + 委派权限约束 + Agent 间信任传播追踪 | 低（后续规划，暂不实现） |
-| **L3 Memory**（T3 跨会话） | ✅ 已补齐：`intercept_read()` + LangChain/OpenAI SDK Wrapper | ✅ 已实现（详见 [§13.6](#136-记忆管控memory-interceptor)） | — |
 | **L2 Cognitive**（T2/T3 跨轮次） | 规划劫持检测未实现 | P1.11 `IntentAnchor` + `PlanDriftDetector` | 低（后续规划，暂不实现） |
 | **L6 Ecosystem**（T4） | MCP Server 完整性校验缺失 | MCP Server 来源签名验证 + AgentBOM 物料清单 | 中 |
-| **L1 Foundation**（T4） | 模型后门/训练数据污染无法检测 | 超出 VirbiusAgent 范围（属模型供应商责任） | 不适用 |
+| **L1 Foundation**（T4） | 模型后门/训练数据污染检测不在本项目建设范围 | 基于 VirbiusLLM 平台已覆盖（模型权重/训练管线安全主要属模型供应商责任） | Low |
+| **L1 Foundation**（T1 多模态） | 当前不支持多模态：多模态基础模型的对抗图像、图像越狱无法检测，且可向下穿透至 L2 认知层（图像内嵌指令经 VLM 读入上下文） | 多模态 guard 模型（图像+文本联合检测）；低成本过渡方案：OCR 预过滤提取图像文本后复用现有检测管线 | 中 |
 | **跨层传播**（T4） | 工具结果→记忆→规划的跨层传播追踪不足 | 跨层因果链追踪（复用 Trace Collector） | 中 |
 
 > **LASM 的核心启示**（论文原文）："Agent 安全不是'模型安全加一点工具风控'这么简单，而是一个典型的**分布式系统安全问题**。你必须看到组件边界，看到信任边界，看到时间维度，看到供应链，看到治理和问责，否则就很容易在低层做了很多防护，却在高层留下致命空洞。"
@@ -733,7 +735,7 @@ LASM 论文指出：**高层（Ecosystem、Governance）以及长周期、跨层
 ### 13.1 Prompt 注入检测
 
 > **实现位置**：`virbius-engine/src/main/java/io/virbius/engine/eval/PromptInjectionDetector.java`
-> **已有设计**：[ARCHITECTURE.md §2.8.7](ARCHITECTURE.md#287-prompt-入侵检测prompt-runtime-重新定位) 已包含完整设计。本节为现有实现说明。
+> **已有设计**：[ARCHITECTURE.zh.md §2.8.7](ARCHITECTURE.zh.md#287-prompt-注入检测prompt-runtime-重新定位) 已包含完整设计。本节为现有实现说明。
 
 #### 13.1.1 架构定位
 
@@ -817,7 +819,7 @@ public record DetectionResult(
 ### 13.2 STI Taint 语义审计
 
 > **实现位置**：`virbius-engine/src/main/java/io/virbius/engine/eval/StiTaintDetector.java`
-> **已有设计**：[ARCHITECTURE.md §5.4](ARCHITECTURE.md#54-语义审计--sti-协议) 已包含 STI 协议概述。以下为现有实现说明。
+> **已有设计**：[ARCHITECTURE.zh.md §5.4](ARCHITECTURE.zh.md#54-语义审计--sti-协议) 已包含 STI 协议概述。以下为现有实现说明。
 
 #### 13.2.1 设计目标
 
@@ -1880,7 +1882,7 @@ P1.10 和 P1.11 产生的 riskDelta 统一汇入 chain_anomaly 维度，
 > 2. 插件模式无 syscall 可见性，与 Falco 核心价值冲突
 > 3. 跨层关联通过 Engine `FalcoAlertController` 事后关联即可实现，不需要在 Falco 引擎内联合判断
 >
-> **替代方案**：Falco 退回纯系统级 syscall 观测，通过 `http_output` 将告警发送到 Engine，由 Engine 完成三级关联（pid → cgroup → ppid）和 session 风险评分。详见 [ARCHITECTURE.md §4.5](ARCHITECTURE.md#45-falco-plugin-模式已移除) 和 [§4.6 三级关联链](ARCHITECTURE.md#三级关联链p1-实现)。
+> **替代方案**：Falco 退回纯系统级 syscall 观测，通过 `http_output` 将告警发送到 Engine，由 Engine 完成三级关联（pid → cgroup → ppid）和 session 风险评分。详见 [ARCHITECTURE.zh.md §4.5](ARCHITECTURE.zh.md#45-falco-plugin-模式已移除) 和 [§4.6 三级关联链](ARCHITECTURE.zh.md#三级关联链p1-实现)。
 >
 > 以下为原插件设计（保留作为历史参考）：
 
@@ -1998,7 +2000,7 @@ plugins:
 **规则定义示例**：
 
 ```yaml
-# virbius-kernel/rules/virbius-agent-rules.yaml
+# 自定义 Falco 规则示例 — 由 config-subscriber 下发至 /etc/falco/falco_rules.d/
 
 - rule: agent_data_exfiltration_db_to_http
   desc: 检测数据库读取后外传模式（read_db → http_post to external）
@@ -2258,7 +2260,7 @@ virbius:
 
 ### 13.6 记忆管控（Memory Interceptor）
 
-> **已有设计**：[ARCHITECTURE.md §2.9](ARCHITECTURE.md#29-记忆管控memory-interceptor) 已包含完整设计（拦截点、框架集成、数据模型、策略配置）。以下为补充的实现细节。
+> **已有设计**：[ARCHITECTURE.zh.md §2.9](ARCHITECTURE.zh.md#29-记忆管控memory-interceptor) 已包含完整设计（拦截点、框架集成、数据模型、策略配置）。以下为补充的实现细节。
 
 #### 13.6.1 实现组件
 
@@ -2580,6 +2582,35 @@ fail_open = true            # Engine 不可用时是否放行
 
 ---
 
+### 13.8 P1 功能实现优先级
+
+基于风险评估框架的七维度分析，建议按以下优先级实现 P1 功能：
+
+| 优先级 | 功能 | 理由 | 依赖 |
+|--------|------|------|------|
+| **P1.1** | Prompt 注入检测（§13.1） | Prompt 注入是 Agent 最高频攻击面 | qwen3guard 模型部署 |
+| **P1.2** | STI Taint 语义审计（§13.2） | 工具返回值注入是第二大攻击入口 | 与 P1.1 共享模型 |
+| **P1.3** | Session Risk 自适应模型（§13.3） | 自适应评分是其他检测的联动基础 | 无 |
+| **P1.4** | 审计完整性 hash chain（§13.5） | 审计可信是安全合规的底线 | 无 |
+| **P1.5** | 输出审查（§13.7） | 覆盖最终输出安全 | 复用 P1.1/P1.2 的 Engine 规则管线（零新增端点） |
+| **P1.6** | 记忆管控（§13.6） | 记忆污染是持久化攻击 | 与 P1.1 共享模型 |
+| **P1.7** | virbius-audit Falco 插件（§13.4） | 增强内核级 Agent 专用检测 | Falco plugin SDK |
+| **P1.8** | Falco 规则库扩充（§13.4） | 配合 virbius-audit 插件 | 依赖 P1.7 |
+| **P1.10** | 显式信任分层（§13.10） | 补齐 LASM L2 数据/指令隔离缺口 | 无（零 LLM 调用） |
+
+> **📋 后续规划（暂不实现）**：
+>
+> | 规划项 | 功能 | 理由 | 依赖 |
+> |--------|------|------|------|
+> | P1.11 | 规划劫持检测（§13.11） | LASM L2 跨轮次规划偏转检测 | P1.3 Session Risk（复用风险分机制） |
+> | L5 Multi-Agent | 多 Agent 协同安全 | A2A 消息链路验证 + 委派权限约束 + 信任传播 | 架构升级为多 Agent |
+>
+> 优先级较低，设计已归档，待后续版本实现。
+
+> **关键路径**：P1.1 → P1.2 → P1.3 可并行推进，P1.4 独立。P1.5/P1.6 依赖 P1.1 的模型部署。P1.10 零 LLM 依赖，可立即推进。P1.11（规划劫持检测）与 L5 多 Agent 协同安全已降级为后续规划，暂不实现。
+
+---
+
 ### 13.9 累计计数器 Engine 侧 Ingest（A1）
 
 > **状态**：✅ 已完成
@@ -2711,35 +2742,6 @@ HGETALL session:{id}:tool_counts  → {read_file: 3, write_file: 5}
 | `ScriptRuleRunner` | 新增 `recordToolCall()` | 委托 SessionStatePreloader |
 | `SessionStatePreloader` | `preload()` 修复 | 新增 `HGETALL` 读取 toolCounts |
 | `SessionStatePreloader` | `recordToolCall()` 改造 | `HINCRBY` 替代 `INCR` |
-
----
-
-### 13.8 P1 功能实现优先级
-
-基于风险评估框架的七维度分析，建议按以下优先级实现 P1 功能：
-
-| 优先级 | 功能 | 理由 | 依赖 |
-|--------|------|------|------|
-| **P1.1** | Prompt 注入检测（§13.1） | Prompt 注入是 Agent 最高频攻击面 | qwen3guard 模型部署 |
-| **P1.2** | STI Taint 语义审计（§13.2） | 工具返回值注入是第二大攻击入口 | 与 P1.1 共享模型 |
-| **P1.3** | Session Risk 自适应模型（§13.3） | 自适应评分是其他检测的联动基础 | 无 |
-| **P1.4** | 审计完整性 hash chain（§13.5） | 审计可信是安全合规的底线 | 无 |
-| **P1.5** | 输出审查（§13.7） | 覆盖最终输出安全 | 复用 P1.1/P1.2 的 Engine 规则管线（零新增端点） |
-| **P1.6** | 记忆管控（§13.6） | 记忆污染是持久化攻击 | 与 P1.1 共享模型 |
-| **P1.7** | virbius-audit Falco 插件（§13.4） | 增强内核级 Agent 专用检测 | Falco plugin SDK |
-| **P1.8** | Falco 规则库扩充（§13.4） | 配合 virbius-audit 插件 | 依赖 P1.7 |
-| **P1.10** | 显式信任分层（§13.10） | 补齐 LASM L2 数据/指令隔离缺口 | 无（零 LLM 调用） |
-
-> **📋 后续规划（暂不实现）**：
->
-> | 规划项 | 功能 | 理由 | 依赖 |
-> |--------|------|------|------|
-> | P1.11 | 规划劫持检测（§13.11） | LASM L2 跨轮次规划偏转检测 | P1.3 Session Risk（复用风险分机制） |
-> | L5 Multi-Agent | 多 Agent 协同安全 | A2A 消息链路验证 + 委派权限约束 + 信任传播 | 架构升级为多 Agent |
->
-> 优先级较低，设计已归档，待后续版本实现。
-
-> **关键路径**：P1.1 → P1.2 → P1.3 可并行推进，P1.4 独立。P1.5/P1.6 依赖 P1.1 的模型部署。P1.10 零 LLM 依赖，可立即推进。P1.11（规划劫持检测）与 L5 多 Agent 协同安全已降级为后续规划，暂不实现。
 
 ---
 

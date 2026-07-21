@@ -49,20 +49,19 @@ flowchart TD
 
 ## Features
 
-| Capability | Phase | Description |
-|-----------|-------|-------------|
-| **MCP Secure Proxy** | P0 | stdio/SSE proxy + security pipeline (License + allowlist + engine adjudication) + multi-upstream routing |
-| **Fast Path** | P0/P1 | Bypass cloud layer for low-risk tools, latency optimization |
-| **Decision Trace** | P1 | Full-chain tool_call/tool_result tracing, session timeline + causal chain visualization |
-| **Human Approval** | P1 | High-risk tool approval flow: engine challenge → console approve → token-gated execution |
-| **Audit Dashboard** | P1 | Session risk, tool calls, alerts, approval queue, decision trace visualization |
-| **Prompt Injection Detection** | P1 | Multi-LLM prompt injection detection with dynamic risk scoring |
-| **STI Taint Tracking** | P1 | Track untrusted outputs across tool chains, prevent data leakage |
-| **Hash Chain Audit** | P1 | Tamper-proof audit log with SHA-256 hash chain integrity verification |
-| **Memory Interceptor** | P1/P2 | Desensitize sensitive data written to Agent memory |
-| **Output Review** | P1/P2 | PII/credential leak detection in tool return values |
-| **Falco Rules Management** | P1 | Custom eBPF rules managed through console with canary deployment |
-| **Kernel Sandboxing** | P2 | Landlock + gVisor process isolation for high-risk tool execution |
+| Capability | Description |
+|-----------|-------------|
+| **MCP Secure Proxy** | stdio/SSE proxy + security pipeline (License + allowlist + engine adjudication) + multi-upstream routing |
+| **Fast Path** | Bypass cloud layer for low-risk tools, latency optimization |
+| **Decision Trace** | Full-chain tool_call/tool_result tracing, session timeline + causal chain visualization |
+| **Human Approval** | High-risk tool approval flow: engine challenge → console approve → token-gated execution |
+| **Audit Dashboard** | Session risk, tool calls, alerts, approval queue, decision trace visualization |
+| **Prompt Injection Detection** | Multi-LLM prompt injection detection with dynamic risk scoring |
+| **STI Taint Tracking** | Track untrusted outputs across tool chains, prevent data leakage |
+| **Hash Chain Audit** | Tamper-proof audit log with SHA-256 hash chain integrity verification |
+| **Memory Interceptor** | Desensitize sensitive data written to Agent memory |
+| **Output Review** | PII/credential leak detection in tool return values |
+| **Falco Rules Management** | Custom eBPF rules managed through console with canary deployment |
 
 ## Quick Start
 
@@ -115,16 +114,14 @@ virbius-core = { git = "https://github.com/i1see1you/VirbiusAgent" }
 ```
 
 ```bash
-# Offline demo with fixture manifest
+# Run the end-to-end integration tests (no external services required)
 cd virbius-core
-cargo run --example rust_client_demo
-
-# Control sync (after run-local.sh + publishing edge rules)
-export VIRBIUS_CONTROL_BASE_URL=http://127.0.0.1:8080
-export VIRBIUS_TENANT_ID=default
-export VIRBIUS_APP_ID=beta
-cargo run --example rust_client_demo
+cargo test --test e2e_integration -- --nocapture
 ```
+
+The suite walks through the full edge-layer security pipeline: License
+verification → tool precheck → Prompt Gateway → MCP execution → STI taint
+detection → audit trace propagation.
 
 ## Deployment Architecture
 
