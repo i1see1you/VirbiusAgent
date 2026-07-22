@@ -5,7 +5,7 @@
 | 项目 | 说明 |
 |------|------|
 | 文档版本 | v3.6 |
-| 状态 | 草案 |
+| 状态 | 正式 |
 | 关联 | [README.zh.md](README.zh.md) |
 | 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
 
@@ -18,9 +18,9 @@
 | 文件 | 内容 | 简述 |
 |------|------|------|
 | **[ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)** | §1 总体架构 · §2 端层 · §3 管层 · §4 核层 · §5 云层 | 四层架构核心设计（端管核云） |
-| **[PROTOCOL.md](PROTOCOL.md)**（英文） | §2.6 MCP Server 集成 · §2.6.1 MCP Proxy 完整技术方案 | MCP 协议代理、安全管线、会话管理、错误码 |
+| **[PROTOCOL.zh.md](PROTOCOL.zh.md)** | §2.6 MCP Server 集成 · §2.6.1 MCP Proxy 完整技术方案 | MCP 协议代理、安全管线、会话管理、错误码 |
 | **[DEPLOYMENT.zh.md](DEPLOYMENT.zh.md)** | §8 部署视图 | 组件端口、部署拓扑（Sidecar / 远程 / SDK）、接入方式对比、四层全覆盖组合部署 |
-| **[ROADMAP.md](ROADMAP.md)**（英文） | §11 路线图 · 变更日志 | P0/P1/P2 分阶段规划 + 版本历史 |
+| **[README.zh.md](README.zh.md)** | 快速开始 + 项目概览 | 架构、核心能力、对比、部署 |
 | **DESIGN.zh.md**（本文件） | §6 跨层数据流 · §7 策略一致性 · §9 第三方依赖 · §10 与 VirbiusLLM 关系 · §12 风险评估 · §13 P1 详细设计 | 索引 + 跨层与辅助章节 |
 
 ## 目录
@@ -29,8 +29,8 @@
 |------|------|
 | §1 总体架构 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#1-总体架构) |
 | §2 端层 — Agent 工具调用预检与执行 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#2-端层--agent-工具调用预检与执行) |
-| §2.6 MCP Server 集成（MCP Proxy） | [PROTOCOL.md](PROTOCOL.md)（英文） |
-| §3 管层 — Higress 南北向安全网关 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#3-管层--higress-南北向安全网关) |
+| §2.6 MCP Server 集成（MCP Proxy） | [PROTOCOL.zh.md](PROTOCOL.zh.md) |
+| §3 管层 — Higress 南北向安全网关（含 §3.6 网关可移植性） | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#3-管层--higress-南北向安全网关) |
 | §4 核层 — Falco 观测引擎 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#4-核层--falco-观测引擎) |
 | §5 云层 — 统一策略大脑 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md#5-云层--统一策略大脑) |
 | §6 跨层数据流 | [本文件 §6](#6-跨层数据流) |
@@ -38,10 +38,10 @@
 | §8 部署视图（含接入方式对比 §8.3 + 四层全覆盖 §8.4） | [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) |
 | §9 第三方技术栈依赖与稳定性 | [本文件 §9](#9-第三方技术栈依赖与稳定性) |
 | §10 与 VirbiusLLM 的关系 | [本文件 §10](#10-与-virbiusllm-的关系) |
-| §11 路线图 | [ROADMAP.md](ROADMAP.md)（英文） |
+| §11 路线图 | [CHANGELOG.md](CHANGELOG.md)（英文） |
 | §12 Agent 安全风险评估框架 | [本文件 §12](#12-agent-安全风险评估框架) |
 | §13 P1 功能详细设计方案 | [本文件 §13](#13-p1-功能详细设计方案) |
-| 变更日志 | [ROADMAP.md](ROADMAP.md#changelog)（英文） |
+| 变更日志 | [CHANGELOG.md](CHANGELOG.md)（英文） |
 
 ---
 
@@ -243,7 +243,7 @@ virbius-control
 | 端 | drop caps | capabilities 丢弃(P2) | 极稳定(内核 2.2, 1999) | 无 |
 | 端 | gVisor | 不可信代码沙箱(P2) | 稳定(Google, GKE 使用) | Kata Containers |
 | 端 | PyO3 / napi-rs | Rust<->Python/Node 绑定 | 稳定(广泛使用) | subprocess |
-| 管 | Higress + WASM | AI 网关 + 安全插件 | 稳定(基于 Envoy, 阿里巴巴生产) | APISIX / Envoy |
+| 管 | Higress + WASM | AI 网关 + 安全插件 | 稳定(基于 Envoy, 阿里巴巴生产) | APISIX / Kong / Envoy — 见 [§3.6](ARCHITECTURE.zh.md#36-网关可移植性--切换其他-mcp-网关) |
 | 核 | eBPF + BTF/CO-RE | 内核观测 | 极稳定(行业标准) | 无 |
 | 核 | Falco | 观测引擎(CNCF 毕业) | 极稳定(CNCF Graduated) | Tracee |
 | 云 | Groovy | L3 规则脚本 | 稳定但 declining(Apache) | Python sandbox |
@@ -260,7 +260,7 @@ virbius-control
 
 | 技术 | 风险 | 缓解 |
 |------|------|------|
-| Higress/Envoy | Envoy 社区活跃; WASM 生态发展中 | 核心功能已稳定; WASM 插件可跨网关移植 |
+| Higress/Envoy | Envoy 社区活跃; WASM 生态发展中 | 核心功能已稳定; WASM 插件可跨网关移植; 切换指南见 [§3.6](ARCHITECTURE.zh.md#36-网关可移植性--切换其他-mcp-网关)（约 550 行, 1–2 人天） |
 | Falco | 4 套驱动维护负担; kmod 驱动将弃用 | 只用 eBPF + plugin 两种 |
 | gVisor | Google 依赖; 性能开销 | P2 才引入; Kata 备选 |
 
@@ -276,7 +276,7 @@ virbius-control
 
 **不可替代(失败则系统不可用)**：
 - Redis — session 状态 + 审计流(建议 Sentinel/Cluster)
-- Higress — 管层全部安全检查(可迁 APISIX/Envoy)
+- Higress — 管层全部安全检查(可迁 APISIX/Kong/Envoy, 见 [§3.6](ARCHITECTURE.zh.md#36-网关可移植性--切换其他-mcp-网关))
 - virbius-engine — 云层终判
 
 **可降级(失败有 fallback)**：
@@ -669,7 +669,7 @@ LASM 是一个 **7 层 × 4 类时间性**的网格：
 | **L4 Tool Execution** | 端层预检（参数校验 + allowlist + JSON Schema） | `virbius-core` + `virbius-mcp-proxy` | §2.1 | T1 | ✅ 已完成 |
 | | 管层 WASM（allowlist + 计数 + 快速通道） | `virbius-gateway/wasm/` | §3.2 | T1 | ✅ 已完成 |
 | | 云层 Groovy L3 终判（工具链检测） | `virbius-groovy-l3` + Engine | §5.3 | T1/T2 | ✅ 已完成 |
-| | 高风险人工审批（Challenge 全链路） | Engine + Control Dashboard | PROTOCOL.md | T1 | ✅ 已完成 |
+| | 高风险人工审批（Challenge 全链路） | Engine + Control Dashboard | PROTOCOL.zh.md | T1 | ✅ 已完成 |
 | | 累计计数器（双层计数） | Engine `CounterStore.ingest` | §13.9 | T1/T2 | ✅ 已完成 |
 | | 内核级沙箱（Landlock + capset + prctl + gVisor） | `virbius-core/src/sandbox/landlock.rs` | §2.3/§2.4 | T1 | ✅ 已实现 |
 | | 输出审查（工具结果 + Agent 最终响应） | MCP Proxy → Engine `/v1/evaluate` | §13.7 | T1 | ✅ 工具结果审查完成；Agent 最终输出待集成 |
@@ -997,7 +997,7 @@ decay(stored_value, elapsed_minutes) = stored_value × exp(-elapsed_minutes / 30
 | `tool_weight` | `Σ(tool_risk_class(tool) × round(log(call_count + 1)))` | 0-∞ | 对数累积，避免线性爆炸（详见 §13.3.3） |
 | `chain_anomaly` | `Σ(L3 规则命中风险增量)` | 0-∞ | Groovy L3 工具链异常检测，每次命中累加（详见 §13.3.4） |
 | `prompt_injection` | `命中次数 × 15` | 0-∞ | 每次 Prompt 注入命中加 15 分 |
-| `falco_alert` | `告警数 × 10` | 0-∞ | 每次 Falco 告警加 10 分（详见 §13.3.9） |
+| `falco_alert` | `告警数 × 10` | 0-∞ | 每次 Falco 告警加 10 分（详见 §13.3.10） |
 
 ##### 工具风险等级权重
 
@@ -1198,7 +1198,89 @@ int applyDecay(int storedValue, long elapsedMinutes) {
 }
 ```
 
-#### 13.3.5 完整评分算法
+#### 13.3.5 Intent-Action 加权累积（P2）
+
+##### 设计动机
+
+`chain_anomaly` 维度在 P1 中按规则 `risk_score` 全量累积，导致：
+- **challenge 触发 2 次即超限**：`risk_score=100` 的 challenge 规则命中 2 次后 `chain=200`，加上 `base_risk + tool_weight` 远超 `risk_quota=60`，Agent 后续所有调用被 `risk_threshold` 阻断。
+- **审批后重试被阻断**：challenge 审批通过后 Engine 虽返回 `allow`（豁免），但 MCP Proxy 检查 `session_risk_score ≥ risk_quota` 仍然 deny。
+
+P2 引入 **按 `intent_action` 加权累积**，使不同严重程度的规则命中产生不同幅度的风险分增长：
+
+| `intent_action` | 权重 | 含义 | 示例 |
+|---|---|---|---|
+| `block` / `deny` | **0.5** | 确认恶意 → 50% 累积 | risk_score=100 → chainDelta=50 |
+| `challenge` | **0.1** | 可疑未确认 → 10% 累积 | risk_score=100 → chainDelta=10 |
+| `review` | **0.0** | 仅建议审查 → 不累积 | risk_score=100 → chainDelta=0 |
+| `allow` | **0.0** | 规则放行 → 不累积 | — |
+
+##### 配置方式
+
+在 `application.yml` 中配置：
+
+```yaml
+virbius:
+  session-risk:
+    intent-weight:
+      block: 0.5        # 确认恶意 → 50% 累积
+      challenge: 0.1    # 可疑未确认 → 10% 累积
+      review: 0.0       # 建议审查 → 不累积
+      allow: 0.0        # 规则放行 → 不累积
+```
+
+也可通过 `@Value` 注解的默认值兜底（`virbius.session-risk.intent-weight.block:0.5` 等）。
+
+##### 计算逻辑
+
+`EvaluateOrchestrator` 在计算 `chainDelta` 时，对每个非 `PROMPT_INJECTION` 的 Signal 按其 `intentAction` 加权：
+
+```java
+int chainDelta = exempted ? 0 : signals.stream()
+    .filter(s -> s.ruleId() != null
+            && !"PROMPT_INJECTION".equals(s.ruleId())
+            && s.score() > 0)
+    .mapToInt(s -> {
+        double weight = switch (s.intentAction() == null ? "allow" : s.intentAction().toLowerCase()) {
+            case "deny", "block" -> blockWeight;      // 0.5
+            case "challenge" -> challengeWeight;       // 0.1
+            case "review" -> reviewWeight;             // 0.0
+            default -> allowWeight;                    // 0.0
+        };
+        return (int) Math.round(s.score() * weight);
+    })
+    .sum();
+```
+
+##### Challenge 豁免跳过累积
+
+当同一 session + 工具 + 参数的 challenge 已被审批通过（存在有效豁免记录），Engine 将 `effective_action` 从 `challenge` 改为 `allow`，并跳过 `chain_anomaly` 累积（`chainDelta = 0`），避免审批后重试仍因风险分累积而被阻断。
+
+```java
+boolean exempted = "challenge".equalsIgnoreCase(effectiveAction)
+        && challengeService.hasActiveExemption(sessionId, toolName, argsHash);
+if (exempted) {
+    effectiveAction = "allow";
+}
+int chainDelta = exempted ? 0 : weightedChainDelta(signals);
+```
+
+##### 计算示例
+
+**场景**：规则 `query_audit_block`（`risk_score=100`, `intent_action=challenge`），License `risk_quota=60`。
+
+| 调用次数 | chainDelta | chain_anomaly | base_risk | tool_weight | total | 是否超限 |
+|---|---|---|---|---|---|---|
+| 1 次 challenge | round(100×0.1)=10 | 10 | 6 | 1 | **17** | 否 |
+| 2 次 challenge | 10 | 20 | 6 | 1 | **27** | 否 |
+| 3 次 challenge | 10 | 30 | 6 | 1 | **37** | 否 |
+| 4 次 challenge | 10 | 40 | 6 | 1 | **47** | 否 |
+| 5 次 challenge | 10 | 50 | 6 | 1 | **57** | 否（接近 60） |
+| 6 次 challenge | 10 | 60 | 6 | 1 | **67** | **是** |
+
+相比 P1（权重 1.0）时 1 次即 `chain=100` → 秒断，P2 给了 6 次重试空间。
+
+#### 13.3.6 完整评分算法
 
 ##### 输入模型
 
@@ -1321,7 +1403,7 @@ function updateRiskScore(sessionId, input):
    38 > 30 → 提升审计采样率到 50%
 ```
 
-#### 13.3.6 SessionRiskManager 组件设计
+#### 13.3.7 SessionRiskManager 组件设计
 
 ```java
 /**
@@ -1543,7 +1625,7 @@ public class SessionRiskManager {
 }
 ```
 
-#### 13.3.7 Redis 数据结构
+#### 13.3.8 Redis 数据结构
 
 ##### 新增 Key
 
@@ -1601,7 +1683,7 @@ Pipeline:
 → 1 次 Redis 往返
 ```
 
-#### 13.3.8 阈值动作与响应机制
+#### 13.3.9 阈值动作与响应机制
 
 | 阈值 | 动作 | 实现机制 | 读取方 |
 |------|------|---------|--------|
@@ -1648,7 +1730,7 @@ public record EvaluateResponseDto(
     String argsHash) {}
 ```
 
-#### 13.3.9 与现有组件集成方案
+#### 13.3.10 与现有组件集成方案
 
 ##### 集成点 1：EvaluateOrchestrator.evaluate()
 
@@ -1815,7 +1897,7 @@ Falco (async):
       → 下次 updateRiskScore() 消费
 ```
 
-#### 13.3.10 配置项
+#### 13.3.11 配置项
 
 ```yaml
 virbius:
@@ -1844,7 +1926,7 @@ virbius:
     threshold-flag-ttl-seconds: 300        # 阈值标志 TTL（5 分钟）
 ```
 
-#### 13.3.11 成本分析
+#### 13.3.12 成本分析
 
 | 操作 | 机制 | Redis 调用 | 延迟 |
 |------|------|-----------|------|
@@ -1857,7 +1939,7 @@ virbius:
 
 > 与现有 `incrementRiskScore()` 的 1 次 `INCRBY`（~0.5ms）相比，增加 ~1.5ms 延迟，但获得了多维评分 + 时间衰减 + 维度明细的能力。
 
-#### 13.3.12 与 P1.10/P1.11 的协同
+#### 13.3.13 与 P1.10/P1.11 的协同
 
 ```
 SessionRiskManager（§13.3）

@@ -11,25 +11,47 @@
   let currentTenant = 'default';
 
   function init() {
-    const tab = document.getElementById('tab-challenge');
-    if (!tab) return;
+    // The challenge panel element (id="panel-challenge") — if it doesn't
+    // exist, this page doesn't include the challenge UI, so bail out.
+    const panel = document.getElementById('panel-challenge');
+    if (!panel) return;
 
-    // Start polling when tab becomes active
-    document.querySelectorAll('.tab-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        if (btn.dataset.tab === 'challenge') {
-          startPolling();
-        } else {
-          stopPolling();
-        }
-      });
+    // Start/stop polling based on which panel is shown.
+    // ops-nav.js dispatches a 'panel-show' CustomEvent with
+    // detail = 'panel-<tab>' whenever the user switches tabs.
+    document.addEventListener('panel-show', (e) => {
+      if (e.detail === 'panel-challenge') {
+        startPolling();
+      } else {
+        stopPolling();
+      }
     });
+
+    // If the challenge panel is already active on page load, start polling.
+    if (panel.classList.contains('active')) {
+      startPolling();
+    }
 
     // Refresh button
     const refreshBtn = document.getElementById('chRefresh');
     if (refreshBtn) {
       refreshBtn.addEventListener('click', loadChallenges);
     }
+
+    // Sub-tab switching (pending / approved)
+    const subTabs = panel.querySelectorAll('.sub-tab[data-subtab]');
+    subTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        const target = tab.getAttribute('data-subtab');
+        // toggle tab active state
+        subTabs.forEach(t => t.classList.toggle('active', t === tab));
+        // toggle sub-panel visibility
+        const pendingPanel = document.getElementById('chSubPending');
+        const approvedPanel = document.getElementById('chSubApproved');
+        if (pendingPanel) pendingPanel.classList.toggle('active', target === 'pending');
+        if (approvedPanel) approvedPanel.classList.toggle('active', target === 'approved');
+      });
+    });
   }
 
   function startPolling() {
@@ -47,19 +69,28 @@
 
   async function loadChallenges() {
     try {
-      const resp = await fetch(`/api/v1/challenges?tenant_id=${currentTenant}&status=pending&max=50`);
-      if (!resp.ok) {
+      const [pendingResp, approvedResp] = await Promise.all([
+        fetch(`/api/v1/challenges?tenant_id=${currentTenant}&status=pending&max=50`),
+        fetch(`/api/v1/challenges?tenant_id=${currentTenant}&status=approved&max=50`),
+      ]);
+
+      if (!pendingResp.ok) {
         showEmpty('Failed to load challenges');
         return;
       }
-      const challenges = await resp.json();
-      renderChallenges(challenges);
+      const pending = await pendingResp.json();
+      renderPending(pending);
+
+      if (approvedResp.ok) {
+        const approved = await approvedResp.json();
+        renderApproved(approved);
+      }
     } catch (e) {
       showEmpty('Connection error: ' + e.message);
     }
   }
 
-  function renderChallenges(challenges) {
+  function renderPending(challenges) {
     const tbody = document.getElementById('chQueueBody');
     const countEl = document.getElementById('chPendingCount');
     if (!tbody) return;
@@ -76,11 +107,8 @@
     tbody.innerHTML = challenges.map(ch => {
       const created = formatTime(ch.created_at);
       const expires = formatTime(ch.expires_at);
-      const riskBadge = ch.risk_score >= 80
-        ? '<span class="badge badge-danger">Critical</span>'
-        : ch.risk_score >= 50
-        ? '<span class="badge badge-warning">High</span>'
-        : '<span class="badge badge-info">Medium</span>';
+      const riskBadge = riskBadgeHTML(ch.risk_score);
+      const isExpired = ch.expires_at && (Date.now() / 1000) > ch.expires_at;
 
       return `<tr data-challenge-id="${esc(ch.challenge_id)}">
         <td><code>${esc(ch.challenge_id)}</code></td>
@@ -89,13 +117,54 @@
         <td><code>${esc(ch.rule_id || '-')}</code></td>
         <td>${esc(ch.session_id ? ch.session_id.substring(0, 12) + '...' : '-')}</td>
         <td>${created}</td>
-        <td>${expires}</td>
+        <td>${isExpired ? '<span style="color:#dc2626">' + expires + '</span>' : expires}</td>
         <td class="action-cell">
-          <button class="btn btn-sm btn-success" onclick="challengeApprove('${esc(ch.challenge_id)}')">Approve</button>
-          <button class="btn btn-sm btn-danger" onclick="challengeReject('${esc(ch.challenge_id)}')">Reject</button>
+          ${isExpired ? '<span class="muted">已过期</span>' : `<button class="btn btn-sm btn-success" onclick="challengeApprove('${esc(ch.challenge_id)}')">Approve</button>
+          <button class="btn btn-sm btn-danger" onclick="challengeReject('${esc(ch.challenge_id)}')">Reject</button>`}
         </td>
       </tr>`;
     }).join('');
+  }
+
+  function renderApproved(challenges) {
+    const tbody = document.getElementById('chApprovedBody');
+    const countEl = document.getElementById('chApprovedCount');
+    if (!tbody) return;
+
+    if (countEl) {
+      countEl.textContent = challenges.length;
+    }
+
+    if (!challenges || challenges.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No approved challenges</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = challenges.map(ch => {
+      const created = formatTime(ch.created_at);
+      const riskBadge = riskBadgeHTML(ch.risk_score);
+      const approvedAt = ch.approved_at ? formatTime(ch.approved_at) : '-';
+      const approvedBy = esc(ch.approved_by || '-');
+
+      return `<tr>
+        <td><code>${esc(ch.challenge_id)}</code></td>
+        <td><strong>${esc(ch.tool_name || 'N/A')}</strong></td>
+        <td>${riskBadge} <span class="muted">(${ch.risk_score || 0})</span></td>
+        <td><code>${esc(ch.rule_id || '-')}</code></td>
+        <td>${esc(ch.session_id ? ch.session_id.substring(0, 12) + '...' : '-')}</td>
+        <td>${created}</td>
+        <td>${approvedBy}</td>
+        <td>${approvedAt}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  function riskBadgeHTML(score) {
+    return score >= 80
+      ? '<span class="badge badge-danger">Critical</span>'
+      : score >= 50
+      ? '<span class="badge badge-warning">High</span>'
+      : '<span class="badge badge-info">Medium</span>';
   }
 
   function showEmpty(msg) {

@@ -229,8 +229,9 @@ pub type SharedTraceCollector = Arc<TraceCollector>;
 
 async fn redis_trace_worker(url: String, mut rx: mpsc::Receiver<TraceEvent>) {
     debug!("trace redis worker started");
+    let addr = parse_redis_addr(&url);
     loop {
-        match tokio::net::TcpStream::connect(&url).await {
+        match tokio::net::TcpStream::connect(addr).await {
             Ok(stream) => {
                 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
                 let (reader, mut writer) = stream.into_split();
@@ -309,6 +310,19 @@ async fn kafka_trace_worker(brokers: String, topic: String, mut rx: mpsc::Receiv
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
+/// Parse a Redis address string into a `SocketAddr`.
+///
+/// Accepts both `host:port` and `redis://host:port` formats.
+/// Parsing as `SocketAddr` avoids going through the system DNS resolver
+/// (which can fail spuriously on macOS for literal IPs).
+fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
+    let raw = url.strip_prefix("redis://").unwrap_or(url);
+    raw.parse::<std::net::SocketAddr>()
+        .unwrap_or_else(|e| {
+            panic!("invalid Redis address '{url}': {e}. Expected 'host:port' or 'redis://host:port'")
+        })
+}
+
 fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
@@ -322,4 +336,170 @@ fn hex_encode(bytes: &[u8]) -> String {
         s.push_str(&format!("{:02x}", b));
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::Session;
+
+    fn make_session() -> Session {
+        let meta = serde_json::json!({
+            "session_id": "trace-sid",
+            "app_id": "trace-app",
+            "tenant_id": "trace-tenant",
+        });
+        Session::from_meta(&meta)
+    }
+
+    #[test]
+    fn test_step_type_as_str() {
+        assert_eq!(StepType::Input.as_str(), "input");
+        assert_eq!(StepType::Reasoning.as_str(), "reasoning");
+        assert_eq!(StepType::ToolCall.as_str(), "tool_call");
+        assert_eq!(StepType::ToolResult.as_str(), "tool_result");
+        assert_eq!(StepType::Output.as_str(), "output");
+        assert_eq!(StepType::MemoryWrite.as_str(), "memory_write");
+    }
+
+    #[test]
+    fn test_step_type_debug() {
+        assert_eq!(format!("{:?}", StepType::ToolCall), "ToolCall");
+    }
+
+    #[test]
+    fn test_step_type_partial_eq() {
+        assert_eq!(StepType::Input, StepType::Input);
+        assert_ne!(StepType::Input, StepType::Output);
+    }
+
+    #[test]
+    fn test_trace_event_tool_call() {
+        let session = make_session();
+        let args = serde_json::json!({"path": "/tmp/test.txt"});
+        let event = TraceEvent::tool_call(&session, "step-1", Some("parent-0"), 1, "read_file", &args);
+        assert_eq!(event.trace_id, session.trace_id);
+        assert_eq!(event.session_id, "trace-sid");
+        assert_eq!(event.step_id, "step-1");
+        assert_eq!(event.parent_step_id.as_deref(), Some("parent-0"));
+        assert_eq!(event.step_seq, 1);
+        assert_eq!(event.step_type, "tool_call");
+        assert_eq!(event.layer, "edge");
+        assert_eq!(event.tool_name.as_deref(), Some("read_file"));
+        assert!(event.tool_args_hash.is_some());
+        assert_eq!(event.tool_args, Some(args));
+        assert!(event.tool_decision.is_none());
+        assert!(event.content_sampled);
+    }
+
+    #[test]
+    fn test_trace_event_tool_call_no_parent() {
+        let session = make_session();
+        let event = TraceEvent::tool_call(&session, "step-1", None, 0, "shell", &serde_json::json!({"cmd":"ls"}));
+        assert!(event.parent_step_id.is_none());
+    }
+
+    #[test]
+    fn test_trace_event_tool_result() {
+        let session = make_session();
+        let result = serde_json::json!({"stdout": "ok"});
+        let event = TraceEvent::tool_result(&session, "step-2", "step-1", 2, "success", 150, &result);
+        assert_eq!(event.step_id, "step-2");
+        assert_eq!(event.parent_step_id.as_deref(), Some("step-1"));
+        assert_eq!(event.step_seq, 2);
+        assert_eq!(event.step_type, "tool_result");
+        assert_eq!(event.tool_status.as_deref(), Some("success"));
+        assert_eq!(event.tool_duration_ms, Some(150));
+        assert_eq!(event.tool_result_preview.as_deref(), Some(r#"{"stdout":"ok"}"#));
+        assert!(event.tool_name.is_none());
+        assert!(event.tool_args.is_none());
+    }
+
+    #[test]
+    fn test_trace_event_tool_result_long_preview_truncated() {
+        let session = make_session();
+        let long_content = "x".repeat(3000);
+        let result = serde_json::json!({"data": long_content});
+        let event = TraceEvent::tool_result(&session, "step-3", "step-2", 3, "success", 500, &result);
+        let preview = event.tool_result_preview.unwrap();
+        assert!(preview.len() <= 2048);
+    }
+
+    #[test]
+    fn test_trace_event_with_decision() {
+        let session = make_session();
+        let event = TraceEvent::tool_call(&session, "step-1", None, 0, "rm", &serde_json::json!({}))
+            .with_decision("block", Some("rule-42"), Some("high_risk"), Some(85));
+        assert_eq!(event.tool_decision.as_deref(), Some("block"));
+        assert_eq!(event.rule_id.as_deref(), Some("rule-42"));
+        assert_eq!(event.reason_code.as_deref(), Some("high_risk"));
+        assert_eq!(event.risk_score, Some(85));
+    }
+
+    #[test]
+    fn test_trace_event_with_decision_none_fields() {
+        let session = make_session();
+        let event = TraceEvent::tool_call(&session, "step-1", None, 0, "ls", &serde_json::json!({}))
+            .with_decision("allow", None, None, None);
+        assert_eq!(event.tool_decision.as_deref(), Some("allow"));
+        assert!(event.rule_id.is_none());
+        assert!(event.reason_code.is_none());
+        assert!(event.risk_score.is_none());
+    }
+
+    #[test]
+    fn test_sha256_hex_format() {
+        let hash = sha256_hex("trace-data");
+        assert!(hash.starts_with("sha256:"));
+        assert_eq!(hash.len(), 71);
+    }
+
+    #[test]
+    fn test_sha256_hex_deterministic() {
+        assert_eq!(sha256_hex("abc"), sha256_hex("abc"));
+        assert_ne!(sha256_hex("abc"), sha256_hex("xyz"));
+    }
+
+    #[test]
+    fn test_hex_encode() {
+        assert_eq!(hex_encode(b"\xde\xad\xbe\xef"), "deadbeef");
+        assert_eq!(hex_encode(b""), "");
+        assert_eq!(hex_encode(b"\x00\xff"), "00ff");
+    }
+
+    #[test]
+    fn test_trace_collector_disabled() {
+        let collector = TraceCollector::new(TraceBackend::Disabled);
+        // Should not panic when recording
+        let session = make_session();
+        let event = TraceEvent::tool_call(&session, "step-1", None, 0, "test", &serde_json::json!({}));
+        // We can't easily assert on the internal sender, but ensure no panic
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            collector.record(event).await;
+        });
+    }
+
+    #[test]
+    fn test_trace_event_json_serialization() {
+        let session = make_session();
+        let event = TraceEvent::tool_call(&session, "s1", None, 1, "read_file", &serde_json::json!({"p":"/x"}));
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["step_id"], "s1");
+        assert_eq!(json["step_type"], "tool_call");
+        assert_eq!(json["tool_name"], "read_file");
+        assert_eq!(json["layer"], "edge");
+    }
+
+    #[test]
+    fn test_trace_backend_debug() {
+        let d = TraceBackend::Disabled;
+        assert!(format!("{:?}", d).contains("Disabled"));
+
+        let r = TraceBackend::Redis { url: "r".into() };
+        assert!(format!("{:?}", r).contains("Redis"));
+
+        let k = TraceBackend::Kafka { brokers: "b".into(), topic: "t".into() };
+        assert!(format!("{:?}", k).contains("Kafka"));
+    }
 }

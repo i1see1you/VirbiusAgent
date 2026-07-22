@@ -5,7 +5,7 @@
 | Project | Description |
 |---------|-------------|
 | Document Version | v3.6 |
-| Status | Draft |
+| Status | Active |
 | Related | [README.md](README.md) |
 | Reference Project | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
 
@@ -20,7 +20,7 @@ This design document is split into the following files. This file serves as the 
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | §1 Overall Architecture · §2 Edge Layer · §3 Gateway Layer · §4 Kernel Layer · §5 Cloud Layer | Core design of the four-layer architecture (Edge, Gateway, Kernel, Cloud) |
 | **[PROTOCOL.md](PROTOCOL.md)** | §2.6 MCP Server Integration · §2.6.1 MCP Proxy Complete Technical Solution | MCP protocol proxy, security pipeline, session management, error codes |
 | **[DEPLOYMENT.md](DEPLOYMENT.md)** | §8 Deployment View | Component ports, deployment topology (Sidecar / Remote / SDK), access method comparison, four-layer full-coverage combined deployment |
-| **[ROADMAP.md](ROADMAP.md)** | §11 Roadmap · Changelog | P0/P1/P2 phased planning + version history |
+| **[README.md](README.md)** | Quick Start + project overview | Architecture, features, comparison, deployment |
 | **DESIGN.md** (this file) | §6 Cross-Layer Data Flow · §7 Policy Consistency · §9 Third-Party Dependencies · §10 Relationship with VirbiusLLM · §12 Risk Assessment · §13 P1 Detailed Design | Index + cross-layer and supplementary chapters |
 
 ## Table of Contents
@@ -30,7 +30,7 @@ This design document is split into the following files. This file serves as the 
 | §1 Overall Architecture | [ARCHITECTURE.md](ARCHITECTURE.md#1-overall-architecture) |
 | §2 Edge Layer — Agent Tool Call Precheck and Execution | [ARCHITECTURE.md](ARCHITECTURE.md#2-edge--agent-tool-call-precheck-and-execution) |
 | §2.6 MCP Server Integration (MCP Proxy) | [PROTOCOL.md](PROTOCOL.md) |
-| §3 Gateway Layer — Higress North-South Security Gateway | [ARCHITECTURE.md](ARCHITECTURE.md#3-gateway--higress-north-south-security-gateway) |
+| §3 Gateway Layer — Higress North-South Security Gateway (incl. §3.6 Gateway Portability) | [ARCHITECTURE.md](ARCHITECTURE.md#3-gateway--higress-north-south-security-gateway) |
 | §4 Kernel Layer — Falco Observability Engine | [ARCHITECTURE.md](ARCHITECTURE.md#4-kernel--falco-observation-engine) |
 | §5 Cloud Layer — Unified Policy Brain | [ARCHITECTURE.md](ARCHITECTURE.md#5-cloud--unified-policy-brain) |
 | §6 Cross-Layer Data Flow | [This file §6](#6-cross-layer-data-flow) |
@@ -38,10 +38,10 @@ This design document is split into the following files. This file serves as the 
 | §8 Deployment View (includes access method comparison §8.3 + four-layer full coverage §8.4) | [DEPLOYMENT.md](DEPLOYMENT.md) |
 | §9 Third-Party Technology Stack Dependencies and Stability | [This file §9](#9-third-party-technology-stack-dependencies-and-stability) |
 | §10 Relationship with VirbiusLLM | [This file §10](#10-relationship-with-virbiusllm) |
-| §11 Roadmap | [ROADMAP.md](ROADMAP.md) |
+| §11 Roadmap | [CHANGELOG.md](CHANGELOG.md) |
 | §12 Agent Security Risk Assessment Framework | [This file §12](#12-agent-security-risk-assessment-framework) |
 | §13 P1 Feature Detailed Design | [This file §13](#13-p1-feature-detailed-design) |
-| Changelog | [ROADMAP.md](ROADMAP.md#changelog) |
+| Changelog | [CHANGELOG.md](CHANGELOG.md) |
 
 ---
 
@@ -243,7 +243,7 @@ Rollout states across layers may be out of sync (e.g., edge layer canary=10%, ga
 | Edge | drop caps | Capabilities dropping (P2) | Very stable (kernel 2.2, 1999) | None |
 | Edge | gVisor | Untrusted code sandbox (P2) | Stable (Google, GKE production) | Kata Containers |
 | Edge | PyO3 / napi-rs | Rust<->Python/Node bindings | Stable (widely used) | subprocess |
-| Gateway | Higress + WASM | AI gateway + security plugins | Stable (based on Envoy, Alibaba production) | APISIX / Envoy |
+| Gateway | Higress + WASM | AI gateway + security plugins | Stable (based on Envoy, Alibaba production) | APISIX / Kong / Envoy — see [§3.6](ARCHITECTURE.md#36-gateway-portability--switching-to-other-mcp-gateways) |
 | Kernel | eBPF + BTF/CO-RE | Kernel observability | Very stable (industry standard) | None |
 | Kernel | Falco | Observability engine (CNCF Graduated) | Very stable (CNCF Graduated) | Tracee |
 | Cloud | Groovy | L3 rule scripts | Stable but declining (Apache) | Python sandbox |
@@ -260,7 +260,7 @@ Rollout states across layers may be out of sync (e.g., edge layer canary=10%, ga
 
 | Technology | Risk | Mitigation |
 |------------|------|------------|
-| Higress/Envoy | Envoy community active; WASM ecosystem evolving | Core functionality already stable; WASM plugins portable across gateways |
+| Higress/Envoy | Envoy community active; WASM ecosystem evolving | Core functionality already stable; WASM plugins portable across gateways; switching guide in [§3.6](ARCHITECTURE.md#36-gateway-portability--switching-to-other-mcp-gateways) (~550 lines, 1–2 person-days) |
 | Falco | Maintenance burden of 4 drivers; kmod driver to be deprecated | Use only eBPF + plugin modes |
 | gVisor | Google dependency; performance overhead | Only introduced at P2; Kata as backup |
 
@@ -276,7 +276,7 @@ Rollout states across layers may be out of sync (e.g., edge layer canary=10%, ga
 
 **Irreplaceable (failure makes system unavailable)**:
 - Redis — session state + audit stream (recommend Sentinel/Cluster)
-- Higress — all gateway layer security checks (migratable to APISIX/Envoy)
+- Higress — all gateway layer security checks (migratable to APISIX/Kong/Envoy, see [§3.6](ARCHITECTURE.md#36-gateway-portability--switching-to-other-mcp-gateways))
 - virbius-engine — cloud layer final judgment
 
 **Degradable (fallback on failure)**:
@@ -997,7 +997,7 @@ decay(stored_value, elapsed_minutes) = stored_value × exp(-elapsed_minutes / 30
 | `tool_weight` | `Σ(tool_risk_class(tool) × round(log(call_count + 1)))` | 0-∞ | Logarithmic accumulation to avoid linear explosion (see §13.3.3) |
 | `chain_anomaly` | `Σ(L3 rule hit risk delta)` | 0-∞ | Groovy L3 tool chain anomaly detection, accumulated per hit (see §13.3.4) |
 | `prompt_injection` | `hit count × 15` | 0-∞ | Each prompt injection hit adds 15 points |
-| `falco_alert` | `alert count × 10` | 0-∞ | Each Falco alert adds 10 points (see §13.3.9) |
+| `falco_alert` | `alert count × 10` | 0-∞ | Each Falco alert adds 10 points (see §13.3.10) |
 
 ##### Tool Risk Class Weights
 
@@ -1198,7 +1198,89 @@ int applyDecay(int storedValue, long elapsedMinutes) {
 }
 ```
 
-#### 13.3.5 Complete Scoring Algorithm
+#### 13.3.5 Intent-Action Weighted Accumulation (P2)
+
+##### Design Motivation
+
+In P1, the `chain_anomaly` dimension accumulated the full `risk_score` of each rule hit, which caused:
+- **Two challenge triggers exceed quota**: A `challenge` rule with `risk_score=100` hit twice produces `chain=200`. Combined with `base_risk + tool_weight`, this far exceeds `risk_quota=60`, blocking all subsequent Agent calls via `risk_threshold`.
+- **Post-approval retry blocked**: After a challenge is approved, the Engine returns `allow` (exemption), but the MCP Proxy still denies because `session_risk_score ≥ risk_quota`.
+
+P2 introduces **weighted accumulation by `intent_action`**, so rule hits of different severity produce different magnitudes of risk score growth:
+
+| `intent_action` | Weight | Meaning | Example |
+|---|---|---|---|
+| `block` / `deny` | **0.5** | Confirmed malicious → 50% accumulation | risk_score=100 → chainDelta=50 |
+| `challenge` | **0.1** | Suspicious, unconfirmed → 10% accumulation | risk_score=100 → chainDelta=10 |
+| `review` | **0.0** | Advisory review only → no accumulation | risk_score=100 → chainDelta=0 |
+| `allow` | **0.0** | Rule allowed → no accumulation | — |
+
+##### Configuration
+
+Configure in `application.yml`:
+
+```yaml
+virbius:
+  session-risk:
+    intent-weight:
+      block: 0.5        # confirmed malicious → 50% accumulation
+      challenge: 0.1    # suspicious, unconfirmed → 10% accumulation
+      review: 0.0       # advisory review → no accumulation
+      allow: 0.0        # rule allowed → no accumulation
+```
+
+Defaults are also provided via `@Value` annotations (`virbius.session-risk.intent-weight.block:0.5`, etc.).
+
+##### Calculation Logic
+
+`EvaluateOrchestrator` weights each non-`PROMPT_INJECTION` signal by its `intentAction` when computing `chainDelta`:
+
+```java
+int chainDelta = exempted ? 0 : signals.stream()
+    .filter(s -> s.ruleId() != null
+            && !"PROMPT_INJECTION".equals(s.ruleId())
+            && s.score() > 0)
+    .mapToInt(s -> {
+        double weight = switch (s.intentAction() == null ? "allow" : s.intentAction().toLowerCase()) {
+            case "deny", "block" -> blockWeight;      // 0.5
+            case "challenge" -> challengeWeight;       // 0.1
+            case "review" -> reviewWeight;             // 0.0
+            default -> allowWeight;                    // 0.0
+        };
+        return (int) Math.round(s.score() * weight);
+    })
+    .sum();
+```
+
+##### Challenge Exemption Skips Accumulation
+
+When a challenge for the same session + tool + args has been approved (an active exemption record exists), the Engine changes `effective_action` from `challenge` to `allow` and skips `chain_anomaly` accumulation (`chainDelta = 0`), preventing approved retries from being blocked due to risk score inflation.
+
+```java
+boolean exempted = "challenge".equalsIgnoreCase(effectiveAction)
+        && challengeService.hasActiveExemption(sessionId, toolName, argsHash);
+if (exempted) {
+    effectiveAction = "allow";
+}
+int chainDelta = exempted ? 0 : weightedChainDelta(signals);
+```
+
+##### Calculation Example
+
+**Scenario**: Rule `query_audit_block` (`risk_score=100`, `intent_action=challenge`), License `risk_quota=60`.
+
+| Call Count | chainDelta | chain_anomaly | base_risk | tool_weight | total | Exceeds Quota? |
+|---|---|---|---|---|---|---|
+| 1st challenge | round(100×0.1)=10 | 10 | 6 | 1 | **17** | No |
+| 2nd challenge | 10 | 20 | 6 | 1 | **27** | No |
+| 3rd challenge | 10 | 30 | 6 | 1 | **37** | No |
+| 4th challenge | 10 | 40 | 6 | 1 | **47** | No |
+| 5th challenge | 10 | 50 | 6 | 1 | **57** | No (close to 60) |
+| 6th challenge | 10 | 60 | 6 | 1 | **67** | **Yes** |
+
+Compared to P1 (weight 1.0) where a single hit produced `chain=100` → instant block, P2 provides 6 retry attempts before the quota is exceeded.
+
+#### 13.3.6 Complete Scoring Algorithm
 
 ##### Input Model
 
@@ -1321,7 +1403,7 @@ function updateRiskScore(sessionId, input):
    38 > 30 → Increase audit sampling rate to 50%
 ```
 
-#### 13.3.6 SessionRiskManager Component Design
+#### 13.3.7 SessionRiskManager Component Design
 
 ```java
 /**
@@ -1543,7 +1625,7 @@ public class SessionRiskManager {
 }
 ```
 
-#### 13.3.7 Redis Data Structures
+#### 13.3.8 Redis Data Structures
 
 ##### New Keys
 
@@ -1601,7 +1683,7 @@ Pipeline:
 → 1 Redis round trip
 ```
 
-#### 13.3.8 Threshold Actions and Response Mechanism
+#### 13.3.9 Threshold Actions and Response Mechanism
 
 | Threshold | Action | Implementation Mechanism | Reader |
 |-----------|--------|--------------------------|--------|
@@ -1648,7 +1730,7 @@ public record EvaluateResponseDto(
     String argsHash) {}
 ```
 
-#### 13.3.9 Integration with Existing Components
+#### 13.3.10 Integration with Existing Components
 
 ##### Integration Point 1: EvaluateOrchestrator.evaluate()
 
@@ -1815,7 +1897,7 @@ Falco (async):
       → consumed on next updateRiskScore()
 ```
 
-#### 13.3.10 Configuration Items
+#### 13.3.11 Configuration Items
 
 ```yaml
 virbius:
@@ -1844,7 +1926,7 @@ virbius:
     threshold-flag-ttl-seconds: 300        # threshold flag TTL (5 minutes)
 ```
 
-#### 13.3.11 Cost Analysis
+#### 13.3.12 Cost Analysis
 
 | Operation | Mechanism | Redis Calls | Latency |
 |-----------|-----------|-------------|---------|
@@ -1857,7 +1939,7 @@ virbius:
 
 > Compared to the existing `incrementRiskScore()`'s single `INCRBY` (~0.5ms), this adds ~1.5ms latency but gains multi-dimensional scoring + time decay + dimension breakdown capabilities.
 
-#### 13.3.12 Synergy with P1.10/P1.11
+#### 13.3.13 Synergy with P1.10/P1.11
 
 ```
 SessionRiskManager (§13.3)

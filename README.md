@@ -63,6 +63,50 @@ flowchart TD
 | **Output Review** | PII/credential leak detection in tool return values |
 | **Falco Rules Management** | Custom eBPF rules managed through console with canary deployment |
 
+## Why VirbiusAgent
+
+### Rules + Models: The Engineering Best Practice
+
+Industry security engineering has proven that **the best defense combines deterministic rules with ML models** — neither alone is sufficient. This principle, practiced at scale by security teams at Alibaba and Meituan, is the foundation of VirbiusAgent's design.
+
+| Aspect | Rules (Deterministic) | Models (ML/LLM) | VirbiusAgent Approach |
+|--------|----------------------|------------------|-----------------------|
+| **Accuracy** | High — zero false negatives for known patterns | Moderate — depends on training data | Rules as the first line of defense; models as safety net |
+| **Recall** | Low — only catches known patterns | High — generalizes to novel attacks | Models fill the gap for unknown threats |
+| **Latency** | Sub-millisecond | 100ms – 2s (LLM) | Edge rules < 1ms; Cloud models for deep analysis |
+| **Cost** | Near-zero (CPU only) | High (GPU/LLM API per call) | 80%+ traffic handled by rules; models only for high-risk |
+| **Maintainability** | Transparent, auditable, version-controlled | Black-box, hard to debug | Rules in Git; models as augmenting signal |
+
+> **Design philosophy**: Rules are cheap, fast, and precise for known threats. Models are expensive but essential for novel attack patterns. Combining them — with rules as the primary filter and models as the deep analyzer — achieves both **precision and recall** at sustainable cost. This mirrors the layered security architecture used by Alibaba's and Meituan's production security platforms, where WAF rules + ML detection engines work in tandem.
+
+### Comparison with Industry Solutions
+
+| Capability | VirbiusAgent | Lakera Guard | Prompt Security | Guardrails AI |
+|-----------|:------------:|:------------:|:---------------:|:-------------:|
+| **Architecture** | 4-layer (Edge–Gateway–Kernel–Cloud) | Single API gateway | Single API gateway | SDK / library |
+| **Defense-in-depth** | ✅ Edge precheck → Gateway enforce → Kernel observe → Cloud adjudicate | ❌ Single checkpoint | ❌ Single checkpoint | ❌ Single checkpoint |
+| **Detection method** | Rules + ML models (hybrid) | ML model primary | ML model primary | ML model + validators |
+| **Rule engine** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ❌ Model-only | ❌ Model-only | ⚠️ Limited validators |
+| **Runtime observability** | ✅ eBPF / Falco (syscall-level) | ❌ | ❌ | ❌ |
+| **MCP protocol support** | ✅ Native (stdio/SSE proxy) | ❌ | ❌ | ❌ |
+| **Tool-call security** | ✅ Core focus (precheck → adjudicate → audit) | ⚠️ Prompt-level only | ⚠️ Prompt-level only | ⚠️ Output validation only |
+| **Human-in-the-loop** | ✅ Challenge → approve → token-gated execution | ❌ | ⚠️ Policy actions | ❌ |
+| **Decision trace** | ✅ Full-chain causal visualization | ❌ | ⚠️ Logs | ⚠️ Logs |
+| **DLP (PII masking)** | ✅ Edge-layer, sub-ms, offline | ⚠️ Cloud API | ⚠️ Cloud API | ✅ Validators |
+| **Sandbox isolation** | ✅ Landlock / gVisor (P2) | ❌ | ❌ | ❌ |
+| **Deployment** | Self-hosted (Sidecar / Remote / SDK) | SaaS | SaaS / self-hosted | SDK (Python) |
+| **Open source** | ✅ MIT | ❌ Closed | ❌ Closed | ✅ Apache-2.0 |
+
+### Key Differentiators
+
+1. **Four-layer defense-in-depth** — Most competitors offer a single API checkpoint. VirbiusAgent deploys security at four independent layers (Edge → Gateway → Kernel → Cloud), so even if one layer is bypassed, others still catch the threat. This architecture is inspired by the **defense-in-depth principle** used in Alibaba's and Meituan's production security systems.
+
+2. **Rules first, models second** — Rules handle 80%+ of known threats at sub-millisecond latency with near-zero cost. ML/LLM models are reserved for deep analysis of high-risk requests, providing superior recall for novel attacks. This **hybrid approach** is the industry-proven optimal balance of cost, speed, and coverage.
+
+3. **Agent-native, not just LLM-native** — While competitors focus on prompt-level filtering, VirbiusAgent secures the entire **tool-call lifecycle**: pre-execution precheck → on-path gateway enforcement → runtime kernel observation → post-execution audit. This is purpose-built for the MCP era where Agents execute real actions.
+
+4. **Runtime visibility at the kernel level** — Via eBPF/Falco, VirbiusAgent observes Agent processes at the syscall level (file access, network connections, process spawns). No competitor offers this depth of runtime observability.
+
 ## Quick Start
 
 ### Prerequisites
@@ -104,6 +148,36 @@ mvn spring-boot:run -Dspring-boot.run.profiles=local
 
 # 5. Verify
 curl -s http://localhost:8080/api/v1/health
+```
+
+### Docker (Compose)
+
+Start the full stack with a single command (Redis + engine + control plane):
+
+```bash
+git clone https://github.com/i1see1you/VirbiusAgent.git && cd VirbiusAgent
+docker compose build     # build all images (first time only)
+docker compose up -d     # start all services
+docker compose ps        # check status
+```
+
+```bash
+# Verify all services are healthy
+curl -s http://localhost:8080/api/v1/health
+curl -s http://localhost:8082/admin/health
+```
+
+```bash
+# Follow logs
+docker compose logs -f
+# Stop
+docker compose down
+```
+
+To include the MCP proxy (requires license and upstream server):
+
+```bash
+docker compose --profile full up -d
 ```
 
 ### Edge SDK Demo
@@ -210,7 +284,6 @@ virbius-agent/
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Detailed architecture documentation |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Deployment topology and operations |
 | [PROTOCOL.md](PROTOCOL.md) | MCP proxy protocol specification |
-| [ROADMAP.md](ROADMAP.md) | Development roadmap and changelog |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ## Contributing

@@ -848,19 +848,10 @@ async fn handle_tools_call(
         }
     }
 
-    // ── Trace: record tool_call event (before pipeline) ──
+    // ── Trace: prepare tool_call step metadata (decision recorded after pipeline) ──
     let tool_call_step_id = uuid::Uuid::new_v4().to_string();
     let parent_step_id = session.last_step_id.clone();
     let step_seq = session.next_step_seq();
-    let trace_event = TraceEvent::tool_call(
-        &session,
-        &tool_call_step_id,
-        parent_step_id.as_deref(),
-        step_seq,
-        &original_tool_name,
-        &args,
-    );
-    trace_collector.record(trace_event).await;
     let trace_start = std::time::Instant::now();
 
     // Run security pipeline with the ORIGINAL tool name (before any prefix stripping).

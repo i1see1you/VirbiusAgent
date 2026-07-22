@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -29,6 +30,12 @@ public class EvaluateOrchestrator {
     private final SessionRiskManager sessionRiskManager;
     private final TrustViolationDetector trustViolationDetector;
 
+    // P2: intent_action weighted risk accumulation
+    private final double blockWeight;
+    private final double challengeWeight;
+    private final double reviewWeight;
+    private final double allowWeight;
+
     public EvaluateOrchestrator(
             ScriptRuleRunner scriptRuleRunner,
             PromptRunner promptRunner,
@@ -38,7 +45,11 @@ public class EvaluateOrchestrator {
             PromptInjectionDetector injectionDetector,
             StiTaintDetector taintDetector,
             SessionRiskManager sessionRiskManager,
-            TrustViolationDetector trustViolationDetector) {
+            TrustViolationDetector trustViolationDetector,
+            @Value("${virbius.session-risk.intent-weight.block:0.5}") double blockWeight,
+            @Value("${virbius.session-risk.intent-weight.challenge:0.1}") double challengeWeight,
+            @Value("${virbius.session-risk.intent-weight.review:0.0}") double reviewWeight,
+            @Value("${virbius.session-risk.intent-weight.allow:0.0}") double allowWeight) {
         this.scriptRuleRunner = scriptRuleRunner;
         this.promptRunner = promptRunner;
         this.auditWriter = auditWriter;
@@ -48,6 +59,10 @@ public class EvaluateOrchestrator {
         this.taintDetector = taintDetector;
         this.sessionRiskManager = sessionRiskManager;
         this.trustViolationDetector = trustViolationDetector;
+        this.blockWeight = blockWeight;
+        this.challengeWeight = challengeWeight;
+        this.reviewWeight = reviewWeight;
+        this.allowWeight = allowWeight;
     }
 
     public EvaluateResponseDto evaluate(EvaluateRequestDto req) {
@@ -149,17 +164,47 @@ public class EvaluateOrchestrator {
             log.warn("recordToolCall failed: {}", e.getMessage());
         }
 
+        // Compute args hash for challenge binding
+        String argsJson = req.argsJson() != null ? req.argsJson() : "";
+        String argsHash = ChallengeService.computeArgsHash(toolName, argsJson);
+
+        // Check session-level exemption: if the same session+tool+args_hash
+        // was previously approved, bypass the challenge and allow the call.
+        // This check is done BEFORE risk score update so that exempted calls
+        // do not accumulate chain_anomaly risk from the triggering rule.
+        String effectiveAction = decision.effectiveAction();
+        String challengeId = null;
+        boolean exempted = "challenge".equalsIgnoreCase(effectiveAction)
+                && challengeService.hasActiveExemption(sessionId, toolName, argsHash);
+        if (exempted) {
+            log.info("challenge bypassed by session exemption: tenant={} session={} tool={} args_hash={}",
+                    req.tenantId(), sessionId, toolName, argsHash);
+            effectiveAction = "allow";
+        }
+
         // --- P1.3: Session Risk adaptive scoring (multi-dimensional weighted + time decay) ---
+        // When a challenge is bypassed by session exemption, skip chain_anomaly
+        // accumulation so that approved retries don't inflate the risk score.
         int sessionRiskScore = 0;
         try {
             int injectionHits = (int) signals.stream()
                     .filter(s -> "PROMPT_INJECTION".equals(s.ruleId()))
                     .count();
-            int chainDelta = signals.stream()
+            // P2: weight chainDelta by intent_action so that challenge/review
+            // don't inflate risk as aggressively as block.
+            int chainDelta = exempted ? 0 : signals.stream()
                     .filter(s -> s.ruleId() != null
                             && !"PROMPT_INJECTION".equals(s.ruleId())
                             && s.score() > 0)
-                    .mapToInt(s -> (int) s.score())
+                    .mapToInt(s -> {
+                        double weight = switch (s.intentAction() == null ? "allow" : s.intentAction().toLowerCase()) {
+                            case "deny", "block" -> blockWeight;
+                            case "challenge" -> challengeWeight;
+                            case "review" -> reviewWeight;
+                            default -> allowWeight;
+                        };
+                        return (int) Math.round(s.score() * weight);
+                    })
                     .sum();
             RiskUpdateInput riskInput = new RiskUpdateInput(
                     sessionId,
@@ -174,13 +219,8 @@ public class EvaluateOrchestrator {
             log.warn("sessionRiskManager.updateRiskScore failed: {}", e.getMessage());
         }
 
-        // Compute args hash for challenge binding
-        String argsJson = req.argsJson() != null ? req.argsJson() : "";
-        String argsHash = ChallengeService.computeArgsHash(toolName, argsJson);
-
-        // If effective_action is "challenge", create a challenge record in Redis
-        String challengeId = null;
-        if ("challenge".equalsIgnoreCase(decision.effectiveAction())) {
+        // If effective_action is still "challenge", create a challenge record in Redis
+        if ("challenge".equalsIgnoreCase(effectiveAction)) {
             challengeId = challengeService.createChallenge(
                     req.tenantId() != null ? req.tenantId() : "default",
                     req.sessionId() != null ? req.sessionId() : "",
@@ -192,7 +232,7 @@ public class EvaluateOrchestrator {
         }
 
         return new EvaluateResponseDto(
-                decision.effectiveAction(),
+                effectiveAction,
                 decision.maxRiskScore(),
                 sessionRiskScore,
                 primaryRuleId,

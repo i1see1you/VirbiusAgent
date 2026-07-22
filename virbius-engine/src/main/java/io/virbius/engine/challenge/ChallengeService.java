@@ -20,10 +20,15 @@ import redis.clients.jedis.JedisPool;
  *
  * <p>Challenge records and tokens are stored in Redis with TTL:
  * <ul>
- *   <li>{@code challenge:{id}} — challenge record (TTL: 300s default)</li>
+ *   <li>{@code challenge:{id}} — challenge record (TTL: 600s default)</li>
  *   <li>{@code challenge:token:{token}} — one-time-use token (TTL: 600s)</li>
  *   <li>{@code challenge:queue:{tenantId}} — ZSET of pending challenge IDs</li>
+ *   <li>{@code challenge:exempt:{session}:{tool}:{args_hash}} — session-level exemption (TTL: 600s)</li>
  * </ul>
+ *
+ * <p>When a challenge is approved, an exemption record is written so that
+ * subsequent calls with the same session+tool+args_hash bypass the challenge
+ * and are allowed directly within the exemption TTL window.
  */
 @Service
 public class ChallengeService {
@@ -32,22 +37,51 @@ public class ChallengeService {
     private static final String KEY_CHALLENGE = "challenge:%s";
     private static final String KEY_TOKEN = "challenge:token:%s";
     private static final String KEY_QUEUE = "challenge:queue:%s";
+    private static final String KEY_EXEMPT = "challenge:exempt:%s:%s:%s";
     private static final SecureRandom RNG = new SecureRandom();
 
     private final Optional<JedisPool> jedisPool;
     private final ObjectMapper mapper;
     private final int challengeTtlSeconds;
     private final int tokenTtlSeconds;
+    private final int exemptionTtlSeconds;
 
     public ChallengeService(
             Optional<JedisPool> jedisPool,
             ObjectMapper mapper,
-            @Value("${virbius.challenge.ttl-seconds:300}") int challengeTtlSeconds,
-            @Value("${virbius.challenge.token-ttl-seconds:600}") int tokenTtlSeconds) {
+            @Value("${virbius.challenge.ttl-seconds:600}") int challengeTtlSeconds,
+            @Value("${virbius.challenge.token-ttl-seconds:600}") int tokenTtlSeconds,
+            @Value("${virbius.challenge.exemption-ttl-seconds:600}") int exemptionTtlSeconds) {
         this.jedisPool = jedisPool;
         this.mapper = mapper;
         this.challengeTtlSeconds = challengeTtlSeconds;
         this.tokenTtlSeconds = tokenTtlSeconds;
+        this.exemptionTtlSeconds = exemptionTtlSeconds;
+    }
+
+    /**
+     * Check whether a session-level exemption exists for the given session+tool+args_hash.
+     *
+     * <p>When an exemption is active, the Engine should override the challenge
+     * decision to "allow" so the tool call proceeds without a new challenge.
+     *
+     * @param sessionId the Agent session ID
+     * @param toolName  the tool being called
+     * @param argsHash  SHA-256 hash of tool_name:args_json
+     * @return {@code true} if an active exemption exists
+     */
+    public boolean hasActiveExemption(String sessionId, String toolName, String argsHash) {
+        if (jedisPool.isEmpty() || sessionId == null || sessionId.isBlank()
+                || exemptionTtlSeconds <= 0) {
+            return false;
+        }
+        try (var jedis = jedisPool.get().getResource()) {
+            String key = KEY_EXEMPT.formatted(sessionId, toolName, argsHash);
+            return jedis.exists(key);
+        } catch (Exception e) {
+            log.warn("failed to check challenge exemption: {}", e.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -144,6 +178,23 @@ public class ChallengeService {
             // Remove from pending queue
             String tenantId = (String) record.get("tenant_id");
             jedis.zrem(KEY_QUEUE.formatted(tenantId), challengeId);
+
+            // Write session-level exemption so subsequent calls with the same
+            // session+tool+args_hash bypass the challenge within the TTL window.
+            String sessionForExempt = (String) record.get("session_id");
+            String toolForExempt = (String) record.get("tool_name");
+            String hashForExempt = (String) record.get("args_hash");
+            if (sessionForExempt != null && !sessionForExempt.isBlank()
+                    && toolForExempt != null && !toolForExempt.isBlank()
+                    && hashForExempt != null && !hashForExempt.isBlank()) {
+                String exemptKey = KEY_EXEMPT.formatted(sessionForExempt, toolForExempt, hashForExempt);
+                Map<String, Object> exemptRecord = new LinkedHashMap<>();
+                exemptRecord.put("challenge_id", challengeId);
+                exemptRecord.put("approved_by", approvedBy);
+                exemptRecord.put("approved_at", now);
+                exemptRecord.put("expires_at", now + exemptionTtlSeconds);
+                jedis.setex(exemptKey, exemptionTtlSeconds, mapper.writeValueAsString(exemptRecord));
+            }
 
             log.info("challenge approved: id={} by={} token=***", challengeId, approvedBy);
         } catch (Exception e) {

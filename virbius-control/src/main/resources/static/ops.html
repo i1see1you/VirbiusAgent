@@ -98,6 +98,22 @@
     #log.log-info { color: #94a3b8; background: #0f172a; }
     .panel { display: none; }
     .panel.active { display: block; }
+    /* sub-tabs within a panel (e.g. challenge pending/approved) */
+    .sub-tabs { display: flex; gap: 0; border-bottom: 2px solid #e2e8f0; margin-bottom: 0.75rem; }
+    .sub-tab {
+      padding: 0.5rem 1.1rem; border: none; background: transparent; color: #64748b;
+      cursor: pointer; font-size: 0.88rem; font-weight: 500; border-bottom: 2px solid transparent;
+      margin-bottom: -2px; transition: color 0.15s, border-color 0.15s; display: flex; align-items: center; gap: 0.4rem;
+    }
+    .sub-tab:hover { color: #334155; }
+    .sub-tab.active { color: #2563eb; border-bottom-color: #2563eb; }
+    .sub-tab .badge-count {
+      font-size: 0.72rem; font-weight: 600; min-width: 1.3rem; text-align: center;
+      padding: 0.05rem 0.35rem; border-radius: 999px; background: #e2e8f0; color: #475569;
+    }
+    .sub-tab.active .badge-count { background: #2563eb; color: #fff; }
+    .sub-panel { display: none; }
+    .sub-panel.active { display: block; }
     .hint { font-size: 0.8rem; color: #64748b; margin: 0.25rem 0 0.75rem; }
     .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
     @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
@@ -1093,26 +1109,54 @@
 
   <div id="panel-challenge" class="panel card">
     <h2 style="margin:0 0 0.5rem;font-size:1rem" data-i18n="challenge.title">审批队列</h2>
-    <p class="hint" data-i18n-html="challenge.desc">高风险工具调用被 <code>challenge</code> 规则拦截后进入此队列。审批通过后生成一次性 token，Agent 凭 token 重试调用。</p>
+    <p class="hint" data-i18n-html="challenge.desc">被 <code>challenge</code> 规则匹配的工具调用进入此队列等待人工审批。审批通过后生成一次性 token，Agent 凭 token 重试调用。</p>
     <div class="row" style="align-items:center;margin-bottom:0.5rem">
-      <span class="kpi-card"><span class="label" data-i18n="challenge.kpi-pending">待审批</span><span class="value" id="chPendingCount">0</span></span>
       <button type="button" class="secondary" id="chRefresh" data-i18n="challenge.btn-refresh">刷新</button>
     </div>
-    <table class="data-table" style="width:100%">
-      <thead><tr>
-        <th>Challenge ID</th>
-        <th data-i18n="challenge.header-tool">工具</th>
-        <th data-i18n="challenge.header-risk">风险</th>
-        <th data-i18n="challenge.header-rule">规则</th>
-        <th>Session</th>
-        <th data-i18n="challenge.header-created">创建时间</th>
-        <th data-i18n="challenge.header-expires">过期时间</th>
-        <th data-i18n="challenge.header-actions">操作</th>
-      </tr></thead>
-      <tbody id="chQueueBody">
-        <tr><td colspan="8" class="empty-state">No pending challenges</td></tr>
-      </tbody>
-    </table>
+    <div class="sub-tabs">
+      <button type="button" class="sub-tab active" data-subtab="pending">
+        <span data-i18n="challenge.tab-pending">待审批</span>
+        <span class="badge-count" id="chPendingCount">0</span>
+      </button>
+      <button type="button" class="sub-tab" data-subtab="approved">
+        <span data-i18n="challenge.tab-approved">已审批</span>
+        <span class="badge-count" id="chApprovedCount">0</span>
+      </button>
+    </div>
+    <div id="chSubPending" class="sub-panel active">
+      <table class="data-table" style="width:100%">
+        <thead><tr>
+          <th>Challenge ID</th>
+          <th data-i18n="challenge.header-tool">工具</th>
+          <th data-i18n="challenge.header-risk">风险</th>
+          <th data-i18n="challenge.header-rule">规则</th>
+          <th>Session</th>
+          <th data-i18n="challenge.header-created">创建时间</th>
+          <th data-i18n="challenge.header-expires">过期时间</th>
+          <th data-i18n="challenge.header-actions">操作</th>
+        </tr></thead>
+        <tbody id="chQueueBody">
+          <tr><td colspan="8" class="empty-state">No pending challenges</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="chSubApproved" class="sub-panel">
+      <table class="data-table" style="width:100%">
+        <thead><tr>
+          <th>Challenge ID</th>
+          <th data-i18n="challenge.header-tool">工具</th>
+          <th data-i18n="challenge.header-risk">风险</th>
+          <th data-i18n="challenge.header-rule">规则</th>
+          <th>Session</th>
+          <th data-i18n="challenge.header-created">创建时间</th>
+          <th>审批人</th>
+          <th>审批时间</th>
+        </tr></thead>
+        <tbody id="chApprovedBody">
+          <tr><td colspan="8" class="empty-state">No approved challenges</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <div id="panel-trace" class="panel card">
@@ -1174,7 +1218,7 @@
     </div>
   </div>
 
-  <script src="js/i18n.js?v=20260721b"></script>
+  <script src="js/i18n.js?v=20260722a"></script>
   <script src="js/ops-common.js?v=20260720i"></script>
   <script src="js/ops-rules.js?v=20260720i"></script>
   <script src="js/ops-lists.js?v=20260720g"></script>
@@ -1187,7 +1231,7 @@
   <script src="js/ops-audit.js?v=20260720g"></script>
   <script src="js/ops-tenants.js?v=20260720g"></script>
   <script src="js/ops-monitor.js?v=20260720g"></script>
-<script src="js/ops-challenge.js?v=20260720g"></script>
+<script src="js/ops-challenge.js?v=20260722a"></script>
 <script src="js/ops-license.js?v=20260720i"></script>
 <script src="js/ops-trace.js?v=20260720g"></script>
   <script src="js/ops-nav.js?v=20260720g"></script>

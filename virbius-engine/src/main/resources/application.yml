@@ -26,8 +26,9 @@ virbius:
       match-cache-ttl-sec: 60
       match-cache-max-entries: 200000
   challenge:
-    ttl-seconds: ${VIRBIUS_CHALLENGE_TTL:300}
+    ttl-seconds: ${VIRBIUS_CHALLENGE_TTL:600}
     token-ttl-seconds: ${VIRBIUS_CHALLENGE_TOKEN_TTL:600}
+    exemption-ttl-seconds: ${VIRBIUS_CHALLENGE_EXEMPTION_TTL:600}
   grpc:
     port: ${VIRBIUS_GRPC_PORT:50051}
   audit:
@@ -73,6 +74,11 @@ virbius:
     falco-weight: 10                       # per-falco-alert risk delta
     decay-half-life-minutes: 30            # exp(-elapsed / half_life)
     decay-cutoff-minutes: 120              # event-driven dims → 0 after this
+    intent-weight:                         # chain_anomaly weight by intent_action
+      block: 0.5                           # confirmed malicious → 50% accumulation
+      challenge: 0.1                       # suspicious, unconfirmed → 10% accumulation
+      review: 0.0                          # advisory only → no accumulation
+      allow: 0.0                           # rule allowed → no accumulation
     threshold:
       disconnect: 80                       # >80: force disconnect + alert
       full-audit: 60                       # >60: exit fast path + full audit

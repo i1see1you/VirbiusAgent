@@ -33,9 +33,35 @@ Examples of unacceptable behavior:
 ## Enforcement
 
 Community leaders are responsible for clarifying and enforcing our standards.
+
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project team. All complaints will be reviewed and investigated
-promptly and fairly.
+reported to the project maintainers at:
+
+**security@virbius.io** (or open a [GitHub Security Advisory](https://github.com/i1see1you/VirbiusAgent/security/advisories))
+
+All complaints will be reviewed and investigated promptly and fairly.
+
+## Enforcement Responsibilities
+
+Project maintainers have the right and responsibility to remove, edit, or reject
+comments, commits, code, wiki edits, issues, and other contributions that are
+not aligned to this Code of Conduct, and will communicate reasons for moderation
+decisions when appropriate.
+
+## Scope
+
+This Code of Conduct applies within all community spaces, and also applies when
+an individual is officially representing the community in public spaces.
+
+## Enforcement Guidelines
+
+Project maintainers will follow these Community Impact Guidelines in determining
+consequences for any action they deem in violation of this Code of Conduct:
+
+1. **Correction**: Private warning with clarification of why the behavior is inappropriate.
+2. **Warning**: Warning with consequences for continued behavior (no interaction with involved parties for a specified period).
+3. **Temporary Ban**: Temporary ban from community interaction.
+4. **Permanent Ban**: Permanent ban from community interaction.
 
 ## Attribution
 

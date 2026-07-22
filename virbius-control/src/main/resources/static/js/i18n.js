@@ -476,7 +476,7 @@
       'monitor.title': '监控中心',
       'monitor.desc': '监控策略运行时指标，时间范围切换后自动刷新。',
       'challenge.title': '审批队列',
-      'challenge.desc': '高风险工具调用被 <code>challenge</code> 规则拦截后进入此队列。审批通过后生成一次性 token，Agent 凭 token 重试调用。',
+      'challenge.desc': '被 <code>challenge</code> 规则匹配的工具调用进入此队列等待人工审批。审批通过后生成一次性 token，Agent 凭 token 重试调用。',
       'challenge.btn-refresh': '刷新',
       'challenge.header-tool': '工具',
       'challenge.header-risk': '风险',
@@ -484,6 +484,8 @@
       'challenge.header-created': '创建时间',
       'challenge.header-expires': '过期时间',
       'challenge.header-actions': '操作',
+      'challenge.tab-pending': '待审批',
+      'challenge.tab-approved': '已审批',
       'monitor.kpi-total-requests': '总请求',
       'monitor.kpi-block-rate': '拦截率',
       'monitor.kpi-review-rate': '复审率',
@@ -709,6 +711,7 @@
 
       // Challenge extras
       'challenge.kpi-pending': '待审批',
+      'challenge.kpi-approved': '已审批',
 
       // Rules extras
       'rules.compare': '比较',
@@ -1196,7 +1199,7 @@
       'monitor.title': 'Monitoring Center',
       'monitor.desc': 'Monitor runtime policy metrics. Auto-refreshes on time range change.',
       'challenge.title': 'Approval Queue',
-      'challenge.desc': 'High-risk tool calls blocked by <code>challenge</code> rules appear here. Approving generates a one-time token for the Agent to retry.',
+      'challenge.desc': 'Tool calls matched by <code>challenge</code> rules enter this queue for human approval. Approving generates a one-time token for the Agent to retry.',
       'challenge.btn-refresh': 'Refresh',
       'challenge.header-tool': 'Tool',
       'challenge.header-risk': 'Risk',
@@ -1204,6 +1207,8 @@
       'challenge.header-created': 'Created',
       'challenge.header-expires': 'Expires',
       'challenge.header-actions': 'Actions',
+      'challenge.tab-pending': 'Pending',
+      'challenge.tab-approved': 'Approved',
       'monitor.kpi-total-requests': 'Total Requests',
       'monitor.kpi-block-rate': 'Block Rate',
       'monitor.kpi-review-rate': 'Review Rate',
@@ -1430,6 +1435,7 @@
 
       // Challenge extras
       'challenge.kpi-pending': 'Pending',
+      'challenge.kpi-approved': 'Approved',
 
       // Rules extras
       'rules.compare': 'Compare',

@@ -142,8 +142,9 @@ pub type SharedAuditSink = Arc<AuditSink>;
 
 async fn redis_audit_worker(url: String, mut rx: mpsc::Receiver<AuditEvent>) {
     debug!("audit redis worker started");
+    let addr = parse_redis_addr(&url);
     loop {
-        match tokio::net::TcpStream::connect(&url).await {
+        match tokio::net::TcpStream::connect(addr).await {
             Ok(stream) => {
                 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
                 let (reader, mut writer) = stream.into_split();
@@ -232,4 +233,130 @@ fn rand_sample() -> f64 {
         .as_nanos()
         .hash(&mut h);
     (h.finish() as f64 / u64::MAX as f64).fract()
+}
+
+/// Parse a Redis address string into a `SocketAddr`.
+///
+/// Accepts both `host:port` and `redis://host:port` formats.
+/// Parsing as `SocketAddr` avoids going through the system DNS resolver
+/// (which can fail spuriously on macOS for literal IPs).
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::Session;
+
+    fn make_session() -> Session {
+        let meta = serde_json::json!({
+            "session_id": "sid-1",
+            "app_id": "app-1",
+            "tenant_id": "tenant-1",
+        });
+        Session::from_meta(&meta)
+    }
+
+    #[test]
+    fn test_audit_event_tool_call() {
+        let session = make_session();
+        let event = AuditEvent::tool_call(&session, "read_file", "allow", Some("rule-1"), Some("ok"));
+        assert_eq!(event.trace_id, session.trace_id);
+        assert_eq!(event.layer, "edge");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.tool_name, "read_file");
+        assert_eq!(event.action, "allow");
+        assert_eq!(event.rule_id.as_deref(), Some("rule-1"));
+        assert_eq!(event.reason.as_deref(), Some("ok"));
+        assert_eq!(event.session_id, "sid-1");
+        assert_eq!(event.app_id, "app-1");
+        assert_eq!(event.tenant_id, "tenant-1");
+        assert_eq!(event.session_risk_score, 0);
+        assert!(!event.timestamp.is_empty());
+    }
+
+    #[test]
+    fn test_audit_event_tool_call_no_rule_no_reason() {
+        let session = make_session();
+        let event = AuditEvent::tool_call(&session, "shell", "block", None, None);
+        assert_eq!(event.action, "block");
+        assert!(event.rule_id.is_none());
+        assert!(event.reason.is_none());
+    }
+
+    #[test]
+    fn test_audit_event_memory_write() {
+        let session = make_session();
+        let event = AuditEvent::memory_write(&session, "sql_query", "block", None, Some("pii"), true, Some(-1));
+        assert_eq!(event.event_type, "memory_write");
+        assert_eq!(event.tool_name, "sql_query");
+        assert_eq!(event.action, "block");
+        assert_eq!(event.reason.as_deref(), Some("pii"));
+    }
+
+    #[test]
+    fn test_audit_event_memory_write_with_rule() {
+        let session = make_session();
+        let event = AuditEvent::memory_write(&session, "write_file", "allow", Some("kee-1"), None, false, None);
+        assert_eq!(event.event_type, "memory_write");
+        assert_eq!(event.action, "allow");
+        assert_eq!(event.rule_id.as_deref(), Some("kee-1"));
+    }
+
+    #[test]
+    fn test_rand_sample_range() {
+        let s = rand_sample();
+        assert!(s >= 0.0);
+        assert!(s < 1.0);
+    }
+
+    #[test]
+    fn test_parse_redis_addr_host_port() {
+        let addr = parse_redis_addr("127.0.0.1:6379");
+        assert_eq!(addr.to_string(), "127.0.0.1:6379");
+    }
+
+    #[test]
+    fn test_parse_redis_addr_redis_protocol() {
+        let addr = parse_redis_addr("redis://10.0.0.1:6380");
+        assert_eq!(addr.to_string(), "10.0.0.1:6380");
+    }
+
+    #[test]
+    #[should_panic(expected = "invalid Redis address")]
+    fn test_parse_redis_addr_invalid() {
+        parse_redis_addr("not-a-valid-address");
+    }
+
+    #[test]
+    fn test_audit_sink_disabled_enabled() {
+        let sink = AuditSink::new(AuditBackend::Disabled, 0.5);
+        assert!(!sink.enabled());
+    }
+
+    #[tokio::test]
+    async fn test_audit_sink_report_disabled() {
+        let sink = Arc::new(AuditSink::new(AuditBackend::Disabled, 1.0));
+        let session = make_session();
+        let event = AuditEvent::tool_call(&session, "test", "allow", None, None);
+        // Should not panic or block
+        sink.report(event).await;
+    }
+
+    #[test]
+    fn test_audit_event_json_serialization() {
+        let session = make_session();
+        let event = AuditEvent::tool_call(&session, "rm", "block", None, Some("not allowed"));
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["tool_name"], "rm");
+        assert_eq!(json["action"], "block");
+        assert_eq!(json["reason"], "not allowed");
+        assert_eq!(json["layer"], "edge");
+        assert_eq!(json["event_type"], "tool_call");
+    }
+}
+
+fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
+    let raw = url.strip_prefix("redis://").unwrap_or(url);
+    raw.parse::<std::net::SocketAddr>()
+        .unwrap_or_else(|e| {
+            panic!("invalid Redis address '{url}': {e}. Expected 'host:port' or 'redis://host:port'")
+        })
 }

@@ -5,12 +5,12 @@
 | 项目 | 说明 |
 |------|------|
 | 文档版本 | v3.6 |
-| 状态 | 草案 |
-| 关联 | [DESIGN.zh.md](DESIGN.zh.md)（索引） · [PROTOCOL.md](PROTOCOL.md)（英文） · [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) · [ROADMAP.md](ROADMAP.md)（英文） |
+| 状态 | 正式 |
+| 关联 | [DESIGN.zh.md](DESIGN.zh.md)（索引） · [PROTOCOL.zh.md](PROTOCOL.zh.md) · [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) · [CHANGELOG.md](CHANGELOG.md)（英文） |
 | 参考项目 | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
 
 > 本文件包含 §1 总体架构 · §2 端层 · §3 管层 · §4 核层 · §5 云层。
-> §2.6 MCP Proxy 完整技术方案已拆分至 [PROTOCOL.md](PROTOCOL.md)。
+> §2.6 MCP Proxy 完整技术方案已拆分至 [PROTOCOL.zh.md](PROTOCOL.zh.md)。
 
 ---
 
@@ -497,7 +497,7 @@ struct EdgeManifest {
 
 ### 2.6 MCP Server 集成
 
-> **本节已拆分至独立文档**：[PROTOCOL.md](PROTOCOL.md) — 包含 MCP Proxy 完整技术方案（架构、协议处理、拦截流程、会话管理、Fallback 策略、错误码定义、配置、部署模式、实现结构、核心代码）。
+> **本节已拆分至独立文档**：[PROTOCOL.zh.md](PROTOCOL.zh.md) — 包含 MCP Proxy 完整技术方案（架构、协议处理、拦截流程、会话管理、Fallback 策略、错误码定义、配置、部署模式、实现结构、核心代码）。
 
 ---
 
@@ -665,7 +665,7 @@ LLM 生成 tool_call -> 端层预检 -> 管层 -> 云层终判 -> 执行
 > | 新：系统提示词集中注入 | ~80 token | 约束规则只在 system prompt 出现一次 |
 > | 节省 | ~420 token | **减少 ~84%** |
 >
-> 工具 `description` 保持原始简洁文本不变；结构化约束通过 MCP `annotations` 字段传递（[§2.6.1](PROTOCOL.md#261-mcp-proxy-full-technical-solution)），供 MCP 客户端 UI 和预检逻辑消费，不进入 LLM prompt。
+> 工具 `description` 保持原始简洁文本不变；结构化约束通过 MCP `annotations` 字段传递（[§2.6.1](PROTOCOL.zh.md#261-mcp-proxy-full-technical-solution)），供 MCP 客户端 UI 和预检逻辑消费，不进入 LLM prompt。
 
 **PII 输入脱敏**——复用现有 virbius-core/src/dlp/engine.rs，在 prompt 发送前脱敏用户输入。
 
@@ -729,7 +729,7 @@ impl PromptGateway {
 | **OpenAI SDK** | EnhancedOpenAIClient 代理，在 chat.completions.create() 前调 gateway.enhance() | 请求发送前 |
 | **LangChain** | ConstitutionalPromptTemplate，在 LLMChain.invoke() 前增强 | prompt 模板渲染后 |
 | **通用 HTTP proxy** | 独立服务，拦截 LLM API 请求，增强 body 后转发 | HTTP 层 |
-| **MCP proxy 模式** | 复用 [§2.6](PROTOCOL.md) MCP proxy，在转发前增强 | tools/call 前 |
+| **MCP proxy 模式** | 复用 [§2.6](PROTOCOL.zh.md) MCP proxy，在转发前增强 | tools/call 前 |
 
 #### 2.8.4 宪法模板编译
 
@@ -1085,7 +1085,7 @@ Agent -> Higress (Egress Proxy) -> 外部 API
 > **拓扑说明**：管层处理南北向（跨网络）流量。Sidecar 模式下 MCP 工具调用为东西向流量，不经管层（§1.1）。管层在以下场景发挥作用：
 > - **Ingress**：远程 Agent（非 Sidecar 部署）通过 HTTPS 访问 MCP Server
 > - **Egress**：非 Sidecar 模式下 Agent 发起的外部 HTTP 请求经过管层 Egress Proxy
-> - **Sidecar 模式 Egress**：由端层 Proxy 代发 HTTP 请求（[§2.6.1](PROTOCOL.md#261-mcp-proxy-full-technical-solution)），管层不参与
+> - **Sidecar 模式 Egress**：由端层 Proxy 代发 HTTP 请求（[§2.6.1](PROTOCOL.zh.md#261-mcp-proxy-full-technical-solution)），管层不参与
 
 | 能力 | 方向 | 实现方式 |
 |------|------|---------|
@@ -1207,7 +1207,7 @@ Agent 发起的外部 HTTP 请求属于南北向 Egress 流量，分为两类：
 > - **框架隐式请求**（配置拉取、模型下载、心跳等）由 Agent 自身发起，受 NetworkPolicy 限制到白名单目标
 > - **进程级全量出站**（P2 兜底）由 eBPF/iptables 透明劫持
 >
-> 这三分法匹配威胁模型：安全威胁来自 Agent 通过业务工具发起的**可控外部请求**，而非框架底层的**固定目标**网络调用。工具级代发只需支持 GET/POST + 流式响应透传（chunked/SSE），reqwest `bytes_stream()` 即可实现，开发成本可控。详见 [§2.6.1](PROTOCOL.md#261-mcp-proxy-full-technical-solution) Egress 流量管控。
+> 这三分法匹配威胁模型：安全威胁来自 Agent 通过业务工具发起的**可控外部请求**，而非框架底层的**固定目标**网络调用。工具级代发只需支持 GET/POST + 流式响应透传（chunked/SSE），reqwest `bytes_stream()` 即可实现，开发成本可控。详见 [§2.6.1](PROTOCOL.zh.md#261-mcp-proxy-full-technical-solution) Egress 流量管控。
 
 #### Sidecar 模式——工具级 Proxy 代发
 
@@ -1399,6 +1399,121 @@ Agent 进程
 | eBPF sock_ops 透明劫持 | P2 | 进程级所有 TCP 出站 | 内核 5.8+ + CAP_BPF |
 | iptables TPROXY | P2 | 进程级所有 TCP 出站 | NET_ADMIN |
 | NetworkPolicy（增强） | P2 | Pod 级网络隔离 | K8s CNI 支持 |
+
+### 3.6 网关可移植性 — 切换其他 MCP 网关
+
+管层设计为**可插拔**架构。Higress 是默认实现，但架构允许切换到其他网关（APISIX、Kong、Envoy、Nginx 等），代码改动量很小。项目中已有 APISIX Emitter 作为此设计的验证。
+
+#### 3.6.1 耦合面分析
+
+Higress 在项目中的耦合仅限于 **3 个点**，其余模块完全无关：
+
+| 耦合点 | 文件 | 耦合程度 | 说明 |
+|--------|------|---------|------|
+| ① WASM 插件 | `virbius-gateway/wasm/main.go` | 中 | 依赖 `higress/plugins/wasm-go` wrapper 和 `proxy-wasm-go-sdk` |
+| ② CRD Emitter | `virbius-compiler/.../HigressCrdEmitter.java` | 低 | 生成 Higress 专有 CRD（McpBridge、McpServer、WasmPlugin） |
+| ③ 文档/配置 | `ARCHITECTURE.md`、`DEPLOYMENT.md` | 无（仅描述性） | 文档引用 |
+
+**切换网关时不需要改动的模块**：
+
+| 模块 | 原因 |
+|------|------|
+| `virbius-mcp-proxy`（Rust） | Sidecar 模式下拥有独立安全管线（License + precheck + Engine 调用），东西向流量不经管层 |
+| `virbius-engine`（Java） | 标准 HTTP API（`POST /v1/evaluate`），对调用方无感知 |
+| `virbius-control`（Java） | 通过 Redis 投递 artifact（access-lists + scene-registry），与网关实现无关 |
+| `virbius-core`（Rust） | 端层嵌入式 precheck SDK，与管层无关 |
+| `virbius-policy`（Java） | 策略匹配引擎，与管层无关 |
+
+#### 3.6.2 已有的多网关支持
+
+编译器已内置 `-g`（网关后端）参数和两套 Emitter 实现：
+
+```
+virbius-compiler/src/main/java/io/virbius/compiler/
+  ├── HigressCrdEmitter.java        ← Higress CRD 生成（默认）
+  ├── GatewayApisixEmitter.java     ← APISIX 路由生成（已存在）
+  └── CompilerCli.java              ← -g higress | apisix 切换
+```
+
+```java
+// CompilerCli.java
+@Option(names = {"-g", "--gateway"}, defaultValue = "higress",
+        description = "gateway backend: higress | apisix")
+private String gateway;
+```
+
+#### 3.6.3 切换网关需要实现的代码
+
+切换到其他网关（如 Kong、Nginx 或自研网关），需实现以下 **3 项**：
+
+**① 新增 Emitter**（约 100–200 行 Java）
+
+参照已有的 `GatewayApisixEmitter`，新建 `GatewayXxxEmitter.java`。Emitter 读取同一份规则 bundle JSON，输出目标网关的路由/插件配置：
+
+```java
+// 示例: GatewayKongEmitter.java
+public final class GatewayKongEmitter {
+    static int emitRoutes(JsonNode root, Path gatewayDir, ObjectMapper json) throws IOException {
+        // 1. 从 bundle gateway.routes 生成 Kong Route + Service JSON
+        // 2. 配置 Kong Plugin（allowlist / rate-limit / engine-call）
+    }
+}
+```
+
+在 `CompilerCli.java` 中注册（一行）：
+
+```java
+} else if ("kong".equals(gw)) {
+    GatewayKongEmitter.emitRoutes(root, gwDir, json);
+}
+```
+
+**② 安全插件**（约 300–400 行 Go/Lua/JS）
+
+当前 `virbius-gateway/wasm/main.go` 实现了 5 个核心函数，需在目标网关的插件语言中重新实现：
+
+| 函数 | 职责 | Engine 交互 |
+|------|------|------------|
+| 请求头/体拦截 | 从 JSON-RPC 提取 `tool_name`、`session_id` | 无 |
+| Tool 白名单检查 | 本地匹配配置 | 无 |
+| 限流 | Redis INCR per tool+session | Redis |
+| 快速通道放行 | 低风险工具跳过 Engine | 无 |
+| Engine 终判 | `POST /v1/evaluate` 调用 virbius-engine | HTTP → Engine |
+| HTTP 403 阻断 | 直接响应 + JSON-RPC error | 无 |
+| Challenge 响应 | 返回 `-32011` + `challenge_id` | 无 |
+
+按目标网关评估实现工作量：
+
+| 目标网关 | 插件语言 | 代码复用度 | 工作量 |
+|---------|---------|-----------|--------|
+| APISIX | Lua | 逻辑复用，API 重写 | 中 |
+| Kong | Lua | 逻辑复用，API 重写 | 中 |
+| Envoy（纯） | Go WASM | 高 — 仅替换 wrapper 层 | 小 |
+| Nginx + njs | JavaScript | 逻辑复用，API 重写 | 中 |
+| 自研 Go 网关 | Go | 高 — 直接代码复用 | 小 |
+
+**③ Artifact 投递适配**（可选，约 50 行）
+
+如果新网关支持从 Redis 拉取 artifact（access-lists + scene-registry），则 `GatewayDeliveryService` 无需改动。否则需适配投递方式（如 HTTP push 到 Kong Admin API）。
+
+#### 3.6.4 工作量估算
+
+| 工作项 | 代码量 | 难度 | 时间 |
+|--------|-------|------|------|
+| 新增 `GatewayXxxEmitter` | ~150 行 | 低（模板化） | 2–3 小时 |
+| `CompilerCli` 加分支 | ~5 行 | 极低 | 5 分钟 |
+| 新增网关安全插件 | ~350 行 | 中（接口清晰） | 4–6 小时 |
+| Artifact 投递适配（如需） | ~50 行 | 低 | 1 小时 |
+| 部署配置/文档 | — | 低 | 1 小时 |
+| **合计** | **~550 行** | | **1–2 人天** |
+
+#### 3.6.5 支撑可移植性的关键设计
+
+1. **MCP Proxy 独立于管层** — Sidecar 模式下，完整安全管线（License 验证 → precheck → Engine 终判 → challenge）在 `virbius-mcp-proxy` 内闭环，不经过管层
+2. **Engine 是标准 HTTP API** — 任何网关只要能发 HTTP `POST /v1/evaluate` 就能接入 virbius-engine
+3. **编译器有多网关架构** — `--gateway` 参数 + Emitter 模式，新增网关只需加一个 Emitter 类
+4. **Artifact 投递走 Redis** — Control Plane 不直接耦合任何网关实现
+5. **安全插件接口定义清晰** — 5 个核心函数（allowlist、rate-limit、fast-path、engine-call、block）有明确契约，可用任何语言重新实现
 
 ---
 

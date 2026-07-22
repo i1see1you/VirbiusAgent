@@ -471,3 +471,196 @@ impl Default for MemorySection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config_values() {
+        let cfg = ProxyConfig::default();
+        assert_eq!(cfg.proxy.listen, "stdio");
+        assert_eq!(cfg.proxy.upstream_url, "http://localhost:8080");
+        assert_eq!(cfg.proxy.upstream_transport, "sse");
+        assert_eq!(cfg.proxy.upstream_sse_path, "/sse");
+        assert_eq!(cfg.proxy.session_ttl_secs, 1800);
+        assert!(cfg.proxy.upstreams.is_empty());
+    }
+
+    #[test]
+    fn test_default_security_values() {
+        let cfg = ProxyConfig::default();
+        assert_eq!(cfg.security.control_base_url, "http://localhost:8080");
+        assert_eq!(cfg.security.engine_url, "http://localhost:8082");
+        assert!(cfg.security.license_public_key.is_empty());
+        assert!(cfg.security.license_file.is_empty());
+        assert_eq!(cfg.security.fallback_policy, "minimum_privilege");
+        assert!(cfg.security.fast_path.enabled);
+        assert_eq!(cfg.security.fast_path.warmup_calls, 5);
+        assert_eq!(cfg.security.fast_path.risk_threshold, 30);
+        assert!(cfg.security.failover.high_risk_fail_closed);
+        assert!(cfg.security.failover.low_risk_fail_open);
+        assert_eq!(cfg.security.failover.engine_timeout_ms, 3000);
+    }
+
+    #[test]
+    fn test_default_audit_values() {
+        let cfg = ProxyConfig::default();
+        assert!(cfg.audit.backend.is_empty());
+        assert!(cfg.audit.redis_url.is_empty());
+        assert!(cfg.audit.kafka_brokers.is_empty());
+        assert_eq!(cfg.audit.kafka_topic, "virbius-audit-events");
+        assert!((cfg.audit.sample_rate - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_default_trace_values() {
+        let cfg = ProxyConfig::default();
+        assert!(cfg.trace.backend.is_empty());
+        assert!(cfg.trace.redis_url.is_empty());
+        assert!(cfg.trace.kafka_brokers.is_empty());
+        assert_eq!(cfg.trace.kafka_topic, "virbius-trace-events");
+        assert!(cfg.trace.enabled);
+    }
+
+    #[test]
+    fn test_default_memory_values() {
+        let cfg = ProxyConfig::default();
+        assert!(!cfg.memory.enabled);
+        assert_eq!(cfg.memory.max_entry_size, 4096);
+        assert!(cfg.memory.tool_patterns.is_empty());
+    }
+
+    #[test]
+    fn test_fallback_policy_parsing() {
+        let mut cfg = ProxyConfig::default();
+
+        cfg.security.fallback_policy = "minimum_privilege".to_string();
+        assert_eq!(cfg.fallback_policy(), FallbackPolicy::MinimumPrivilege);
+
+        cfg.security.fallback_policy = "default_deny".to_string();
+        assert_eq!(cfg.fallback_policy(), FallbackPolicy::DefaultDeny);
+
+        cfg.security.fallback_policy = "audit_only".to_string();
+        assert_eq!(cfg.fallback_policy(), FallbackPolicy::AuditOnly);
+
+        cfg.security.fallback_policy = "unknown_value".to_string();
+        assert_eq!(cfg.fallback_policy(), FallbackPolicy::MinimumPrivilege);
+
+        cfg.security.fallback_policy = "".to_string();
+        assert_eq!(cfg.fallback_policy(), FallbackPolicy::MinimumPrivilege);
+    }
+
+    #[test]
+    fn test_fallback_policy_enum_debug_clone() {
+        let p = FallbackPolicy::DefaultDeny;
+        assert_eq!(format!("{:?}", p), "DefaultDeny");
+        let cloned = p;
+        assert_eq!(cloned, FallbackPolicy::DefaultDeny);
+    }
+
+    #[test]
+    fn test_trace_redis_url_fallback() {
+        let mut cfg = ProxyConfig::default();
+
+        // When trace.redis_url is empty, fallback to audit.redis_url
+        cfg.audit.redis_url = "127.0.0.1:6379".to_string();
+        assert_eq!(cfg.trace_redis_url(), "127.0.0.1:6379");
+
+        // When trace.redis_url is set, use it
+        cfg.trace.redis_url = "10.0.0.1:6380".to_string();
+        assert_eq!(cfg.trace_redis_url(), "10.0.0.1:6380");
+    }
+
+    #[test]
+    fn test_audit_use_kafka() {
+        let mut cfg = ProxyConfig::default();
+        assert!(!cfg.audit_use_kafka());
+
+        cfg.audit.backend = "kafka".to_string();
+        // backend=kafka but no brokers → false
+        assert!(!cfg.audit_use_kafka());
+
+        cfg.audit.kafka_brokers = "kafka-1:9092".to_string();
+        assert!(cfg.audit_use_kafka());
+    }
+
+    #[test]
+    fn test_trace_use_kafka() {
+        let mut cfg = ProxyConfig::default();
+        assert!(!cfg.trace_use_kafka());
+
+        cfg.trace.backend = "kafka".to_string();
+        assert!(!cfg.trace_use_kafka());
+
+        cfg.trace.kafka_brokers = "kafka-1:9092".to_string();
+        assert!(cfg.trace_use_kafka());
+    }
+
+    #[test]
+    fn test_high_risk_tools_contains_shell() {
+        assert!(HIGH_RISK_TOOLS.contains(&"shell"));
+        assert!(HIGH_RISK_TOOLS.contains(&"curl"));
+        assert!(HIGH_RISK_TOOLS.contains(&"read_file"));
+        assert!(HIGH_RISK_TOOLS.contains(&"delete_file"));
+        assert!(HIGH_RISK_TOOLS.contains(&"sql_query"));
+    }
+
+    #[test]
+    fn test_high_risk_tools_not_contains_low_risk() {
+        assert!(!HIGH_RISK_TOOLS.contains(&"read_file_info"));
+        assert!(!HIGH_RISK_TOOLS.contains(&"list_files"));
+        assert!(!HIGH_RISK_TOOLS.contains(&"search"));
+    }
+
+    #[test]
+    fn test_upstream_entry_defaults() {
+        let entry = UpstreamEntry {
+            name: "test".to_string(),
+            url: "http://localhost:8001".to_string(),
+            sse_path: "/sse".to_string(),
+        };
+        assert_eq!(entry.name, "test");
+        assert_eq!(entry.sse_path, "/sse");
+    }
+
+    #[test]
+    fn test_config_toml_deserialize() {
+        let toml_str = r#"
+            [proxy]
+            listen = "tcp://0.0.0.0:9090"
+            upstream_url = "http://mcp:8080"
+            session_ttl_secs = 3600
+
+            [security]
+            engine_url = "http://engine:8082"
+            fallback_policy = "default_deny"
+
+            [security.fast_path]
+            enabled = false
+
+            [audit]
+            backend = "kafka"
+            kafka_brokers = "kafka:9092"
+
+            [trace]
+            enabled = false
+
+            [memory]
+            enabled = true
+            max_entry_size = 8192
+        "#;
+        let cfg: ProxyConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.proxy.listen, "tcp://0.0.0.0:9090");
+        assert_eq!(cfg.proxy.upstream_url, "http://mcp:8080");
+        assert_eq!(cfg.proxy.session_ttl_secs, 3600);
+        assert_eq!(cfg.security.engine_url, "http://engine:8082");
+        assert_eq!(cfg.security.fallback_policy, "default_deny");
+        assert!(!cfg.security.fast_path.enabled);
+        assert_eq!(cfg.audit.backend, "kafka");
+        assert_eq!(cfg.audit.kafka_brokers, "kafka:9092");
+        assert!(!cfg.trace.enabled);
+        assert!(cfg.memory.enabled);
+        assert_eq!(cfg.memory.max_entry_size, 8192);
+    }
+}

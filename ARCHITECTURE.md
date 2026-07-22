@@ -5,8 +5,8 @@
 | Project | Description |
 |------|------|
 | Document version | v3.6 |
-| Status | Draft |
-| Related | [DESIGN.md](DESIGN.md) (index) · [PROTOCOL.md](PROTOCOL.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [ROADMAP.md](ROADMAP.md) |
+| Status | Active |
+| Related | [DESIGN.md](DESIGN.md) (index) · [PROTOCOL.md](PROTOCOL.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [CHANGELOG.md](CHANGELOG.md) |
 | Reference project | [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) |
 
 > This document contains §1 Overall Architecture · §2 Edge Layer · §3 Gateway Layer · §4 Kernel Layer · §5 Cloud Layer.
@@ -1401,6 +1401,121 @@ Agent process
 | eBPF sock_ops transparent hijacking | P2 | Process-level all TCP outbound | Kernel 5.8+ + CAP_BPF |
 | iptables TPROXY | P2 | Process-level all TCP outbound | NET_ADMIN |
 | NetworkPolicy (enhanced) | P2 | Pod-level network isolation | K8s CNI support |
+
+### 3.6 Gateway Portability — Switching to Other MCP Gateways
+
+The Gateway layer is designed to be **pluggable**. Higress is the default implementation, but the architecture allows switching to other gateways (APISIX, Kong, Envoy, Nginx, etc.) with minimal code changes. An APISIX emitter already exists as proof of this design.
+
+#### 3.6.1 Coupling Analysis
+
+Higress coupling is confined to **3 points**. All other modules are completely independent:
+
+| Coupling Point | File | Coupling Level | Description |
+|---------------|------|---------------|-------------|
+| ① WASM Plugin | `virbius-gateway/wasm/main.go` | Medium | Depends on `higress/plugins/wasm-go` wrapper and `proxy-wasm-go-sdk` |
+| ② CRD Emitter | `virbius-compiler/.../HigressCrdEmitter.java` | Low | Generates Higress-specific CRDs (McpBridge, McpServer, WasmPlugin) |
+| ③ Docs & Config | `ARCHITECTURE.md`, `DEPLOYMENT.md` | None (descriptive) | Documentation references only |
+
+**Modules that do NOT require changes** when switching gateways:
+
+| Module | Reason |
+|--------|--------|
+| `virbius-mcp-proxy` (Rust) | Sidecar MCP proxy with its own security pipeline (License + precheck + Engine call); does not go through the Gateway in Sidecar mode |
+| `virbius-engine` (Java) | Exposes standard HTTP API (`POST /v1/evaluate`); agnostic to the calling gateway |
+| `virbius-control` (Java) | Delivers artifacts (access-lists, scene-registry) via Redis; gateway-agnostic |
+| `virbius-core` (Rust) | Edge-layer embedded precheck SDK; no gateway dependency |
+| `virbius-policy` (Java) | Policy matching engine; no gateway dependency |
+
+#### 3.6.2 Existing Multi-Gateway Support
+
+The compiler already has a `-g` (gateway backend) flag and two emitter implementations:
+
+```
+virbius-compiler/src/main/java/io/virbius/compiler/
+  ├── HigressCrdEmitter.java        ← Higress CRD generation (default)
+  ├── GatewayApisixEmitter.java     ← APISIX route generation (already exists)
+  └── CompilerCli.java              ← -g higress | apisix switch
+```
+
+```java
+// CompilerCli.java
+@Option(names = {"-g", "--gateway"}, defaultValue = "higress",
+        description = "gateway backend: higress | apisix")
+private String gateway;
+```
+
+#### 3.6.3 Code Required to Switch Gateways
+
+To switch to another gateway (e.g., Kong, Nginx, or a custom gateway), implement the following **3 items**:
+
+**① New Emitter** (~100–200 lines Java)
+
+Create a new `GatewayXxxEmitter.java` following the existing `GatewayApisixEmitter` pattern. The emitter reads the same rule bundle JSON and outputs gateway-specific route/plugin configuration:
+
+```java
+// Example: GatewayKongEmitter.java
+public final class GatewayKongEmitter {
+    static int emitRoutes(JsonNode root, Path gatewayDir, ObjectMapper json) throws IOException {
+        // 1. Generate Kong Route + Service JSON from bundle gateway.routes
+        // 2. Configure Kong Plugin (allowlist / rate-limit / engine-call)
+    }
+}
+```
+
+Register it in `CompilerCli.java` (one line):
+
+```java
+} else if ("kong".equals(gw)) {
+    GatewayKongEmitter.emitRoutes(root, gwDir, json);
+}
+```
+
+**② Security Plugin** (~300–400 lines Go/Lua/JS)
+
+The current `virbius-gateway/wasm/main.go` implements 5 core functions that must be replicated in the target gateway's plugin language:
+
+| Function | Responsibility | Engine Interaction |
+|----------|---------------|-------------------|
+| Request header/body interception | Extract `tool_name`, `session_id` from JSON-RPC | None |
+| Tool allowlist check | Local match against config | None |
+| Rate limiting | Redis INCR per tool+session | Redis |
+| Fast-path bypass | Skip engine for low-risk tools | None |
+| Engine evaluate | `POST /v1/evaluate` to virbius-engine | HTTP to Engine |
+| HTTP 403 block | Direct response + JSON-RPC error | None |
+| Challenge response | Return `-32011` with `challenge_id` | None |
+
+Implementation effort by target gateway:
+
+| Target Gateway | Plugin Language | Code Reuse | Effort |
+|---------------|----------------|------------|--------|
+| APISIX | Lua | Logic reuse, API rewrite | Medium |
+| Kong | Lua | Logic reuse, API rewrite | Medium |
+| Envoy (standalone) | Go WASM | High — replace wrapper layer only | Low |
+| Nginx + njs | JavaScript | Logic reuse, API rewrite | Medium |
+| Custom Go gateway | Go | High — direct code reuse | Low |
+
+**③ Artifact Delivery Adaptation** (optional, ~50 lines)
+
+If the new gateway supports pulling artifacts from Redis (access-lists + scene-registry), `GatewayDeliveryService` requires no changes. Otherwise, adapt the delivery mechanism (e.g., HTTP push to Kong Admin API).
+
+#### 3.6.4 Work Estimation
+
+| Work Item | Code Lines | Difficulty | Time |
+|-----------|-----------|-----------|------|
+| New `GatewayXxxEmitter` | ~150 | Low (templated) | 2–3 hours |
+| `CompilerCli` branch | ~5 | Trivial | 5 min |
+| New gateway security plugin | ~350 | Medium (well-defined interface) | 4–6 hours |
+| Artifact delivery adaptation (if needed) | ~50 | Low | 1 hour |
+| Deployment config & docs | — | Low | 1 hour |
+| **Total** | **~550** | | **1–2 person-days** |
+
+#### 3.6.5 Key Design Properties Enabling Portability
+
+1. **MCP Proxy is independent of the Gateway** — In Sidecar mode, the entire security pipeline (License verification → precheck → Engine evaluation → challenge) runs inside `virbius-mcp-proxy` without any Gateway involvement
+2. **Engine is a standard HTTP API** — Any gateway that can make HTTP `POST /v1/evaluate` can integrate with virbius-engine
+3. **Compiler has multi-gateway architecture** — The `--gateway` flag + Emitter pattern means adding a new gateway only requires one new Emitter class
+4. **Artifact delivery via Redis** — Control Plane does not directly couple to any specific gateway implementation
+5. **Security plugin interface is well-defined** — The 5 core functions (allowlist, rate-limit, fast-path, engine-call, block) have clear contracts that can be reimplemented in any language
 
 ---
 

@@ -667,3 +667,294 @@ mod hex {
         s
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audit::{AuditBackend, AuditSink};
+    use crate::config::FailoverConfig;
+    use std::sync::Arc;
+
+    fn make_session() -> Session {
+        let meta = serde_json::json!({
+            "session_id": "test-session",
+            "app_id": "test-app",
+            "tenant_id": "test-tenant",
+        });
+        Session::from_meta(&meta)
+    }
+
+    fn make_pipeline(fallback_policy: FallbackPolicy) -> SecurityPipeline {
+        let audit = Arc::new(AuditSink::new(AuditBackend::Disabled, 1.0));
+        SecurityPipeline::new(
+            "".to_string(),
+            "http://localhost:0",
+            FastPathConfig {
+                enabled: true,
+                warmup_calls: 0,
+                risk_threshold: 30,
+            },
+            FailoverConfig {
+                high_risk_fail_closed: true,
+                low_risk_fail_open: true,
+                engine_timeout_ms: 1000,
+            },
+            fallback_policy,
+            audit,
+            OutputReviewConfig {
+                enabled: true,
+                min_text_length: 512,
+                min_risk_score: 50,
+                fail_open: true,
+            },
+        )
+    }
+
+    #[test]
+    fn test_pipeline_result_allow() {
+        let r = PipelineResult::allow("ok");
+        match r {
+            PipelineResult::Allow { reason, rule_id, risk_score } => {
+                assert_eq!(reason, "ok");
+                assert!(rule_id.is_none());
+                assert!(risk_score.is_none());
+            }
+            _ => panic!("expected Allow"),
+        }
+    }
+
+    #[test]
+    fn test_pipeline_result_deny() {
+        let r = PipelineResult::deny(VirbiusErrorCode::EngineBlocked, "blocked");
+        match r {
+            PipelineResult::Deny { code, reason, .. } => {
+                assert_eq!(code, VirbiusErrorCode::EngineBlocked);
+                assert_eq!(reason, "blocked");
+            }
+            _ => panic!("expected Deny"),
+        }
+    }
+
+    #[test]
+    fn test_pipeline_result_challenge() {
+        let r = PipelineResult::challenge("ch-1", "abc123", "need verification");
+        match r {
+            PipelineResult::Challenge { challenge_id, args_hash, reason, .. } => {
+                assert_eq!(challenge_id, "ch-1");
+                assert_eq!(args_hash, "abc123");
+                assert_eq!(reason, "need verification");
+            }
+            _ => panic!("expected Challenge"),
+        }
+    }
+
+    #[test]
+    fn test_sha256_hex_format() {
+        let hash = sha256_hex("hello");
+        assert!(hash.starts_with("sha256:"));
+        // SHA-256 hex is 64 chars, plus "sha256:" prefix = 71
+        assert_eq!(hash.len(), 71);
+    }
+
+    #[test]
+    fn test_sha256_hex_deterministic() {
+        assert_eq!(sha256_hex("test"), sha256_hex("test"));
+        assert_ne!(sha256_hex("test"), sha256_hex("different"));
+    }
+
+    #[test]
+    fn test_hex_encode() {
+        assert_eq!(hex::encode(b"\x00\x01\xff"), "0001ff");
+        assert_eq!(hex::encode(b""), "");
+        assert_eq!(hex::encode(b"hello"), "68656c6c6f");
+    }
+
+    #[test]
+    fn test_extract_challenge_token_present() {
+        let meta = serde_json::json!({"challenge_token": "tok-abc"});
+        assert_eq!(
+            SecurityPipeline::extract_challenge_token(&meta),
+            Some("tok-abc".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_challenge_token_missing() {
+        let meta = serde_json::json!({});
+        assert_eq!(SecurityPipeline::extract_challenge_token(&meta), None);
+    }
+
+    #[test]
+    fn test_extract_challenge_token_wrong_type() {
+        let meta = serde_json::json!({"challenge_token": 42});
+        assert_eq!(SecurityPipeline::extract_challenge_token(&meta), None);
+    }
+
+    #[test]
+    fn test_should_review_output_disabled() {
+        let mut pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        pipeline.output_review.enabled = false;
+        assert!(!pipeline.should_review_output("x".repeat(1000).as_str(), 100));
+    }
+
+    #[test]
+    fn test_should_review_output_by_text_length() {
+        let pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        // Text shorter than min_text_length (512) and low risk score → no review
+        assert!(!pipeline.should_review_output("short", 0));
+        // Text length >= 512 → review
+        let long = "x".repeat(512);
+        assert!(pipeline.should_review_output(&long, 0));
+    }
+
+    #[test]
+    fn test_should_review_output_by_risk_score() {
+        let pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        // Low risk, short text → review
+        assert!(!pipeline.should_review_output("short", 0));
+        // High risk (>= 50) → review regardless of length
+        assert!(pipeline.should_review_output("short", 50));
+        assert!(pipeline.should_review_output("short", 100));
+    }
+
+    #[test]
+    fn test_is_fast_path_disabled() {
+        let mut pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        pipeline.fast_path.enabled = false;
+        let session = make_session();
+        let pre = PrecheckResult {
+            allowed: true,
+            reason: None,
+            fast_path: true,
+            sandbox_type: "none".to_string(),
+            timeout_ms: 5000,
+        };
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+    }
+
+    #[test]
+    fn test_is_fast_path_warmup() {
+        let mut pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        pipeline.fast_path.warmup_calls = 5;
+        let mut session = make_session();
+        session.tool_call_count = 3;
+        let pre = PrecheckResult {
+            allowed: true,
+            reason: None,
+            fast_path: true,
+            sandbox_type: "none".to_string(),
+            timeout_ms: 5000,
+        };
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+    }
+
+    #[test]
+    fn test_is_fast_path_high_risk() {
+        let mut pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        pipeline.fast_path.warmup_calls = 0;
+        let mut session = make_session();
+        session.tool_call_count = 10;
+        session.session_risk_score = 50;
+        let pre = PrecheckResult {
+            allowed: true,
+            reason: None,
+            fast_path: true,
+            sandbox_type: "none".to_string(),
+            timeout_ms: 5000,
+        };
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+    }
+
+    #[test]
+    fn test_is_fast_path_sandbox_not_none() {
+        let mut pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        pipeline.fast_path.warmup_calls = 0;
+        let session = make_session();
+        let pre = PrecheckResult {
+            allowed: true,
+            reason: None,
+            fast_path: true,
+            sandbox_type: "docker".to_string(),
+            timeout_ms: 5000,
+        };
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+    }
+
+    #[test]
+    fn test_is_fast_path_fast_path_false_in_precheck() {
+        let mut pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        pipeline.fast_path.warmup_calls = 0;
+        let session = make_session();
+        let pre = PrecheckResult {
+            allowed: true,
+            reason: None,
+            fast_path: false,
+            sandbox_type: "none".to_string(),
+            timeout_ms: 5000,
+        };
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+    }
+
+    #[test]
+    fn test_is_fast_path_hit() {
+        let mut pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        pipeline.fast_path.warmup_calls = 0;
+        let mut session = make_session();
+        session.tool_call_count = 10;
+        session.session_risk_score = 0;
+        let pre = PrecheckResult {
+            allowed: true,
+            reason: None,
+            fast_path: true,
+            sandbox_type: "none".to_string(),
+            timeout_ms: 5000,
+        };
+        assert!(pipeline.is_fast_path(&session, &pre, "read_file"));
+    }
+
+    #[tokio::test]
+    async fn test_apply_fallback_minimum_privilege_low_risk() {
+        let pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        let session = make_session();
+        let result = pipeline
+            .apply_fallback(&session, "list_files", &serde_json::json!({}))
+            .await;
+        assert!(matches!(result, PipelineResult::Allow { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_apply_fallback_minimum_privilege_high_risk() {
+        let pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
+        let session = make_session();
+        let result = pipeline
+            .apply_fallback(&session, "shell", &serde_json::json!({}))
+            .await;
+        assert!(matches!(result, PipelineResult::Deny { .. }));
+        if let PipelineResult::Deny { code, .. } = result {
+            assert_eq!(code, VirbiusErrorCode::HighRiskNoLicense);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_fallback_default_deny() {
+        let pipeline = make_pipeline(FallbackPolicy::DefaultDeny);
+        let session = make_session();
+        let result = pipeline
+            .apply_fallback(&session, "list_files", &serde_json::json!({}))
+            .await;
+        assert!(matches!(result, PipelineResult::Deny { .. }));
+        if let PipelineResult::Deny { code, .. } = result {
+            assert_eq!(code, VirbiusErrorCode::LicenseRequired);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_apply_fallback_audit_only() {
+        let pipeline = make_pipeline(FallbackPolicy::AuditOnly);
+        let session = make_session();
+        let result = pipeline
+            .apply_fallback(&session, "shell", &serde_json::json!({}))
+            .await;
+        assert!(matches!(result, PipelineResult::Allow { .. }));
+    }
+}
