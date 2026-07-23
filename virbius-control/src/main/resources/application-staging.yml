@@ -29,3 +29,10 @@ audit:
     backend: redis-stream
     redis:
       stream-key: virbius:audit:events
+
+trace:
+  ingest:
+    enabled: true
+    backend: redis-stream
+    redis:
+      stream-key: virbius:trace:stream

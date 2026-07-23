@@ -26,6 +26,13 @@ audit:
     redis:
       stream-key: virbius:audit:events
 
+trace:
+  ingest:
+    enabled: true
+    backend: redis-stream
+    redis:
+      stream-key: virbius:trace:stream
+
 logging:
   level:
     io.virbius: DEBUG

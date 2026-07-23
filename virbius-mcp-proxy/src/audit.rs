@@ -21,6 +21,8 @@ pub struct AuditEvent {
     pub session_id: String,
     pub app_id: String,
     pub tenant_id: String,
+    pub user_id: Option<String>,
+    pub device_id: Option<String>,
     pub session_risk_score: u32,
     pub timestamp: String,
 }
@@ -45,6 +47,8 @@ impl AuditEvent {
             session_id: session.session_id.clone(),
             app_id: session.app_id.clone(),
             tenant_id: session.tenant_id.clone(),
+            user_id: session.user_id.clone(),
+            device_id: session.device_id.clone(),
             session_risk_score: session.session_risk_score,
             timestamp,
         }
@@ -71,6 +75,8 @@ impl AuditEvent {
             session_id: session.session_id.clone(),
             app_id: session.app_id.clone(),
             tenant_id: session.tenant_id.clone(),
+            user_id: session.user_id.clone(),
+            device_id: session.device_id.clone(),
             session_risk_score: session.session_risk_score,
             timestamp,
         }

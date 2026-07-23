@@ -284,6 +284,7 @@ virbius-agent/
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Detailed architecture documentation |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Deployment topology and operations |
 | [PROTOCOL.md](PROTOCOL.md) | MCP proxy protocol specification |
+| [SSO_INTEGRATION.zh.md](SSO_INTEGRATION.zh.md)（中文） | Unified login (OAuth2/OIDC) integration design - dual-track SSO + API Key auth |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ## Contributing

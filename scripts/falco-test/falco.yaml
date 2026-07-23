@@ -1,0 +1,67 @@
+# Falco configuration for local Docker testing
+#
+# This config enables:
+# - modern_ebpf driver (built into kernel, no module needed)
+# - JSON output (for parsing)
+# - stdout output (for real-time alert visibility)
+# - HTTP output to Virbius Engine (when ENGINE_URL is set)
+# - Web server on port 8765 (health check)
+#
+# Usage: mount as /etc/falco/falco.yaml in the Falco container
+
+# Use modern_ebpf driver — it's built into the kernel and doesn't require
+# loading a kernel module. This works on Docker Desktop VMs (LinuxKit).
+driver:
+  kind: modern_ebpf
+
+json_output: true
+json_include_output_property: true
+json_include_message_property: true
+
+syscall_event_drops:
+  actions:
+    - log
+  rate: 0.05
+  max_burst: 10
+  simulated_drops: 0
+
+syscall_event_timeouts:
+  max_consecutives: 1000
+
+base_syscalls:
+  repair: false
+  setup:
+    - close
+    - mmap
+    - munmap
+    - getpid
+    - gettid
+    - getrandom
+
+rules_file:
+  - /etc/falco/falco_rules.d/virbius-rules.yaml
+
+stdout_output:
+  enabled: true
+  format: json
+
+file_output:
+  enabled: false
+
+grpc:
+  enabled: false
+
+webserver:
+  enabled: true
+  listen_port: 8765
+  k8s_healthz_endpoint: /healthz
+
+# HTTP output — dynamically set via FALCO_HTTP_OUTPUT_URL env var.
+# When Engine is running on the host, use http://host.docker.internal:8082/api/internal/falco-alert
+# When Engine is running in Docker Compose, use http://virbius-engine:8082/api/internal/falco-alert
+http_output:
+  enabled: false
+  url: "http://host.docker.internal:8082/api/internal/falco-alert"
+  user_agent: "falco/virbius"
+  connection_keepalive: true
+  retry_wait_seconds: 5

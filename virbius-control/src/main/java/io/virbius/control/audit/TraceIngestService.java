@@ -28,7 +28,7 @@ import redis.clients.jedis.resps.StreamEntry;
  * <p>Mirrors the pattern of {@link AuditIngestService} for audit events.
  */
 @Service
-@Profile({"dev", "staging"})
+@Profile({"dev", "staging", "prod"})
 public class TraceIngestService {
 
     private static final Logger log = LoggerFactory.getLogger(TraceIngestService.class);

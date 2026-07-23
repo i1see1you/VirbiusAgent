@@ -94,7 +94,7 @@ services:
     ports:
       - "9090:9090"
     environment:
-      VIRBIUS_TRANSPORT: sse
+      VIRBIUS_TRANSPORT: tcp://0.0.0.0:9090
       VIRBIUS_UPSTREAM_URL: ${VIRBIUS_UPSTREAM_URL:-http://host.docker.internal:8080}
       VIRBIUS_CONTROL_URL: http://virbius-control:8080
       VIRBIUS_ENGINE_URL: http://virbius-engine:8082
@@ -108,6 +108,11 @@ services:
         condition: service_healthy
       virbius-control:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9090/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
 volumes:

@@ -34,6 +34,7 @@
 - [6. Security Pipeline Flow](#6-security-pipeline-flow)
 - [7. Monitoring and Alerting](#7-monitoring-and-alerting)
 - [8. Production Deployment](#8-production-deployment)
+  - [8.0 Environment Configuration Matrix](#80-environment-configuration-matrix)
   - [8.1 Database Setup](#81-database-setup)
   - [8.2 Multi-Tenancy](#82-multi-tenancy)
   - [8.3 Canary Rollouts](#83-canary-rollouts)
@@ -475,8 +476,8 @@ Navigation: **📋 名单**
 Manage named lists (`list_name` + dimension + value entries). Lists are referenced by Lua/Groovy rules via `listMatch(name, value)`.
 
 **Dimensions:**
-- `keyword` -- In-memory, max 1000 entries
-- `ip_cidr` -- In-memory, max 1000 entries
+- `keyword` -- In-memory, max 10000 entries
+- `ip_cidr` -- In-memory, max 10000 entries
 - `user_id` -- Redis ZSET, supports per-entry expiry
 - `device_id` -- Redis ZSET
 - `var` -- Logical variable (from context mapping)
@@ -972,6 +973,105 @@ curl -s "http://localhost:8080/api/v1/admin/tenants/default/trace/session/sess-0
 ---
 
 ## 8. Production Deployment
+
+### 8.0 Environment Configuration Matrix
+
+VirbiusAgent uses Spring Boot profiles to distinguish three environments: `dev` (local development), `staging` (pre-production), and `prod` (production). The tables below summarize the key configuration differences across environments.
+
+> **Profile activation**: Set via `SPRING_PROFILES_ACTIVE=dev|staging|prod`. Defaults to `dev` if not set.
+
+#### 8.0.1 Database & Schema
+
+| Setting | dev | staging | prod |
+|---------|-----|---------|------|
+| **Database** | SQLite (file) | MySQL 8+ | MySQL 8+ |
+| **JDBC Driver** | `org.sqlite.JDBC` | `org.mariadb.jdbc.Driver` | `org.mariadb.jdbc.Driver` |
+| **JDBC URL** | `jdbc:sqlite:./data/virbius-control.db` | `${VIRBIUS_JDBC_URL}` (env) | `${VIRBIUS_JDBC_URL}` (env) |
+| **Schema Init** | `always` (auto-run `schema.sql` + `seed.sql`) | `never` (Flyway) | `never` (Flyway) |
+| **Flyway Migration** | Disabled | Enabled (`classpath:db/migration`) | Enabled (`classpath:db/migration`) |
+| **HikariCP Max Pool** | Default | 20 | 50 |
+| **Connection Timeout** | Default | 5000ms | 3000ms |
+| **Leak Detection** | Default | Default | 30000ms |
+
+#### 8.0.2 Message Queue (Audit & Trace)
+
+| Setting | dev | staging | prod |
+|---------|-----|---------|------|
+| **Audit Publish Backend** | Redis Stream | Redis Stream | Kafka |
+| **Audit Ingest Backend** | Redis Stream | Redis Stream | Kafka |
+| **Trace Ingest Backend** | Redis Stream (`virbius:trace:stream`) | Redis Stream (`virbius:trace:stream`) | Kafka (`virbius-trace-events`) |
+| **Kafka Brokers** | Not required | Not required | `${KAFKA_BOOTSTRAP_SERVERS}` (env) |
+| **Kafka Producer Acks** | — | — | `all` (highest reliability) |
+| **Kafka Consumer Group** | — | — | `virbius-audit-ingest` |
+
+#### 8.0.3 LLM Detection (Engine Only)
+
+| Setting | dev | staging | prod |
+|---------|-----|---------|------|
+| **LLM Base URL** | `http://127.0.0.1:11434` (local Ollama) | `${VIRBIUS_PROMPT_LLM_BASE_URL}` (env) | `${VIRBIUS_PROMPT_LLM_BASE_URL}` (env) |
+| **LLM Model** | `sileader/qwen3guard:0.6b` | `${VIRBIUS_PROMPT_LLM_MODEL}` (env) | `${VIRBIUS_PROMPT_LLM_MODEL}` (env) |
+| **LLM Timeout** | 30000ms | 30000ms | `${VIRBIUS_PROMPT_LLM_TIMEOUT_MS}` (default 30000ms) |
+| **prompt-llm fail-open** | `true` (allow on LLM unavailable) | `true` | `false` (block on LLM unavailable) |
+| **guard-detect fail-open** | `true` | `true` | `true` (inherited default) |
+| **Injection Detection** | Enabled | Enabled | Enabled |
+| **Taint Detection** | Enabled | Enabled | Enabled |
+
+> **Fail-open policy**: In dev/staging, requests are allowed when the LLM is unavailable (availability-first). In prod, the prompt-llm blocks requests when the LLM is down (safety-first). This is a deliberate trade-off between availability and security.
+
+#### 8.0.4 Security
+
+| Setting | dev | staging | prod |
+|---------|-----|---------|------|
+| **API Key Auth** | Disabled | Enabled | Enabled |
+| **License Master Key** | Default value (warning log only) | Default value (warning log only) | **Must set** `VIRBIUS_LICENSE_MASTER_KEY`, otherwise startup fails |
+| **Hash Chain Audit** | Enabled | Enabled | Enabled |
+
+> **License Master Key**: `LicenseSigner` throws `IllegalStateException` on startup in prod profile if the default key is used. Dev/staging only logs a warning.
+
+#### 8.0.5 Actuator Endpoints
+
+| Setting | dev | staging | prod |
+|---------|-----|---------|------|
+| **Control Endpoints** | `health, info` | `health, info` | `health, info, prometheus` |
+| **Engine Endpoints** | `health` | `health` | `health, prometheus` |
+| **Prometheus Metrics** | Not exposed | Not exposed | Exposed (for Prometheus Server scraping) |
+
+> Prod exposes the `prometheus` endpoint for runtime metrics collection with Prometheus + Grafana. Requires `micrometer-registry-prometheus` dependency (see [§7 Monitoring](#7-monitoring-and-alerting)).
+
+#### 8.0.6 Logging
+
+| Setting | dev | staging | prod |
+|---------|-----|---------|------|
+| `io.virbius` package log level | `DEBUG` | Default (`INFO`) | Default (`INFO`) |
+| Log file path | `/tmp/virbius/logs/` | `/tmp/virbius/logs/` | `${VIRBIUS_LOG_DIR}` |
+
+#### 8.0.7 Environment Variables Cheatsheet
+
+Complete list of environment variables required for production (prod):
+
+```bash
+# ── Database ──
+export SPRING_PROFILES_ACTIVE=prod
+export VIRBIUS_JDBC_URL=jdbc:mysql://mysql-host:3306/virbius?useSSL=true
+export VIRBIUS_JDBC_USER=virbius
+export VIRBIUS_JDBC_PASSWORD=your_password
+
+# ── Kafka ──
+export KAFKA_BOOTSTRAP_SERVERS=kafka-1:9092,kafka-2:9092
+
+# ── LLM ──
+export VIRBIUS_PROMPT_LLM_BASE_URL=http://llm-host:11434
+export VIRBIUS_PROMPT_LLM_MODEL=sileader/qwen3guard:0.6b
+export VIRBIUS_PROMPT_LLM_TIMEOUT_MS=30000
+
+# ── Security ──
+export VIRBIUS_LICENSE_MASTER_KEY=your-strong-secret-key
+
+# ── Optional: Log directory ──
+export VIRBIUS_LOG_DIR=/var/log/virbius
+```
+
+> Staging uses the same env vars as prod, except audit backend is Redis Stream instead of Kafka (staging's `KAFKA_BOOTSTRAP_SERVERS` is only for Engine consumption; audit still uses Redis Stream).
 
 ### 8.1 Database Setup
 

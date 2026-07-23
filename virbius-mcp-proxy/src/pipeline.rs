@@ -89,6 +89,10 @@ struct EvaluateRequest<'a> {
     content: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device_id: Option<&'a str>,
 }
 
 /// Engine evaluate response body.
@@ -308,6 +312,8 @@ impl SecurityPipeline {
             license_risk_quota: risk_quota,
             content: None,
             role: None,
+            user_id: session.user_id.as_deref(),
+            device_id: session.device_id.as_deref(),
         };
 
         match self.engine.evaluate(&req).await {
@@ -637,6 +643,8 @@ impl SecurityPipeline {
             license_risk_quota: session.risk_quota,
             content: Some(content),
             role: Some("output"),
+            user_id: session.user_id.as_deref(),
+            device_id: session.device_id.as_deref(),
         };
         self.engine.evaluate(&req).await
     }

@@ -21,6 +21,8 @@ pub struct Session {
     pub session_id: String,
     pub app_id: String,
     pub tenant_id: String,
+    pub user_id: Option<String>,
+    pub device_id: Option<String>,
     pub license_jwt: String,
     pub trace_id: String,
     pub tool_call_count: u32,
@@ -67,6 +69,11 @@ impl Session {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+        let user_id = meta.get("user_id").and_then(|v| v.as_str()).map(String::from);
+        let device_id = meta
+            .get("device_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
 
         let session_id = if session_id.is_empty() {
             uuid::Uuid::new_v4().to_string()
@@ -87,6 +94,8 @@ impl Session {
             session_id,
             app_id,
             tenant_id,
+            user_id,
+            device_id,
             license_jwt,
             trace_id: uuid::Uuid::new_v4().to_string(),
             tool_call_count: 0,

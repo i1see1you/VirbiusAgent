@@ -42,6 +42,8 @@ pub struct RuleBody {
     pub keywords: Vec<String>,
     #[serde(default, rename = "list_type")]
     pub list_type: String,
+    #[serde(skip)]
+    pub keywords_lower: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -354,6 +356,9 @@ fn read_manifest() -> EdgeManifest {
                 rules = Vec::new();
                 dlp_rules = Vec::new();
             }
+            for rule in &mut rules {
+                rule.body.keywords_lower = precompute_keywords_lower(&rule.body.keywords);
+            }
             return EdgeManifest {
                 tenant_id: if parsed.tenant_id.is_empty() {
                     cfg.tenant_id.clone()
@@ -404,6 +409,10 @@ fn app_id_matches(manifest_app_id: &str, cfg: &crate::sync::EdgeInitConfig) -> b
     }
     let expected = &cfg.app_id;
     !expected.is_empty() && !manifest_app_id.is_empty() && expected == manifest_app_id
+}
+
+fn precompute_keywords_lower(keywords: &[String]) -> Vec<String> {
+    keywords.iter().map(|kw| kw.to_ascii_lowercase()).collect()
 }
 
 pub fn effective_sdk_config() -> SdkConfig {

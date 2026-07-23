@@ -23,7 +23,7 @@ import redis.clients.jedis.params.XReadParams;
 import redis.clients.jedis.resps.StreamEntry;
 
 @Service
-@Profile({"dev", "staging"})
+@Profile({"dev", "staging", "prod"})
 public class AuditIngestService {
 
     private static final Logger log = LoggerFactory.getLogger(AuditIngestService.class);

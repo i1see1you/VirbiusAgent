@@ -282,6 +282,7 @@ virbius-agent/
 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md) | 详细架构说明 |
 | [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) | 部署拓扑与运维 |
 | [PROTOCOL.md](PROTOCOL.md)（英文） | MCP 代理协议规范 |
+| [SSO_INTEGRATION.zh.md](SSO_INTEGRATION.zh.md) | 统一登录（OAuth2/OIDC）接入方案 - SSO 双轨认证设计 |
 | [CHANGELOG.md](CHANGELOG.md)（英文） | 版本历史 |
 
 > 语言说明：DESIGN / ARCHITECTURE / DEPLOYMENT 提供中文版（点击上表链接）；USAGE_GUIDE、PROTOCOL、CHANGELOG 目前仅提供英文版。

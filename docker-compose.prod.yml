@@ -1,0 +1,179 @@
+# =============================================================================
+#  VirbiusAgent — Docker Compose (Production Profile)
+#
+#  Runs with prod Spring profile: MySQL + Kafka + Redis + Engine + Control.
+#  LLM (Ollama) runs on the host Mac, accessed via host.docker.internal.
+#
+#  Usage:
+#    docker compose -f docker-compose.prod.yml build
+#    docker compose -f docker-compose.prod.yml up -d
+#    docker compose -f docker-compose.prod.yml ps
+#    docker compose -f docker-compose.prod.yml logs -f
+#    docker compose -f docker-compose.prod.yml down
+#
+#  Prerequisites:
+#    - Ollama running on host Mac with model sileader/qwen3guard:0.6b
+#      (ollama pull sileader/qwen3guard:0.6b)
+# =============================================================================
+
+services:
+
+  # ── MySQL 8 (production database) ──────────────────────────────────────
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: virbius_root_2026
+      MYSQL_DATABASE: virbius
+      MYSQL_USER: virbius
+      MYSQL_PASSWORD: virbius_prod_2026
+    volumes:
+      - mysql-data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --sql_mode=NO_ENGINE_SUBSTITUTION
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pvirbius_root_2026"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Kafka (production message queue, KRaft mode — no Zookeeper) ────────
+  kafka:
+    image: apache/kafka:3.7.0
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft mode (no Zookeeper needed)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller,broker
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Auto-create topics
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: "3"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+      # Required cluster ID for KRaft mode
+      CLUSTER_ID: MkUjOEJhQjY1QUY1NDQ2Nk1BODI
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    restart: unless-stopped
+
+  # ── Redis (still needed for counters, cache, session state) ────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── virbius-engine (security engine, port 8082) ─────────────────────────
+  virbius-engine:
+    build:
+      context: .
+      target: virbius-engine
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      # ── Clear proxy (Docker Desktop injects unreachable proxy) ──
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+      # ── Kafka ──
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # ── LLM (host Mac Ollama) ──
+      VIRBIUS_PROMPT_LLM_BASE_URL: http://host.docker.internal:11434
+      VIRBIUS_PROMPT_LLM_MODEL: sileader/qwen3guard:0.6b
+      VIRBIUS_PROMPT_LLM_TIMEOUT_MS: "30000"
+      # ── Redis (still needed for session risk, cache) ──
+      VIRBIUS_REDIS_URL: redis://redis:6379
+      VIRBIUS_CONTROL_BASE_URL: http://virbius-control:8080
+      # ── Logging ──
+      VIRBIUS_LOG_DIR: /var/log/virbius
+    volumes:
+      - engine-logs:/var/log/virbius
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--noproxy", "*", "http://localhost:8082/admin/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── virbius-control (control plane, port 8080) ──────────────────────────
+  virbius-control:
+    build:
+      context: .
+      target: virbius-control
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      # ── Clear proxy (Docker Desktop injects unreachable proxy) ──
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+      # ── MySQL ──
+      VIRBIUS_JDBC_URL: jdbc:mariadb://mysql:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      VIRBIUS_JDBC_USER: virbius
+      VIRBIUS_JDBC_PASSWORD: virbius_prod_2026
+      # ── Kafka ──
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # ── Redis ──
+      VIRBIUS_REDIS_URL: redis://redis:6379
+      VIRBIUS_ENGINE_URL: http://virbius-engine:8082
+      # ── Security ──
+      VIRBIUS_LICENSE_MASTER_KEY: local-prod-test-key-change-me
+      VIRBIUS_SECURITY_API_KEY_ENABLED: "false"  # disable API key auth for local testing
+      # ── Logging ──
+      VIRBIUS_LOG_DIR: /var/log/virbius
+    volumes:
+      - control-logs:/var/log/virbius
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      virbius-engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--noproxy", "*", "http://localhost:8080/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  kafka-data:
+  redis-data:
+  engine-logs:
+  control-logs:

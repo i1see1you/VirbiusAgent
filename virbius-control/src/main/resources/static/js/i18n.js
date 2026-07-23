@@ -71,7 +71,7 @@
 
       // Lists
       'lists.title': '命名名单',
-      'lists.desc': '名单仅定义 <code>list_name</code> + 维度 + 纯值条目；拦截/放行由脚本规则 <code>listMatch(...)</code> + 规则行 <code>intent_action</code> / <code>risk_score</code> 决定。按 Header/Query 匹配：维度选 <code>var:逻辑变量</code>（如 <code>var:app_id</code>），条目填纯值（如 <code>evil</code>），脚本写 <code>listMatch(\'名单\', ctx.var(\'app_id\'))</code>。<strong>存储</strong>：<code>keyword</code> / <code>ip_cidr</code> → 内存（gateway JSON + Engine reload）；<code>user_id</code> / <code>device_id</code> / <code>var:*</code> → Redis ZSET（支持单条过期）。内存名单<strong>生效条目上限 1000</strong>；保存后自动刷新 gateway 产物、Redis 并推送 Engine。',
+      'lists.desc': '名单仅定义 <code>list_name</code> + 维度 + 纯值条目；拦截/放行由脚本规则 <code>listMatch(...)</code> + 规则行 <code>intent_action</code> / <code>risk_score</code> 决定。按 Header/Query 匹配：维度选 <code>var:逻辑变量</code>（如 <code>var:app_id</code>），条目填纯值（如 <code>evil</code>），脚本写 <code>listMatch(\'名单\', ctx.var(\'app_id\'))</code>。<strong>存储</strong>：<code>keyword</code> / <code>ip_cidr</code> → 内存（gateway JSON + Engine reload）；<code>user_id</code> / <code>device_id</code> / <code>var:*</code> → Redis ZSET（支持单条过期）。内存名单<strong>生效条目上限 10000</strong>；保存后自动刷新 gateway 产物、Redis 并推送 Engine。',
       'lists.placeholder-name': 'list_name',
       'lists.dim-logical': '逻辑变量',
       'lists.placeholder-remark-list': '名单备注',
@@ -794,7 +794,7 @@
 
       // Lists
       'lists.title': 'Named Lists',
-      'lists.desc': 'Lists define <code>list_name</code> + dimension + plain values; block/allow is determined by script rules <code>listMatch(...)</code> + rule row <code>intent_action</code> / <code>risk_score</code>. For Header/Query matching: select dimension <code>var:logical_variable</code> (e.g. <code>var:app_id</code>), fill plain values (e.g. <code>evil</code>), write script <code>listMatch(\'list\', ctx.var(\'app_id\'))</code>. <strong>Storage</strong>: <code>keyword</code> / <code>ip_cidr</code> → memory (gateway JSON + Engine reload); <code>user_id</code> / <code>device_id</code> / <code>var:*</code> → Redis ZSET (supports per-entry expiry). Memory lists have a<strong>limit of 1000 active entries</strong>; after saving, gateway artifacts, Redis and Engine are auto-refreshed.',
+      'lists.desc': 'Lists define <code>list_name</code> + dimension + plain values; block/allow is determined by script rules <code>listMatch(...)</code> + rule row <code>intent_action</code> / <code>risk_score</code>. For Header/Query matching: select dimension <code>var:logical_variable</code> (e.g. <code>var:app_id</code>), fill plain values (e.g. <code>evil</code>), write script <code>listMatch(\'list\', ctx.var(\'app_id\'))</code>. <strong>Storage</strong>: <code>keyword</code> / <code>ip_cidr</code> → memory (gateway JSON + Engine reload); <code>user_id</code> / <code>device_id</code> / <code>var:*</code> → Redis ZSET (supports per-entry expiry). Memory lists have a<strong>limit of 10000 active entries</strong>; after saving, gateway artifacts, Redis and Engine are auto-refreshed.',
       'lists.placeholder-name': 'list_name',
       'lists.dim-logical': 'Logical Variable',
       'lists.placeholder-remark-list': 'List remark',

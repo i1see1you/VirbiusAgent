@@ -34,6 +34,7 @@
 - [6. 安全流水线流程](#6-安全流水线流程)
 - [7. 监控与告警](#7-监控与告警)
 - [8. 生产部署](#8-生产部署)
+  - [8.0 环境配置对照表](#80-环境配置对照表)
   - [8.1 数据库设置](#81-数据库设置)
   - [8.2 多租户](#82-多租户)
   - [8.3 金丝雀发布](#83-金丝雀发布)
@@ -968,6 +969,105 @@ curl -s "http://localhost:8080/api/v1/admin/tenants/default/trace/session/sess-0
 ---
 
 ## 8. 生产部署
+
+### 8.0 环境配置对照表
+
+VirbiusAgent 使用 Spring Boot Profile 体系区分三套环境：`dev`（本地开发）、`staging`（预发布）、`prod`（生产）。下表汇总了各环境在核心配置维度的差异，帮助开发者快速了解从本地到生产的配置变化。
+
+> **Profile 激活方式**：通过环境变量 `SPRING_PROFILES_ACTIVE=dev|staging|prod` 控制，未设置时默认 `dev`。
+
+#### 8.0.1 数据库与 Schema
+
+| 配置项 | dev | staging | prod |
+|--------|-----|---------|------|
+| **数据库类型** | SQLite（文件） | MySQL 8+ | MySQL 8+ |
+| **JDBC 驱动** | `org.sqlite.JDBC` | `org.mariadb.jdbc.Driver` | `org.mariadb.jdbc.Driver` |
+| **连接地址** | `jdbc:sqlite:./data/virbius-control.db` | `${VIRBIUS_JDBC_URL}`（环境变量） | `${VIRBIUS_JDBC_URL}`（环境变量） |
+| **Schema 初始化** | `always`（自动执行 `schema.sql` + `seed.sql`） | `never`（依赖 Flyway） | `never`（依赖 Flyway） |
+| **Flyway 迁移** | 禁用 | 启用（`classpath:db/migration`） | 启用（`classpath:db/migration`） |
+| **连接池大小** | 默认 | 20 | 50 |
+| **连接超时** | 默认 | 5000ms | 3000ms |
+| **泄漏检测** | 默认 | 默认 | 30000ms |
+
+#### 8.0.2 消息队列（审计与链路）
+
+| 配置项 | dev | staging | prod |
+|--------|-----|---------|------|
+| **审计发布后端** | Redis Stream | Redis Stream | Kafka |
+| **审计消费后端** | Redis Stream | Redis Stream | Kafka |
+| **链路消费后端** | Redis Stream（`virbius:trace:stream`） | Redis Stream（`virbius:trace:stream`） | Kafka（`virbius-trace-events`） |
+| **Kafka 地址** | 不需要 | 不需要 | `${KAFKA_BOOTSTRAP_SERVERS}`（环境变量） |
+| **Kafka producer acks** | — | — | `all`（最高可靠性） |
+| **Kafka consumer group** | — | — | `virbius-audit-ingest` |
+
+#### 8.0.3 LLM 检测配置（Engine 专属）
+
+| 配置项 | dev | staging | prod |
+|--------|-----|---------|------|
+| **LLM 地址** | `http://127.0.0.1:11434`（本地 Ollama） | `${VIRBIUS_PROMPT_LLM_BASE_URL}`（环境变量） | `${VIRBIUS_PROMPT_LLM_BASE_URL}`（环境变量） |
+| **LLM 模型** | `sileader/qwen3guard:0.6b` | `${VIRBIUS_PROMPT_LLM_MODEL}`（环境变量） | `${VIRBIUS_PROMPT_LLM_MODEL}`（环境变量） |
+| **LLM 超时** | 30000ms | 30000ms | `${VIRBIUS_PROMPT_LLM_TIMEOUT_MS}`（默认 30000ms） |
+| **prompt-llm fail-open** | `true`（LLM 不可用时放行） | `true` | `false`（LLM 不可用时拦截） |
+| **guard-detect fail-open** | `true` | `true` | `true`（继承默认值） |
+| **注入检测** | 启用 | 启用 | 启用 |
+| **污点检测** | 启用 | 启用 | 启用 |
+
+> **fail-open 策略差异**：dev/staging 环境中 LLM 不可用时放行请求（优先保证可用性），prod 环境中 prompt-llm 不可用时拦截请求（优先保证安全性）。这是安全策略在可用性与安全性之间的权衡。
+
+#### 8.0.4 安全策略
+
+| 配置项 | dev | staging | prod |
+|--------|-----|---------|------|
+| **API Key 认证** | 禁用 | 启用 | 启用 |
+| **License Master Key** | 使用默认值（仅告警日志） | 使用默认值（仅告警日志） | **必须设置** `VIRBIUS_LICENSE_MASTER_KEY`，否则启动失败 |
+| **Hash Chain 审计** | 启用 | 启用 | 启用 |
+
+> **License Master Key**：`LicenseSigner` 在 prod profile 下检测到使用默认密钥时会抛出 `IllegalStateException` 阻止启动。dev/staging 仅输出告警日志。
+
+#### 8.0.5 监控端点暴露（Actuator）
+
+| 配置项 | dev | staging | prod |
+|--------|-----|---------|------|
+| **Control 端点** | `health, info` | `health, info` | `health, info, prometheus` |
+| **Engine 端点** | `health` | `health` | `health, prometheus` |
+| **Prometheus 指标** | 不暴露 | 不暴露 | 暴露（供 Prometheus Server 抓取） |
+
+> 生产环境额外暴露 `prometheus` 端点，配合 Prometheus + Grafana 实现运行时指标监控。使用前需添加 `micrometer-registry-prometheus` 依赖（参见 [§7 监控与告警](#7-监控与告警)）。
+
+#### 8.0.6 日志级别
+
+| 配置项 | dev | staging | prod |
+|--------|-----|---------|------|
+| `io.virbius` 包日志 | `DEBUG` | 默认（`INFO`） | 默认（`INFO`） |
+| 日志文件 | `/tmp/virbius/logs/` | `/tmp/virbius/logs/` | `${VIRBIUS_LOG_DIR}` |
+
+#### 8.0.7 环境变量速查
+
+生产环境（prod）需要设置的完整环境变量清单：
+
+```bash
+# ── 数据库 ──
+export SPRING_PROFILES_ACTIVE=prod
+export VIRBIUS_JDBC_URL=jdbc:mysql://mysql-host:3306/virbius?useSSL=true
+export VIRBIUS_JDBC_USER=virbius
+export VIRBIUS_JDBC_PASSWORD=your_password
+
+# ── Kafka ──
+export KAFKA_BOOTSTRAP_SERVERS=kafka-1:9092,kafka-2:9092
+
+# ── LLM ──
+export VIRBIUS_PROMPT_LLM_BASE_URL=http://llm-host:11434
+export VIRBIUS_PROMPT_LLM_MODEL=sileader/qwen3guard:0.6b
+export VIRBIUS_PROMPT_LLM_TIMEOUT_MS=30000
+
+# ── 安全 ──
+export VIRBIUS_LICENSE_MASTER_KEY=your-strong-secret-key
+
+# ── 可选：日志目录 ──
+export VIRBIUS_LOG_DIR=/var/log/virbius
+```
+
+> staging 环境的环境变量与 prod 相同，区别仅在于审计后端使用 Redis Stream 而非 Kafka（staging 的 `KAFKA_BOOTSTRAP_SERVERS` 仅用于 Engine 消费，审计仍走 Redis Stream）。
 
 ### 8.1 数据库设置
 

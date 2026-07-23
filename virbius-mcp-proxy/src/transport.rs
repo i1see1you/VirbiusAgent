@@ -147,12 +147,22 @@ pub struct AppState {
 /// Create the axum router with all routes.
 pub fn create_router(state: AppState) -> Router {
     Router::new()
+        // Health check endpoint (for Docker HEALTHCHECK and orchestration)
+        .route("/health", get(handle_health))
         // MCP SSE protocol
         .route("/sse", get(handle_sse))
         .route("/messages/", post(handle_post_message))
         // Simple HTTP POST (for non-SSE clients and testing)
         .route("/", post(handle_simple_post))
         .with_state(state)
+}
+
+/// GET /health — Health check endpoint.
+///
+/// Returns 200 OK with a simple JSON body. Used by Docker HEALTHCHECK
+/// and orchestrators (docker-compose, Kubernetes) to determine liveness.
+async fn handle_health() -> impl IntoResponse {
+    Json(serde_json::json!({"status": "ok"}))
 }
 
 /// GET /sse — Establish SSE connection (MCP SSE server protocol).

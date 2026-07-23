@@ -36,38 +36,58 @@ COPY virbius-compiler/ virbius-compiler/
 RUN mvn package -DskipTests -B -q
 
 # ── Stage 2: Rust build (workspace) ─────────────────────────────────────────
-FROM rust:1.80-slim-bookworm AS rust-build
+FROM rust:1.86-slim-bookworm AS rust-build
 WORKDIR /build
+
+# Clear proxy env vars inherited from Docker daemon (not reachable inside container)
+ENV HTTP_PROXY=""
+ENV HTTPS_PROXY=""
+ENV http_proxy=""
+ENV https_proxy=""
+ENV ALL_PROXY=""
+ENV all_proxy=""
+
+# Configure Chinese crates.io mirror (rsproxy) to avoid network issues
+RUN mkdir -p /usr/local/cargo && cat > /usr/local/cargo/config.toml << 'EOF'
+[source.crates-io]
+replace-with = "rsproxy-sparse"
+
+[source.rsproxy]
+registry = "https://rsproxy.cn/crates.io-index"
+
+[source.rsproxy-sparse]
+registry = "sparse+https://rsproxy.cn/index/"
+
+[net]
+git-fetch-with-cli = true
+EOF
 
 # Install system deps for native libs
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+    pkg-config libssl-dev g++ python3 make && rm -rf /var/lib/apt/lists/*
 
-# Copy manifests for dependency cache
+# Copy all source and build
 COPY Cargo.toml Cargo.lock* ./
 COPY virbius-core/Cargo.toml virbius-core/
 COPY virbius-kernel/Cargo.toml virbius-kernel/
 COPY virbius-mcp-proxy/Cargo.toml virbius-mcp-proxy/
-
-# Create dummy main for dependency resolution
-RUN mkdir -p virbius-core/src virbius-kernel/src virbius-mcp-proxy/src \
-    && echo 'fn main() {}' | tee virbius-core/src/main.rs \
-        virbius-kernel/src/main.rs virbius-mcp-proxy/src/main.rs
-RUN cargo build --release -p virbius-mcp-proxy 2>/dev/null || true
-RUN rm -rf virbius-core/src virbius-kernel/src virbius-mcp-proxy/src
-
-# Copy actual source and build
+COPY virbius-mcp-node/Cargo.toml virbius-mcp-node/
+COPY virbius-mcp-python/Cargo.toml virbius-mcp-python/
 COPY virbius-core/src virbius-core/src
 COPY virbius-kernel/src virbius-kernel/src
 COPY virbius-mcp-proxy/src virbius-mcp-proxy/src
+COPY virbius-mcp-node/src virbius-mcp-node/src
+COPY virbius-mcp-python/src virbius-mcp-python/src
 COPY virbius-core/include virbius-core/include
-COPY virbius-core/Cargo.toml virbius-core/Cargo.toml
 
 RUN cargo build --release -p virbius-mcp-proxy
 
 # ── Stage 3: virbius-engine runtime ─────────────────────────────────────────
 FROM eclipse-temurin:17-jre-jammy AS virbius-engine
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
 
@@ -92,6 +112,9 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 FROM eclipse-temurin:17-jre-jammy AS virbius-control
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
 
 COPY --from=java-build /build/virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar app.jar
@@ -115,6 +138,9 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 FROM debian:bookworm-slim AS virbius-mcp-proxy
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
 
 COPY --from=rust-build /build/target/release/virbius-mcp-proxy /usr/local/bin/
@@ -124,7 +150,7 @@ RUN mkdir -p /var/log/virbius && chown -R virbius:virbius /app /var/log/virbius
 USER virbius
 EXPOSE 9090
 
-ENV VIRBIUS_TRANSPORT=sse
+ENV VIRBIUS_TRANSPORT=tcp://0.0.0.0:9090
 ENV VIRBIUS_LOG_DIR=/var/log/virbius
 
 HEALTHCHECK --interval=15s --timeout=5s --retries=3 \

@@ -129,7 +129,7 @@ CREATE TABLE tb_cumulative (
 CREATE TABLE tb_tenant_rollout_policy (
     tenant_id                   VARCHAR(64) PRIMARY KEY,
     auto_mode                   VARCHAR(16) NOT NULL DEFAULT 'assisted',
-    canary_ladder_json          TEXT NOT NULL DEFAULT '[5,20,50,100]',
+    canary_ladder_json          VARCHAR(255) NOT NULL DEFAULT '[5,20,50,100]',
     min_dry_run_hours           INTEGER NOT NULL DEFAULT 1,
     min_review_count            INTEGER NOT NULL DEFAULT 100,
     max_review_rate             REAL NOT NULL DEFAULT 0.05,
@@ -159,7 +159,7 @@ CREATE TABLE tb_rule_rollout_event (
     rule_revision    INTEGER NOT NULL,
     rollout_state    VARCHAR(16) NOT NULL,
     canary_percent   INTEGER,
-    trigger          VARCHAR(32) NOT NULL,
+    `trigger`        VARCHAR(32) NOT NULL,
     operator         VARCHAR(64),
     effective_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -311,7 +311,7 @@ CREATE TABLE tb_bundle_staging (
     layer            VARCHAR(16) NOT NULL,
     base_version     VARCHAR(64) NOT NULL,
     status           VARCHAR(16) NOT NULL DEFAULT 'editing',
-    rule_diffs       TEXT NOT NULL DEFAULT '{}',
+    rule_diffs       VARCHAR(8192) NOT NULL DEFAULT '{}',
     version          INTEGER NOT NULL DEFAULT 1,
     updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (tenant_id, bundle_id, layer),
@@ -326,7 +326,7 @@ CREATE TABLE tb_gateway_artifact_meta (
     scene_registry_sha256  VARCHAR(64)  NOT NULL,
     published_at           TIMESTAMP    NOT NULL,
     publish_id             VARCHAR(36),
-    trigger                VARCHAR(32),
+    `trigger`              VARCHAR(32),
     storage                VARCHAR(16)  NOT NULL DEFAULT 'redis'
 );
 
@@ -348,7 +348,7 @@ CREATE TABLE tb_deploy_rollout (
     stable_edge_revision   BIGINT,
     canary_falco_revision  BIGINT,
     stable_falco_revision  BIGINT,
-    canary_ladder          TEXT         NOT NULL DEFAULT '[5,20,50,100]',
+    canary_ladder          VARCHAR(255)  NOT NULL DEFAULT '[5,20,50,100]',
     started_at             TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at             TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     finalized_at           TIMESTAMP,
@@ -395,7 +395,7 @@ CREATE TABLE tb_agent_licenses (
     license_id      VARCHAR(64)  NOT NULL,
     tenant_id       VARCHAR(64)  NOT NULL,
     app_id          VARCHAR(128) NOT NULL,
-    allowed_tools   TEXT         NOT NULL DEFAULT '[]',
+    allowed_tools   VARCHAR(8192) NOT NULL DEFAULT '[]',
     risk_quota      INTEGER      NOT NULL DEFAULT 60,
     tool_rate_limit INTEGER      NOT NULL DEFAULT 50,
     expiry          TIMESTAMP    NOT NULL,
@@ -403,7 +403,7 @@ CREATE TABLE tb_agent_licenses (
     status          VARCHAR(16)  NOT NULL DEFAULT 'active',
     signature_hash   VARCHAR(64)  NOT NULL,
     agent_name      VARCHAR(256) NOT NULL DEFAULT '',
-    description     TEXT         NOT NULL DEFAULT '',
+    description     VARCHAR(1024) NOT NULL DEFAULT '',
     agent_aid       VARCHAR(256) NOT NULL DEFAULT '',
     created_by      VARCHAR(64),
     created_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,

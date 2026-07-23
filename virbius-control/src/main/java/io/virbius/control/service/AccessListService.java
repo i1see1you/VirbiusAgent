@@ -18,7 +18,7 @@ import org.springframework.stereotype.Service;
 public class AccessListService {
 
     /** Max active (non-expired) entries per memory list (keyword / ip_cidr). */
-    public static final int MEMORY_LIST_MAX_ACTIVE_ENTRIES = 1000;
+    public static final int MEMORY_LIST_MAX_ACTIVE_ENTRIES = 10000;
 
     private final ListMetaRepository listMetaRepo;
     private final RegistryRepository registryRepo;

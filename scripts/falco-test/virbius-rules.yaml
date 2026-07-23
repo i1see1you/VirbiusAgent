@@ -1,0 +1,18 @@
+# Virbius Falco rules — builtin_sensitive_file_access
+#
+# This file is auto-generated from the database seed (V2__seed_builtin_falco.sql)
+# and matches the output of FalcoConfigBuilder.buildRulesYaml().
+#
+# Rule: builtin_sensitive_file_access
+# - Detects WRITE access to sensitive system files
+# - Condition: open/openat/openat2 on /etc/shadow, /etc/passwd,
+#   /root/.ssh/id_rsa, /root/.ssh/authorized_keys with write intent
+# - Priority: WARNING
+# - intent_action: deny (risk_score: 100)
+
+- rule: builtin_sensitive_file_access
+  desc: Detect access to sensitive system files
+  condition: evt.type in (open, openat, openat2) and fd.name in (/etc/shadow, /etc/passwd, /root/.ssh/id_rsa, /root/.ssh/authorized_keys) and evt.is_open_write=true
+  output: Sensitive file access (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, pname=%proc.name, file=%fd.name, pcmdline=%proc.pcmdline)
+  priority: WARNING
+  tags: [agent, filesystem, sensitive]

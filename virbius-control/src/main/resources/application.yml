@@ -62,6 +62,12 @@ audit:
     batch-size: 256
     consumer-group: virbius-audit-ingest
 
+trace:
+  ingest:
+    poll-ms: 1000
+    batch-size: 256
+    consumer-group: virbius-trace-ingest
+
 virbius.audit.hash-chain:
   enabled: ${VIRBIUS_AUDIT_HASH_CHAIN_ENABLED:true}
   verify-enabled: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_ENABLED:true}
