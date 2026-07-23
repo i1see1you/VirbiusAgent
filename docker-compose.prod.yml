@@ -2,7 +2,7 @@
 #  VirbiusAgent — Docker Compose (Production Profile)
 #
 #  Runs with prod Spring profile: MySQL + Kafka + Redis + Engine + Control.
-#  LLM (Ollama) runs on the host Mac, accessed via host.docker.internal.
+#  LLM (Ollama) runs on the host machine, accessed via host.docker.internal.
 #
 #  Usage:
 #    docker compose -f docker-compose.prod.yml build
@@ -12,8 +12,10 @@
 #    docker compose -f docker-compose.prod.yml down
 #
 #  Prerequisites:
-#    - Ollama running on host Mac with model sileader/qwen3guard:0.6b
+#    - Ollama running on host machine with model sileader/qwen3guard:0.6b
 #      (ollama pull sileader/qwen3guard:0.6b)
+#    - Create a .env file (or export env vars) with required secrets:
+#      MYSQL_ROOT_PASSWORD, MYSQL_PASSWORD, VIRBIUS_LICENSE_MASTER_KEY
 # =============================================================================
 
 services:
@@ -24,15 +26,15 @@ services:
     ports:
       - "3306:3306"
     environment:
-      MYSQL_ROOT_PASSWORD: virbius_root_2026
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env or environment}
       MYSQL_DATABASE: virbius
       MYSQL_USER: virbius
-      MYSQL_PASSWORD: virbius_prod_2026
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env or environment}
     volumes:
       - mysql-data:/var/lib/mysql
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --sql_mode=NO_ENGINE_SUBSTITUTION
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-pvirbius_root_2026"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -142,14 +144,14 @@ services:
       # ── MySQL ──
       VIRBIUS_JDBC_URL: jdbc:mariadb://mysql:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
       VIRBIUS_JDBC_USER: virbius
-      VIRBIUS_JDBC_PASSWORD: virbius_prod_2026
+      VIRBIUS_JDBC_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env or environment}
       # ── Kafka ──
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       # ── Redis ──
       VIRBIUS_REDIS_URL: redis://redis:6379
       VIRBIUS_ENGINE_URL: http://virbius-engine:8082
       # ── Security ──
-      VIRBIUS_LICENSE_MASTER_KEY: local-prod-test-key-change-me
+      VIRBIUS_LICENSE_MASTER_KEY: ${VIRBIUS_LICENSE_MASTER_KEY:?set VIRBIUS_LICENSE_MASTER_KEY in .env or environment}
       VIRBIUS_SECURITY_API_KEY_ENABLED: "false"  # disable API key auth for local testing
       # ── Logging ──
       VIRBIUS_LOG_DIR: /var/log/virbius

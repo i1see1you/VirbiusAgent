@@ -47,8 +47,10 @@ ENV https_proxy=""
 ENV ALL_PROXY=""
 ENV all_proxy=""
 
-# Configure Chinese crates.io mirror (rsproxy) to avoid network issues
-RUN mkdir -p /usr/local/cargo && cat > /usr/local/cargo/config.toml << 'EOF'
+# Configure crates.io mirror (optional, set CRATES_MIRROR=cn for China users)
+ARG CRATES_MIRROR=""
+RUN if [ "$CRATES_MIRROR" = "cn" ]; then \
+      mkdir -p /usr/local/cargo && cat > /usr/local/cargo/config.toml << 'EOF'
 [source.crates-io]
 replace-with = "rsproxy-sparse"
 
@@ -61,6 +63,7 @@ registry = "sparse+https://rsproxy.cn/index/"
 [net]
 git-fetch-with-cli = true
 EOF
+    fi
 
 # Install system deps for native libs
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -79,7 +79,7 @@ Agent Framework
 [1] Edge Layer Execution (virbius-core, P0: in-process)
     +-- P0: sandbox_type=none -> in-process execution
     +-- P2: sandbox_type=subprocess -> Landlock + drop caps
-    +-- P2: sandbox_type=gvisor -> gVisor warm pool
+    +-- sandbox_type=gvisor -> gVisor warm pool
     |     v execution result
     v
 [2] Gateway Layer (Higress)
@@ -241,7 +241,7 @@ Rollout states across layers may be out of sync (e.g., edge layer canary=10%, ga
 |-------|-----------|---------|-----------|-------------|
 | Edge | Landlock | File path restriction (P2) | Relatively new (files 5.13/2021, network 6.7/2024) | AppArmor |
 | Edge | drop caps | Capabilities dropping (P2) | Very stable (kernel 2.2, 1999) | None |
-| Edge | gVisor | Untrusted code sandbox (P2) | Stable (Google, GKE production) | Kata Containers |
+| Edge | gVisor | Untrusted code sandbox | Stable (Google, GKE production) | Kata Containers |
 | Edge | PyO3 / napi-rs | Rust<->Python/Node bindings | Stable (widely used) | subprocess |
 | Gateway | Higress + WASM | AI gateway + security plugins | Stable (based on Envoy, Alibaba production) | APISIX / Kong / Envoy — see [§3.6](ARCHITECTURE.md#36-gateway-portability--switching-to-other-mcp-gateways) |
 | Kernel | eBPF + BTF/CO-RE | Kernel observability | Very stable (industry standard) | None |
@@ -262,7 +262,7 @@ Rollout states across layers may be out of sync (e.g., edge layer canary=10%, ga
 |------------|------|------------|
 | Higress/Envoy | Envoy community active; WASM ecosystem evolving | Core functionality already stable; WASM plugins portable across gateways; switching guide in [§3.6](ARCHITECTURE.md#36-gateway-portability--switching-to-other-mcp-gateways) (~550 lines, 1–2 person-days) |
 | Falco | Maintenance burden of 4 drivers; kmod driver to be deprecated | Use only eBPF + plugin modes |
-| gVisor | Google dependency; performance overhead | Only introduced at P2; Kata as backup |
+| gVisor | Google dependency; performance overhead | Kata as backup |
 
 **Tier 3 Relatively New (needs close monitoring)**:
 
@@ -329,7 +329,7 @@ VirbiusAgent adopts a **file-level reuse** strategy and does not depend on Virbi
 | `virbius-core/src/prompt_gateway.rs` | Rust | Prompt Gateway (constitution injection + PII desensitization) |
 | `virbius-core/src/license.rs` | Rust | License validation (signature/expiry/revocation) |
 | `virbius-core/src/sandbox/landlock.rs` | Rust | P2: Landlock + drop caps sandbox |
-| `virbius-core/src/sandbox/gvisor_pool.rs` | Rust | P2: gVisor warm pool |
+| `virbius-core/src/sandbox/gvisor_pool.rs` | Rust | gVisor warm pool |
 | virbius-core MCP bindings | Rust | PyO3 / napi-rs bindings |
 | `virbius-mcp-proxy` | Rust | MCP protocol proxy (stdio/SSE transport + security pipeline + session management) |
 | `virbius-control` License module | Java | License issuance (EdDSA) + revocation (pub/sub) |
@@ -493,7 +493,7 @@ if session_risk > 30: increase audit sampling rate
 | Application layer | tool_call/tool_result full-chain trace | MCP Proxy TraceCollector |
 | HTTP layer | Request-level allowlist/counting/blocking | Higress WASM plugin |
 | Kernel layer | syscall/network/file events | Falco (eBPF) |
-| Kernel layer (P2) | Real-time blocking | Landlock + gVisor |
+| Kernel layer | Real-time blocking | Landlock + gVisor |
 
 #### Dimension 5: Approval and Blocking Capability (Enforcement)
 
@@ -501,7 +501,7 @@ if session_risk > 30: increase audit sampling rate
 - Can high-risk operations be intercepted and routed to human approval?
 - Is the approval token single-use, parameter-bound, with a TTL?
 - Does approval timeout default to deny?
-- Is there kernel-level hard blocking (Landlock/gVisor) in the P2 phase?
+- Is there kernel-level hard blocking (Landlock/gVisor)?
 
 #### Dimension 6: Audit Integrity
 
@@ -590,7 +590,7 @@ Use a matrix to assess each Agent's control coverage:
 | Runtime observability | Falco eBPF + http_output three-level correlation + decision chain tracing | P0/P1 | ✅ Completed (custom Falco plugin removed in Plan A; see [§13.4](#134-custom-virbius-audit-falco-plugin--falco-rule-set-expansion)) |
 | High-risk approval | Challenge full chain (create → approve → token verify) | P1 | ✅ Completed |
 | HTTP blocking | Higress WASM 403 + License revocation | P0 | ✅ Completed |
-| Kernel-level blocking | Landlock + gVisor | P2 | 🔧 Code complete + compiles (Rust `pre_exec` hook implements Landlock + capset + prctl); awaiting Linux runtime verification + integration tests (`landlock_applied` currently inferred from ABI, pending self-pipe accurate reporting) (see [ARCHITECTURE.md §2.3-2.4](ARCHITECTURE.md#23-p2-landlock--drop-caps-subprocess-linux)) |
+| Kernel-level blocking | Landlock + gVisor | P0 | ✅ Completed (Landlock runtime verified; gVisor deployed and verified on Linux host, see [ARCHITECTURE.md §2.3-2.4](ARCHITECTURE.md#23-p2-landlock--drop-caps-subprocess-linux)) |
 | Audit integrity | hash chain | P1 | ✅ Completed (see [§13.5](#135-audit-integrity-hash-chain)) |
 | Supply chain identity | License issuance/verification/revocation | P0 | ✅ Completed |
 | Memory control | Memory Interceptor (PII desensitization + credential detection + LLM injection detection) | P1 | ✅ Completed (write interception ✅ + read interception ✅ + framework integration ✅, see [§13.6](#136-memory-control-memory-interceptor)) |

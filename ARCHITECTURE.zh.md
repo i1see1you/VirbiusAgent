@@ -24,7 +24,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
   v
 [1] Edge - virbius-core (extended)
     precheck: args + allowlist + JSON Schema
-    execute:  P0 in-process / P2 Landlock + drop caps + gVisor
+    execute:  P0 同进程执行 / Landlock + drop caps + gVisor
   |
 [2] Gateway - Higress + virbius-gateway WASM plugin
     TLS/rate-limit/long-conn + allowlist + counter + engine call + HTTP block
@@ -32,7 +32,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 [3] Kernel - Falco observer (observation layer)
     eBPF driver (standard node); unprivileged env -> Disabled (plugin mode removed)
     observe: syscall/net/file + audit stream + session risk
-    enforce(P2): Landlock + drop caps (edge) / gVisor (edge)
+    enforce: Landlock + drop caps (edge) / gVisor (edge)
   |
 [4] Cloud - virbius-engine + virbius-control
     engine: Groovy L3 + STI audit + tool-chain detect
@@ -104,7 +104,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 |------|-----------|------------|
 | **P0** | Falco(eBPF) + access log + Redis 审计流 + STI 审计 + Prompt Gateway(宪法注入) | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 + Runtime License 校验 |
 | **P1** | STI Taint 小模型 + Falco http_output 三级关联 + 审计完整性 | 人工审批流 + 自适应 risk 模型 + 记忆管控(Memory Interceptor) |
-| **P2** | eBPF 自定义观测(execveat + IPv6) | Landlock + drop caps + gVisor + TEE(金融级) |
+| **P2** | eBPF 自定义观测(execveat + IPv6) | Landlock + drop caps + gVisor (✅) + TEE(金融级, 待实现) |
 
 ### 1.4 身份标识体系
 
@@ -219,7 +219,7 @@ virbius-control 签发 License（JWT 签名）：
 | 文件路径隔离 | Landlock | §2.3 | P2 |
 | 命名空间隔离 | clone3(CLONE_NEWPID \| CLONE_NEWNS \| CLONE_NEWNET) | §2.3.1 | P2 |
 | capabilities 丢弃 | drop caps | §2.3 | P2 |
-| 不可信代码沙箱 | gVisor runsc 预热池 | §2.4 | P2 |
+| 不可信代码沙箱 | gVisor runsc 预热池 | §2.4 | ✅ |
 | 内核观测 | Falco eBPF | §4 | P0 |
 
 
@@ -232,7 +232,7 @@ virbius-control 签发 License（JWT 签名）：
 | 阶段 | 动作 | 延迟 |
 |------|------|------|
 | **预检** | 参数校验、tool allowlist、JSON Schema 校验、本地规则匹配 | <0.5ms |
-| **执行** | P0: 同进程执行 / P2: Landlock / gVisor 沙箱 | P0: <0.1ms / P2: 见 §2.2 |
+| **执行** | P0: 同进程执行 / Landlock + gVisor 沙箱 | P0: <0.1ms / Landlock: ~2ms / gVisor: 1-5s 冷启动, ~50ms 热启动 |
 
 **关键约束**：预检阶段不执行任何工具逻辑。只有终判返回 allow 后才进入执行阶段。
 
@@ -443,14 +443,14 @@ pub fn detect_abi_version() -> LandlockAbi {
 
 关于 macOS：不支持 Landlock。macOS 为开发环境，P2 沙箱不启用，降级为同进程执行 + 告警日志。生产环境部署在 Linux/K8s，Landlock 可用。
 
-### 2.4 P2: gVisor 子进程 + 预热池
+### 2.4 gVisor 子进程 + 预热池
 
-> **P2 实现，P0 不涉及。**
+> **已实现并在 Linux 主机上验证。**
 
 对于不可信代码执行，通过 gVisor runsc 启动隔离容器。gVisor 冷启动 1-5 秒，**必须使用预热池**：
 
 ```rust
-// virbius-core/src/sandbox/gvisor_pool.rs (P2)
+// virbius-core/src/sandbox/gvisor_pool.rs
 pub struct GvisorPool {
     config: GvisorPoolConfig,
     warm: Arc<Mutex<HashMap<Language, Vec<WarmContainer>>>>,
@@ -1733,7 +1733,7 @@ Engine `FalcoAlertController` 对每条 Falco 告警执行三级 session 关联�
 
 | 模式 | 判定条件 | 观测 | 阻断 |
 |------|---------|------|------|
-| host | 裸机/自管 VM + root | Falco eBPF(P2) | Landlock(P2) + gVisor(P2) |
+| host | 裸机/自管 VM + root | Falco eBPF(P2) | Landlock + gVisor |
 | daemonset | K8s 标准节点池 + privileged | 同上 | 同上 |
 | pod-observe | serverless(Fargate/Autopilot) | 云厂商告警（无 syscall 可见性） | 端层 Landlock(P2) + NetworkPolicy |
 | audit-only | 前期观测 | 上述观测的只读子集 | 无 |

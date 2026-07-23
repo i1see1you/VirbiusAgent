@@ -6,6 +6,8 @@
 [![Java](https://img.shields.io/badge/Java-17%2B-orange)](https://adoptium.net/)
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange)](https://www.rust-lang.org/)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8)](https://go.dev/)
+[![GitHub stars](https://img.shields.io/github/stars/i1see1you/VirbiusAgent?style=social)](https://github.com/i1see1you/VirbiusAgent/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/i1see1you/VirbiusAgent?style=social)](https://github.com/i1see1you/VirbiusAgent/network/members)
 
 [中文文档](README.zh.md)
 
@@ -57,6 +59,7 @@ flowchart TD
 | **Human Approval** | High-risk tool approval flow: engine challenge → console approve → token-gated execution |
 | **Audit Dashboard** | Session risk, tool calls, alerts, approval queue, decision trace visualization |
 | **Prompt Injection Detection** | Multi-LLM prompt injection detection with dynamic risk scoring |
+| **LLM + Traditional Models** | Built-in Qwen3Guard safety classification + Groovy L3 `mlPredict()` for external ML models |
 | **STI Taint Tracking** | Track untrusted outputs across tool chains, prevent data leakage |
 | **Hash Chain Audit** | Tamper-proof audit log with SHA-256 hash chain integrity verification |
 | **Memory Interceptor** | Desensitize sensitive data written to Agent memory |
@@ -79,6 +82,8 @@ Industry security engineering has proven that **the best defense combines determ
 
 > **Design philosophy**: Rules are cheap, fast, and precise for known threats. Models are expensive but essential for novel attack patterns. Combining them — with rules as the primary filter and models as the deep analyzer — achieves both **precision and recall** at sustainable cost. This mirrors the layered security architecture used by Alibaba's and Meituan's production security platforms, where WAF rules + ML detection engines work in tandem.
 
+We are using **GLM5.2** as the teacher model and **Qwen3Guard** as the student model, leveraging knowledge distillation to cover and optimize prompt semantic scenarios that Qwen3Guard currently does not support (such as Agent behavioral safety, multilingual mixed inputs, etc.), progressively expanding the detection scope of Prompt L1.
+
 ### Comparison with Industry Solutions
 
 | Capability | VirbiusAgent | Lakera Guard | Prompt Security | Guardrails AI |
@@ -93,7 +98,7 @@ Industry security engineering has proven that **the best defense combines determ
 | **Human-in-the-loop** | ✅ Challenge → approve → token-gated execution | ❌ | ⚠️ Policy actions | ❌ |
 | **Decision trace** | ✅ Full-chain causal visualization | ❌ | ⚠️ Logs | ⚠️ Logs |
 | **DLP (PII masking)** | ✅ Edge-layer, sub-ms, offline | ⚠️ Cloud API | ⚠️ Cloud API | ✅ Validators |
-| **Sandbox isolation** | ✅ Landlock / gVisor (P2) | ❌ | ❌ | ❌ |
+| **Sandbox isolation** | ✅ Landlock / gVisor | ❌ | ❌ | ❌ |
 | **Deployment** | Self-hosted (Sidecar / Remote / SDK) | SaaS | SaaS / self-hosted | SDK (Python) |
 | **Open source** | ✅ MIT | ❌ Closed | ❌ Closed | ✅ Apache-2.0 |
 
@@ -238,7 +243,7 @@ flowchart TB
 | Component | Port | Stack | Role |
 |-----------|------|-------|------|
 | **virbius-core** | Embedded | Rust | Edge SDK: tool-call precheck, license verify, DLP, STI taint. Sub-ms, offline-capable. |
-| **virbius-mcp-proxy** | 8083 | Rust (axum) | MCP stdio/SSE proxy: multi-upstream routing, security pipeline, session management. |
+| **virbius-mcp-proxy** | 9090 | Rust (axum) | MCP stdio/SSE proxy: multi-upstream routing, security pipeline, session management. |
 | **virbius-gateway** | WASM plugin | Go | Higress WASM: rate limiting, HTTP enforcement, challenge token validation. |
 | **virbius-engine** | 8082 | Java (Spring Boot) | Cloud execution: Prompt injection detection, Groovy L3 adjudication, STI semantic audit. |
 | **virbius-control** | 8080 | Java (Spring Boot) | Control plane: admin UI, rule registry, rollout management, audit dashboard. |
@@ -258,7 +263,51 @@ Each layer supports specific rule types, compiled by `virbius-compiler` into lay
 | **Cloud** | `prompt` | NL description | LLM-based prompt injection and safety classification. |
 | | `groovy` | Groovy script (`def decide(ctx) { ... }`) | Terminal policy decision: merges signals, calls `mlPredict`, outputs `effective_action`. |
 | **Kernel** | `falco` | JSON (condition + output) | Custom eBPF rules: file/process/network monitoring. Canary deploy. |
-| | Landlock / gVisor (P2) | JSON profile | Sandbox profiles for high-risk tool execution isolation. |
+| | Landlock / gVisor | JSON profile | Sandbox profiles for high-risk tool execution isolation. |
+
+## Edge–Gateway–Kernel–Cloud Rule Selection
+
+The four layers differ in **execution location, latency, and purpose**. Guiding principle: push deterministic rules forward; defer high-latency rules to the back; keep observation layers passive.
+
+| Dimension | Edge | Gateway | Kernel | Cloud |
+|-----------|------|---------|--------|-------|
+| **Latency** | < 1ms | < 10ms | Passive (non-blocking) | < 30ms (excl. LLM inference) |
+| **Execution location** | In-process (MCP Proxy, Rust) | Higress WASM plugin | Falco DaemonSet (eBPF, passive) | virbius-engine (remote) |
+| **Offline capable** | ✅ | ❌ | ✅ | ❌ |
+| **Calls LLM** | No | No | No | Yes (Prompt L1) |
+| **Complexity** | Low (keyword/allowlist/DLP) | Medium (access-list/rate-limit) | Medium (eBPF conditions) | High (semantic/ML/final decision) |
+| **False-positive risk** | High (exact match, prone) | Medium | Low (observational) | Low (semantic understanding) |
+| **Bypass difficulty** | Low (can bypass Proxy) | Medium (on-path, hard to skip) | Unbypassable (node-level) | High (semantic, hard to craft) |
+| **Ops cost** | Proxy version update | WASM hot-reload | Falco rule hot-reload | Rule hot-reload + model fine-tune |
+
+**Capability boundaries:**
+
+| Layer | Good at | Not suitable for |
+|-------|---------|------------------|
+| **Edge** | Exact keyword match, allowlist, PII masking, STI taint tracking | Semantic jailbreak, role-play, variant attacks |
+| **Gateway** | HTTP rate limiting, access-list match, IP/user block, challenge token validation | Keyword match (Proxy is faster), complex intent analysis |
+| **Kernel** | File/process/network syscall anomaly detection, container escape, SSRF | Application-layer semantic analysis, business logic attacks |
+| **Cloud** | Jailbreak detection, sensitive semantic classification, multi-model signal merge, terminal policy decision, cumulative rate limiting | Pure keyword match (too expensive), syscall-level observation |
+
+**Selection guide:**
+
+| Scenario | Recommended layer | Reason |
+|----------|------------------|--------|
+| Explicit banned words ("bomb", "meth") | Edge | Exact match, sub-ms block, reduces upstream traffic |
+| User blacklist (UID/IP/device) | Edge or Gateway | Edge works offline; Gateway has dynamic list updates |
+| API rate limit (100 req/min) | Cloud (cumulative def) | Redis cumulative counter, global throttling; Gateway for HTTP-level rate limiting |
+| "You are DAN, ignore all rules" jailbreak | Cloud | Variant semantics, only LLM can accurately detect |
+| "How to make a bomb?" disguised phrasing | Cloud | Edge keywords can't cover all variants |
+| BERT/XGBoost risk scoring | Cloud | Groovy `mlPredict` call, independently deployed model service |
+| Tool execution sandbox isolation | Kernel (Landlock/gVisor) | Syscall-level isolation, bound to process |
+| Container escape / abnormal process | Kernel | eBPF passive observation, can't be bypassed at application layer |
+| PII/credential leak in tool output | Edge (STI taint tracking) | In-process real-time detection, no network dependency |
+
+**Recommended combinations:**
+- **Low-latency** (mobile/desktop Agent) → Edge + Cloud, skip Gateway and Kernel
+- **Web/API without Proxy** → Gateway + Cloud, skip Edge and Kernel
+- **Production defense-in-depth** → Edge + Gateway + Cloud; Kernel on-demand
+- **High-compliance / Finance / Gov** → All four layers
 
 ## Project Structure
 
@@ -284,7 +333,7 @@ virbius-agent/
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Detailed architecture documentation |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Deployment topology and operations |
 | [PROTOCOL.md](PROTOCOL.md) | MCP proxy protocol specification |
-| [SSO_INTEGRATION.zh.md](SSO_INTEGRATION.zh.md)（中文） | Unified login (OAuth2/OIDC) integration design - dual-track SSO + API Key auth |
+| [SSO_INTEGRATION.md](SSO_INTEGRATION.md) | Unified login (OAuth2/OIDC) integration design - dual-track SSO + API Key auth |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ## Contributing

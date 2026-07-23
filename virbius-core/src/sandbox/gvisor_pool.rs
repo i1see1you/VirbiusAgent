@@ -338,7 +338,7 @@ impl GvisorPool {
     }
 
     /// Build the OCI runtime configuration JSON for a container.
-    fn build_oci_config(&self, language: Language) -> String {
+    pub fn build_oci_config(&self, language: Language) -> String {
         let mem_limit = self.config.memory_limit_bytes;
         let cpu_quota = self.config.cpu_quota;
         let interpreter = language.interpreter();

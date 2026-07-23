@@ -24,7 +24,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
   v
 [1] Edge - virbius-core (extended)
     precheck: args + allowlist + JSON Schema
-    execute:  P0 in-process / P2 Landlock + drop caps + gVisor
+    execute:  P0 in-process / Landlock + drop caps + gVisor
   |
 [2] Gateway - Higress + virbius-gateway WASM plugin
     TLS/rate-limit/long-conn + allowlist + counter + engine call + HTTP block
@@ -32,7 +32,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 [3] Kernel - Falco observer (observation layer)
     eBPF driver (standard node); unprivileged env -> Disabled (plugin mode removed)
     observe: syscall/net/file + audit stream + session risk
-    enforce(P2): Landlock + drop caps (edge) / gVisor (edge)
+    enforce: Landlock + drop caps (edge) / gVisor (edge)
   |
 [4] Cloud - virbius-engine + virbius-control
     engine: Groovy L3 + STI audit + tool-chain detect
@@ -104,7 +104,7 @@ The four layers (Edge, Gateway, Kernel, Cloud) are divided into two categories b
 |------|-----------|------------|
 | **P0** | Falco (eBPF) + access log + Redis audit stream + STI audit + Prompt Gateway (constitutional injection) | HTTP 403 + allowlist + counting + schema validation + risk threshold disconnect + Runtime License validation |
 | **P1** | STI Taint small model + Falco http_output three-level correlation + audit integrity | Manual approval flow + adaptive risk model + memory control (Memory Interceptor) |
-| **P2** | Custom eBPF observation (execveat + IPv6) | Landlock + drop caps + gVisor + TEE (financial grade) |
+| **P2** | Custom eBPF observation (execveat + IPv6) | Landlock + drop caps + gVisor (✅) + TEE (financial grade, pending) |
 
 ### 1.4 Identity System
 
@@ -221,7 +221,7 @@ Build a secure and trusted Agent OS, providing syscall-level isolation and obser
 | File path isolation | Landlock | §2.3 | P2 |
 | Namespace isolation | clone3(CLONE_NEWPID \| CLONE_NEWNS \| CLONE_NEWNET) | §2.3.1 | P2 |
 | Capability dropping | drop caps | §2.3 | P2 |
-| Untrusted code sandbox | gVisor runsc warm pool | §2.4 | P2 |
+| Untrusted code sandbox | gVisor runsc warm pool | §2.4 | ✅ |
 | Kernel observation | Falco eBPF | §4 | P0 |
 
 
@@ -234,7 +234,7 @@ Build a secure and trusted Agent OS, providing syscall-level isolation and obser
 | Phase | Action | Latency |
 |------|------|------|
 | **Precheck** | Parameter validation, tool allowlist, JSON Schema validation, local rule matching | <0.5ms |
-| **Execution** | P0: in-process execution / P2: Landlock / gVisor sandbox | P0: <0.1ms / P2: see §2.2 |
+| **Execution** | P0: in-process execution / Landlock + gVisor sandbox | P0: <0.1ms / Landlock: ~2ms / gVisor: 1-5s cold, ~50ms hot |
 
 **Key constraint**: No tool logic is executed during the precheck phase. Only after final judgment returns allow does execution begin.
 
@@ -254,10 +254,11 @@ ToolCallRequest { name, args }
   |    Applicable to: read_file, write_file, curl (allowlist targets)
   |    Latency: cold ~2ms / hot ~1ms
   |
-  +-- sandbox_type = "gvisor" (P2)
+  +-- sandbox_type = "gvisor"
   |    gVisor runsc container (warm pool)
   |    Applicable to: execute_python, shell, any untrusted code
   |    Latency: cold 1-5s / hot ~50ms (warm pool hit)
+  |    Status: ✅ Verified on Linux host
   |
   +-- deny
         Directly rejected, not executed
@@ -445,14 +446,14 @@ pub fn detect_abi_version() -> LandlockAbi {
 
 Regarding macOS: Landlock is not supported. macOS is a development environment; P2 sandbox is not enabled and degrades to in-process execution with warning logs. Production environments are deployed on Linux/K8s where Landlock is available.
 
-### 2.4 P2: gVisor Subprocess + Warm Pool
+### 2.4 gVisor Subprocess + Warm Pool
 
-> **P2 implementation, P0 does not involve.**
+> **Implemented and verified on Linux host.**
 
 For untrusted code execution, an isolated container is started via gVisor runsc. gVisor cold start is 1-5 seconds; **a warm pool must be used**:
 
 ```rust
-// virbius-core/src/sandbox/gvisor_pool.rs (P2)
+// virbius-core/src/sandbox/gvisor_pool.rs
 pub struct GvisorPool {
     config: GvisorPoolConfig,
     warm: Arc<Mutex<HashMap<Language, Vec<WarmContainer>>>>,
@@ -1735,7 +1736,7 @@ Engine `FalcoAlertController` performs a three-level session correlation for eac
 
 | Mode | Determination Condition | Observation | Enforcement |
 |------|---------|------|------|
-| host | Bare metal/self-managed VM + root | Falco eBPF (P2) | Landlock (P2) + gVisor (P2) |
+| host | Bare metal/self-managed VM + root | Falco eBPF (P2) | Landlock + gVisor |
 | daemonset | K8s standard node pool + privileged | Same as above | Same as above |
 | pod-observe | serverless (Fargate/Autopilot) | Cloud vendor alerts (no syscall visibility) | Edge Landlock (P2) + NetworkPolicy |
 | audit-only | Early stage observation | Read-only subset of above observation | None |

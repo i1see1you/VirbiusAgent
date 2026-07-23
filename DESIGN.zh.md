@@ -79,7 +79,7 @@ Agent Framework
 [1] 端层执行 (virbius-core, P0: 同进程)
     +-- P0: sandbox_type=none -> 同进程执行
     +-- P2: sandbox_type=subprocess -> Landlock + drop caps
-    +-- P2: sandbox_type=gvisor -> gVisor 预热池
+    +-- sandbox_type=gvisor -> gVisor 预热池
     |     v 执行结果
     v
 [2] 管层 (Higress)
@@ -241,7 +241,7 @@ virbius-control
 |----|------|------|--------|---------|
 | 端 | Landlock | 文件路径限制(P2) | 较新(文件 5.13/2021, 网络 6.7/2024) | AppArmor |
 | 端 | drop caps | capabilities 丢弃(P2) | 极稳定(内核 2.2, 1999) | 无 |
-| 端 | gVisor | 不可信代码沙箱(P2) | 稳定(Google, GKE 使用) | Kata Containers |
+| 端 | gVisor | 不可信代码沙箱 | 稳定(Google, GKE 使用) | Kata Containers |
 | 端 | PyO3 / napi-rs | Rust<->Python/Node 绑定 | 稳定(广泛使用) | subprocess |
 | 管 | Higress + WASM | AI 网关 + 安全插件 | 稳定(基于 Envoy, 阿里巴巴生产) | APISIX / Kong / Envoy — 见 [§3.6](ARCHITECTURE.zh.md#36-网关可移植性--切换其他-mcp-网关) |
 | 核 | eBPF + BTF/CO-RE | 内核观测 | 极稳定(行业标准) | 无 |
@@ -262,7 +262,7 @@ virbius-control
 |------|------|------|
 | Higress/Envoy | Envoy 社区活跃; WASM 生态发展中 | 核心功能已稳定; WASM 插件可跨网关移植; 切换指南见 [§3.6](ARCHITECTURE.zh.md#36-网关可移植性--切换其他-mcp-网关)（约 550 行, 1–2 人天） |
 | Falco | 4 套驱动维护负担; kmod 驱动将弃用 | 只用 eBPF + plugin 两种 |
-| gVisor | Google 依赖; 性能开销 | P2 才引入; Kata 备选 |
+| gVisor | Google 依赖; 性能开销 | Kata 备选 |
 
 **Tier 3 较新(需密切关注)**：
 
@@ -331,7 +331,7 @@ VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依
 | `virbius-core/src/prompt_gateway.rs` | Rust | Prompt Gateway(宪法注入 + PII 脱敏) |
 | `virbius-core/src/license.rs` | Rust | License 校验(签名/过期/吊销) |
 | `virbius-core/src/sandbox/landlock.rs` | Rust | P2: Landlock + drop caps 沙箱 |
-| `virbius-core/src/sandbox/gvisor_pool.rs` | Rust | P2: gVisor 预热池 |
+| `virbius-core/src/sandbox/gvisor_pool.rs` | Rust | gVisor 预热池 |
 | virbius-core MCP 绑定 | Rust | PyO3 / napi-rs 绑定 |
 | `virbius-mcp-proxy` | Rust | MCP 协议代理（stdio/SSE 传输 + 安全管线 + 会话管理） |
 | `virbius-control` License 模块 | Java | License 签发(EdDSA) + 吊销(pub/sub) |
@@ -494,7 +494,7 @@ if session_risk > 30: 提升审计采样率
 | 应用层 | tool_call/tool_result 全链路 trace | MCP Proxy TraceCollector |
 | HTTP 层 | 请求级 allowlist/计数/阻断 | Higress WASM 插件 |
 | 内核层 | syscall/网络/文件事件 | Falco (eBPF) |
-| 内核层(P2) | 实时阻断 | Landlock + gVisor |
+| 内核层 | 实时阻断 | Landlock + gVisor |
 
 #### 维度 5：审批与阻断能力（Enforcement）
 
@@ -502,7 +502,7 @@ if session_risk > 30: 提升审计采样率
 - 高风险操作能否被拦截并转人工审批？
 - 审批 token 是否一次性使用、绑定参数、有 TTL？
 - 审批超时是否默认 deny？
-- P2 阶段是否有内核级硬阻断（Landlock/gVisor）？
+- 是否有内核级硬阻断（Landlock/gVisor）？
 
 #### 维度 6：审计完整性（Audit Integrity）
 
@@ -591,7 +591,7 @@ if session_risk > 30: 提升审计采样率
 | 运行时观测 | Falco eBPF + http_output 三级关联 + 决策链路追踪 | P0/P1 | ✅ 已完成（自定义 Falco 插件已在方案 A 中移除；详见 [§13.4](#134-自定义-virbius-audit-falco-插件--falco-规则库扩充)） |
 | 高风险审批 | Challenge 全链路（create → approve → token verify） | P1 | ✅ 已完成 |
 | HTTP 阻断 | Higress WASM 403 + License 吊销 | P0 | ✅ 已完成 |
-| 内核级阻断 | Landlock + gVisor | P2 | 🔧 代码完成 + 编译通过（Rust `pre_exec` hook 实现 Landlock + capset + prctl）；待 Linux 运行时验证 + 集成测试（`landlock_applied` 当前由 ABI 推断，待 self-pipe 精确上报）（详见 [ARCHITECTURE.zh.md §2.3-2.4](ARCHITECTURE.zh.md#23-p2-landlock--drop-caps-子进程linux)） |
+| 内核级阻断 | Landlock + gVisor | P0 | ✅ 已完成（Landlock 运行时已验证；gVisor 已在 Linux 主机部署验证，详见 [ARCHITECTURE.zh.md §2.3-2.4](ARCHITECTURE.zh.md#23-p2-landlock--drop-caps-子进程linux)） |
 | 审计完整性 | hash chain | P1 | ✅ 已完成（详见 [§13.5](#135-审计完整性hash-chain)） |
 | 供应链身份 | License 签发/校验/吊销 | P0 | ✅ 已完成 |
 | 记忆管控 | Memory Interceptor（PII 脱敏 + 凭据检测 + LLM 注入检测） | P1 | ✅ 已完成（写入拦截 ✅ + 读取拦截 ✅ + 框架集成 ✅，详见 [§13.6](#136-记忆管控memory-interceptor)） |

@@ -41,6 +41,3 @@ dependency-reduced-pom.xml
 
 # Backup files
 *.bak
-
-# Test scripts
-scripts/test*

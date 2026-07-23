@@ -200,7 +200,7 @@ pub fn execute(_req: ExecutionRequest) -> Result<ExecutionResult, String> {
 #[cfg(target_os = "linux")]
 impl GvisorPool {
     /// Check if the pool is functional (runsc binary exists).
-    fn is_available(&self) -> bool {
+    pub fn is_available(&self) -> bool {
         self.runsc_available
     }
 }
