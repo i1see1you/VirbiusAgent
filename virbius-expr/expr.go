@@ -38,10 +38,10 @@ const (
 // Node is a single node in the flat operator DAG.
 // Each node references child nodes by their index in the owning Nodes slice.
 type Node struct {
-	ID   int     `json:"id"`
-	Op   OpCode  `json:"op"`
-	Val  string  `json:"val,omitempty"`
-	Args []int   `json:"args,omitempty"`
+	ID   int    `json:"id"`
+	Op   OpCode `json:"op"`
+	Val  string `json:"val,omitempty"`
+	Args []int  `json:"args,omitempty"`
 }
 
 // Expression is a compiled expression ready for evaluation.

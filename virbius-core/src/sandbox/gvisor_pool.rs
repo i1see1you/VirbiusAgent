@@ -116,6 +116,7 @@ impl Default for GvisorPoolConfig {
 }
 
 /// A pre-warmed container waiting for a command.
+#[allow(dead_code)]
 struct WarmContainer {
     id: String,
     language: Language,
@@ -450,6 +451,7 @@ impl Drop for GvisorPool {
 }
 
 /// Internal: a container acquired from the pool (or freshly created).
+#[allow(dead_code)]
 struct AcquiredContainer {
     id: String,
     language: Language,

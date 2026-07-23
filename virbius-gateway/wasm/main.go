@@ -336,11 +336,11 @@ func evalExpressionsWithBody(rules []ExpressionRule, toolName, sessionID, path, 
 
 func callEngine(ctx wrapper.HttpContext, config VirbiusConfig, log wrapper.Log, toolName, sessionID string) types.Action {
 	engineReq := map[string]interface{}{
-		"trace_id":    ctx.GetTraceID(),
-		"session_id":  sessionID,
-		"tool_name":   toolName,
-		"tenant_id":   config.TenantID,
-		"args":        map[string]interface{}{},
+		"trace_id":   ctx.GetTraceID(),
+		"session_id": sessionID,
+		"tool_name":  toolName,
+		"tenant_id":  config.TenantID,
+		"args":       map[string]interface{}{},
 	}
 
 	body, _ := json.Marshal(engineReq)
@@ -441,10 +441,10 @@ func contains(slice []string, item string) bool {
 // a 403 error is returned.
 func verifyChallengeToken(ctx wrapper.HttpContext, config VirbiusConfig, log wrapper.Log, toolName, sessionID, token string) types.Action {
 	verifyReq := map[string]interface{}{
-		"token":       token,
-		"tool_name":   toolName,
-		"session_id":  sessionID,
-		"args_hash":   "", // Engine looks up from token record
+		"token":      token,
+		"tool_name":  toolName,
+		"session_id": sessionID,
+		"args_hash":  "", // Engine looks up from token record
 	}
 	body, _ := json.Marshal(verifyReq)
 

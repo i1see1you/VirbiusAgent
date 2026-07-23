@@ -78,7 +78,7 @@ Industry security engineering has proven that **the best defense combines determ
 | **Cost** | Near-zero (CPU only) | High (GPU/LLM API per call) | 80%+ traffic handled by rules; models only for high-risk |
 | **Maintainability** | Transparent, auditable, version-controlled | Black-box, hard to debug | Rules in Git; models as augmenting signal |
 
-> **Design philosophy**: Rules are cheap, fast, and precise for known threats. Models are expensive but essential for novel attack patterns. Combining them — with rules as the primary filter and models as the deep analyzer — achieves both **precision and recall** at sustainable cost. This mirrors the layered security architecture used by Alibaba's and Meituan's production security platforms, where WAF rules + ML detection engines work in tandem.
+> **Design philosophy**: Rules are cheap, fast, and precisely match known threats. Models are expensive but have strong recall for novel attacks. Combining them achieves **high performance, precision and recall** at low cost. This draws on the layered security architecture practices of Alibaba's and Meituan's production security platforms (I previously worked on security architecture and security management at Alibaba and Meituan).
 
 We are using **GLM5.2** as the teacher model and **Qwen3Guard** as the student model, leveraging knowledge distillation to cover and optimize prompt semantic scenarios that Qwen3Guard currently does not support (such as Agent behavioral safety, multilingual mixed inputs, etc.), progressively expanding the detection scope of Prompt L1.
 

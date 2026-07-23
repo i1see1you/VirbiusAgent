@@ -650,8 +650,8 @@ impl LandlockSandbox {
         // pipe(2) is async-signal-safe; the write end is CLOEXEC so it
         // closes automatically on exec.  The child writes a 2-byte report
         // in pre_exec; the parent reads it after spawn.
-        let (read_fd, write_fd) = create_report_pipe()
-            .map_err(|e| format!("failed to create self-pipe: {e}"))?;
+        let (read_fd, write_fd) =
+            create_report_pipe().map_err(|e| format!("failed to create self-pipe: {e}"))?;
 
         let mut cmd = Command::new(program);
         cmd.args(args);

@@ -14,7 +14,9 @@ pub fn match_rules(content: &str, rules: &[EdgeRule]) -> Vec<RuleHit> {
             }
             continue;
         }
-        if rule.body.list_type == "deny" && keyword_hit(content, &rule.body.keywords, &rule.body.keywords_lower) {
+        if rule.body.list_type == "deny"
+            && keyword_hit(content, &rule.body.keywords, &rule.body.keywords_lower)
+        {
             hits.push(RuleHit { rule: rule.clone() });
         }
     }

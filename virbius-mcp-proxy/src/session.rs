@@ -69,7 +69,10 @@ impl Session {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let user_id = meta.get("user_id").and_then(|v| v.as_str()).map(String::from);
+        let user_id = meta
+            .get("user_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let device_id = meta
             .get("device_id")
             .and_then(|v| v.as_str())

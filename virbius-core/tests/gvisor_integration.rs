@@ -34,7 +34,9 @@ fn ensure_rootfs() -> Result<String, String> {
         if sh_path.exists() || busybox_path.exists() {
             return Ok(path);
         }
-        return Err(format!("VIRBIUS_ROOTFS={path} does not contain bin/sh or bin/busybox"));
+        return Err(format!(
+            "VIRBIUS_ROOTFS={path} does not contain bin/sh or bin/busybox"
+        ));
     }
 
     Err("VIRBIUS_ROOTFS not set. Export it: VIRBIUS_ROOTFS=/tmp/virbius-gvisor-rootfs".into())
@@ -129,7 +131,10 @@ fn test_gvisor_pool_available() {
 
     let config = GvisorPoolConfig::default();
     let pool = GvisorPool::new(config);
-    assert!(pool.is_available(), "pool should report available when runsc exists");
+    assert!(
+        pool.is_available(),
+        "pool should report available when runsc exists"
+    );
 }
 
 #[test]
@@ -154,7 +159,13 @@ fn test_gvisor_oci_config_no_capabilities() {
 
     // All capability sets should be empty
     let caps = &parsed["process"]["capabilities"];
-    for key in ["bounding", "effective", "inheritable", "permitted", "ambient"] {
+    for key in [
+        "bounding",
+        "effective",
+        "inheritable",
+        "permitted",
+        "ambient",
+    ] {
         assert_eq!(
             caps[key].as_array().unwrap().len(),
             0,
@@ -171,7 +182,10 @@ fn test_gvisor_oci_config_no_capabilities() {
 
     // Memory limit should be set
     assert!(
-        parsed["linux"]["resources"]["memory"]["limit"].as_u64().unwrap() > 0,
+        parsed["linux"]["resources"]["memory"]["limit"]
+            .as_u64()
+            .unwrap()
+            > 0,
         "memory limit should be set"
     );
 }

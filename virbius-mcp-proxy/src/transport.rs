@@ -204,7 +204,10 @@ async fn handle_sse(State(state): State<AppState>) -> Response {
                 mon_conn_id
             );
             // Resolve logical session ID for upstream cleanup
-            if let Some(logical) = mon_conn_to_session.get(&mon_conn_id).map(|e| e.value().clone()) {
+            if let Some(logical) = mon_conn_to_session
+                .get(&mon_conn_id)
+                .map(|e| e.value().clone())
+            {
                 mon_upstream_mgr.remove(&logical);
             }
             mon_sse.remove(&mon_conn_id);

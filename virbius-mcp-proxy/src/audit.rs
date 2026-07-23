@@ -263,7 +263,8 @@ mod tests {
     #[test]
     fn test_audit_event_tool_call() {
         let session = make_session();
-        let event = AuditEvent::tool_call(&session, "read_file", "allow", Some("rule-1"), Some("ok"));
+        let event =
+            AuditEvent::tool_call(&session, "read_file", "allow", Some("rule-1"), Some("ok"));
         assert_eq!(event.trace_id, session.trace_id);
         assert_eq!(event.layer, "edge");
         assert_eq!(event.event_type, "tool_call");
@@ -290,7 +291,15 @@ mod tests {
     #[test]
     fn test_audit_event_memory_write() {
         let session = make_session();
-        let event = AuditEvent::memory_write(&session, "sql_query", "block", None, Some("pii"), true, Some(-1));
+        let event = AuditEvent::memory_write(
+            &session,
+            "sql_query",
+            "block",
+            None,
+            Some("pii"),
+            true,
+            Some(-1),
+        );
         assert_eq!(event.event_type, "memory_write");
         assert_eq!(event.tool_name, "sql_query");
         assert_eq!(event.action, "block");
@@ -300,7 +309,15 @@ mod tests {
     #[test]
     fn test_audit_event_memory_write_with_rule() {
         let session = make_session();
-        let event = AuditEvent::memory_write(&session, "write_file", "allow", Some("kee-1"), None, false, None);
+        let event = AuditEvent::memory_write(
+            &session,
+            "write_file",
+            "allow",
+            Some("kee-1"),
+            None,
+            false,
+            None,
+        );
         assert_eq!(event.event_type, "memory_write");
         assert_eq!(event.action, "allow");
         assert_eq!(event.rule_id.as_deref(), Some("kee-1"));
@@ -361,8 +378,7 @@ mod tests {
 
 fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
     let raw = url.strip_prefix("redis://").unwrap_or(url);
-    raw.parse::<std::net::SocketAddr>()
-        .unwrap_or_else(|e| {
-            panic!("invalid Redis address '{url}': {e}. Expected 'host:port' or 'redis://host:port'")
-        })
+    raw.parse::<std::net::SocketAddr>().unwrap_or_else(|e| {
+        panic!("invalid Redis address '{url}': {e}. Expected 'host:port' or 'redis://host:port'")
+    })
 }

@@ -317,10 +317,9 @@ async fn kafka_trace_worker(brokers: String, topic: String, mut rx: mpsc::Receiv
 /// (which can fail spuriously on macOS for literal IPs).
 fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
     let raw = url.strip_prefix("redis://").unwrap_or(url);
-    raw.parse::<std::net::SocketAddr>()
-        .unwrap_or_else(|e| {
-            panic!("invalid Redis address '{url}': {e}. Expected 'host:port' or 'redis://host:port'")
-        })
+    raw.parse::<std::net::SocketAddr>().unwrap_or_else(|e| {
+        panic!("invalid Redis address '{url}': {e}. Expected 'host:port' or 'redis://host:port'")
+    })
 }
 
 fn sha256_hex(input: &str) -> String {
@@ -377,7 +376,8 @@ mod tests {
     fn test_trace_event_tool_call() {
         let session = make_session();
         let args = serde_json::json!({"path": "/tmp/test.txt"});
-        let event = TraceEvent::tool_call(&session, "step-1", Some("parent-0"), 1, "read_file", &args);
+        let event =
+            TraceEvent::tool_call(&session, "step-1", Some("parent-0"), 1, "read_file", &args);
         assert_eq!(event.trace_id, session.trace_id);
         assert_eq!(event.session_id, "trace-sid");
         assert_eq!(event.step_id, "step-1");
@@ -395,7 +395,14 @@ mod tests {
     #[test]
     fn test_trace_event_tool_call_no_parent() {
         let session = make_session();
-        let event = TraceEvent::tool_call(&session, "step-1", None, 0, "shell", &serde_json::json!({"cmd":"ls"}));
+        let event = TraceEvent::tool_call(
+            &session,
+            "step-1",
+            None,
+            0,
+            "shell",
+            &serde_json::json!({"cmd":"ls"}),
+        );
         assert!(event.parent_step_id.is_none());
     }
 
@@ -403,14 +410,18 @@ mod tests {
     fn test_trace_event_tool_result() {
         let session = make_session();
         let result = serde_json::json!({"stdout": "ok"});
-        let event = TraceEvent::tool_result(&session, "step-2", "step-1", 2, "success", 150, &result);
+        let event =
+            TraceEvent::tool_result(&session, "step-2", "step-1", 2, "success", 150, &result);
         assert_eq!(event.step_id, "step-2");
         assert_eq!(event.parent_step_id.as_deref(), Some("step-1"));
         assert_eq!(event.step_seq, 2);
         assert_eq!(event.step_type, "tool_result");
         assert_eq!(event.tool_status.as_deref(), Some("success"));
         assert_eq!(event.tool_duration_ms, Some(150));
-        assert_eq!(event.tool_result_preview.as_deref(), Some(r#"{"stdout":"ok"}"#));
+        assert_eq!(
+            event.tool_result_preview.as_deref(),
+            Some(r#"{"stdout":"ok"}"#)
+        );
         assert!(event.tool_name.is_none());
         assert!(event.tool_args.is_none());
     }
@@ -420,7 +431,8 @@ mod tests {
         let session = make_session();
         let long_content = "x".repeat(3000);
         let result = serde_json::json!({"data": long_content});
-        let event = TraceEvent::tool_result(&session, "step-3", "step-2", 3, "success", 500, &result);
+        let event =
+            TraceEvent::tool_result(&session, "step-3", "step-2", 3, "success", 500, &result);
         let preview = event.tool_result_preview.unwrap();
         assert!(preview.len() <= 2048);
     }
@@ -428,8 +440,9 @@ mod tests {
     #[test]
     fn test_trace_event_with_decision() {
         let session = make_session();
-        let event = TraceEvent::tool_call(&session, "step-1", None, 0, "rm", &serde_json::json!({}))
-            .with_decision("block", Some("rule-42"), Some("high_risk"), Some(85));
+        let event =
+            TraceEvent::tool_call(&session, "step-1", None, 0, "rm", &serde_json::json!({}))
+                .with_decision("block", Some("rule-42"), Some("high_risk"), Some(85));
         assert_eq!(event.tool_decision.as_deref(), Some("block"));
         assert_eq!(event.rule_id.as_deref(), Some("rule-42"));
         assert_eq!(event.reason_code.as_deref(), Some("high_risk"));
@@ -439,8 +452,9 @@ mod tests {
     #[test]
     fn test_trace_event_with_decision_none_fields() {
         let session = make_session();
-        let event = TraceEvent::tool_call(&session, "step-1", None, 0, "ls", &serde_json::json!({}))
-            .with_decision("allow", None, None, None);
+        let event =
+            TraceEvent::tool_call(&session, "step-1", None, 0, "ls", &serde_json::json!({}))
+                .with_decision("allow", None, None, None);
         assert_eq!(event.tool_decision.as_deref(), Some("allow"));
         assert!(event.rule_id.is_none());
         assert!(event.reason_code.is_none());
@@ -472,7 +486,8 @@ mod tests {
         let collector = TraceCollector::new(TraceBackend::Disabled);
         // Should not panic when recording
         let session = make_session();
-        let event = TraceEvent::tool_call(&session, "step-1", None, 0, "test", &serde_json::json!({}));
+        let event =
+            TraceEvent::tool_call(&session, "step-1", None, 0, "test", &serde_json::json!({}));
         // We can't easily assert on the internal sender, but ensure no panic
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -483,7 +498,14 @@ mod tests {
     #[test]
     fn test_trace_event_json_serialization() {
         let session = make_session();
-        let event = TraceEvent::tool_call(&session, "s1", None, 1, "read_file", &serde_json::json!({"p":"/x"}));
+        let event = TraceEvent::tool_call(
+            &session,
+            "s1",
+            None,
+            1,
+            "read_file",
+            &serde_json::json!({"p":"/x"}),
+        );
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["step_id"], "s1");
         assert_eq!(json["step_type"], "tool_call");
@@ -499,7 +521,10 @@ mod tests {
         let r = TraceBackend::Redis { url: "r".into() };
         assert!(format!("{:?}", r).contains("Redis"));
 
-        let k = TraceBackend::Kafka { brokers: "b".into(), topic: "t".into() };
+        let k = TraceBackend::Kafka {
+            brokers: "b".into(),
+            topic: "t".into(),
+        };
         assert!(format!("{:?}", k).contains("Kafka"));
     }
 }

@@ -7,9 +7,9 @@ import (
 
 func TestCompileAndEval_Simple(t *testing.T) {
 	tests := []struct {
-		source  string
-		ctx     map[string]any
-		want    bool
+		source string
+		ctx    map[string]any
+		want   bool
 	}{
 		{`ctx.app_id == "admin"`, map[string]any{"app_id": "admin"}, true},
 		{`ctx.app_id == "admin"`, map[string]any{"app_id": "user"}, false},
@@ -95,8 +95,8 @@ func TestJSONOutput(t *testing.T) {
 
 	// Verify it can be evaluated
 	got, err := Eval(expr, map[string]any{
-		"tool_name":   "shell_exec",
-		"risk_score":  float64(30),
+		"tool_name":  "shell_exec",
+		"risk_score": float64(30),
 	})
 	if err != nil {
 		t.Fatalf("eval error: %v", err)

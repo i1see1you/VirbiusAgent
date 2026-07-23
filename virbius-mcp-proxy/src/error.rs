@@ -113,9 +113,18 @@ mod tests {
 
     #[test]
     fn test_error_code_messages() {
-        assert_eq!(VirbiusErrorCode::LicenseInvalid.message(), "license_invalid");
-        assert_eq!(VirbiusErrorCode::LicenseRequired.message(), "license_required");
-        assert_eq!(VirbiusErrorCode::MemoryWriteBlocked.message(), "memory_write_blocked");
+        assert_eq!(
+            VirbiusErrorCode::LicenseInvalid.message(),
+            "license_invalid"
+        );
+        assert_eq!(
+            VirbiusErrorCode::LicenseRequired.message(),
+            "license_required"
+        );
+        assert_eq!(
+            VirbiusErrorCode::MemoryWriteBlocked.message(),
+            "memory_write_blocked"
+        );
     }
 
     #[test]

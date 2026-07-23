@@ -14,9 +14,7 @@
 
 use std::time::Duration;
 
-use virbius_core::sandbox::{
-    execute_sandboxed, detect_abi_version, LandlockAbi, LandlockRules,
-};
+use virbius_core::sandbox::{detect_abi_version, execute_sandboxed, LandlockAbi, LandlockRules};
 
 /// Returns true if the running kernel supports Landlock (ABI ≥ V1).
 fn landlock_available() -> bool {
@@ -52,10 +50,7 @@ fn test_self_pipe_reports_landlock_applied() {
     .expect("sandbox execution should succeed");
 
     assert_eq!(result.exit_code, 0, "cat /etc/hostname should exit 0");
-    assert!(
-        !result.stdout.is_empty(),
-        "should read hostname content"
-    );
+    assert!(!result.stdout.is_empty(), "should read hostname content");
     assert!(
         result.landlock_applied,
         "self-pipe should report landlock_applied=true"
@@ -105,8 +100,5 @@ fn test_execute_sandboxed_invalid_program() {
         Duration::from_secs(5),
     );
 
-    assert!(
-        result.is_err(),
-        "non-existent program should return Err"
-    );
+    assert!(result.is_err(), "non-existent program should return Err");
 }

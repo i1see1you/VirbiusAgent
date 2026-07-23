@@ -341,7 +341,11 @@ fn load_license_jwt(path: &str) -> String {
                 warn!("license_file {} is empty, no fallback license loaded", path);
                 return String::new();
             }
-            info!("loaded fallback license JWT from {} ({} bytes)", path, jwt.len());
+            info!(
+                "loaded fallback license JWT from {} ({} bytes)",
+                path,
+                jwt.len()
+            );
             jwt
         }
         Err(e) => {

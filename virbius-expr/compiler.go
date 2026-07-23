@@ -6,7 +6,7 @@ import (
 )
 
 type compiler struct {
-	nodes []Node
+	nodes  []Node
 	nextID int
 }
 

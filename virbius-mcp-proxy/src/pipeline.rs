@@ -722,7 +722,11 @@ mod tests {
     fn test_pipeline_result_allow() {
         let r = PipelineResult::allow("ok");
         match r {
-            PipelineResult::Allow { reason, rule_id, risk_score } => {
+            PipelineResult::Allow {
+                reason,
+                rule_id,
+                risk_score,
+            } => {
                 assert_eq!(reason, "ok");
                 assert!(rule_id.is_none());
                 assert!(risk_score.is_none());
@@ -747,7 +751,12 @@ mod tests {
     fn test_pipeline_result_challenge() {
         let r = PipelineResult::challenge("ch-1", "abc123", "need verification");
         match r {
-            PipelineResult::Challenge { challenge_id, args_hash, reason, .. } => {
+            PipelineResult::Challenge {
+                challenge_id,
+                args_hash,
+                reason,
+                ..
+            } => {
                 assert_eq!(challenge_id, "ch-1");
                 assert_eq!(args_hash, "abc123");
                 assert_eq!(reason, "need verification");

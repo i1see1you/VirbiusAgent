@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+    # pyo3 0.22.x: Missing Sync bound on PyCFunction::new_closure closures.
+    # Our codebase does not use new_closure / new_closure_bound.
+    # Planned upgrade to pyo3 0.29+ in a separate PR.
+    "RUSTSEC-2026-0177",
+]

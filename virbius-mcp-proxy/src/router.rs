@@ -967,8 +967,13 @@ async fn handle_tools_call(
                     // ── Trust boundary tagging (high/network risk only) ──
                     tag_tool_result(&mut resp, &original_tool_name, false);
                     // ── Memory read interception (T3 cross-session defense) ──
-                    intercept_memory_read(&mut resp, &session, &original_tool_name, pipeline.as_ref())
-                        .await;
+                    intercept_memory_read(
+                        &mut resp,
+                        &session,
+                        &original_tool_name,
+                        pipeline.as_ref(),
+                    )
+                    .await;
                     // ── Output content safety review (LLM-based) ──
                     review_tool_output(&mut resp, &session, &original_tool_name, pipeline.as_ref())
                         .await;
@@ -1487,7 +1492,8 @@ async fn intercept_memory_read(
                 );
 
                 // Filter or block based on policy
-                let filtered = memory_interceptor.filter_read_content(&read_result.filtered_content);
+                let filtered =
+                    memory_interceptor.filter_read_content(&read_result.filtered_content);
                 if filtered != read_result.filtered_content {
                     // filter_on_read = true: wrap in <untrusted_data> tags
                     debug!(
@@ -1497,7 +1503,8 @@ async fn intercept_memory_read(
                     replace_result_text(resp, &filtered);
                 } else {
                     // filter_on_read = false: block entirely
-                    let safe_msg = format!("[Memory read blocked: injection detected ({})]", reason);
+                    let safe_msg =
+                        format!("[Memory read blocked: injection detected ({})]", reason);
                     replace_result_text(resp, &safe_msg);
                 }
             }

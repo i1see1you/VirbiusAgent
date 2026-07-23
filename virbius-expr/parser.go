@@ -18,12 +18,31 @@ type (
 	astString   struct{ Value string }
 	astNumber   struct{ Value float64 }
 	astBool     struct{ Value bool }
-	astUnary    struct{ Op string; Right astNode }
-	astBinary   struct{ Left, Right astNode; Op string }
-	astMatches  struct{ Left astNode; Pattern string }
-	astContains struct{ Left astNode; Substr string }
-	astIn       struct{ Left astNode; ListName string; Op string }
-	astCall     struct{ Name string; Arg string }
+	astUnary    struct {
+		Op    string
+		Right astNode
+	}
+	astBinary struct {
+		Left, Right astNode
+		Op          string
+	}
+	astMatches struct {
+		Left    astNode
+		Pattern string
+	}
+	astContains struct {
+		Left   astNode
+		Substr string
+	}
+	astIn struct {
+		Left     astNode
+		ListName string
+		Op       string
+	}
+	astCall struct {
+		Name string
+		Arg  string
+	}
 )
 
 func (astVariable) astMarker() {}
@@ -49,32 +68,32 @@ type parser struct {
 type bp int
 
 const (
-	bpLowest  bp = 0
-	bpOr         = 10
-	bpAnd        = 20
-	bpNot        = 30
-	bpCmp        = 40
-	bpStringOp   = 50
-	bpPrimary    = 80
-	bpPrefix     = 90
+	bpLowest   bp = 0
+	bpOr          = 10
+	bpAnd         = 20
+	bpNot         = 30
+	bpCmp         = 40
+	bpStringOp    = 50
+	bpPrimary     = 80
+	bpPrefix      = 90
 )
 
 // Precedence table for infix operators.
 var infixBP = map[string]bp{
-	"or":            bpOr,
-	"and":           bpAnd,
-	"==":            bpCmp,
-	"~=":            bpCmp,
-	">":             bpCmp,
-	">=":            bpCmp,
-	"<":             bpCmp,
-	"<=":            bpCmp,
-	"matches":       bpStringOp,
-	"contains":      bpStringOp,
-	"starts_with":   bpStringOp,
-	"ends_with":     bpStringOp,
-	"in":            bpStringOp,
-	"not_in":        bpStringOp,
+	"or":          bpOr,
+	"and":         bpAnd,
+	"==":          bpCmp,
+	"~=":          bpCmp,
+	">":           bpCmp,
+	">=":          bpCmp,
+	"<":           bpCmp,
+	"<=":          bpCmp,
+	"matches":     bpStringOp,
+	"contains":    bpStringOp,
+	"starts_with": bpStringOp,
+	"ends_with":   bpStringOp,
+	"in":          bpStringOp,
+	"not_in":      bpStringOp,
 }
 
 // Parse parses a Lua expression string into an AST node.
@@ -125,7 +144,7 @@ func (p *parser) parseExpr(minBP bp) astNode {
 		if !ok || bp < minBP {
 			break
 		}
-		p.next()  // consume first char of operator
+		p.next() // consume first char of operator
 		if isMultiCharOp {
 			p.next() // consume second char (=)
 		}
@@ -236,9 +255,9 @@ func (p *parser) parsePrefix() astNode {
 			// Check for function call: ident '(' string_literal ')'
 			if p.peek == '(' {
 				p.next() // consume '('
-			if p.peek != scanner.String && p.peek != scanner.Char {
-				return nil
-			}
+				if p.peek != scanner.String && p.peek != scanner.Char {
+					return nil
+				}
 				argRaw := p.tokenText()
 				p.next()
 				arg := argRaw

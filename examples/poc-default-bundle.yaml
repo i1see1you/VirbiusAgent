@@ -1,0 +1,52 @@
+tenant_id: default
+bundle_id: poc-default
+version: "0.1.0"
+
+gateway:
+  evaluate: true
+  fail_mode: open
+  routes:
+    - uri: /v1/chat/completions
+      methods: [POST]
+
+scene_registry:
+  version: 1
+  fail_on_unknown_app: false
+  fail_on_unresolved_scene: false
+  scenes:
+    demo_chat:
+      app_id: demo-app
+      default: true
+      uris: [/v1/chat/completions]
+      priority: 0
+
+rules:
+  - rule_id: edge_l0_content_deny
+    layer: edge
+    runtime: lua-dsl
+    rollout_state: dry_run
+    reason_code: EDGE_CONTENT_KEYWORD_DENY
+    risk_score: 100
+    intent_action: deny
+    body:
+      list_type: deny
+      keywords: [jailbreak, ignore previous instructions]
+    scope:
+      bind_scope: service
+      bind_ref:
+        app_ids: [beta, medical-prod]
+
+  - rule_id: edge_medical_extra_deny
+    layer: edge
+    runtime: lua-dsl
+    rollout_state: full
+    reason_code: EDGE_MEDICAL_EXTRA_DENY
+    risk_score: 100
+    intent_action: deny
+    body:
+      list_type: deny
+      keywords: [diagnosis, prescription]
+    scope:
+      bind_scope: service
+      bind_ref:
+        app_ids: [medical-prod]

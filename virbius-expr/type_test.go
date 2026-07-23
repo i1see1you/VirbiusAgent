@@ -77,10 +77,10 @@ func TestInferType_BooleanExpressions(t *testing.T) {
 
 func TestInferType_NonBooleanExpressions(t *testing.T) {
 	sources := []string{
-		`"blocked"`,        // String literal
-		`42`,                // Number literal
-		`ctx.app_id`,        // Bare variable
-		`ctx.var('tool')`,   // Bare ctx.var() call
+		`"blocked"`,       // String literal
+		`42`,              // Number literal
+		`ctx.app_id`,      // Bare variable
+		`ctx.var('tool')`, // Bare ctx.var() call
 	}
 	for _, src := range sources {
 		ast, err := Parse(src)
