@@ -501,9 +501,7 @@ SELECT 'default', 'prompt-jailbreak', 1, 'demo-default', 'cloud', 'prompt', 'JAI
 WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'prompt-jailbreak');
 
 -- ============================================================
--- Builtin Falco rules (migrated from falco-config.yaml ConfigMap)
--- Macros (spawned_process, outbound) inlined into conditions.
--- Mirrored in V2__seed_builtin_falco.sql for Flyway-managed envs.
+-- Demo Falco rules
 -- ============================================================
 
 INSERT INTO tb_rule_history (
@@ -511,7 +509,7 @@ INSERT INTO tb_rule_history (
                   reason_code, risk_score, intent_action, scope_json, body_json,
     rollout_state, canary_percent, effective_from, modified_at
 )
-SELECT 'default', 'builtin_sensitive_file_access', 1, 'system-builtin', 'falco', 'falco',
+SELECT 'default', 'builtin_sensitive_file_access', 1, 'demo-default', 'falco', 'falco',
     'WARNING', 100, 'deny',
     '{"bind_scope":"global","description":"Detect access to sensitive system files"}',
     '{"condition":"evt.type in (open, openat, openat2) and fd.name in (/etc/shadow, /etc/passwd, /root/.ssh/id_rsa, /root/.ssh/authorized_keys) and evt.is_open_write=true","output":"Sensitive file access (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, pname=%proc.name, file=%fd.name, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","filesystem","sensitive"]}',
@@ -519,7 +517,7 @@ SELECT 'default', 'builtin_sensitive_file_access', 1, 'system-builtin', 'falco',
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'builtin_sensitive_file_access' AND rule_revision = 1);
 
 INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
-SELECT 'default', 'builtin_sensitive_file_access', 1, 'system-builtin', 'falco', 'falco', 'WARNING', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+SELECT 'default', 'builtin_sensitive_file_access', 1, 'demo-default', 'falco', 'falco', 'WARNING', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'builtin_sensitive_file_access');
 
 INSERT INTO tb_rule_history (
@@ -527,7 +525,7 @@ INSERT INTO tb_rule_history (
                   reason_code, risk_score, intent_action, scope_json, body_json,
     rollout_state, canary_percent, effective_from, modified_at
 )
-SELECT 'default', 'builtin_agent_process_spawned', 1, 'system-builtin', 'falco', 'falco',
+SELECT 'default', 'builtin_agent_process_spawned', 1, 'demo-default', 'falco', 'falco',
     'WARNING', 80, 'deny',
     '{"bind_scope":"global","description":"Detect new processes spawned by Agent"}',
     '{"condition":"evt.type in (execve, execveat) and evt.dir=< and not proc.name startswith \"falco\" and not proc.name startswith \"virbius\"","output":"Agent process spawned (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, command=%proc.cmdline, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","process"]}',
@@ -535,7 +533,7 @@ SELECT 'default', 'builtin_agent_process_spawned', 1, 'system-builtin', 'falco',
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_process_spawned' AND rule_revision = 1);
 
 INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
-SELECT 'default', 'builtin_agent_process_spawned', 1, 'system-builtin', 'falco', 'falco', 'WARNING', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+SELECT 'default', 'builtin_agent_process_spawned', 1, 'demo-default', 'falco', 'falco', 'WARNING', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_process_spawned');
 
 INSERT INTO tb_rule_history (
@@ -543,7 +541,7 @@ INSERT INTO tb_rule_history (
                   reason_code, risk_score, intent_action, scope_json, body_json,
     rollout_state, canary_percent, effective_from, modified_at
 )
-SELECT 'default', 'builtin_agent_outbound_connection', 1, 'system-builtin', 'falco', 'falco',
+SELECT 'default', 'builtin_agent_outbound_connection', 1, 'demo-default', 'falco', 'falco',
     'NOTICE', 60, 'deny',
     '{"bind_scope":"global","description":"Detect outbound connections from Agent"}',
     '{"condition":"evt.type=connect and evt.dir=< and fd.typechar=4 and not fd.sip in (127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)","output":"Agent outbound connection (pid=%proc.pid, ppid=%proc.ppid, pname=%proc.name, sip=%fd.sip, sport=%fd.sport, pcmdline=%proc.pcmdline)","priority":"NOTICE","tags":["agent","network"]}',
@@ -551,5 +549,109 @@ SELECT 'default', 'builtin_agent_outbound_connection', 1, 'system-builtin', 'fal
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_outbound_connection' AND rule_revision = 1);
 
 INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
-SELECT 'default', 'builtin_agent_outbound_connection', 1, 'system-builtin', 'falco', 'falco', 'NOTICE', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+SELECT 'default', 'builtin_agent_outbound_connection', 1, 'demo-default', 'falco', 'falco', 'NOTICE', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_outbound_connection');
+
+-- ============================================================
+-- Demo DLP rule (edge / dlp-dsl)
+-- ============================================================
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at
+)
+SELECT 'default', 'edge_dlp_phone', 1, 'demo-default', 'edge', 'dlp-dsl',
+    'DLP_PHONE', 0, 'allow', '{}',
+    '{"entity_type":"phone_cn","priority":0,"mask_template":"{{VIRBIUS_PHONE_CN_{seq}}}"}',
+    'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'edge_dlp_phone' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'edge_dlp_phone', 1, 'demo-default', 'edge', 'dlp-dsl', 'DLP_PHONE', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'edge_dlp_phone');
+
+-- ============================================================
+-- Demo tool registry entries (sandbox config)
+-- ============================================================
+
+INSERT INTO tb_tool_registry (tenant_id, tool_name, risk_class, sandbox_type, timeout_ms, fast_path, allowed_args_schema, description)
+SELECT 'default', 'read_file', 'low', 'landlock', 5000, 1,
+    '{"read_paths":["/tmp/data/*","/home/user/workdir/*","/usr/lib/*"],"write_paths":[],"exec_paths":["/usr/bin/cat","/usr/bin/head"]}',
+    'Read file content with Landlock path restriction'
+FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_tool_registry WHERE tenant_id = 'default' AND tool_name = 'read_file');
+
+INSERT INTO tb_tool_registry (tenant_id, tool_name, risk_class, sandbox_type, timeout_ms, fast_path, allowed_args_schema, description)
+SELECT 'default', 'exec_cmd', 'high', 'gvisor', 30000, 0,
+    '{"runsc_path":"/usr/local/bin/runsc","rootfs_path":"/opt/virbius/rootfs","min_warm":2,"max_idle":5,"memory_limit_bytes":268435456,"cpu_quota":1.0,"network_disabled":true,"exec_timeout_ms":30000}',
+    'Execute command in gVisor sandbox with warm pool'
+FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_tool_registry WHERE tenant_id = 'default' AND tool_name = 'exec_cmd');
+
+INSERT INTO tb_tool_registry (tenant_id, tool_name, risk_class, sandbox_type, timeout_ms, fast_path, allowed_args_schema, description)
+SELECT 'default', 'curl', 'network', 'none', 15000, 0,
+    '{"allowed_hosts":["api.openai.com","api.github.com"],"deny_cidrs":["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","169.254.169.254/32"]}',
+    'HTTP client with SSRF protection via domain allowlist + CIDR deny'
+FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_tool_registry WHERE tenant_id = 'default' AND tool_name = 'curl');
+
+-- ============================================================
+-- Demo Groovy L3 complex scripts (cloud / groovy)
+-- ============================================================
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at)
+SELECT 'default', 'cloud_tool_chain_detect', 1, 'demo-default', 'cloud', 'groovy',
+    'CLOUD_TOOL_CHAIN_ABUSE', 80, 'deny', '{"bind_scope":"global"}',
+    'def decide(ctx) {
+    def history = ctx.sessionHistory(5)
+    def tools = history.collect { it.tool_name }
+    def readIdx = tools.indexOf("read_file")
+    def curlIdx = tools.indexOf("curl")
+    if (readIdx >= 0 && curlIdx >= 0 && readIdx < curlIdx) {
+        def target = history[curlIdx]?.args?.url
+        if (target != null && !ctx.isInternalHost(target)) {
+            ctx.incrementRiskScore(20)
+            return true
+        }
+    }
+    if (tools.size() >= 10 && tools.every { it == "search" }) {
+        ctx.incrementRiskScore(15)
+        return true
+    }
+    return false
+}',
+    'dry_run', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'cloud_tool_chain_detect' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'cloud_tool_chain_detect', 1, 'demo-default', 'cloud', 'groovy', 'CLOUD_TOOL_CHAIN_ABUSE', 'dry_run', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'cloud_tool_chain_detect');
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at)
+SELECT 'default', 'cloud_session_risk_escalation', 1, 'demo-default', 'cloud', 'groovy',
+    'CLOUD_SESSION_RISK_ESCALATION', 85, 'challenge', '{"bind_scope":"global"}',
+    'def decide(ctx) {
+    def risk = ctx.sessionRiskScore()
+    if (risk != null && risk >= 85) {
+        ctx.setIntent("deny")
+        return true
+    }
+    if (risk != null && risk >= 60) {
+        ctx.setIntent("challenge")
+        return true
+    }
+    return false
+}',
+    'dry_run', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'cloud_session_risk_escalation' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'cloud_session_risk_escalation', 1, 'demo-default', 'cloud', 'groovy', 'CLOUD_SESSION_RISK_ESCALATION', 'dry_run', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'cloud_session_risk_escalation');

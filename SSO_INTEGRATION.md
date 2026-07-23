@@ -44,7 +44,7 @@
 | UI exposure | `static/ops.html`, via `OpsUiController` (`/ui`, `/ops` -> redirect to `/ops.html`) | Filter explicitly skips `/ui`, **currently no authentication at all** |
 | Authorization model | `ApiKeyPrincipal`(credentialId, tenantId, role, label) + `ApiRole`(TENANT_VIEWER < TENANT_ADMIN < PLATFORM_ADMIN) + `ApiKeyRoutePolicy` | Reuse, SSO users map to the same model |
 | Context | `ApiKeyAuthContext` (based on request attribute + RequestContextHolder) | SSO bridge reuses the same context |
-| Path coverage | Filter only protects `/api/v1/admin/`, `/api/v1/edge/`, `/api/v1/gateway/`, `/api/v1/tenants/` | `/api/v1/challenges` etc. not covered (existing gap, see §10.3) |
+| Path coverage | Filter only protects `/api/v1/admin/`, `/api/v1/edge/`, `/api/v1/gateway/`, `/api/v1/tenants/` | `/api/v1/challenges` etc. not covered|
 
 ### 2.1 Key Risk of Introducing Spring Security
 

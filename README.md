@@ -11,9 +11,7 @@
 
 [中文文档](README.zh.md)
 
-**VirbiusAgent** is a deep security protection platform for AI Agents. It provides end-to-end protection for MCP (Model Context Protocol) tool calls through an **Edge–Gateway–Kernel–Cloud** four-layer defense-in-depth architecture.
-
-Built on the [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) security platform, VirbiusAgent extends LLM security to the AI Agent domain, covering tool-call preflight checks, runtime observability, and post-execution audits.
+**VirbiusAgent** is a deep security platform purpose-built for AI Agents. Leveraging eBPF and a four-tier **Edge–Gateway–Kernel–Cloud**  architecture, it provides real-time visibility and precise blocking of Agent behaviors, effectively tackling the challenges of privilege abuse and loss of security control.
 
 ## Architecture
 
@@ -250,6 +248,98 @@ flowchart TB
 | **virbius-kernel** | eBPF plugin | Go (plugin) + Rust (sidecar) | Falco DaemonSet: custom eBPF rules, config-subscriber for live reload. |
 | **Redis** | 6379 | — | Audit event stream, cumulative counters (rate limiting), session cache. |
 | **Database** | — | SQLite / MySQL | Rule metadata, rollout state, agent traces, audit events. |
+
+## Layer Responsibilities
+
+Building on the four-tier architecture, each layer has distinct responsibilities, coordinated through the **rule pipeline** (Edge precheck → Gateway enforce → Kernel observe → Cloud adjudicate).
+
+### Layer overview
+
+| Layer | Path attribute | Typical latency | Blocks request |
+|-------|---------------|-----------------|----------------|
+| ① Edge | Synchronous, in-process (SDK / Proxy) | < 1ms | Yes (local logic only) |
+| ② Gateway | Synchronous, on-path (Higress WASM) | < 10ms | Yes |
+| ③ Kernel | Passive, non-blocking (Falco eBPF) | N/A (observational) | No (sandbox blocks at syscall) |
+| ④ Cloud | Synchronous, remote (virbius-engine) | < 30ms (excl. LLM inference) | Yes (on-demand) |
+
+**Request main path**: Agent tool call → Edge (L0 precheck + DLP + STI) → Gateway (rate limit + enforcement) → Cloud (Prompt L1 + Groovy L3 + PolicyMerger) → MCP Server execution. Kernel passive observation spans all phases.
+
+### ① Edge: lightweight pre-execution protection
+
+The edge is the first defense point before any tool execution. It performs local filtering and security checks without adding noticeable latency.
+
+- **Tool precheck**: validates tool_name against allowlist, checks License permissions, verifies request integrity
+- **DLP desensitization**: masks PII (phone, ID, email, bank card) in tool arguments before they leave the client
+- **STI Taint tracking**: marks untrusted tool return values, prevents injection into subsequent tool calls or Agent memory
+- **Fast path**: bypasses cloud layer for low-risk tools, optimizing latency to < 1ms
+
+**Boundary**: Does not perform semantic jailbreak detection; relies on allowlist matching. Can be bypassed via direct API calls and must not serve as the sole defense line.
+
+### ② Gateway: on-path real-time enforcement
+
+The gateway is the mandatory checkpoint on the tool_call HTTP path, executing decisions from the cloud engine.
+
+- **Rate limiting**: per-user/per-app cumulative counters for tool call frequency
+- **HTTP enforcement**: blocks/allow based on engine decision; validates challenge approval tokens
+- **Protocol validation**: validates MCP request/response format and parameter integrity
+- **On-demand engine call**: forwards to cloud engine only when needed (risk-based routing, configurable per scene)
+
+**Relationship with the cloud**: The gateway handles fast-path execution (rate limiting, list matching); the cloud handles slower-path semantic decision. Not every request needs to RPC to the engine — fast path bypasses when risk is low.
+
+### ③ Kernel: runtime observability & sandbox isolation
+
+The kernel layer operates at the OS level, providing visibility and isolation that application-layer defenses cannot achieve. It is passive by default and does not block the request path unless a sandbox rule is triggered.
+
+- **eBPF/Falco monitoring**: real-time syscall-level observation of file access (open/read/write), network connections (connect/accept), process spawns (execve)
+- **Custom Falco rules**: managed through control plane, supports canary deployment, hot-reload without restart
+- **Sandbox isolation**: Landlock (file path restrictions via kernel LSM) and gVisor (full userspace kernel) for high-risk tool execution — blocks at syscall level before any damage occurs
+- **Audit events**: all kernel events correlated with `trace_id` and fed into the audit pipeline for session-level risk scoring
+
+**Difference from application layers**: Kernel observation cannot be bypassed by the Agent process — even if the Agent is compromised, syscalls are still visible to eBPF. Sandbox restrictions apply regardless of Agent behavior.
+
+### ④ Cloud: policy computation & terminal adjudication
+
+The cloud is the central decision-making layer, aggregating signals from all layers and computing the final disposition.
+
+- **Policy management**: rule authoring, versioning, progressive rollout (draft → dry_run → canary → full)
+- **LLM-based detection**: Prompt L1 safety classification (Qwen3Guard, 9 safety categories), multi-category jailbreak/injection detection
+- **Groovy L3 adjudication**: terminal policy decision merging signals from all layers, calling external ML models via `mlPredict`, outputting `effective_action` (allow / deny / challenge)
+- **Decision trace**: full-chain tool_call/tool_result tracing with causal chain visualization
+- **Audit dashboard**: session risk, tool calls, alerts, approval queue, tamper-proof hash chain audit
+- **Human-in-the-loop**: challenge approval flow for high-risk tool calls — engine issues challenge → console approves → token-gated execution
+
+## Request Main Path
+
+A typical request flows through the layers as follows:
+
+```
+Agent tool call
+  → virbius-core (Edge: precheck + DLP + STI + license verify)
+    │
+    ├── Fast path (low-risk tool)
+    │   └── Direct to MCP Server (bypasses Gateway + Cloud)
+    │
+    └── Normal path (medium/high-risk tool)
+        → virbius-mcp-proxy (security pipeline + trace init)
+          → Higress WASM (Gateway: rate limit + access-list)
+            → virbius-engine (Cloud)
+              ├─ Ollama / vLLM (Prompt L1 safety classification)
+              ├─ ML Serving (Groovy mlPredict)
+              └─ PolicyMerger → effective_action
+                ├── allow  → MCP Server executes tool
+                ├── deny   → blocked with reason code
+                └── challenge → human approval → token → execute
+          ← effective_action + risk_score + trace_id
+        ← tool_result (with audit context)
+  ← final tool_result to Agent
+  → Kernel (Falco) passive observation throughout all phases
+```
+
+**Key design points**:
+- **Fast path**: Low-risk tools (classified by `tb_tool_registry.risk_class`) skip Gateway + Cloud entirely, achieving < 1ms end-to-end latency
+- **On-demand cloud call**: The gateway decides per-request whether to invoke the engine, based on scene configuration and risk level
+- **Kernel is passive**: Falco never blocks the request path; it emits events for risk scoring. Sandbox (Landlock/gVisor) blocks at syscall level independently
+- **All phases carry `trace_id`**: Edge, Gateway, Kernel, and Cloud events are correlated by `trace_id` for end-to-end audit
 
 ## Rule Runtimes
 

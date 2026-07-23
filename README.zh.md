@@ -11,11 +11,7 @@
 
 English: [README.md](README.md)
 
-AI Agent 安全防护工具 — 端管核云四层架构，基于 [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) 基础平台。
-
-**VirbiusAgent** 是面向 AI Agent 的深度安全防护平台，通过**端—管—核—云**四层纵深防御架构，为 MCP（Model Context Protocol）工具调用提供端到端保护。
-
-基于 [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) 安全平台构建，VirbiusAgent 将 LLM 安全能力扩展到 AI Agent 领域，覆盖工具调用前置检查、运行时观测与执行后审计。
+**VirbiusAgent** 是专为AI Agent 打造的深层安全防护平台。基于 eBPF 与**端—管—核—云**架构实现了对 Agent 行为的实时感知与精准阻断，解决Agent 越权与安全失控难题。
 
 ## 架构
 
@@ -250,6 +246,98 @@ flowchart TB
 | virbius-kernel | eBPF 插件 | Go + Rust | Falco DaemonSet：自定义 eBPF 规则，config-subscriber 热重载。 |
 | Redis | 6379 | — | 审计事件流、累计计数器、会话缓存。 |
 | 数据库 | — | SQLite / MySQL | 规则元数据、灰度状态、Agent 链路、审计事件。 |
+
+## 层职责
+
+在四层架构基础上，各层通过**规则流水线**（端层预检→管层执行→核层观测→云层终判）协同工作。
+
+### 层概览
+
+| 层 | 路径属性 | 典型延迟 | 是否阻断请求 |
+|----|---------|---------|-------------|
+| ① 端层 | 同步、进程内（SDK / Proxy） | < 1ms | 是（仅本地逻辑）|
+| ② 管层 | 同步、在线路径（Higress WASM） | < 10ms | 是 |
+| ③ 核层 | 旁路、非阻塞（Falco eBPF） | 不适用（观测性）| 否（沙箱在 syscall 层阻断）|
+| ④ 云层 | 同步、远程（virbius-engine） | < 30ms（不含 LLM） | 是（按需调用）|
+
+**请求主路径**：Agent 工具调用 → 端层（L0 预检 + DLP + STI）→ 管层（限流 + 执行）→ 云层（Prompt L1 + Groovy L3 + PolicyMerger）→ MCP Server 执行。核层被动观测贯穿全程。
+
+### ① 端层：轻量执行前防护
+
+端层是工具执行前的第一道防线，在本地执行过滤和安全检查，不增加可感知的延迟。
+
+- **工具预检**：校验 tool_name 是否在 allowlist 中、检查 License 权限、验证请求完整性
+- **DLP 脱敏**：在工具参数离开客户端前对 PII（手机号、身份证、邮箱、银行卡）进行掩码替换
+- **STI 污点跟踪**：标记不可信的工具返回值，防止注入到后续工具调用或 Agent 记忆
+- **快速通道**：低风险工具直接绕过云层，端到端延迟 < 1ms
+
+**边界**：不执行语义级越狱检测，依赖 allowlist 匹配。可通过直接 API 调用绕过，不能作为唯一防线。
+
+### ② 管层：在线实时执行
+
+管层是工具调用 HTTP 路径上的强制检查点，执行云层引擎下发的决策。
+
+- **限流**：按用户/应用维度的累计计数器控制工具调用频率
+- **HTTP 执行**：基于引擎决策执行阻断/放行；验证审批 token 有效性
+- **协议校验**：验证 MCP 请求/响应格式和参数完整性
+- **按需调用引擎**：仅在需要时转发到云层引擎（基于风险的路由，可按场景配置）
+
+**与云层的关系**：管层处理快速执行路径（限流、名单匹配）；云层处理慢速语义决策。并非每个请求都需要 RPC 到引擎——低风险时走快速通道绕过。
+
+### ③ 核层：运行时观测与沙箱隔离
+
+核层在操作系统层面运行，提供应用层防御无法实现的可见性和隔离能力。默认旁路模式，不阻塞请求路径，除非沙箱规则被触发。
+
+- **eBPF/Falco 监控**：实时 syscall 级观测文件访问（open/read/write）、网络连接（connect/accept）、进程创建（execve）
+- **自定义 Falco 规则**：通过控制面管理，支持灰度发布，热重载无需重启
+- **沙箱隔离**：Landlock（内核 LSM 文件路径限制）和 gVisor（完整用户态内核）对高风险工具执行进行隔离——在 syscall 层阻断，防止损害发生
+- **审计事件**：所有内核事件通过 `trace_id` 关联，汇入审计流水线用于会话风险评分
+
+**与应用层的区别**：核层观测无法被 Agent 进程绕过——即使 Agent 被攻陷，syscall 对 eBPF 仍然可见。沙箱限制独立于 Agent 行为生效。
+
+### ④ 云层：策略计算与终判
+
+云层是中心决策层，聚合所有层的信号并输出最终处置动作。
+
+- **策略管理**：规则编写、版本管理、渐进式灰度（draft → dry_run → canary → full）
+- **LLM 检测**：Prompt L1 安全分类（Qwen3Guard，9 类安全标签），越狱/注入检测
+- **Groovy L3 终判**：合并各层信号的策略终判，通过 `mlPredict` 调用外部 ML 模型，输出 `effective_action`（allow / deny / challenge）
+- **决策链路**：全链路 tool_call/tool_result 追踪，因果链可视化
+- **审计大盘**：会话风险、工具调用、告警、审批队列、防篡改哈希链审计
+- **人工审批**：高风险工具调用的 challenge 审批流——引擎下发 challenge → 运营台审批 → token 限权执行
+
+## 请求主路径
+
+典型请求经过以下路径：
+
+```
+Agent 工具调用
+  → virbius-core（端层：预检 + DLP + STI + License 校验）
+    │
+    ├── 快速通道（低风险工具）
+    │   └── 直发 MCP Server（绕过管层 + 云层）
+    │
+    └── 普通路径（中/高风险工具）
+        → virbius-mcp-proxy（安全流水线 + trace 初始化）
+          → Higress WASM（管层：限流 + 名单匹配）
+            → virbius-engine（云层）
+              ├─ Ollama / vLLM（Prompt L1 安全分类）
+              ├─ ML Serving（Groovy mlPredict）
+              └─ PolicyMerger → effective_action
+                ├── allow  → MCP Server 执行工具
+                ├── deny   → 阻断 + 原因码
+                └── challenge → 人工审批 → token → 执行
+          ← effective_action + risk_score + trace_id
+        ← tool_result（含审计上下文）
+  ← 最终 tool_result 返回 Agent
+  → 核层（Falco）全程被动观测
+```
+
+**关键设计点**：
+- **快速通道**：低风险工具（按 `tb_tool_registry.risk_class` 分类）绕过管层 + 云层，端到端延迟 < 1ms
+- **按需调云**：管层按场景配置和风险级别决定是否调用引擎
+- **核层旁路**：Falco 从不阻断请求路径，仅发射事件用于风险评分。沙箱（Landlock/gVisor）在 syscall 层独立阻断
+- **全链路 trace_id**：端层、管层、核层、云层事件通过 `trace_id` 关联，实现端到端审计
 
 ## 规则运行时
 

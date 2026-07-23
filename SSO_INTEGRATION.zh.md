@@ -44,7 +44,7 @@
 | UI 暴露 | `static/ops.html`，经 `OpsUiController`（`/ui`、`/ops` -> 重定向 `/ops.html`） | filter 显式跳过 `/ui`，**当前完全无认证** |
 | 鉴权模型 | `ApiKeyPrincipal`(credentialId, tenantId, role, label) + `ApiRole`(TENANT_VIEWER < TENANT_ADMIN < PLATFORM_ADMIN) + `ApiKeyRoutePolicy` | 复用，SSO 用户映射为同一模型 |
 | 上下文 | `ApiKeyAuthContext`（基于 request attribute + RequestContextHolder） | SSO 桥接复用同一上下文 |
-| 路径覆盖 | filter 仅保护 `/api/v1/admin/`、`/api/v1/edge/`、`/api/v1/gateway/`、`/api/v1/tenants/` | `/api/v1/challenges` 等未覆盖（既有缺口，见 §10.3） |
+| 路径覆盖 | filter 仅保护 `/api/v1/admin/`、`/api/v1/edge/`、`/api/v1/gateway/`、`/api/v1/tenants/` | `/api/v1/challenges` 等未覆盖,无影响 |
 
 ### 2.1 引入 Spring Security 的关键风险
 
