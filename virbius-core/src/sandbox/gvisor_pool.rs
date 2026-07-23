@@ -63,7 +63,7 @@ impl Language {
     }
 
     /// Parse from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "python" | "python3" => Some(Language::Python),
             "shell" | "sh" | "bash" => Some(Language::Shell),
@@ -188,7 +188,6 @@ impl GvisorPool {
             return Err("runsc binary not available".to_string());
         }
 
-        let warm_hit;
         let mut container = self.acquire_warm(language)?;
 
         // Write code to stdin.
@@ -249,7 +248,7 @@ impl GvisorPool {
         let _ = container.child.wait();
 
         // Spawn a replacement in the background.
-        warm_hit = container.warm_hit;
+        let warm_hit = container.warm_hit;
         self.spawn_warm_async(language);
 
         Ok(GvisorExecResult {
@@ -434,7 +433,7 @@ impl GvisorPool {
     /// Shutdown all containers (cleanup on exit).
     pub fn shutdown(&self) {
         let mut pool = self.warm.lock().unwrap();
-        for (_, containers) in pool.iter_mut() {
+        for containers in pool.values_mut() {
             for c in containers {
                 let _ = c.child.kill();
                 let _ = c.child.wait();
@@ -483,11 +482,11 @@ mod tests {
 
     #[test]
     fn test_language_from_str() {
-        assert_eq!(Language::from_str("python"), Some(Language::Python));
-        assert_eq!(Language::from_str("PYTHON3"), Some(Language::Python));
-        assert_eq!(Language::from_str("bash"), Some(Language::Shell));
-        assert_eq!(Language::from_str("nodejs"), Some(Language::Node));
-        assert_eq!(Language::from_str("ruby"), None);
+        assert_eq!(Language::parse("python"), Some(Language::Python));
+        assert_eq!(Language::parse("PYTHON3"), Some(Language::Python));
+        assert_eq!(Language::parse("bash"), Some(Language::Shell));
+        assert_eq!(Language::parse("nodejs"), Some(Language::Node));
+        assert_eq!(Language::parse("ruby"), None);
     }
 
     #[test]

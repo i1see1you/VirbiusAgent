@@ -64,7 +64,7 @@ ensure_redis() {
   redis-server --daemonize yes --port "$VIRBIUS_REDIS_PORT" \
     --bind 127.0.0.1 --pidfile "$REDIS_PID_FILE" \
     --logfile "$LOG_DIR/redis.log" --save ""
-  for i in $(seq 1 20); do
+  for _ in $(seq 1 20); do
     if redis-cli -p "$VIRBIUS_REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
       ok "Redis ready ($VIRBIUS_REDIS_URL)"; return 0
     fi; sleep 0.5

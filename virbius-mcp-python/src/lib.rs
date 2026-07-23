@@ -1,9 +1,6 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use virbius_core::{
-    license, precheck, License, MemoryContext, MemoryInterceptor, MemoryPolicies, PrecheckResult,
-    ToolCall,
-};
+use virbius_core::{precheck, License, MemoryContext, MemoryInterceptor, MemoryPolicies, ToolCall};
 
 /// Python module for VirbiusAgent MCP integration.
 #[pymodule]
@@ -71,7 +68,8 @@ fn verify_license(jwt: String, public_key_pem: String, app_id: String) -> PyResu
 
 /// Desensitize PII in text using Virbius DLP rules.
 #[pyfunction]
-fn desensitize(text: String, trace_id: String, rules_json: Option<String>) -> PyResult<String> {
+#[pyo3(signature = (text, trace_id, _rules_json=None))]
+fn desensitize(text: String, trace_id: String, _rules_json: Option<String>) -> PyResult<String> {
     let manifest = virbius_core::manifest::load();
     let result = virbius_core::dlp::desensitize_in(
         &text,

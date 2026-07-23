@@ -572,7 +572,7 @@ fn drop_caps_and_no_new_privs() -> io::Result<bool> {
 /// Sets CLOEXEC on the write end so exec closes it automatically.
 fn create_report_pipe() -> io::Result<(i32, i32)> {
     let mut fds: [i32; 2] = [-1; 2];
-    let ret = unsafe { libc::pipe(fds.as_mut_ptr() as *mut i32) };
+    let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
     if ret != 0 {
         return Err(io::Error::last_os_error());
     }

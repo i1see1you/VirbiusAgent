@@ -135,9 +135,11 @@ jobs:
         working-directory: virbius-expr
         run: go vet ./...
 
-      - name: Vet virbius-gateway/wasm
+      - name: Tidy and vet virbius-gateway/wasm
         working-directory: virbius-gateway/wasm
-        run: go vet ./...
+        run: |
+          go mod tidy
+          go vet ./...
 
   # ────────────────────────────────────────────────────────────
   #  Shell scripts: shellcheck

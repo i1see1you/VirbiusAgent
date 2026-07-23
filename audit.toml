@@ -4,4 +4,8 @@ ignore = [
     # Our codebase does not use new_closure / new_closure_bound.
     # Planned upgrade to pyo3 0.29+ in a separate PR.
     "RUSTSEC-2026-0177",
+    # pyo3 0.22.x: Risk of buffer overflow in PyString::from_object.
+    # Our codebase does not use PyString::from_object.
+    # Planned upgrade to pyo3 0.29+ in a separate PR.
+    "RUSTSEC-2025-0020",
 ]

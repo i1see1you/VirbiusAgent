@@ -98,7 +98,7 @@ pub fn luhn_valid(digits: &str) -> bool {
         sum += n;
         alt = !alt;
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 pub fn default_mask_prefix(entity_type: &str) -> &'static str {

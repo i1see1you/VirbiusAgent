@@ -167,6 +167,7 @@ async fn main() {
 ///
 /// Reads newline-delimited JSON-RPC from stdin, writes responses to stdout.
 /// Uses a fixed session_id for the single stdio connection.
+#[allow(clippy::too_many_arguments)]
 async fn run_stdio(
     session_mgr: Arc<SessionManager>,
     pipeline: Arc<SecurityPipeline>,

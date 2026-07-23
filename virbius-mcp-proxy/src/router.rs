@@ -163,6 +163,7 @@ pub async fn route_request(
 /// The logical session ID is determined from `_meta.session_id` (or auto-generated).
 /// On reconnect (same logical session ID already in SessionManager), accumulated
 /// state (risk_score, tool_call_count, trace_id, step_seq) is preserved.
+#[allow(clippy::too_many_arguments)]
 async fn handle_initialize(
     id: &Value,
     params: &Value,

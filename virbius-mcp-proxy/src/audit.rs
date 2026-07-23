@@ -246,6 +246,13 @@ fn rand_sample() -> f64 {
 /// Accepts both `host:port` and `redis://host:port` formats.
 /// Parsing as `SocketAddr` avoids going through the system DNS resolver
 /// (which can fail spuriously on macOS for literal IPs).
+fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
+    let raw = url.strip_prefix("redis://").unwrap_or(url);
+    raw.parse::<std::net::SocketAddr>().unwrap_or_else(|e| {
+        panic!("invalid Redis address '{url}': {e}. Expected 'host:port' or 'redis://host:port'")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -374,11 +381,4 @@ mod tests {
         assert_eq!(json["layer"], "edge");
         assert_eq!(json["event_type"], "tool_call");
     }
-}
-
-fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
-    let raw = url.strip_prefix("redis://").unwrap_or(url);
-    raw.parse::<std::net::SocketAddr>().unwrap_or_else(|e| {
-        panic!("invalid Redis address '{url}': {e}. Expected 'host:port' or 'redis://host:port'")
-    })
 }

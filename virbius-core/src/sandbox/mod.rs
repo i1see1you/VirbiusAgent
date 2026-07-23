@@ -29,7 +29,7 @@ pub enum SandboxType {
 }
 
 impl SandboxType {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "landlock" | "subprocess" => SandboxType::Landlock,
             "gvisor" => SandboxType::Gvisor,
@@ -211,11 +211,11 @@ mod tests {
 
     #[test]
     fn test_sandbox_type_from_str() {
-        assert_eq!(SandboxType::from_str("none"), SandboxType::None);
-        assert_eq!(SandboxType::from_str("landlock"), SandboxType::Landlock);
-        assert_eq!(SandboxType::from_str("gvisor"), SandboxType::Gvisor);
-        assert_eq!(SandboxType::from_str("subprocess"), SandboxType::Landlock);
-        assert_eq!(SandboxType::from_str(""), SandboxType::None);
+        assert_eq!(SandboxType::parse("none"), SandboxType::None);
+        assert_eq!(SandboxType::parse("landlock"), SandboxType::Landlock);
+        assert_eq!(SandboxType::parse("gvisor"), SandboxType::Gvisor);
+        assert_eq!(SandboxType::parse("subprocess"), SandboxType::Landlock);
+        assert_eq!(SandboxType::parse(""), SandboxType::None);
     }
 
     #[test]
