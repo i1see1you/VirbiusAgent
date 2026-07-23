@@ -1,6 +1,6 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-use virbius_core::{license, precheck, License, PrecheckResult, ToolCall};
+use virbius_core::{precheck, License, ToolCall};
 
 /// Pre-check a tool call.
 #[napi(object)]

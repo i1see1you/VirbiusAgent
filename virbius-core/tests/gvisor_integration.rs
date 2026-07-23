@@ -11,7 +11,6 @@
 #![cfg(target_os = "linux")]
 
 use std::path::Path;
-use std::process::Command;
 use std::time::Duration;
 
 use virbius_core::sandbox::{GvisorPool, GvisorPoolConfig, Language};
@@ -139,8 +138,10 @@ fn test_gvisor_pool_available() {
 
 #[test]
 fn test_gvisor_pool_unavailable_when_runsc_missing() {
-    let mut config = GvisorPoolConfig::default();
-    config.runsc_path = "/nonexistent/runsc".to_string();
+    let config = GvisorPoolConfig {
+        runsc_path: "/nonexistent/runsc".to_string(),
+        ..Default::default()
+    };
     let pool = GvisorPool::new(config);
     assert!(!pool.is_available(), "pool should report unavailable");
 }

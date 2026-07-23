@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/alibaba/higress/plugins/wasm-go v1.4.0
-	github.com/tetratelabs/proxy-wasm-go-sdk v0.0.0-20240314015001-5906d39c1bce
+	github.com/tetratelabs/proxy-wasm-go-sdk v0.24.0
 	github.com/virbius/virbius-expr v0.0.0-00010101000000-000000000000
 )
 
