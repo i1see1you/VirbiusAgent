@@ -346,6 +346,7 @@ spring:
 | staging | `true` | `true` | SSO + API Key 双轨 |
 | prod | `true` | `true` | SSO + API Key 双轨 |
 
+> prod 需先按 §11.1 第 3 步签发 PLATFORM_ADMIN API Key 后再开启 `api-key.enabled=true`，否则 admin API 与 edge/gateway API 将无可用认证方式。
 > staging/prod 的 `application-staging.yml`、`application-prod.yml` 追加 `virbius.security.sso.enabled: true` 及 IdP 连接信息（均通过环境变量注入）。
 
 ### 7.3 IdP 侧注册
@@ -490,6 +491,31 @@ UI 启动调 `/me`：
 
 `virbius.security.sso.enabled=false`（默认）时 `OpenSecurityConfig` 生效，Security 链全部 permitAll + CSRF 关闭，`ApiKeyAuthFilter` 走 `DEV_PRINCIPAL`，与改造前完全一致。
 
+### 9.4 管理员角色限制：SSO 用户浏览器调用 admin API 的准入原则
+
+SSO 登录用户通过浏览器调用 `/api/v1/admin/**`、`/api/v1/tenants/**` 时，**必须拥有 `TENANT_ADMIN` 及以上角色**，实现方式如下：
+
+| 认证方式 | admin API 准入条件 | 拒绝结果 |
+|---------|-------------------|---------|
+| **OIDC session**（浏览器） | `OidcRoleResolver` 解析出的 `ApiRole` 必须 ≥ `TENANT_ADMIN` | `OidcPrincipalBridgeFilter` 返回 403 |
+| **API Key**（程序化调用） | `ApiKeyAuthFilter` 校验 `credential.role()` 满足 `ApiKeyRoutePolicy.requiredRole()` | 按路径 401/403 |
+
+**浏览器 SSO 调用 admin API 的完整链路**：
+
+```
+浏览器 AJAX GET /api/v1/admin/tenants/{t}/rules（带 JSESSIONID）
+  → Security: permitAll（放行，不要求 authenticated）
+  → OidcPrincipalBridgeFilter: SecurityContext 中有 OidcUser？
+      ├─ 否（无会话） → 不设值，继续
+      └─ 是（已登录） → OidcRoleResolver 解析 role + tenant
+           ├─ role = TENANT_VIEWER → 返回 403（角色不足，不可管理）
+           └─ role ≥ TENANT_ADMIN → 设值 ApiKeyAuthContext，继续
+  → ApiKeyAuthFilter: Context 已设值 → 跳过
+  → Admin Controller: 正常处理
+```
+
+> `ApiKeyRoutePolicy` 对 `GET` 要求 `TENANT_VIEWER`、对 `POST/PUT/DELETE` 要求 `TENANT_ADMIN`。但 SSO 桥接 Filter 在角色准入时**统一要求 ≥ `TENANT_ADMIN`**，因为浏览器用户通过 SSO 进入后台后，应具备管理操作能力；仅为「只读查看」的场景（TENANT_VIEWER）不在 SSO 的覆盖范围——这类需求应走 API Key 或单独评估。
+
 ---
 
 ## 10. 安全考量
@@ -539,9 +565,48 @@ SSO 登录用户的操作审计：现有审计链路基于 `ApiKeyPrincipal`，�
    VIRBIUS_SSO_ROLE_CLAIM=realm_access.roles   # 按 IdP 实际字段
    VIRBIUS_SSO_DEFAULT_ROLE=                   # 按需
    ```
-3. **发布**：构建并部署 virbius-control（含新依赖与配置）。
-4. **验证**：浏览器访问 `https://<host>/ops.html` 应跳转 IdP 登录，登录后回跳后台；程序化调用带 API Key 不受影响。
-5. **灰度**：可先在 staging 验证角色映射与审计日志，再推 prod。
+3. **初始化 PLATFORM_ADMIN API Key**（首次部署必须步骤）：
+
+   API Key 是服务端调用（Edge SDK / MCP Proxy）和 admin API 回退认证的凭证，**SSO 开启前需先签发**。利用认证关闭时的 `DEV_PRINCIPAL` 后门：
+
+   ```bash
+   # 首次部署后，VIRBIUS_SECURITY_API_KEY_ENABLED 默认 false（认证关闭）
+   curl -X POST http://localhost:8080/api/v1/admin/platform/api-credentials \
+     -H 'Content-Type: application/json' \
+     -d '{"label": "prod-admin"}'
+   # 返回: { "api_key": "vrb_tk_Ab12...XXXX", "tenant_id": "*", "role": "platform_admin", ... }
+   # 将 api_key 存入密码管理 / 环境变量，仅此一次可见
+   ```
+
+   > 若 API Key 丢失，可重复上述步骤签发新 Key 并吊销旧 Key；或临时设置 `VIRBIUS_SECURITY_API_KEY_ENABLED=false` 重启重新签发（生产不推荐）。
+
+4. **开启 API Key 认证**：
+
+   ```yaml
+   # application-prod.yml
+   virbius.security.api-key.enabled: true
+   ```
+
+   或环境变量 `VIRBIUS_SECURITY_API_KEY_ENABLED=true`。
+
+5. **发布**：构建并部署 virbius-control（含新依赖与配置）。
+6. **验证**：
+   - 浏览器访问 `https://<host>/ops.html` 应跳转 IdP 登录，登录后回跳后台。
+   - 程序化调用带 API Key 正常（`Authorization: Bearer vrb_tk_...`）。
+   - 无 API Key 调用 edge/admin API 应返回 401。
+7. **灰度**：可先在 staging 验证角色映射与审计日志，再推 prod。
+
+### 11.2 正式环境 Key 管理
+
+| 操作 | 命令 |
+|------|------|
+| 签发租户级 Key | `POST /api/v1/admin/tenants/{tenantId}/api-credentials`（需平台或租户管理员 Key） |
+| 签发平台级 Key | `POST /api/v1/admin/platform/api-credentials`（需平台管理员 Key） |
+| 吊销 Key | `POST /api/v1/admin/platform/api-credentials/{id}/revoke` |
+| 列举 Key | `GET /api/v1/admin/platform/api-credentials` |
+
+> 每个 API Key 归属一个租户（`tenantId`），平台级 Key 的 `tenantId` 为 `*`，可管理全部租户。
+> 密钥**仅在签发时返回一次**，丢失后只能吊销重建。
 
 ### 11.2 回滚
 
@@ -631,3 +696,4 @@ SSO 登录用户的操作审计：现有审计链路基于 `ApiKeyPrincipal`，�
 | `VIRBIUS_SSO_TENANT_CLAIM` | 否 | 租户 claim 点路径，默认空 |
 | `VIRBIUS_SSO_USERNAME_CLAIM` | 否 | 用户名 claim，默认 `preferred_username` |
 | `VIRBIUS_SSO_DEFAULT_ROLE` | 否 | 无匹配默认角色，默认空（拒绝） |
+| `VIRBIUS_SECURITY_API_KEY_ENABLED` | 否 | 开启 API Key 认证，默认 `false`；prod 需先签发 Key 再开启 |
