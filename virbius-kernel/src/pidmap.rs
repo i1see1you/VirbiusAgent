@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::fs;
 use std::io::Write;
 use std::net::TcpStream;
 use std::sync::{Mutex, OnceLock};
@@ -207,9 +209,9 @@ fn read_cgroup_id() -> Option<u64> {
                 } else {
                     format!("/sys/fs/cgroup/{}", path)
                 };
-                return fs::metadata(&full_path).ok().and_then(|meta| {
+                return fs::metadata(&full_path).ok().map(|meta| {
                     use std::os::unix::fs::MetadataExt;
-                    Some(meta.ino())
+                    meta.ino()
                 });
             }
         }

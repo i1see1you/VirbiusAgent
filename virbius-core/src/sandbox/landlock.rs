@@ -250,9 +250,14 @@ impl PreparedRules {
 /// nothing are silently dropped — Landlock would reject them anyway via
 /// `open(O_PATH)` returning ENOENT, but filtering them here keeps the
 /// child's syscall count minimal.
+///
+/// The list is capped at [`MAX_EXPANDED_PATHS`] and expansion stops as soon
+/// as the cap is reached: a pathological pattern such as `/**` would
+/// otherwise walk the entire filesystem (including `/proc` and `/sys`)
+/// before truncation, stalling the caller for minutes.
 fn expand_globs(patterns: &[String]) -> Vec<CString> {
     let mut out = Vec::new();
-    for pat in patterns {
+    'outer: for pat in patterns {
         if pat.is_empty() {
             continue;
         }
@@ -261,6 +266,12 @@ fn expand_globs(patterns: &[String]) -> Vec<CString> {
                 for path in paths.flatten() {
                     if let Ok(s) = CString::new(path.as_os_str().as_encoded_bytes()) {
                         out.push(s);
+                        if out.len() >= MAX_EXPANDED_PATHS {
+                            // Cap reached — stop walking immediately.  If a
+                            // rule expands to more paths, the operator should
+                            // tighten the glob.
+                            break 'outer;
+                        }
                     }
                 }
             }
@@ -269,11 +280,11 @@ fn expand_globs(patterns: &[String]) -> Vec<CString> {
             }
         }
     }
-    // Cap the list to avoid pathological expansion.  If a rule expands to
-    // more than 4096 paths, the operator should tighten the glob.
-    out.truncate(4096);
     out
 }
+
+/// Maximum number of glob-expanded paths kept for a single rule set.
+const MAX_EXPANDED_PATHS: usize = 4096;
 
 // ──────────────────────────────────────────────────────────────────────────
 //  Child-side apply functions (async-signal-safe)

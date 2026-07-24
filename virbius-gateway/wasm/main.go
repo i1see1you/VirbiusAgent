@@ -13,11 +13,12 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/alibaba/higress/plugins/wasm-go/pkg/wrapper"
-	"github.com/tetratelabs/proxy-wasm-go-sdk/proxywasm"
-	"github.com/tetratelabs/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm"
+	"github.com/higress-group/proxy-wasm-go-sdk/proxywasm/types"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/resp"
 	"github.com/virbius/virbius-expr"
 )
 
@@ -54,8 +55,8 @@ type VirbiusConfig struct {
 	HTTPClient      wrapper.HttpClient
 }
 
-func parseConfig(jsonBytes []byte, config *VirbiusConfig) error {
-	if err := json.Unmarshal(jsonBytes, config); err != nil {
+func parseConfig(js gjson.Result, config *VirbiusConfig, log wrapper.Log) error {
+	if err := json.Unmarshal([]byte(js.Raw), config); err != nil {
 		return fmt.Errorf("failed to parse config: %v", err)
 	}
 	if config.FailMode == "" {
@@ -69,24 +70,33 @@ func parseConfig(jsonBytes []byte, config *VirbiusConfig) error {
 	}
 
 	// Initialize Redis client for rate limiting
-	config.RedisClient = wrapper.NewRedisClient("virbius-redis", "default", wrapper.RedisClientOptions{
-		Timeout:     uint32(time.Millisecond * 100),
-		DB:          0,
-		Password:    "",
-		HasTag:      false,
-		ReadCluster: false,
+	config.RedisClient = wrapper.NewRedisClusterClient(wrapper.K8sCluster{
+		ServiceName: "virbius-redis",
+		Namespace:   "default",
+		Port:        6379,
 	})
 
 	// Initialize HTTP client for engine calls
-	config.HTTPClient = wrapper.NewClusterClient(wrapper.RouteCluster{
-		Cluster:   "outbound|8082||virbius-engine.default.svc.cluster.local",
-		Authority: "virbius-engine.default.svc.cluster.local:8082",
+	config.HTTPClient = wrapper.NewClusterClient(wrapper.K8sCluster{
+		ServiceName: "virbius-engine",
+		Namespace:   "default",
+		Port:        8082,
+		Host:        "virbius-engine.default.svc.cluster.local:8082",
 	})
 
 	return nil
 }
 
 // --- Request Processing ---
+
+// requestHeader returns the given request header value, or "" when absent.
+func requestHeader(key string) string {
+	value, err := proxywasm.GetHttpRequestHeader(key)
+	if err != nil {
+		return ""
+	}
+	return value
+}
 
 func onHttpRequestHeaders(ctx wrapper.HttpContext, config VirbiusConfig, log wrapper.Log) types.Action {
 	// Only intercept POST requests to MCP endpoints
@@ -101,9 +111,9 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config VirbiusConfig, log wra
 	}
 
 	// Extract MCP session and tool info from headers
-	toolName := ctx.Header().Get("x-mcp-tool-name")
-	sessionID := ctx.Header().Get("x-mcp-session-id")
-	challengeToken := ctx.Header().Get("x-virbius-challenge-token")
+	toolName := requestHeader("x-mcp-tool-name")
+	sessionID := requestHeader("x-mcp-session-id")
+	challengeToken := requestHeader("x-virbius-challenge-token")
 
 	// If a challenge token is present, verify it before allowing
 	if challengeToken != "" && toolName != "" && config.Evaluate {
@@ -133,19 +143,21 @@ func onHttpRequestHeaders(ctx wrapper.HttpContext, config VirbiusConfig, log wra
 	// 2. Rate limiting via Redis (async)
 	if config.ToolRateLimit > 0 && sessionID != "" {
 		rateKey := fmt.Sprintf("tool:%s:session:%s", toolName, sessionID)
-		go func() {
-			if err := config.RedisClient.Inc(rateKey, 1, 3600, func(reply interface{}, err error) {
-				if err != nil {
-					log.Warnf("virbius-wasm: redis incr error: %v", err)
-					return
-				}
-				if count, ok := reply.(int64); ok && count > int64(config.ToolRateLimit) {
-					log.Infof("virbius-wasm: rate limit exceeded for tool=%s session=%s count=%d", toolName, sessionID, count)
-				}
-			}); err != nil {
-				log.Warnf("virbius-wasm: redis incr failed: %v", err)
+		if err := config.RedisClient.Incr(rateKey, func(response resp.Value) {
+			if err := response.Error(); err != nil {
+				log.Warnf("virbius-wasm: redis incr error: %v", err)
+				return
 			}
-		}()
+			if count := response.Integer(); count > config.ToolRateLimit {
+				log.Infof("virbius-wasm: rate limit exceeded for tool=%s session=%s count=%d", toolName, sessionID, count)
+			}
+		}); err != nil {
+			log.Warnf("virbius-wasm: redis incr failed: %v", err)
+		}
+		// Keep the counter key bounded to a 1h window.
+		if err := config.RedisClient.Expire(rateKey, 3600, nil); err != nil {
+			log.Warnf("virbius-wasm: redis expire failed: %v", err)
+		}
 	}
 
 	// 3. Fast path check — skip engine for low-risk tools
@@ -188,7 +200,7 @@ func onHttpRequestBody(ctx wrapper.HttpContext, config VirbiusConfig, body []byt
 	log.Infof("virbius-wasm: extracted tool_name from body: %s", toolName)
 
 	path := ctx.Path()
-	sessionID := ctx.Header().Get("x-mcp-session-id")
+	sessionID := requestHeader("x-mcp-session-id")
 
 	// 1. Tool allowlist check
 	if len(config.Allowlist) > 0 && !contains(config.Allowlist, toolName) {
@@ -336,7 +348,7 @@ func evalExpressionsWithBody(rules []ExpressionRule, toolName, sessionID, path, 
 
 func callEngine(ctx wrapper.HttpContext, config VirbiusConfig, log wrapper.Log, toolName, sessionID string) types.Action {
 	engineReq := map[string]interface{}{
-		"trace_id":   ctx.GetTraceID(),
+		"trace_id":   requestHeader("x-request-id"),
 		"session_id": sessionID,
 		"tool_name":  toolName,
 		"tenant_id":  config.TenantID,
@@ -387,7 +399,7 @@ func callEngine(ctx wrapper.HttpContext, config VirbiusConfig, log wrapper.Log, 
 
 		log.Debugf("virbius-wasm: engine allowed tool=%s", toolName)
 		proxywasm.ResumeHttpRequest()
-	}, uint32(config.EngineTimeoutMs))
+	}, config.EngineTimeoutMs)
 
 	if err != nil {
 		log.Warnf("virbius-wasm: engine call failed: %v", err)
@@ -417,7 +429,7 @@ func denyRequest(ctx wrapper.HttpContext, log wrapper.Log, code, toolName, reaso
 		}
 	}`, code, toolName, reason)
 
-	if err := proxywasm.SendHttpResponseWithDetail(http.StatusForbidden, "virbius-gateway", [][2]string{
+	if err := proxywasm.SendHttpResponse(http.StatusForbidden, [][2]string{
 		{"Content-Type", "application/json"},
 	}, []byte(errBody), -1); err != nil {
 		log.Errorf("virbius-wasm: failed to send deny response: %v", err)
@@ -479,9 +491,11 @@ func verifyChallengeToken(ctx wrapper.HttpContext, config VirbiusConfig, log wra
 
 		log.Infof("virbius-wasm: challenge token verified: tool=%s challenge=%s", toolName, result.ChallengeID)
 		// Remove the challenge token header before forwarding to upstream
-		ctx.Header().Del("x-virbius-challenge-token")
+		if err := proxywasm.RemoveHttpRequestHeader("x-virbius-challenge-token"); err != nil {
+			log.Warnf("virbius-wasm: failed to remove challenge token header: %v", err)
+		}
 		proxywasm.ResumeHttpRequest()
-	}, uint32(config.EngineTimeoutMs))
+	}, config.EngineTimeoutMs)
 
 	if err != nil {
 		log.Warnf("virbius-wasm: challenge verify call failed: %v", err)
@@ -515,7 +529,7 @@ func challengeRequest(ctx wrapper.HttpContext, log wrapper.Log, toolName, challe
 		}
 	}`, toolName, challengeID, argsHash, reason)
 
-	if err := proxywasm.SendHttpResponseWithDetail(http.StatusForbidden, "virbius-gateway", [][2]string{
+	if err := proxywasm.SendHttpResponse(http.StatusForbidden, [][2]string{
 		{"Content-Type", "application/json"},
 	}, []byte(errBody), -1); err != nil {
 		log.Errorf("virbius-wasm: failed to send challenge response: %v", err)

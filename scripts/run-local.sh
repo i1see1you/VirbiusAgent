@@ -31,7 +31,7 @@ kill_port() {
 }
 
 wait_http() {
-  local url=$1 name=$2 i
+  local url=$1 name=$2
   for _ in $(seq 1 40); do
     if curl -sf "$url" >/dev/null 2>&1; then return 0; fi
     sleep 1

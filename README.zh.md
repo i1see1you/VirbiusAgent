@@ -414,15 +414,16 @@ virbius-agent/
 
 | 文档 | 说明 |
 |------|------|
-| [USAGE_GUIDE.md](USAGE_GUIDE.md)（英文） | 使用指南 — 安装、集成、规则编写、运维 |
+| [USAGE_GUIDE.zh.md](USAGE_GUIDE.zh.md) | 使用指南 — 安装、集成、规则编写、运维 |
 | [DESIGN.zh.md](DESIGN.zh.md) | 系统架构设计文档 |
 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md) | 详细架构说明 |
 | [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) | 部署拓扑与运维 |
-| [PROTOCOL.md](PROTOCOL.md)（英文） | MCP 代理协议规范 |
+| [PROTOCOL.zh.md](PROTOCOL.zh.md) | MCP 代理协议规范 |
+| [PROXY_CONFIG.zh.md](PROXY_CONFIG.zh.md) | MCP 代理配置参考 |
 | [SSO_INTEGRATION.zh.md](SSO_INTEGRATION.zh.md) | 统一登录（OAuth2/OIDC）接入方案 - SSO 双轨认证设计 |
 | [CHANGELOG.md](CHANGELOG.md)（英文） | 版本历史 |
 
-> 语言说明：DESIGN / ARCHITECTURE / DEPLOYMENT 提供中文版（点击上表链接）；USAGE_GUIDE、PROTOCOL、CHANGELOG 目前仅提供英文版。
+> 语言说明：以上文档均提供中文版，点击链接即可查看；CHANGELOG 目前仅提供英文版。
 
 ## 贡献指南
 

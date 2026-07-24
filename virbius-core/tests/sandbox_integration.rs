@@ -21,6 +21,23 @@ fn landlock_available() -> bool {
     detect_abi_version() != LandlockAbi::None
 }
 
+/// Minimal read paths needed to exec a dynamically-linked binary (ld.so +
+/// libc) under Landlock.  Kept deliberately narrow — broad patterns like
+/// `/**` or `/usr/lib/**` expand to tens of thousands of paths and stall
+/// glob expansion for minutes on CI runners.
+fn runtime_lib_read_paths() -> Vec<String> {
+    vec![
+        // x86_64 dynamic linker + libc
+        "/lib64/ld-linux-x86-64.so.2".into(),
+        "/lib/x86_64-linux-gnu/libc.so*".into(),
+        "/usr/lib/x86_64-linux-gnu/libc.so*".into(),
+        // aarch64 dynamic linker + libc (no-match on x86_64, harmless)
+        "/lib/ld-linux-aarch64.so.1".into(),
+        "/lib/aarch64-linux-gnu/libc.so*".into(),
+        "/usr/lib/aarch64-linux-gnu/libc.so*".into(),
+    ]
+}
+
 // ─── Self-pipe reporting ──────────────────────────────────────────────
 
 #[test]
@@ -30,14 +47,11 @@ fn test_self_pipe_reports_landlock_applied() {
         return;
     }
 
+    let mut read_paths = vec!["/etc/hostname".into()];
+    read_paths.extend(runtime_lib_read_paths());
     let rules = LandlockRules {
-        read_paths: vec![
-            "/etc/hostname".into(),
-            "/lib/**".into(),
-            "/lib64/**".into(),
-            "/usr/lib/**".into(),
-        ],
-        exec_paths: vec!["/usr/bin/cat".into()],
+        read_paths,
+        exec_paths: vec!["/usr/bin/cat".into(), "/bin/cat".into()],
         ..Default::default()
     };
 
@@ -67,7 +81,7 @@ fn test_self_pipe_reports_landlock_applied() {
 fn test_parent_timeout_kills_child() {
     let rules = if landlock_available() {
         LandlockRules {
-            read_paths: vec!["/**".into()],
+            read_paths: runtime_lib_read_paths(),
             exec_paths: vec!["/usr/bin/sleep".into(), "/bin/sleep".into()],
             ..Default::default()
         }
