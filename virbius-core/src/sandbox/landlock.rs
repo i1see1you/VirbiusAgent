@@ -16,9 +16,9 @@
 //!          .pre_exec(move || {            // runs in child, after fork, before exec
 //!              apply_landlock(&prepared)  //   1. landlock_create_ruleset
 //!              //                          2. landlock_add_rule (per path / port)
-//!              //                          3. landlock_restrict_self
-//!              //                          4. capset(drop ALL)
-//!              //                          5. prctl(PR_SET_NO_NEW_PRIVS)
+//!              //                          3. prctl(PR_SET_NO_NEW_PRIVS) + capset(drop ALL)
+//!              //                          4. landlock_restrict_self
+//!              //                             (restrict_self requires no_new_privs, hence 3 before 4)
 //!          })
 //!          .spawn()
 //!          |
@@ -229,6 +229,12 @@ struct PreparedRules {
     exec_paths: Vec<CString>,
     bind_ports: Vec<u16>,
     connect_ports: Vec<u16>,
+    /// Device nodes that must always be accessible, prepared in the parent
+    /// (the pre_exec child must not allocate).  Rust's std::process::Command
+    /// spawn path opens /dev/null while setting up stdio, and the exec path
+    /// requires READ|WRITE|EXECUTE on it (CI runners route stdin to
+    /// /dev/null).  Granting full access to /dev/null carries no risk.
+    always_paths: Vec<CString>,
 }
 
 impl PreparedRules {
@@ -240,6 +246,10 @@ impl PreparedRules {
             exec_paths: expand_globs(&rules.exec_paths),
             bind_ports: rules.bind_ports.clone(),
             connect_ports: rules.connect_ports.clone(),
+            always_paths: ["/dev/null", "/dev/zero"]
+                .iter()
+                .filter_map(|p| CString::new(*p).ok())
+                .collect(),
         }
     }
 }
@@ -327,6 +337,21 @@ const ACCESS_FS_REFER: u64 = 1 << 13; // v2
 
 const ACCESS_FS_READ: u64 = ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE | ACCESS_FS_READ_DIR;
 
+/// Rights that are only meaningful for directories.  landlock_add_rule(2)
+/// rejects a path_beneath rule with EINVAL when any of these is requested
+/// for a non-directory, so they must be masked out per file type.
+const DIR_ONLY_ACCESS_FS: u64 = ACCESS_FS_READ_DIR
+    | ACCESS_FS_REMOVE_DIR
+    | ACCESS_FS_REMOVE_FILE
+    | ACCESS_FS_MAKE_CHAR
+    | ACCESS_FS_MAKE_DIR
+    | ACCESS_FS_MAKE_REG
+    | ACCESS_FS_MAKE_SOCK
+    | ACCESS_FS_MAKE_FIFO
+    | ACCESS_FS_MAKE_BLOCK
+    | ACCESS_FS_MAKE_SYM
+    | ACCESS_FS_REFER;
+
 const ACCESS_FS_WRITE: u64 = ACCESS_FS_WRITE_FILE
     | ACCESS_FS_READ_DIR // needed to write into a dir
     | ACCESS_FS_REMOVE_DIR
@@ -410,6 +435,8 @@ fn apply_landlock(rules: &PreparedRules) -> io::Result<ApplyReport> {
 
     // 2. Add path rules.  Errors here are non-fatal: a missing path just
     //    means that path won't be accessible, which is the safe default.
+    //    Executables need EXECUTE|READ_FILE: the kernel opens them with
+    //    O_RDONLY|__FMODE_EXEC, which Landlock maps to both rights.
     for path in &rules.read_paths {
         let _ = add_path_rule(fd, path, ACCESS_FS_READ);
     }
@@ -417,7 +444,15 @@ fn apply_landlock(rules: &PreparedRules) -> io::Result<ApplyReport> {
         let _ = add_path_rule(fd, path, ACCESS_FS_WRITE);
     }
     for path in &rules.exec_paths {
-        let _ = add_path_rule(fd, path, ACCESS_FS_EXECUTE);
+        let _ = add_path_rule(fd, path, ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE);
+    }
+    // Always-accessible device nodes (see PreparedRules::always_paths).
+    for path in &rules.always_paths {
+        let _ = add_path_rule(
+            fd,
+            path,
+            ACCESS_FS_EXECUTE | ACCESS_FS_READ_FILE | ACCESS_FS_WRITE_FILE,
+        );
     }
 
     // 3. Add net port rules (v4 only).
@@ -430,18 +465,21 @@ fn apply_landlock(rules: &PreparedRules) -> io::Result<ApplyReport> {
         }
     }
 
-    // 4. landlock_restrict_self — apply the ruleset to this process.
+    // 4. Drop all capabilities and set PR_SET_NO_NEW_PRIVS.  This MUST
+    //    happen before landlock_restrict_self: the kernel rejects
+    //    restrict_self with EPERM when no_new_privs is not set.
+    report.caps_dropped = drop_caps_and_no_new_privs()?;
+
+    // 5. landlock_restrict_self — apply the ruleset to this process.
     let r = unsafe { libc::syscall(SYS_LANDLOCK_RESTRICT_SELF, fd, 0u32) };
     unsafe { libc::close(fd) };
 
     if r < 0 {
-        // restrict_self failed — degrade to drop caps only.
-        report.caps_dropped = drop_caps_and_no_new_privs()?;
+        // restrict_self failed — already in drop-caps-only degraded mode.
         return Ok(report);
     }
 
     report.landlock_applied = true;
-    report.caps_dropped = drop_caps_and_no_new_privs()?;
     Ok(report)
 }
 
@@ -460,6 +498,24 @@ fn add_path_rule(ruleset_fd: i32, path: &std::ffi::CStr, access: u64) -> io::Res
     let path_fd = unsafe { libc::open(path.as_ptr(), O_PATH | O_CLOEXEC) };
     if path_fd < 0 {
         return Err(io::Error::last_os_error());
+    }
+
+    // The kernel rejects directory-only rights (READ_DIR, MAKE_*, ...) with
+    // EINVAL when the target is not a directory.  Mask them out per the
+    // actual file type; the error used to be silently ignored by callers,
+    // which quietly disabled every file-level read/write rule.
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    let access = if unsafe { libc::fstat(path_fd, &mut st) } == 0
+        && (st.st_mode & libc::S_IFMT) != libc::S_IFDIR
+    {
+        access & !DIR_ONLY_ACCESS_FS
+    } else {
+        access
+    };
+    if access == 0 {
+        // Nothing left to grant for this path.
+        unsafe { libc::close(path_fd) };
+        return Ok(());
     }
 
     let attr = LandlockPathBeneathAttr {
