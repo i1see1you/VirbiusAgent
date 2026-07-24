@@ -13,6 +13,10 @@
 
 **VirbiusAgent** is a deep security platform purpose-built for AI Agents. Leveraging eBPF and a four-tier **Edge–Gateway–Kernel–Cloud**  architecture, it provides real-time visibility and precise blocking of Agent behaviors, effectively tackling the challenges of privilege abuse and loss of security control.
 
+## Operations Console
+
+![VirbiusAgent operations console — rule registry (English)](docs/images/ops-en.png)
+
 ## Architecture
 
 ```mermaid

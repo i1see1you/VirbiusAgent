@@ -80,24 +80,28 @@ fn validate_args(args: &serde_json::Value, schema: &serde_json::Value) -> Result
         return Ok(());
     }
 
+    // args must be a JSON object whenever a non-empty schema is present.
+    let args_obj = args.as_object().ok_or("args must be a JSON object")?;
+
+    // 1. required field presence.
     if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-        let args_obj = args.as_object().ok_or("args must be a JSON object")?;
         for field in required {
             let field_name = field.as_str().ok_or("required field name must be string")?;
             if !args_obj.contains_key(field_name) {
                 return Err(format!("missing required field '{}'", field_name));
             }
         }
-        if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
-            for (key, prop) in properties {
-                if let Some(expected_type) = prop.get("type").and_then(|t| t.as_str()) {
-                    if let Some(value) = args_obj.get(key) {
-                        if !type_matches(value, expected_type) {
-                            return Err(format!(
-                                "field '{}' expected type '{}'",
-                                key, expected_type
-                            ));
-                        }
+    }
+
+    // 2. properties type check.  This must run independently of `required`;
+    //    previously this block was nested inside the `required` branch and
+    //    was silently skipped when a schema declared only `properties`.
+    if let Some(properties) = schema.get("properties").and_then(|p| p.as_object()) {
+        for (key, prop) in properties {
+            if let Some(expected_type) = prop.get("type").and_then(|t| t.as_str()) {
+                if let Some(value) = args_obj.get(key) {
+                    if !type_matches(value, expected_type) {
+                        return Err(format!("field '{}' expected type '{}'", key, expected_type));
                     }
                 }
             }
@@ -178,5 +182,50 @@ mod tests {
 
         let invalid = serde_json::json!({"other": "value"});
         assert!(validate_args(&invalid, &schema).is_err());
+    }
+
+    // Regression: a schema declaring only `properties` (no `required`) used to
+    // skip type validation entirely because the properties block was nested
+    // inside the `required` branch.
+    #[test]
+    fn test_validate_properties_only_schema_type_mismatch() {
+        let schema = serde_json::json!({
+            "properties": { "path": { "type": "string" } }
+        });
+        // Wrong type -> must be rejected (previously passed).
+        let invalid = serde_json::json!({"path": 123});
+        assert!(validate_args(&invalid, &schema).is_err());
+
+        // Correct type -> still allowed.
+        let valid = serde_json::json!({"path": "/tmp/test"});
+        assert!(validate_args(&valid, &schema).is_ok());
+
+        // Missing optional field -> allowed (presence is `required`'s job).
+        let missing = serde_json::json!({"other": "value"});
+        assert!(validate_args(&missing, &schema).is_ok());
+    }
+
+    // Regression: non-object args must be rejected whenever a non-empty schema
+    // is present, regardless of whether `required` is declared.
+    #[test]
+    fn test_validate_non_object_args_rejected_without_required() {
+        let schema = serde_json::json!({
+            "properties": { "path": { "type": "string" } }
+        });
+        let array_args = serde_json::json!([1, 2, 3]);
+        let err = validate_args(&array_args, &schema).unwrap_err();
+        assert!(err.contains("args must be a JSON object"), "got: {err}");
+    }
+
+    // Sanity: required + properties still denies a missing required field
+    // after the restructuring.
+    #[test]
+    fn test_validate_required_plus_properties_missing_field() {
+        let schema = serde_json::json!({
+            "required": ["path"],
+            "properties": { "path": { "type": "string" } }
+        });
+        let missing = serde_json::json!({"other": "value"});
+        assert!(validate_args(&missing, &schema).is_err());
     }
 }

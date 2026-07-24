@@ -554,6 +554,88 @@ Risk classes determine the base risk score:
 - `network` (4) -- Network-accessing tools, e.g. `curl`, `http_get`
 - `high` (5) -- Dangerous tools, e.g. `execute_command`, `write_file`
 
+#### 4.4.1 How to Register a Tool
+
+**Option 1: Ops Console**
+
+Navigate to **🔧 Tool Registry**, click "Add Tool", fill in the metadata fields above, and save.
+
+**Option 2: Admin API (curl)**
+
+`POST /api/v1/admin/tenants/{tenantId}/tools` uses upsert semantics (update if exists, create otherwise):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/admin/tenants/default/tools \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool_name": "read_file",
+    "risk_class": "medium",
+    "sandbox_type": "none",
+    "timeout_ms": 30000,
+    "fast_path": true,
+    "allowed_args_schema": "{\"required\":[\"path\"],\"properties\":{\"path\":{\"type\":\"string\"}}}",
+    "description": "Read file content from the filesystem"
+  }'
+```
+
+Field validation rules (returns 400 on violation):
+
+| Field | Rule |
+|---|---|
+| `tool_name` | Regex `[a-z][a-z0-9_-]*`, lowercase-first |
+| `risk_class` | Enum `low` / `medium` / `high` / `network` (default `low`) |
+| `sandbox_type` | Enum `none` / `landlock` / `gvisor` (default `none`) |
+| `timeout_ms` | Range 1000–300000 (default 30000) |
+| `allowed_args_schema` | Valid JSON Schema string |
+
+#### 4.4.2 Tool Registry ≠ License Allowlist (Most Common Pitfall)
+
+The tool registry and the License JWT's `allowed_tools` are **two independent gates**. A tool can be invoked only if it passes **both**:
+
+```
+Tool call request
+    │
+    ├─① License JWT's allowed_tools contains the tool?
+    │      No  ->  Edge denies immediately: "tool 'xxx' not in license allowlist"
+    │      (allowed_tools is maintained by the License issuer, independent of the registry)
+    │
+    └─② Tool registry has metadata for the tool?
+           No  ->  Still allowed, but runs with defaults (risk_class=low / sandbox=none / no args validation / no fast_path)
+           Yes ->  Runs with the registered sandbox_type / fast_path / allowed_args_schema / risk_class
+```
+
+> **Bottom line**: After registering a new tool, you **must also add the tool name to the `allowed_tools` array when issuing the License JWT**, otherwise the edge precheck rejects it at the first step. Conversely, adding a tool only to the License allowlist without registering it lets the tool run with no policy protection (default low risk, no args validation).
+
+#### 4.4.3 Data Flow After Registration
+
+Once a tool is registered, its metadata is compiled and distributed to three consumers:
+
+```
+Tool Registry (tb_tool_registry)
+        │
+        ├── virbius-compiler / ArtifactService.buildToolPolicyBlocks
+        │      -> compiled into Edge Manifest's tool_policies
+        │      -> pushed to Edge SDK (virbius-core)
+        │
+        ├── PublishService -> Redis Stream -> Engine PolicyDataCache
+        │      -> SessionRiskManager looks up base risk by risk_class
+        │
+        └── Edge precheck (virbius-core/precheck.rs) consumes in order:
+               ① license.is_tool_allowed()   <- license allowlist gate (independent of registry)
+               ② manifest::tool_policy()     <- reads registered tool policy
+               ③ allowed_args_schema check   <- missing field/type mismatch -> deny
+               ④ fast_path field             <- determines fast-path eligibility
+               ⑤ sandbox_type field          <- none/landlock/gvisor execution isolation
+               ⑥ risk_class                  <- feeds session risk accumulation
+```
+
+**Key behaviors**:
+
+- `allowed_args_schema` is validated at the edge via **JSON Schema** (`required` fields, types); a failure denies immediately and the request never reaches the cloud.
+- `fast_path=true` is only an **eligibility** flag; whether the request actually takes the fast path also depends on the session warmup count (`warmup_calls`) and whether the current `session_risk_score` is below the threshold.
+- With `sandbox_type=landlock/gvisor`, the tool executes in a subprocess sandbox bounded by `timeout_ms`; `none` runs in-process.
+- The base risk score determined by `risk_class` feeds session-level risk accumulation; crossing a threshold exits the fast path and escalates auditing.
+
 ### 4.5 Scene Registry
 
 Navigation: **🎭 场景注册**

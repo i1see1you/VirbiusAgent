@@ -550,6 +550,88 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants/default/cumulatives \
 - `network`（4）— 网络访问工具，如 `curl`、`http_get`
 - `high`（5）— 危险工具，如 `execute_command`、`write_file`
 
+#### 4.4.1 如何注册一个工具
+
+**方式一：运营台**
+
+进入 **🔧 工具注册** 页面，点击"新增工具"，填写上述元数据字段后保存。
+
+**方式二：管理 API（curl）**
+
+`POST /api/v1/admin/tenants/{tenantId}/tools` 为 upsert 语义（存在则更新，不存在则创建）：
+
+```bash
+curl -X POST http://localhost:8080/api/v1/admin/tenants/default/tools \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tool_name": "read_file",
+    "risk_class": "medium",
+    "sandbox_type": "none",
+    "timeout_ms": 30000,
+    "fast_path": true,
+    "allowed_args_schema": "{\"required\":[\"path\"],\"properties\":{\"path\":{\"type\":\"string\"}}}",
+    "description": "从文件系统读取文件内容"
+  }'
+```
+
+字段校验规则（不满足返回 400）：
+
+| 字段 | 校验规则 |
+|---|---|
+| `tool_name` | 正则 `[a-z][a-z0-9_-]*`，小写字母开头 |
+| `risk_class` | 枚举 `low` / `medium` / `high` / `network`（默认 `low`） |
+| `sandbox_type` | 枚举 `none` / `landlock` / `gvisor`（默认 `none`） |
+| `timeout_ms` | 范围 1000–300000（默认 30000） |
+| `allowed_args_schema` | 合法的 JSON Schema 字符串 |
+
+#### 4.4.2 工具注册 ≠ 许可证白名单（最常踩的坑）
+
+工具注册表和许可证 JWT 的 `allowed_tools` 是**两个相互独立的门禁**。一个工具能被调用，必须**同时**通过两道：
+
+```
+工具调用请求
+    │
+    ├─① 许可证 JWT 的 allowed_tools 包含该工具？
+    │      否  ->  端层直接 deny："tool 'xxx' not in license allowlist"
+    │      （allowed_tools 由 License 签发方维护，与工具注册表无关）
+    │
+    └─② 工具注册表有该工具的元数据？
+           否  ->  仍放行，但按默认值走（risk_class=low / sandbox=none / 不校验参数 / 不走 fast_path）
+           是  ->  按注册的 sandbox_type / fast_path / allowed_args_schema / risk_class 执行
+```
+
+> **结论**：注册一个新工具后，还必须**在签发 License JWT 时把该工具名加入 `allowed_tools` 数组**，否则端层 precheck 第一步就被拦截。反之，只把工具加进 License 白名单而不注册，工具能调用但没有任何策略保护（按默认 low 风险、无参数校验）。
+
+#### 4.4.3 注册后的数据流转
+
+工具注册成功后，元数据会被编译并下发到三个消费方：
+
+```
+工具注册表 (tb_tool_registry)
+        │
+        ├── virbius-compiler / ArtifactService.buildToolPolicyBlocks
+        │      -> 编译进 Edge Manifest 的 tool_policies
+        │      -> 下发到端层 SDK (virbius-core)
+        │
+        ├── PublishService -> Redis Stream -> Engine PolicyDataCache
+        │      -> SessionRiskManager 按 risk_class 查基础风险分
+        │
+        └── 端层 precheck (virbius-core/precheck.rs) 按序消费：
+               ① license.is_tool_allowed()   ← 许可证白名单门禁（独立于注册表）
+               ② manifest::tool_policy()     ← 读取注册的工具策略
+               ③ allowed_args_schema 校验    ← 缺字段/类型不符 -> deny
+               ④ fast_path 字段              ← 决定是否有快速路径资格
+               ⑤ sandbox_type 字段           ← none/landlock/gvisor 执行隔离
+               ⑥ risk_class                  ← 进入 session risk 累计评分
+```
+
+**关键行为说明**：
+
+- `allowed_args_schema` 在端层做 **JSON Schema 校验**（`required` 字段、类型），不通过直接 deny，请求不会到达云层。
+- `fast_path=true` 只是**资格**，是否真正走快速路径还取决于会话暖启动次数（`warmup_calls`）和当前 `session_risk_score` 是否低于阈值。
+- `sandbox_type=landlock/gvisor` 时，工具在子进程沙箱内执行，受 `timeout_ms` 约束；`none` 则在进程内执行。
+- `risk_class` 决定的基础风险分会进入会话级风险累计，触发阈值后会退出快速路径并升级审计。
+
 ### 4.5 场景注册
 
 导航：**🎭 场景注册**

@@ -44,3 +44,6 @@ scripts/test-*.sh
 
 # Backup files
 *.bak
+
+# PPT
+ppt/

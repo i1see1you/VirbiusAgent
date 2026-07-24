@@ -301,6 +301,12 @@ impl SecurityPipeline {
         risk_quota: u32,
         pre: &PrecheckResult,
     ) -> PipelineResult {
+        // Serialize args once; reuse as `content` so the Engine's
+        // PromptInjectionDetector / TrustViolationDetector / MatchContext
+        // actually receive the tool-call text (previously `content: None`
+        // caused both detectors to no-op).  role="tool_call" distinguishes
+        // the input path from the output-review path (role="output").
+        let args_json = serde_json::to_string(args).unwrap_or_default();
         let req = EvaluateRequest {
             trace_id: &session.trace_id,
             session_id: &session.session_id,
@@ -308,10 +314,10 @@ impl SecurityPipeline {
             tenant_id: &session.tenant_id,
             tool_name,
             args,
-            args_json: serde_json::to_string(args).unwrap_or_default(),
+            args_json: args_json.clone(),
             license_risk_quota: risk_quota,
-            content: None,
-            role: None,
+            content: Some(&args_json),
+            role: Some("tool_call"),
             user_id: session.user_id.as_deref(),
             device_id: session.device_id.as_deref(),
         };

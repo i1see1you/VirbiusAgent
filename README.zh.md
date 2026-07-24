@@ -13,6 +13,10 @@ English: [README.md](README.md)
 
 **VirbiusAgent** 是专为AI Agent 打造的深层安全防护平台。基于 eBPF 与**端—管—核—云**架构实现了对 Agent 行为的实时感知与精准阻断，解决Agent 越权与安全失控难题。
 
+## 运营台
+
+![VirbiusAgent 运营台 — 规则配置（中文）](docs/images/ops-zh.png)
+
 ## 架构
 
 ```mermaid
