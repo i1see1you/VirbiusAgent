@@ -31,7 +31,7 @@ jobs:
         language: [java-kotlin, go]
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
