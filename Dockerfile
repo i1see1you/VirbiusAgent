@@ -36,7 +36,7 @@ COPY virbius-compiler/ virbius-compiler/
 RUN mvn package -DskipTests -B -q
 
 # ── Stage 2: Rust build (workspace) ─────────────────────────────────────────
-FROM rust:1.86-slim-bookworm AS rust-build
+FROM rust:1.87-slim-bookworm AS rust-build
 WORKDIR /build
 
 # Clear proxy env vars inherited from Docker daemon (not reachable inside container)
@@ -50,19 +50,20 @@ ENV all_proxy=""
 # Configure crates.io mirror (optional, set CRATES_MIRROR=cn for China users)
 ARG CRATES_MIRROR=""
 RUN if [ "$CRATES_MIRROR" = "cn" ]; then \
-      mkdir -p /usr/local/cargo && cat > /usr/local/cargo/config.toml << 'EOF'
-[source.crates-io]
-replace-with = "rsproxy-sparse"
-
-[source.rsproxy]
-registry = "https://rsproxy.cn/crates.io-index"
-
-[source.rsproxy-sparse]
-registry = "sparse+https://rsproxy.cn/index/"
-
-[net]
-git-fetch-with-cli = true
-EOF
+      mkdir -p /usr/local/cargo && \
+      printf '%s\n' \
+        '[source.crates-io]' \
+        'replace-with = "rsproxy-sparse"' \
+        '' \
+        '[source.rsproxy]' \
+        'registry = "https://rsproxy.cn/crates.io-index"' \
+        '' \
+        '[source.rsproxy-sparse]' \
+        'registry = "sparse+https://rsproxy.cn/index/"' \
+        '' \
+        '[net]' \
+        'git-fetch-with-cli = true' \
+        > /usr/local/cargo/config.toml; \
     fi
 
 # Install system deps for native libs
