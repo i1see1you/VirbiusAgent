@@ -114,6 +114,24 @@ We are using **GLM5.2** as the teacher model and **Qwen3Guard** as the student m
 
 4. **Runtime visibility at the kernel level** — Via eBPF/Falco, VirbiusAgent observes Agent processes at the syscall level (file access, network connections, process spawns). No competitor offers this depth of runtime observability.
 
+
+### Agent Security vs Traditional Security
+
+| Dimension | Traditional Security | Agent Security |
+|------------|----------------------|----------------|
+| **Attack surface** | Network/host/application vulnerabilities | Prompt injection, indirect injection, tool abuse, sensitive data leakage |
+| **Untrusted input sources** | External user input | User input + LLM-generated output (tool calls and args); the model is both the protected asset and the attack vector |
+| **Decision semantics** | Mostly binary allow/block | Requires semantic decisions: human review, masking/rewriting, downgrade |
+| **Side-effect boundary** | Web requests generally don't execute code directly | Triggers real side effects: executing tools, reading/writing files, making network requests |
+| **Detection methods** | Rules/signatures/pattern matching | Requires LLM semantic detection (prompt injection recognition, semantic-level masking, taint tracking) |
+| **Runtime depth** | Mostly at the gateway/host layer | Must reach the kernel (eBPF syscall observation) + gateway HTTP + edge precheck |
+| **Context dependence** | Mostly stateless single requests | Strongly depends on session context (cross-turn risk accumulation, taint propagation) |
+| **Business relevance** | Generic rules, decoupled from business | Deeply coupled with business semantics - assesses whether an operation is compliant by tool, args, and scenario |
+| **Policy dynamism** | Relatively static; signature DBs updated periodically | Evolves in real time within a session - risk accumulation crosses thresholds to auto-escalate protection, supports canary rollout and hot-switching; due to high business relevance, different businesses require different policies, and policies shift as the business changes |
+
+> In short: **Traditional security defends against "external break-ins"; Agent security must also defend against "the model being led astray and attacking from within"** - it must understand business semantics and adapt dynamically to session risk and business change.
+
+
 ## Quick Start
 
 ### Prerequisites

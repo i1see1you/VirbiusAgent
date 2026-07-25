@@ -302,8 +302,18 @@ pub fn entry_to_audit_json(entry: &PidMapEntry) -> String {
 mod tests {
     use super::*;
 
+    /// Serializes tests that mutate the shared global `PID_MAP`.
+    ///
+    /// Both `register_agent`-based tests auto-detect the same `host_pid` and
+    /// `cgroup_id` (the test process's own), and `insert` overwrites entries
+    /// with the same key. Running them in parallel makes one test clobber the
+    /// other's entry, producing a flaky `trace-1` vs `trace-cg` assertion
+    /// failure. This guard forces them to run one at a time.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn test_register_lookup_by_host_pid() {
+        let _guard = TEST_LOCK.lock().unwrap();
         // Use a synthetic host_pid that won't collide with real processes.
         // register_agent auto-detects host_pid, so we test lookup with the
         // real detected value.
@@ -319,6 +329,7 @@ mod tests {
 
     #[test]
     fn test_lookup_by_cgroup() {
+        let _guard = TEST_LOCK.lock().unwrap();
         register_agent(0, "trace-cg", "sess-cg", "agent-cg", "tenant-cg");
         let cgroup_id = read_cgroup_id().unwrap_or(0);
         if cgroup_id != 0 {

@@ -18,14 +18,12 @@
   - [4.2 Namespaced Lists](#42-namespaced-lists)
   - [4.3 Cumulative Definitions](#43-cumulative-definitions)
   - [4.4 Tool Registry](#44-tool-registry)
-  - [4.5 Scene Registry](#45-scene-registry)
-  - [4.6 Gateway Routes](#46-gateway-routes)
-  - [4.7 Rules Management](#47-rules-management)
-  - [4.8 Rollout (Strategy Release)](#48-rollout-strategy-release)
-  - [4.9 Audit Center](#49-audit-center)
-  - [4.10 Decision Trace Viewer](#410-decision-trace-viewer)
-  - [4.11 Human Approval Queue](#411-human-approval-queue)
-  - [4.12 Monitor Center](#412-monitor-center)
+  - [4.5 Rules Management](#45-rules-management)
+  - [4.6 Rollout (Strategy Release)](#46-rollout-strategy-release)
+  - [4.7 Audit Center](#47-audit-center)
+  - [4.8 Decision Trace Viewer](#48-decision-trace-viewer)
+  - [4.9 Human Approval Queue](#49-human-approval-queue)
+  - [4.10 Monitor Center](#410-monitor-center)
 - [5. Rule Authoring](#5-rule-authoring)
   - [5.1 Edge Rules (lua-dsl)](#51-edge-rules-lua-dsl)
   - [5.2 Gateway Rules (lua)](#52-gateway-rules-lua)
@@ -295,18 +293,6 @@ spec:
     license_verify: true
     tool_precheck: true
   url: oci://registry.example.com/virbius-gateway-wasm:v1.0.0
-```
-
-**Gateway route configuration** (from the Ops Console, or API):
-
-```json
-{
-  "uri": "/v1/chat/*",
-  "methods": ["POST"],
-  "evaluate": true,
-  "fail_mode": "open",
-  "timeout_ms": 3000
-}
 ```
 
 ### 3.3 SDK Integration
@@ -636,31 +622,7 @@ Tool Registry (tb_tool_registry)
 - With `sandbox_type=landlock/gvisor`, the tool executes in a subprocess sandbox bounded by `timeout_ms`; `none` runs in-process.
 - The base risk score determined by `risk_class` feeds session-level risk accumulation; crossing a threshold exits the fast path and escalates auditing.
 
-### 4.5 Scene Registry
-
-Navigation: **🎭 场景注册**
-
-Map URIs to `scene_id` for routing. Each scene belongs to an `app_id` and has a priority, URI list, and optional match query.
-
-**Key behavior:**
-- Runtime resolves `(app_id, uri, match)` to a `scene_id`
-- URIs must be covered by Gateway Routes
-- Default scenes (checkbox) are selected when no URI match
-- After editing, click "同步到网关" to push to the Gateway layer
-
-### 4.6 Gateway Routes
-
-Navigation: **🛣 网关路由**
-
-Define which URI patterns enter the Gateway evaluate pipeline. Routes use glob-style patterns (`/v1/chat/*`).
-
-**Settings:**
-- `evaluate` -- Whether to perform security evaluation for this route
-- `fail_mode` -- `open` (allow on error) or `closed` (block on error)
-- `cloud_scan.agent_url` -- The engine URL for evaluation
-- `timeout_ms` -- Evaluation timeout
-
-### 4.7 Rules Management
+### 4.5 Rules Management
 
 Navigation: **📜 规则** (with sub-layers: cloud, gateway, edge, kernel)
 
@@ -684,7 +646,7 @@ Rules are the core security policies. Each rule belongs to one of the four layer
 
 **Async actions:** Rules can be configured to fire webhook or Redis Stream notifications when triggered. Variables like `{{rule_id}}`, `{{user_id}}`, `{{vars.app_id}}` are available in the message template.
 
-### 4.8 Rollout (Strategy Release)
+### 4.6 Rollout (Strategy Release)
 
 Navigation: **🚀 策略上线**
 
@@ -710,7 +672,7 @@ Edge layer uses `device_id` CRC32C hash for canary bucket assignment.
 
 After preparing a version, click "确认部署" in the version modal. The dashboard shows block rate charts, node distribution, and event timelines per deployment.
 
-### 4.9 Audit Center
+### 4.7 Audit Center
 
 Navigation: **🔍 审计中心**
 
@@ -721,7 +683,7 @@ Query `tb_audit_events` by `trace_id`. Shows all `review`, `block`, `challenge` 
 curl -s "http://localhost:8080/api/v1/admin/tenants/default/audit/events?trace_id=trace-abc-123"
 ```
 
-### 4.10 Decision Trace Viewer
+### 4.8 Decision Trace Viewer
 
 Navigation: **🧬 决策链路**
 
@@ -734,7 +696,7 @@ Full-chain tool_call/tool_result tracing with session timeline and causal chain 
 
 Click on a search result row to view the full session timeline, showing each step with its decision, risk score, duration, and hash chain link.
 
-### 4.11 Human Approval Queue
+### 4.9 Human Approval Queue
 
 Navigation: **🔐 审批队列**
 
@@ -747,7 +709,7 @@ High-risk tool calls blocked by `challenge` intent rules enter this queue. An op
 4. If approved, a one-time token is generated
 5. Agent retries the tool call with the token → Gateway validates → tool executes
 
-### 4.12 Monitor Center
+### 4.10 Monitor Center
 
 Navigation: **📈 监控中心**
 
@@ -756,7 +718,6 @@ Dashboards with auto-refresh (30s) showing:
 - Block rate trends
 - Per-rule block rate
 - Rule hit ranking
-- Scene traffic distribution
 - Degradation rate trends
 - Policy change events
 - Ingest health status
@@ -1030,7 +991,6 @@ Agent → MCP Proxy → ① License Verify → ② Precheck → [fast path?]
 **Session risk dashboard** (Ops Console → 📈 监控中心):
 - Real-time traffic and block rate trends
 - Per-rule hit count and block rate
-- Scene traffic distribution
 - Degradation rate (engine unavailable fallbacks)
 
 **Audit log queries** (Ops Console → 🔍 审计中心):
@@ -1413,24 +1373,6 @@ PUT    /api/v1/admin/tenants/{tenantId}/cumulatives/{cumName}
 DELETE /api/v1/admin/tenants/{tenantId}/cumulatives/{cumName}
 ```
 
-### Scene Registry
-
-```
-GET  /api/v1/admin/tenants/{tenantId}/scenes
-POST /api/v1/admin/tenants/{tenantId}/scenes
-PUT  /api/v1/admin/tenants/{tenantId}/scenes/{sceneId}
-DEL  /api/v1/admin/tenants/{tenantId}/scenes/{sceneId}
-POST /api/v1/admin/tenants/{tenantId}/scenes/sync-gateway
-```
-
-### Gateway Routes
-
-```
-GET  /api/v1/admin/tenants/{tenantId}/gateway-routes
-POST /api/v1/admin/tenants/{tenantId}/gateway-routes
-PUT  /api/v1/admin/tenants/{tenantId}/gateway-routes
-```
-
 ### Tool Registry
 
 ```
@@ -1446,7 +1388,6 @@ DEL  /api/v1/admin/tenants/{tenantId}/tools/{toolName}
 POST /api/v1/evaluate
 Body: {
   "tenant_id": "default",
-  "scene_id": "beta_chat",
   "tool_name": "read_file",
   "args": {"path": "/tmp/test.txt"},
   "user_id": "user-123",

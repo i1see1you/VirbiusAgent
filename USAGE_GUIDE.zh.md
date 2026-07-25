@@ -18,14 +18,12 @@
   - [4.2 名单管理](#42-名单管理)
   - [4.3 累计定义](#43-累计定义)
   - [4.4 工具注册](#44-工具注册)
-  - [4.5 场景注册](#45-场景注册)
-  - [4.6 网关路由](#46-网关路由)
-  - [4.7 规则管理](#47-规则管理)
-  - [4.8 策略上线](#48-策略上线)
-  - [4.9 审计中心](#49-审计中心)
-  - [4.10 决策链路查看器](#410-决策链路查看器)
-  - [4.11 审批队列](#411-审批队列)
-  - [4.12 监控中心](#412-监控中心)
+  - [4.5 规则管理](#45-规则管理)
+  - [4.6 策略上线](#46-策略上线)
+  - [4.7 审计中心](#47-审计中心)
+  - [4.8 决策链路查看器](#48-决策链路查看器)
+  - [4.9 审批队列](#49-审批队列)
+  - [4.10 监控中心](#410-监控中心)
 - [5. 规则编写](#5-规则编写)
   - [5.1 边缘规则（lua-dsl）](#51-边缘规则lua-dsl)
   - [5.2 网关规则（lua）](#52-网关规则lua)
@@ -295,18 +293,6 @@ spec:
   url: oci://registry.example.com/virbius-gateway-wasm:v1.0.0
 ```
 
-**网关路由配置**（通过运维控制台或 API）：
-
-```json
-{
-  "uri": "/v1/chat/*",
-  "methods": ["POST"],
-  "evaluate": true,
-  "fail_mode": "open",
-  "timeout_ms": 3000
-}
-```
-
 ### 3.3 SDK 集成
 
 适用于需要最低延迟和最深层次安全（提示增强、PII 脱敏）的自定义 Agent。
@@ -472,8 +458,8 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants \
 管理命名列表（`list_name` + 维度 + 值条目）。Lua/Groovy 规则通过 `listMatch(name, value)` 引用列表。
 
 **维度：**
-- `keyword` — 内存中，最多 1000 条
-- `ip_cidr` — 内存中，最多 1000 条
+- `keyword` — 内存中，每个名单最多 10000 条
+- `ip_cidr` — 内存中，每个名单最多 10000 条
 - `user_id` — Redis ZSET，支持按条目过期
 - `device_id` — Redis ZSET
 - `var` — 逻辑变量（来自上下文映射）
@@ -632,31 +618,7 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants/default/tools \
 - `sandbox_type=landlock/gvisor` 时，工具在子进程沙箱内执行，受 `timeout_ms` 约束；`none` 则在进程内执行。
 - `risk_class` 决定的基础风险分会进入会话级风险累计，触发阈值后会退出快速路径并升级审计。
 
-### 4.5 场景注册
-
-导航：**🎭 场景注册**
-
-将 URI 映射到 `scene_id` 用于路由。每个场景属于一个 `app_id`，具有优先级、URI 列表和可选的匹配查询。
-
-**关键行为：**
-- 运行时将 `(app_id, uri, match)` 解析为 `scene_id`
-- URI 必须被网关路由覆盖
-- 当没有 URI 匹配时，选中默认场景（复选框）
-- 编辑后，点击"同步到网关"推送到网关层
-
-### 4.6 网关路由
-
-导航：**🛣 网关路由**
-
-定义哪些 URI 模式进入网关评估流水线。路由使用 glob 风格模式（`/v1/chat/*`）。
-
-**设置：**
-- `evaluate` — 是否对此路由执行安全评估
-- `fail_mode` — `open`（出错时放行）或 `closed`（出错时拦截）
-- `cloud_scan.agent_url` — 用于评估的引擎 URL
-- `timeout_ms` — 评估超时时间
-
-### 4.7 规则管理
+### 4.5 规则管理
 
 导航：**📜 规则**（包含子层：云端、网关、边缘、内核）
 
@@ -680,7 +642,7 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants/default/tools \
 
 **异步操作：** 规则可配置为在触发时发送 webhook 或 Redis Stream 通知。消息模板中可使用 `{{rule_id}}`、`{{user_id}}`、`{{vars.app_id}}` 等变量。
 
-### 4.8 策略上线
+### 4.6 策略上线
 
 导航：**🚀 策略上线**
 
@@ -706,7 +668,7 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants/default/tools \
 
 准备版本后，在版本弹窗中点击"确认部署"。面板显示每个部署的拦截率图表、节点分布和事件时间线。
 
-### 4.9 审计中心
+### 4.7 审计中心
 
 导航：**🔍 审计中心**
 
@@ -717,7 +679,7 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants/default/tools \
 curl -s "http://localhost:8080/api/v1/admin/tenants/default/audit/events?trace_id=trace-abc-123"
 ```
 
-### 4.10 决策链路查看器
+### 4.8 决策链路查看器
 
 导航：**🧬 决策链路**
 
@@ -730,7 +692,7 @@ curl -s "http://localhost:8080/api/v1/admin/tenants/default/audit/events?trace_i
 
 点击搜索结果行可查看完整的会话时间线，显示每一步的决策、风险分数、持续时间和哈希链链接。
 
-### 4.11 审批队列
+### 4.9 审批队列
 
 导航：**🔐 审批队列**
 
@@ -743,7 +705,7 @@ curl -s "http://localhost:8080/api/v1/admin/tenants/default/audit/events?trace_i
 4. 若批准，生成一次性令牌
 5. Agent 使用令牌重试工具调用 → 网关验证 → 工具执行
 
-### 4.12 监控中心
+### 4.10 监控中心
 
 导航：**📈 监控中心**
 
@@ -752,7 +714,6 @@ curl -s "http://localhost:8080/api/v1/admin/tenants/default/audit/events?trace_i
 - 拦截率趋势
 - 每条规则的拦截率
 - 规则命中排名
-- 场景流量分布
 - 降级率趋势
 - 策略变更事件
 - 写入健康状态
@@ -1026,7 +987,6 @@ Agent → MCP Proxy → ① 许可证验证 → ② 预检查 → [快速路径?
 **会话风险面板**（运维控制台 → 📈 监控中心）：
 - 实时流量和拦截率趋势
 - 每条规则的命中次数和拦截率
-- 场景流量分布
 - 降级率（引擎不可用时的回退）
 
 **审计日志查询**（运维控制台 → 🔍 审计中心）：
@@ -1408,24 +1368,6 @@ PUT    /api/v1/admin/tenants/{tenantId}/cumulatives/{cumName}
 DELETE /api/v1/admin/tenants/{tenantId}/cumulatives/{cumName}
 ```
 
-### 场景注册
-
-```
-GET  /api/v1/admin/tenants/{tenantId}/scenes
-POST /api/v1/admin/tenants/{tenantId}/scenes
-PUT  /api/v1/admin/tenants/{tenantId}/scenes/{sceneId}
-DEL  /api/v1/admin/tenants/{tenantId}/scenes/{sceneId}
-POST /api/v1/admin/tenants/{tenantId}/scenes/sync-gateway
-```
-
-### 网关路由
-
-```
-GET  /api/v1/admin/tenants/{tenantId}/gateway-routes
-POST /api/v1/admin/tenants/{tenantId}/gateway-routes
-PUT  /api/v1/admin/tenants/{tenantId}/gateway-routes
-```
-
 ### 工具注册
 
 ```
@@ -1441,7 +1383,6 @@ DEL  /api/v1/admin/tenants/{tenantId}/tools/{toolName}
 POST /api/v1/evaluate
 Body: {
   "tenant_id": "default",
-  "scene_id": "beta_chat",
   "tool_name": "read_file",
   "args": {"path": "/tmp/test.txt"},
   "user_id": "user-123",
