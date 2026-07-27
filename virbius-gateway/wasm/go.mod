@@ -1,11 +1,11 @@
 module github.com/virbius/virbius-gateway/wasm
 
-go 1.21
+go 1.23
 
 require (
 	github.com/alibaba/higress/plugins/wasm-go v1.4.0
 	github.com/higress-group/proxy-wasm-go-sdk v0.0.0-20240327114451-d6b7174a84fc
-	github.com/tidwall/gjson v1.17.0
+	github.com/tidwall/gjson v1.19.0
 	github.com/tidwall/resp v0.1.1
 	github.com/virbius/virbius-expr v0.0.0-00010101000000-000000000000
 )
