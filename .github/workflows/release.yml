@@ -1,0 +1,274 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ────────────────────────────────────────────────────────────
+  #  CI Validation — ensure code is healthy before releasing
+  # ────────────────────────────────────────────────────────────
+  ci-validate:
+    name: CI Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt, clippy
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+
+      - name: Java tests
+        run: mvn -B -e test
+
+      - name: Rust clippy + test
+        run: |
+          cargo clippy --workspace --exclude virbius-mcp-python --exclude virbius-mcp-node --all-targets -- -D warnings
+          cargo test --workspace --exclude virbius-mcp-python --exclude virbius-mcp-node
+
+      - name: Go tests
+        working-directory: virbius-expr
+        run: go test ./...
+
+  # ────────────────────────────────────────────────────────────
+  #  Build Java modules (platform-independent)
+  # ────────────────────────────────────────────────────────────
+  java-release:
+    name: Java Release
+    runs-on: ubuntu-latest
+    needs: [ci-validate]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: temurin
+          cache: maven
+
+      - name: Package Java modules
+        run: mvn -B -e package -DskipTests
+
+      - name: Upload Java artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: java-artifacts
+          path: |
+            virbius-control/target/*.jar
+            virbius-engine/target/*.jar
+            virbius-compiler/target/*.jar
+
+  # ───────────────────────────────────────────────────────────
+  #  Build Rust binaries (multi-platform)
+  # ────────────────────────────────────────────────────────────
+  rust-release:
+    name: Rust Release (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: [ci-validate]
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          echo 'CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc' >> $GITHUB_ENV
+
+      - name: Build Rust binaries
+        run: |
+          cargo build --release \
+            --target ${{ matrix.target }} \
+            --workspace \
+            --exclude virbius-mcp-python \
+            --exclude virbius-mcp-node
+
+      - name: Package binaries
+        run: |
+          mkdir -p release-artifacts
+          cp target/${{ matrix.target }}/release/virbius-mcp-proxy release-artifacts/virbius-mcp-proxy-${{ matrix.target }}
+          if [ -f target/${{ matrix.target }}/release/virbius-core ]; then
+            cp target/${{ matrix.target }}/release/virbius-core release-artifacts/virbius-core-${{ matrix.target }}
+          fi
+
+      - name: Upload Rust artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-artifacts-${{ matrix.target }}
+          path: release-artifacts/*
+
+  # ────────────────────────────────────────────────────────────
+  #  Build Docker images (multi-arch)
+  # ────────────────────────────────────────────────────────────
+  docker-release:
+    name: Docker Release
+    runs-on: ubuntu-latest
+    needs: [ci-validate]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build multi-arch Docker image
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --tag ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
+            --output type=docker,dest=virbius-agent-${{ github.ref_name }}-multiarch.tar \
+            .
+
+      - name: Compress Docker image
+        run: gzip virbius-agent-${{ github.ref_name }}-multiarch.tar
+
+      - name: Upload Docker artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-artifact
+          path: virbius-agent-*.tar.gz
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push multi-arch image to GHCR
+        run: |
+          docker buildx build \
+            --platform linux/amd64,linux/arm64 \
+            --tag ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
+            --tag ghcr.io/${{ github.repository }}:latest \
+            --push \
+            .
+
+  # ────────────────────────────────────────────────────────────
+  #  Generate changelog
+  # ────────────────────────────────────────────────────────────
+  changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    outputs:
+      body: ${{ steps.changelog.outputs.body }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ github.ref_name }}^ 2>/dev/null || echo "")
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "Initial release" > changelog.md
+          else
+            git log --pretty=format:"- %s (%h)" $PREVIOUS_TAG..${{ github.ref_name }} > changelog.md
+          fi
+          echo "body=$(cat changelog.md | sed ':a;N;$!ba;s/\n/\\n/g')" >> $GITHUB_OUTPUT
+
+  # ────────────────────────────────────────────────────────────
+  #  Create GitHub Release
+  # ───────────────────────────────────────────────────────────
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [java-release, rust-release, docker-release, changelog]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Detect prerelease
+        id: prerelease
+        run: |
+          if [[ "${{ github.ref_name }}" =~ (alpha|beta|rc) ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: VirbiusAgent ${{ github.ref_name }}
+          body: |
+            ## VirbiusAgent ${{ github.ref_name }}
+
+            ${{ needs.changelog.outputs.body }}
+
+            ### Java Modules
+            - `virbius-control-*.jar` — Control plane (admin UI, rule registry)
+            - `virbius-engine-*.jar` — Security engine (policy evaluation)
+            - `virbius-compiler-*.jar` — Rule compiler
+
+            ### Rust Binaries (multi-platform)
+            - `virbius-mcp-proxy-x86_64-unknown-linux-gnu` — Linux x86_64
+            - `virbius-mcp-proxy-aarch64-unknown-linux-gnu` — Linux ARM64
+            - `virbius-mcp-proxy-x86_64-apple-darwin` — macOS Intel
+            - `virbius-mcp-proxy-aarch64-apple-darwin` — macOS Apple Silicon
+
+            ### Docker
+            - Multi-arch image: `ghcr.io/${{ github.repository }}:${{ github.ref_name }}`
+            - Offline tarball: `virbius-agent-${{ github.ref_name }}-multiarch.tar.gz`
+
+            ### Installation
+            ```bash
+            # Docker (recommended)
+            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            docker compose up -d
+
+            # Manual
+            java -jar virbius-control-*.jar
+            java -jar virbius-engine-*.jar
+            ./virbius-mcp-proxy-$(uname -m)-unknown-linux-gnu
+            ```
+          files: |
+            artifacts/java-artifacts/*.jar
+            artifacts/rust-artifacts-*/virbius-mcp-proxy-*
+            artifacts/docker-artifact/*.tar.gz
+          draft: false
+          prerelease: ${{ steps.prerelease.outputs.prerelease }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
