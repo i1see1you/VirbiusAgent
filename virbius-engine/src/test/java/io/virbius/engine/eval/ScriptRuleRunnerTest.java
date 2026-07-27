@@ -156,7 +156,7 @@ class ScriptRuleRunnerTest {
         List<CumulativeBlock> cumulatives = List.of(
                 new CumulativeBlock("calls_per_hour", "tool_name", 60, "rolling", "UTC", null));
         List<ToolPolicyEntry> toolPolicies = List.of(
-                new ToolPolicyEntry("http_get", "network", null, 0, false));
+                new ToolPolicyEntry("http_get", "network", null, 0, false, null));
 
         TenantPolicyData data = ScriptRuleRunner.fromBlocks(lists, redisIndex, cumulatives, toolPolicies);
 

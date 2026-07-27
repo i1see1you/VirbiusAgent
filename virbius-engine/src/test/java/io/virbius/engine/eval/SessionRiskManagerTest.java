@@ -112,7 +112,7 @@ class SessionRiskManagerTest {
 
     @Test
     void computeToolWeightWithHighRiskTool() {
-        ToolPolicyEntry entry = new ToolPolicyEntry("http_get", "network", null, 0, false);
+        ToolPolicyEntry entry = new ToolPolicyEntry("http_get", "network", null, 0, false, null);
         when(policyDataCache.get("default"))
                 .thenReturn(new TenantPolicyData(Map.of(), Map.of(), Map.of(), Map.of("http_get", entry)));
 

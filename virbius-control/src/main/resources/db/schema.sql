@@ -445,12 +445,14 @@ CREATE TABLE IF NOT EXISTS tb_tool_registry (
     fast_path            INTEGER      NOT NULL DEFAULT 0,
     allowed_args_schema  TEXT,
     description          VARCHAR(255),
+    approval_mode        VARCHAR(8)   NOT NULL DEFAULT 'strict',
     created_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (tenant_id, tool_name),
     CHECK (risk_class IN ('low', 'medium', 'high', 'network')),
     CHECK (sandbox_type IN ('none', 'landlock', 'gvisor')),
-    CHECK (timeout_ms >= 1000 AND timeout_ms <= 300000)
+    CHECK (timeout_ms >= 1000 AND timeout_ms <= 300000),
+    CHECK (approval_mode IN ('strict', 'lax'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_tb_tool_registry_tenant

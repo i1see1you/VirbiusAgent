@@ -1061,7 +1061,7 @@ http_post:
   risk_class: network    # → tool_risk_class = 4
 ```
 
-> **运营台配置入口**：工具元数据通过 Virbius 运营台「工具注册」面板独立管理（`tb_tool_registry` 表）。每个工具定义其 `risk_class`、`sandbox_type`、`timeout_ms`、`fast_path`、`allowed_args_schema`。发布上线时由 `ArtifactService.buildToolPolicyBlocks()` 从工具注册表读取并写入 edge manifest 的 `tool_policies[]` 字段；同时通过 `PublishService` 推送到 Engine 的 `PolicyDataCache`，供 `SessionRiskManager` 运行时查询。未注册的工具默认为 `low`。详见 §14.1。
+> **运营台配置入口**：工具元数据通过 Virbius 运营台「工具注册」面板独立管理（`tb_tool_registry` 表）。每个工具定义其 `risk_class`、`sandbox_type`、`timeout_ms`、`fast_path`、`allowed_args_schema`、`approval_mode`。发布上线时由 `ArtifactService.buildToolPolicyBlocks()` 从工具注册表读取并写入 edge manifest 的 `tool_policies[]` 字段；同时通过 `PublishService` 推送到 Engine 的 `PolicyDataCache`，供 `SessionRiskManager` 运行时查询 `risk_class`，并供 `EvaluateOrchestrator` 查询 `approval_mode`（决定 Challenge 豁免绑定粒度：`strict` 绑定 session+tool+args_hash，`lax` 绑定 session+tool，容忍 LLM 参数抖动）。未注册的工具默认为 `low` / `strict`。详见 §14.1。
 
 等级到数值的映射：
 

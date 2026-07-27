@@ -1061,7 +1061,7 @@ http_post:
   risk_class: network    # → tool_risk_class = 4
 ```
 
-> **Ops console configuration entry**: Tool metadata is independently managed through the Virbius ops console "Tool Registry" panel (`tb_tool_registry` table). Each tool defines its `risk_class`, `sandbox_type`, `timeout_ms`, `fast_path`, `allowed_args_schema`. When publishing, `ArtifactService.buildToolPolicyBlocks()` reads from the tool registry and writes to the edge manifest's `tool_policies[]` field; simultaneously pushed via `PublishService` to the Engine's `PolicyDataCache` for runtime query by `SessionRiskManager`. Unregistered tools default to `low`. See §14.1.
+> **Ops console configuration entry**: Tool metadata is independently managed through the Virbius ops console "Tool Registry" panel (`tb_tool_registry` table). Each tool defines its `risk_class`, `sandbox_type`, `timeout_ms`, `fast_path`, `allowed_args_schema`, `approval_mode`. When publishing, `ArtifactService.buildToolPolicyBlocks()` reads from the tool registry and writes to the edge manifest's `tool_policies[]` field; simultaneously pushed via `PublishService` to the Engine's `PolicyDataCache` for runtime query by `SessionRiskManager` (risk_class) and `EvaluateOrchestrator` (approval_mode, binding the challenge exemption to either session+tool+args_hash for `strict` or session+tool for `lax`). Unregistered tools default to `low` / `strict`. See §14.1.
 
 Level-to-value mapping:
 

@@ -346,7 +346,7 @@
   <button type="button" id="btnNewTool" data-i18n="tools.btn-new">新建工具</button>
 </div>
 <table id="toolTable" class="data-table" style="width:100%;margin-bottom:1rem">
-<thead><tr><th data-i18n="tools.header-name">tool_name</th><th data-i18n="tools.header-risk">risk_class</th><th data-i18n="tools.header-sandbox">sandbox_type</th><th data-i18n="tools.header-timeout">timeout_ms</th><th data-i18n="tools.header-fastpath">fast_path</th><th data-i18n="tools.header-schema">args_schema</th><th data-i18n="tools.header-desc">描述</th><th></th></tr></thead>
+<thead><tr><th data-i18n="tools.header-name">tool_name</th><th data-i18n="tools.header-risk">risk_class</th><th data-i18n="tools.header-sandbox">sandbox_type</th><th data-i18n="tools.header-timeout">timeout_ms</th><th data-i18n="tools.header-fastpath">fast_path</th><th data-i18n="tools.header-approval">approval_mode</th><th data-i18n="tools.header-schema">args_schema</th><th data-i18n="tools.header-desc">描述</th><th></th></tr></thead>
 <tbody id="toolTableBody"></tbody>
 </table>
 <div id="toolEditor" style="display:none;margin-top:0.5rem;padding:0.75rem;border:1px solid var(--border);border-radius:4px">
@@ -370,6 +370,15 @@
     </label>
     <label>timeout_ms <input id="fToolTimeoutMs" type="number" min="1000" max="300000" value="30000" style="width:6rem" /></label>
     <label><input type="checkbox" id="fToolFastPath" /> fast_path (<span data-i18n="tools.fastpath-hint">跳过 Engine 扫描</span>)</label>
+    <label>approval_mode
+      <select id="fToolApprovalMode">
+        <option value="strict" data-i18n="tools.approval-strict">强审批（参数一致）</option>
+        <option value="lax" data-i18n="tools.approval-lax">弱审批（不校验参数）</option>
+      </select>
+    </label>
+  </div>
+  <div class="row" style="margin-top:0.25rem">
+    <span class="hint" data-i18n="tools.approval-hint">审批豁免粒度：strict 要求参数完全一致；lax 审批一次后同工具任意参数 10 分钟内豁免</span>
   </div>
   <div class="row" style="margin-top:0.5rem">
     <label style="flex:1">allowed_args_schema (JSON Schema)
@@ -612,6 +621,19 @@
       <div class="row" style="margin-top:0.5rem;justify-content:flex-end">
         <button type="button" id="btnCopyJwt" data-i18n="license.copy-jwt">复制 JWT</button>
         <button type="button" id="btnCloseJwt" class="secondary" data-i18n="common.close">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- API Key dialog -->
+  <div id="credKeyOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:1000;align-items:center;justify-content:center">
+    <div style="background:#fff;border-radius:8px;padding:1.5rem;max-width:640px;width:90%">
+      <h3 style="margin:0 0 0.5rem;font-size:1rem"><span id="credKeyLabel">API Key</span></h3>
+      <p class="hint" style="color:#dc2626" data-i18n="tenants.key-warning">api_key 仅显示一次，请立即保存！保存后无法再次查看！</p>
+      <textarea id="credKeyText" readonly style="width:100%;min-height:4rem;font-family:monospace;font-size:0.82rem;word-break:break-all" rows="5"></textarea>
+      <div class="row" style="margin-top:0.5rem;justify-content:flex-end">
+        <button type="button" id="btnCopyCredKey" data-i18n="tenants.copy-key">复制 Key</button>
+        <button type="button" id="btnCloseCredKey" class="secondary" data-i18n="common.close">关闭</button>
       </div>
     </div>
   </div>

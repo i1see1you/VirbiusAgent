@@ -120,6 +120,23 @@ else
   info "Maven not found; Java build skipped. Install Maven 3.9+ or set MVN=/path/to/mvn"
 fi
 
+# ─── Step 4.5: Rebuild database (optional) ───
+if [[ "${VIRBIUS_REBUILD_DB:-}" == "1" ]]; then
+  info "VIRBIUS_REBUILD_DB=1: rebuilding control database..."
+  DB_FILE="$VIRBIUS_DATA_DIR/virbius-control.db"
+  if [[ -f "$DB_FILE" ]]; then
+    rm -f "$DB_FILE" "$DB_FILE-wal" "$DB_FILE-shm"
+    ok "Removed $DB_FILE (will be recreated from schema.sql + seed.sql on startup)"
+  else
+    info "Database file not found: $DB_FILE (nothing to rebuild)"
+  fi
+  # Also flush Redis so stale policy/challenge data doesn't survive the rebuild
+  if command -v redis-cli >/dev/null 2>&1 && redis-cli -p "$VIRBIUS_REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
+    redis-cli -p "$VIRBIUS_REDIS_PORT" FLUSHDB >/dev/null 2>&1
+    ok "Flushed Redis DB (stale challenge exemptions / policy cache cleared)"
+  fi
+fi
+
 # ─── Step 5: Start services ───
 for p in 8080 8082; do kill_port "$p"; done
 ensure_redis

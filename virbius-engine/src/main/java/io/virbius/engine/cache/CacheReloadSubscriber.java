@@ -69,7 +69,7 @@ public class CacheReloadSubscriber {
                     List<Map.Entry<String, List<StreamEntry>>> results = jedis.xreadGroup(
                             CONSUMER_GROUP, CONSUMER_NAME,
                             XReadGroupParams.xReadGroupParams().count(1).block(5000),
-                            Map.of(STREAM_KEY, new StreamEntryID(">")));
+                            Map.of(STREAM_KEY, StreamEntryID.UNRECEIVED_ENTRY));
                     List<StreamEntry> entries = results != null && !results.isEmpty()
                             ? results.get(0).getValue()
                             : Collections.emptyList();

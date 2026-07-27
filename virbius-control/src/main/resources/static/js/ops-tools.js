@@ -22,6 +22,7 @@
         const riskBadge = renderRiskBadge(t.risk_class);
         const sandbox = esc(t.sandbox_type || 'none');
         const fastPath = t.fast_path ? '<span class="tag">⚡</span>' : '';
+        const approval = renderApprovalBadge(t.approval_mode);
         const schema = t.allowed_args_schema
           ? '<span class="tag" title="' + escAttr(t.allowed_args_schema) + '">schema</span>' : '';
         tr.innerHTML = `
@@ -30,12 +31,20 @@
           <td>${sandbox}</td>
           <td>${t.timeout_ms || 30000}</td>
           <td>${fastPath}</td>
+          <td>${approval}</td>
           <td>${schema}</td>
           <td>${esc(t.description || '')}</td>
           <td><button type="button" class="seg" onclick="editTool('${escAttr(t.tool_name)}')">编辑</button>
               <button type="button" class="danger seg" onclick="deleteTool('${escAttr(t.tool_name)}')">删除</button></td>`;
         tbody.appendChild(tr);
       }
+    }
+
+    function renderApprovalBadge(mode) {
+      if (mode === 'lax') {
+        return '<span class="tag" style="background:#fff3cd;color:#856404" title="弱审批：审批一次后同工具任意参数豁免">lax</span>';
+      }
+      return '<span class="tag" title="强审批：要求参数完全一致">strict</span>';
     }
 
     function renderRiskBadge(rc) {
@@ -56,6 +65,7 @@
       document.getElementById('fToolSandboxType').value = tool?.sandbox_type || 'none';
       document.getElementById('fToolTimeoutMs').value = tool?.timeout_ms || 30000;
       document.getElementById('fToolFastPath').checked = tool?.fast_path || false;
+      document.getElementById('fToolApprovalMode').value = tool?.approval_mode || 'strict';
       document.getElementById('fToolArgsSchema').value = tool?.allowed_args_schema || '';
       document.getElementById('fToolDescription').value = tool?.description || '';
       editingToolName = tool?.tool_name || null;
@@ -107,6 +117,7 @@
         sandbox_type: document.getElementById('fToolSandboxType').value,
         timeout_ms: parseInt(document.getElementById('fToolTimeoutMs').value, 10) || 30000,
         fast_path: document.getElementById('fToolFastPath').checked,
+        approval_mode: document.getElementById('fToolApprovalMode').value,
         allowed_args_schema: schemaStr || null,
         description: document.getElementById('fToolDescription').value.trim() || null
       };

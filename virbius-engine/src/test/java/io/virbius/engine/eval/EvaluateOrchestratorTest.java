@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import io.virbius.engine.audit.AuditWriter;
+import io.virbius.engine.cache.PolicyDataCache;
 import io.virbius.engine.challenge.ChallengeService;
 import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
 import io.virbius.engine.eval.StiTaintDetector.TaintResult;
@@ -39,6 +40,7 @@ class EvaluateOrchestratorTest {
     @Mock private StiTaintDetector taintDetector;
     @Mock private SessionRiskManager sessionRiskManager;
     @Mock private TrustViolationDetector trustViolationDetector;
+    @Mock private PolicyDataCache policyDataCache;
 
     @Captor private ArgumentCaptor<EvaluateRequestDto> auditReqCaptor;
     @Captor private ArgumentCaptor<EngineDecisionDto> auditDecisionCaptor;
@@ -50,7 +52,7 @@ class EvaluateOrchestratorTest {
         orchestrator = new EvaluateOrchestrator(
                 scriptRuleRunner, promptRunner, auditWriter, policyMerger,
                 challengeService, injectionDetector, taintDetector,
-                sessionRiskManager, trustViolationDetector,
+                sessionRiskManager, trustViolationDetector, policyDataCache,
                 0.5, 0.1, 0.0, 0.0);
     }
 
@@ -141,10 +143,10 @@ class EvaluateOrchestratorTest {
                 .thenReturn(new PolicyMerger.PolicyMergeResult(
                         new EngineDecisionDto("challenge", 70, "full"), primary));
 
-        when(challengeService.hasActiveExemption(anyString(), anyString(), anyString()))
+        when(challengeService.hasActiveExemption(anyString(), anyString(), anyString(), anyString()))
                 .thenReturn(false);
         when(challengeService.createChallenge(anyString(), anyString(), anyString(),
-                anyString(), anyString(), anyString(), anyInt()))
+                anyString(), anyString(), anyString(), anyInt(), anyString()))
                 .thenReturn("ch_abc123");
         when(sessionRiskManager.updateRiskScore(any()))
                 .thenReturn(45);
@@ -182,7 +184,7 @@ class EvaluateOrchestratorTest {
                         new EngineDecisionDto("challenge", 70, "full"), primary));
 
         when(challengeService.hasActiveExemption("sess-1", "danger_tool",
-                ChallengeService.computeArgsHash("danger_tool", "{\"cmd\":\"rm\"}")))
+                ChallengeService.computeArgsHash("danger_tool", "{\"cmd\":\"rm\"}"), "strict"))
                 .thenReturn(true);
         when(sessionRiskManager.updateRiskScore(any()))
                 .thenReturn(30);
@@ -193,6 +195,100 @@ class EvaluateOrchestratorTest {
         assertEquals("allow", resp.effectiveAction());
         // No challenge created
         assertNull(resp.challengeId());
+    }
+
+    @Test
+    void evaluateChallengeBypassedByLaxExemption() {
+        // lax tool: args differ from the approved call, but exemption still hits
+        EvaluateRequestDto req = new EvaluateRequestDto(
+                "default", "user", "sess-1", "risky", false, null,
+                "trace-4b", null, null, Map.of(), null, null, null, null, "query_audit_events",
+                "{\"limit\":100}", 100);
+
+        PolicyDataCache.ToolPolicyEntry laxTool = new PolicyDataCache.ToolPolicyEntry(
+                "query_audit_events", "low", "none", 30000, false, "lax");
+        when(policyDataCache.get("default")).thenReturn(
+                new PolicyDataCache.TenantPolicyData(
+                        Map.of(), Map.of(), Map.of(), Map.of("query_audit_events", laxTool)));
+
+        when(injectionDetector.detect("risky"))
+                .thenReturn(InjectionDetectionResult.clean());
+        when(trustViolationDetector.detect("risky", "query_audit_events"))
+                .thenReturn(TrustViolationResult.ok());
+        when(promptRunner.run(anyString(), any()))
+                .thenReturn(List.of());
+
+        SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
+                70, "TOOL_CHALLENGE", "challenge", "full", null, null);
+        when(scriptRuleRunner.run(anyString(), any(), any()))
+                .thenReturn(List.of(signal));
+
+        SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
+                70, "TOOL_CHALLENGE", "challenge", "full", null, null);
+        when(policyMerger.merge(anyString(), anyString(), any()))
+                .thenReturn(new PolicyMerger.PolicyMergeResult(
+                        new EngineDecisionDto("challenge", 70, "full"), primary));
+
+        when(challengeService.hasActiveExemption("sess-1", "query_audit_events",
+                ChallengeService.computeArgsHash("query_audit_events", "{\"limit\":100}"), "lax"))
+                .thenReturn(true);
+        when(sessionRiskManager.updateRiskScore(any()))
+                .thenReturn(30);
+
+        EvaluateResponseDto resp = orchestrator.evaluate(req);
+
+        // Challenge bypassed by lax exemption → allow
+        assertEquals("allow", resp.effectiveAction());
+        assertNull(resp.challengeId());
+    }
+
+    @Test
+    void evaluateChallengeCreatesChallengeWithLaxMode() {
+        EvaluateRequestDto req = new EvaluateRequestDto(
+                "default", "user", "sess-1", "risky", false, null,
+                "trace-4c", null, null, Map.of(), null, null, null, null, "query_audit_events",
+                "{\"limit\":100}", 100);
+
+        PolicyDataCache.ToolPolicyEntry laxTool = new PolicyDataCache.ToolPolicyEntry(
+                "query_audit_events", "low", "none", 30000, false, "lax");
+        when(policyDataCache.get("default")).thenReturn(
+                new PolicyDataCache.TenantPolicyData(
+                        Map.of(), Map.of(), Map.of(), Map.of("query_audit_events", laxTool)));
+
+        when(injectionDetector.detect("risky"))
+                .thenReturn(InjectionDetectionResult.clean());
+        when(trustViolationDetector.detect("risky", "query_audit_events"))
+                .thenReturn(TrustViolationResult.ok());
+        when(promptRunner.run(anyString(), any()))
+                .thenReturn(List.of());
+
+        SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
+                70, "TOOL_CHALLENGE", "challenge", "full", null, null);
+        when(scriptRuleRunner.run(anyString(), any(), any()))
+                .thenReturn(List.of(signal));
+
+        SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
+                70, "TOOL_CHALLENGE", "challenge", "full", null, null);
+        when(policyMerger.merge(anyString(), anyString(), any()))
+                .thenReturn(new PolicyMerger.PolicyMergeResult(
+                        new EngineDecisionDto("challenge", 70, "full"), primary));
+
+        when(challengeService.hasActiveExemption(anyString(), anyString(), anyString(), anyString()))
+                .thenReturn(false);
+        when(challengeService.createChallenge(anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyInt(), anyString()))
+                .thenReturn("ch_lax1");
+        when(sessionRiskManager.updateRiskScore(any()))
+                .thenReturn(45);
+
+        EvaluateResponseDto resp = orchestrator.evaluate(req);
+
+        assertEquals("challenge", resp.effectiveAction());
+        assertEquals("ch_lax1", resp.challengeId());
+        // approval_mode propagated into the challenge record
+        verify(challengeService).createChallenge(anyString(), anyString(), anyString(),
+                anyString(), anyString(), anyString(), anyInt(),
+                org.mockito.ArgumentMatchers.eq("lax"));
     }
 
     @Test

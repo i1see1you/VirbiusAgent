@@ -1,3 +1,22 @@
+    function showCredKeyDialog(apiKey, credentialId) {
+      const overlay = document.getElementById('credKeyOverlay');
+      document.getElementById('credKeyText').value = apiKey;
+      document.getElementById('credKeyLabel').textContent = __('tenants.key-dialog-title') + ' (' + credentialId + ')';
+      overlay.style.display = 'flex';
+    }
+
+    function closeCredKeyDialog() {
+      document.getElementById('credKeyOverlay').style.display = 'none';
+      document.getElementById('credKeyText').value = '';
+    }
+
+    function copyCredKey() {
+      const txt = document.getElementById('credKeyText');
+      txt.select();
+      document.execCommand('copy');
+      log(__('tenants.key-copied'), 'ok');
+    }
+
     async function loadTenantSelect() {
       const sel = document.getElementById('tenantSelect');
       const data = await adminRoot('/tenants');
@@ -87,10 +106,10 @@
           method: 'POST',
           body: JSON.stringify({ role, label: label || null })
         });
-        log({ issued: data, warning: __('tenants.key-show-once') }, 'warn');
         if (data.api_key) {
           document.getElementById('apiKey').value = data.api_key;
           try { localStorage.setItem('virbius.ops.apiKey', data.api_key); } catch (_) {}
+          showCredKeyDialog(data.api_key, data.credential_id);
         }
         await loadCredentialsFor(tenant());
       } catch (e) { log(e.message, 'err'); }
@@ -102,10 +121,10 @@
           method: 'POST',
           body: JSON.stringify({ role: 'platform_admin', label: label || null })
         });
-        log({ issued: data, warning: __('tenants.platform-key-show-once') }, 'warn');
         if (data.api_key) {
           document.getElementById('apiKey').value = data.api_key;
           try { localStorage.setItem('virbius.ops.apiKey', data.api_key); } catch (_) {}
+          showCredKeyDialog(data.api_key, data.credential_id);
         }
         await loadCredentialsFor(tenant());
       } catch (e) { log(e.message, 'err'); }
@@ -136,3 +155,5 @@
         await loadCredentialsFor(tenant());
       } catch (err) { log(err.message, 'err'); }
     });
+    document.getElementById('btnCopyCredKey').onclick = copyCredKey;
+    document.getElementById('btnCloseCredKey').onclick = closeCredKeyDialog;

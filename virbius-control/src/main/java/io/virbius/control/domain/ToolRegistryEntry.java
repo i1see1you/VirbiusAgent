@@ -11,6 +11,8 @@ package io.virbius.control.domain;
  *   <li>{@code ArtifactService.buildToolPolicyBlocks} — generates Edge Manifest {@code tool_policies}</li>
  *   <li>{@code PublishService} — pushes tool policies to Engine via Redis stream</li>
  *   <li>{@code SessionRiskManager} (Engine) — looks up {@code risk_class} for session risk scoring</li>
+ *   <li>{@code EvaluateOrchestrator} (Engine) — looks up {@code approval_mode} for challenge
+ *       exemption binding ({@code strict}: session+tool+args_hash; {@code lax}: session+tool)</li>
  * </ul>
  */
 public record ToolRegistryEntry(
@@ -21,11 +23,13 @@ public record ToolRegistryEntry(
         int timeoutMs,
         boolean fastPath,
         String allowedArgsSchemaJson,
-        String description) {
+        String description,
+        String approvalMode) {
 
     public static ToolRegistryEntry create(
             String tenantId, String toolName, String riskClass, String sandboxType,
-            int timeoutMs, boolean fastPath, String allowedArgsSchemaJson, String description) {
+            int timeoutMs, boolean fastPath, String allowedArgsSchemaJson, String description,
+            String approvalMode) {
         return new ToolRegistryEntry(
                 tenantId,
                 validateToolName(toolName),
@@ -34,7 +38,8 @@ public record ToolRegistryEntry(
                 validateTimeoutMs(timeoutMs),
                 fastPath,
                 allowedArgsSchemaJson,
-                description);
+                description,
+                validateApprovalMode(approvalMode));
     }
 
     private static String validateToolName(String toolName) {
@@ -70,5 +75,14 @@ public record ToolRegistryEntry(
             throw new IllegalArgumentException("timeout_ms must be 1000-300000, got " + timeoutMs);
         }
         return timeoutMs;
+    }
+
+    private static String validateApprovalMode(String approvalMode) {
+        String am = approvalMode != null ? approvalMode.trim().toLowerCase() : "strict";
+        return switch (am) {
+            case "strict", "lax" -> am;
+            default -> throw new IllegalArgumentException("invalid approval_mode: " + am
+                    + " (expected strict|lax)");
+        };
     }
 }

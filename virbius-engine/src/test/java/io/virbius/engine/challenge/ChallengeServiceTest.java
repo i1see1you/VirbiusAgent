@@ -55,7 +55,7 @@ class ChallengeServiceTest {
         int riskScore = 75;
 
         String challengeId = service.createChallenge(tenantId, sessionId, toolName,
-                argsHash, ruleId, reasonCode, riskScore);
+                argsHash, ruleId, reasonCode, riskScore, "strict");
 
         assertNotNull(challengeId);
         assertTrue(challengeId.startsWith("ch_"));
@@ -67,7 +67,7 @@ class ChallengeServiceTest {
     @Test
     void createChallengeWithoutRedis() {
         String challengeId = serviceNoRedis.createChallenge(
-                "t1", "s1", "tool", "h1", "R1", "code", 50);
+                "t1", "s1", "tool", "h1", "R1", "code", 50, "strict");
 
         assertNotNull(challengeId);
         assertTrue(challengeId.startsWith("ch_"));
@@ -132,7 +132,7 @@ class ChallengeServiceTest {
     void approveWithoutRedis() {
         // serviceNoRedis creates and approves without Redis
         String challengeId = serviceNoRedis.createChallenge(
-                "t1", "s1", "tool", "h1", "R1", "code", 50);
+                "t1", "s1", "tool", "h1", "R1", "code", 50, "strict");
 
         Map<String, Object> result = serviceNoRedis.approve(challengeId, "op1", "comment");
 
@@ -283,7 +283,7 @@ class ChallengeServiceTest {
     void hasActiveExemptionReturnsTrue() {
         when(jedis.exists(anyString())).thenReturn(true);
 
-        boolean exempt = service.hasActiveExemption("sess-1", "read_file", "sha256:abc");
+        boolean exempt = service.hasActiveExemption("sess-1", "read_file", "sha256:abc", "strict");
 
         assertTrue(exempt);
     }
@@ -292,15 +292,81 @@ class ChallengeServiceTest {
     void hasActiveExemptionReturnsFalse() {
         when(jedis.exists(anyString())).thenReturn(false);
 
-        boolean exempt = service.hasActiveExemption("sess-1", "read_file", "sha256:abc");
+        boolean exempt = service.hasActiveExemption("sess-1", "read_file", "sha256:abc", "strict");
 
         assertFalse(exempt);
     }
 
     @Test
     void hasActiveExemptionWithoutRedis() {
-        boolean exempt = serviceNoRedis.hasActiveExemption("sess-1", "read_file", "sha256:abc");
+        boolean exempt = serviceNoRedis.hasActiveExemption("sess-1", "read_file", "sha256:abc", "strict");
         assertFalse(exempt);
+    }
+
+    @Test
+    void hasActiveExemptionStrictUsesArgsHashKey() {
+        when(jedis.exists(anyString())).thenReturn(true);
+
+        service.hasActiveExemption("sess-1", "read_file", "sha256:abc", "strict");
+
+        verify(jedis).exists("challenge:exempt:sess-1:read_file:sha256:abc");
+    }
+
+    @Test
+    void hasActiveExemptionLaxUsesWildcardKey() {
+        when(jedis.exists(anyString())).thenReturn(true);
+
+        service.hasActiveExemption("sess-1", "read_file", "sha256:abc", "lax");
+
+        verify(jedis).exists("challenge:exempt:sess-1:read_file:*");
+    }
+
+    @Test
+    void hasActiveExemptionNullModeDefaultsToStrict() {
+        when(jedis.exists(anyString())).thenReturn(true);
+
+        service.hasActiveExemption("sess-1", "read_file", "sha256:abc", null);
+
+        verify(jedis).exists("challenge:exempt:sess-1:read_file:sha256:abc");
+    }
+
+    // ── exemptionArgsSegment ───────────────────────────────────────────
+
+    @Test
+    void exemptionArgsSegmentStrict() {
+        assertEquals("sha256:abc",
+                ChallengeService.exemptionArgsSegment("strict", "sha256:abc"));
+        assertEquals("sha256:abc",
+                ChallengeService.exemptionArgsSegment(null, "sha256:abc"));
+    }
+
+    @Test
+    void exemptionArgsSegmentLax() {
+        assertEquals("*", ChallengeService.exemptionArgsSegment("lax", "sha256:abc"));
+        assertEquals("*", ChallengeService.exemptionArgsSegment("LAX", "sha256:abc"));
+    }
+
+    // ── approve: lax mode exemption write ──────────────────────────────
+
+    @Test
+    void approveLaxChallengeWritesWildcardExemption() throws Exception {
+        String challengeId = createPendingRecordWithMode("lax");
+
+        Map<String, Object> result = service.approve(challengeId, "operator", "ok");
+
+        assertEquals("approved", result.get("status"));
+        // exemption key bound to session+tool with wildcard args segment
+        verify(jedis).setex(eq("challenge:exempt:sess-1:read_file:*"), eq(600L), anyString());
+    }
+
+    @Test
+    void approveStrictChallengeWritesArgsHashExemption() throws Exception {
+        String challengeId = createPendingRecord(); // no approval_mode → strict default
+
+        Map<String, Object> result = service.approve(challengeId, "operator", "ok");
+
+        assertEquals("approved", result.get("status"));
+        verify(jedis).setex(eq("challenge:exempt:sess-1:read_file:sha256:abc"), eq(600L), anyString());
     }
 
     // ── computeArgsHash ────────────────────────────────────────────────
@@ -359,6 +425,29 @@ class ChallengeServiceTest {
         record.put("session_id", "sess-1");
         record.put("tool_name", "read_file");
         record.put("args_hash", "sha256:abc");
+        record.put("rule_id", "Rule_101");
+        record.put("reason_code", "TOOL_HIGH_RISK");
+        record.put("risk_score", 75);
+        record.put("created_at", System.currentTimeMillis() / 1000);
+        record.put("expires_at", (System.currentTimeMillis() / 1000) + 600);
+        record.put("approved_by", null);
+        record.put("approved_at", null);
+        record.put("token", null);
+
+        when(jedis.get("challenge:" + challengeId)).thenReturn(mapper.writeValueAsString(record));
+        return challengeId;
+    }
+
+    private String createPendingRecordWithMode(String approvalMode) throws Exception {
+        String challengeId = "ch_" + java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        Map<String, Object> record = new java.util.LinkedHashMap<>();
+        record.put("challenge_id", challengeId);
+        record.put("status", "pending");
+        record.put("tenant_id", "default");
+        record.put("session_id", "sess-1");
+        record.put("tool_name", "read_file");
+        record.put("args_hash", "sha256:abc");
+        record.put("approval_mode", approvalMode);
         record.put("rule_id", "Rule_101");
         record.put("reason_code", "TOOL_HIGH_RISK");
         record.put("risk_score", 75);

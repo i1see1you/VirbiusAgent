@@ -134,8 +134,12 @@ impl UpstreamClient {
         let sse_url = format!("{}{}", self.base_url.trim_end_matches('/'), self.sse_path);
         debug!("connecting to upstream SSE: {}", sse_url);
 
-        let resp = self
-            .http
+        // SSE connections are long-lived; use a separate client without a
+        // total request timeout so the stream is not killed after N seconds.
+        let sse_http = reqwest::Client::builder()
+            .build()
+            .map_err(|e| UpstreamError::Http(e))?;
+        let resp = sse_http
             .get(&sse_url)
             .header("Accept", "text/event-stream")
             .send()

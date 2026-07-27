@@ -68,6 +68,10 @@
       'tenants.id-name-required': 'tenant_id 与名称必填',
       'tenants.key-show-once': 'api_key 仅显示一次，请立即保存',
       'tenants.platform-key-show-once': 'platform_admin api_key 仅显示一次',
+      'tenants.key-dialog-title': 'API Key',
+      'tenants.key-warning': 'api_key 仅显示一次，请立即保存！保存后无法再次查看！',
+      'tenants.key-copied': 'API Key 已复制到剪贴板',
+      'tenants.copy-key': '复制 Key',
 
       // Lists
       'lists.title': '命名名单',
@@ -636,6 +640,10 @@
       'tools.header-timeout': 'timeout_ms',
       'tools.header-fastpath': 'fast_path',
       'tools.header-schema': 'args_schema',
+      'tools.header-approval': 'approval_mode',
+      'tools.approval-strict': '强审批（参数一致）',
+      'tools.approval-lax': '弱审批（不校验参数）',
+      'tools.approval-hint': '审批豁免粒度：strict 要求参数完全一致；lax 审批一次后同工具任意参数 10 分钟内豁免',
       'tools.header-desc': '描述',
       'tools.btn-save': '保存',
       'tools.editor-title-new': '新建工具',
@@ -791,6 +799,10 @@
       'tenants.id-name-required': 'tenant_id and name are required',
       'tenants.key-show-once': 'api_key shown only once, save it now',
       'tenants.platform-key-show-once': 'platform_admin api_key shown only once',
+      'tenants.key-dialog-title': 'API Key',
+      'tenants.key-warning': 'api_key shown only once, save it now! It cannot be viewed again after closing!',
+      'tenants.key-copied': 'API Key copied to clipboard',
+      'tenants.copy-key': 'Copy Key',
 
       // Lists
       'lists.title': 'Named Lists',
@@ -1359,6 +1371,10 @@
       'tools.header-timeout': 'timeout_ms',
       'tools.header-fastpath': 'fast_path',
       'tools.header-schema': 'args_schema',
+      'tools.header-approval': 'approval_mode',
+      'tools.approval-strict': 'Strict (exact args)',
+      'tools.approval-lax': 'Lax (any args)',
+      'tools.approval-hint': 'Challenge exemption scope: strict requires identical args; lax exempts any args of the same tool for 10 min after one approval',
       'tools.header-desc': 'Description',
       'tools.btn-save': 'Save',
       'tools.editor-title-new': 'New Tool',

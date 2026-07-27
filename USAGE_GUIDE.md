@@ -573,6 +573,7 @@ Field validation rules (returns 400 on violation):
 | `sandbox_type` | Enum `none` / `landlock` / `gvisor` (default `none`) |
 | `timeout_ms` | Range 1000–300000 (default 30000) |
 | `allowed_args_schema` | Valid JSON Schema string |
+| `approval_mode` | Enum `strict` / `lax` (default `strict`). `strict`: challenge exemption requires identical tool args (session+tool+args_hash); `lax`: one approval exempts any args of the same tool within the session TTL (10 min) |
 
 #### 4.4.2 Tool Registry ≠ License Allowlist (Most Common Pitfall)
 

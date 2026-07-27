@@ -61,12 +61,13 @@ public class ToolRegistryService {
                 req.timeoutMs() > 0 ? req.timeoutMs() : 30000,
                 req.fastPath() != null ? req.fastPath() : false,
                 schemaJson,
-                req.description());
+                req.description(),
+                req.approvalMode() != null ? req.approvalMode() : "strict");
 
         repo.upsert(entry);
-        log.info("tool registry upsert: tenant={} tool={} risk={} sandbox={} timeout={} fastPath={}",
+        log.info("tool registry upsert: tenant={} tool={} risk={} sandbox={} timeout={} fastPath={} approvalMode={}",
                 tenantId, entry.toolName(), entry.riskClass(), entry.sandboxType(),
-                entry.timeoutMs(), entry.fastPath());
+                entry.timeoutMs(), entry.fastPath(), entry.approvalMode());
         return get(tenantId, entry.toolName());
     }
 
@@ -103,6 +104,7 @@ public class ToolRegistryService {
         m.put("sandbox_type", e.sandboxType());
         m.put("timeout_ms", e.timeoutMs());
         m.put("fast_path", e.fastPath());
+        m.put("approval_mode", e.approvalMode());
         if (e.allowedArgsSchemaJson() != null) {
             m.put("allowed_args_schema", e.allowedArgsSchemaJson());
         }
@@ -120,6 +122,7 @@ public class ToolRegistryService {
         m.put("sandbox_type", e.sandboxType());
         m.put("timeout_ms", e.timeoutMs());
         m.put("fast_path", e.fastPath());
+        m.put("approval_mode", e.approvalMode());
         if (e.allowedArgsSchemaJson() != null) {
             try {
                 m.put("allowed_args_schema", mapper.readValue(e.allowedArgsSchemaJson(), Object.class));
@@ -137,5 +140,6 @@ public class ToolRegistryService {
             int timeoutMs,
             Boolean fastPath,
             String allowedArgsSchema,
-            String description) {}
+            String description,
+            String approvalMode) {}
 }

@@ -23,12 +23,18 @@ import redis.clients.jedis.JedisPool;
  *   <li>{@code challenge:{id}} — challenge record (TTL: 600s default)</li>
  *   <li>{@code challenge:token:{token}} — one-time-use token (TTL: 600s)</li>
  *   <li>{@code challenge:queue:{tenantId}} — ZSET of pending challenge IDs</li>
- *   <li>{@code challenge:exempt:{session}:{tool}:{args_hash}} — session-level exemption (TTL: 600s)</li>
+ *   <li>{@code challenge:exempt:{session}:{tool}:{args_hash|*}} — session-level exemption (TTL: 600s)</li>
  * </ul>
  *
  * <p>When a challenge is approved, an exemption record is written so that
- * subsequent calls with the same session+tool+args_hash bypass the challenge
- * and are allowed directly within the exemption TTL window.
+ * subsequent calls bypass the challenge within the exemption TTL window.
+ * The exemption binding depends on the tool's {@code approval_mode}:
+ * <ul>
+ *   <li>{@code strict} (default) — bound to session+tool+args_hash; only byte-identical
+ *       tool arguments are exempted.</li>
+ *   <li>{@code lax} — bound to session+tool (args_hash segment is {@code *}); any args
+ *       of the same tool are exempted, tolerating LLM-generated args jitter.</li>
+ * </ul>
  */
 @Service
 public class ChallengeService {
@@ -38,6 +44,14 @@ public class ChallengeService {
     private static final String KEY_TOKEN = "challenge:token:%s";
     private static final String KEY_QUEUE = "challenge:queue:%s";
     private static final String KEY_EXEMPT = "challenge:exempt:%s:%s:%s";
+
+    /** Approval mode: exemption bound to the exact args_hash (default). */
+    public static final String APPROVAL_MODE_STRICT = "strict";
+    /** Approval mode: exemption bound to the tool only, any args allowed. */
+    public static final String APPROVAL_MODE_LAX = "lax";
+    /** Wildcard args_hash segment used for lax-mode exemption keys. */
+    public static final String EXEMPTION_ANY_ARGS = "*";
+
     private static final SecureRandom RNG = new SecureRandom();
 
     private final Optional<JedisPool> jedisPool;
@@ -60,28 +74,46 @@ public class ChallengeService {
     }
 
     /**
-     * Check whether a session-level exemption exists for the given session+tool+args_hash.
+     * Check whether a session-level exemption exists for the given session+tool,
+     * bound according to the tool's approval mode.
      *
      * <p>When an exemption is active, the Engine should override the challenge
      * decision to "allow" so the tool call proceeds without a new challenge.
      *
-     * @param sessionId the Agent session ID
-     * @param toolName  the tool being called
-     * @param argsHash  SHA-256 hash of tool_name:args_json
+     * @param sessionId    the Agent session ID
+     * @param toolName     the tool being called
+     * @param argsHash     SHA-256 hash of tool_name:args_json
+     * @param approvalMode {@code strict} binds to args_hash; {@code lax} binds to the
+     *                     tool only (any args). {@code null} is treated as strict.
      * @return {@code true} if an active exemption exists
      */
-    public boolean hasActiveExemption(String sessionId, String toolName, String argsHash) {
+    public boolean hasActiveExemption(String sessionId, String toolName, String argsHash, String approvalMode) {
         if (jedisPool.isEmpty() || sessionId == null || sessionId.isBlank()
                 || exemptionTtlSeconds <= 0) {
             return false;
         }
         try (var jedis = jedisPool.get().getResource()) {
-            String key = KEY_EXEMPT.formatted(sessionId, toolName, argsHash);
+            String key = KEY_EXEMPT.formatted(sessionId, toolName,
+                    exemptionArgsSegment(approvalMode, argsHash));
             return jedis.exists(key);
         } catch (Exception e) {
             log.warn("failed to check challenge exemption: {}", e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Compute the args segment of an exemption key for the given approval mode.
+     *
+     * @param approvalMode {@code lax} → {@link #EXEMPTION_ANY_ARGS}; anything else → argsHash
+     * @param argsHash     the args hash used for strict binding
+     * @return the third segment of the exemption key
+     */
+    public static String exemptionArgsSegment(String approvalMode, String argsHash) {
+        if (APPROVAL_MODE_LAX.equalsIgnoreCase(approvalMode != null ? approvalMode.trim() : "")) {
+            return EXEMPTION_ANY_ARGS;
+        }
+        return argsHash;
     }
 
     /**
@@ -94,7 +126,8 @@ public class ChallengeService {
             String argsHash,
             String ruleId,
             String reasonCode,
-            int riskScore) {
+            int riskScore,
+            String approvalMode) {
         String challengeId = "ch_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         long now = Instant.now().getEpochSecond();
         long expiresAt = now + challengeTtlSeconds;
@@ -106,6 +139,7 @@ public class ChallengeService {
         record.put("session_id", sessionId);
         record.put("tool_name", toolName);
         record.put("args_hash", argsHash);
+        record.put("approval_mode", approvalMode != null ? approvalMode : APPROVAL_MODE_STRICT);
         record.put("rule_id", ruleId);
         record.put("reason_code", reasonCode);
         record.put("risk_score", riskScore);
@@ -179,17 +213,23 @@ public class ChallengeService {
             String tenantId = (String) record.get("tenant_id");
             jedis.zrem(KEY_QUEUE.formatted(tenantId), challengeId);
 
-            // Write session-level exemption so subsequent calls with the same
-            // session+tool+args_hash bypass the challenge within the TTL window.
+            // Write session-level exemption so subsequent calls bypass the challenge
+            // within the TTL window. The binding depends on the tool's approval_mode
+            // (stored in the challenge record at creation time):
+            //   strict → session+tool+args_hash; lax → session+tool (any args).
             String sessionForExempt = (String) record.get("session_id");
             String toolForExempt = (String) record.get("tool_name");
             String hashForExempt = (String) record.get("args_hash");
+            String modeForExempt = (String) record.get("approval_mode");
             if (sessionForExempt != null && !sessionForExempt.isBlank()
                     && toolForExempt != null && !toolForExempt.isBlank()
                     && hashForExempt != null && !hashForExempt.isBlank()) {
-                String exemptKey = KEY_EXEMPT.formatted(sessionForExempt, toolForExempt, hashForExempt);
+                String exemptKey = KEY_EXEMPT.formatted(sessionForExempt, toolForExempt,
+                        exemptionArgsSegment(modeForExempt, hashForExempt));
                 Map<String, Object> exemptRecord = new LinkedHashMap<>();
                 exemptRecord.put("challenge_id", challengeId);
+                exemptRecord.put("approval_mode",
+                        modeForExempt != null ? modeForExempt : APPROVAL_MODE_STRICT);
                 exemptRecord.put("approved_by", approvedBy);
                 exemptRecord.put("approved_at", now);
                 exemptRecord.put("expires_at", now + exemptionTtlSeconds);

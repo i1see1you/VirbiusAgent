@@ -1,6 +1,7 @@
 package io.virbius.engine.eval;
 
 import io.virbius.engine.audit.AuditWriter;
+import io.virbius.engine.cache.PolicyDataCache;
 import io.virbius.engine.challenge.ChallengeService;
 import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
 import io.virbius.engine.eval.StiTaintDetector.TaintResult;
@@ -29,6 +30,7 @@ public class EvaluateOrchestrator {
     private final StiTaintDetector taintDetector;
     private final SessionRiskManager sessionRiskManager;
     private final TrustViolationDetector trustViolationDetector;
+    private final PolicyDataCache policyDataCache;
 
     // P2: intent_action weighted risk accumulation
     private final double blockWeight;
@@ -46,6 +48,7 @@ public class EvaluateOrchestrator {
             StiTaintDetector taintDetector,
             SessionRiskManager sessionRiskManager,
             TrustViolationDetector trustViolationDetector,
+            PolicyDataCache policyDataCache,
             @Value("${virbius.session-risk.intent-weight.block:0.5}") double blockWeight,
             @Value("${virbius.session-risk.intent-weight.challenge:0.1}") double challengeWeight,
             @Value("${virbius.session-risk.intent-weight.review:0.0}") double reviewWeight,
@@ -59,6 +62,7 @@ public class EvaluateOrchestrator {
         this.taintDetector = taintDetector;
         this.sessionRiskManager = sessionRiskManager;
         this.trustViolationDetector = trustViolationDetector;
+        this.policyDataCache = policyDataCache;
         this.blockWeight = blockWeight;
         this.challengeWeight = challengeWeight;
         this.reviewWeight = reviewWeight;
@@ -168,17 +172,22 @@ public class EvaluateOrchestrator {
         String argsJson = req.argsJson() != null ? req.argsJson() : "";
         String argsHash = ChallengeService.computeArgsHash(toolName, argsJson);
 
-        // Check session-level exemption: if the same session+tool+args_hash
-        // was previously approved, bypass the challenge and allow the call.
+        // Per-tool approval mode from the tool registry (via PolicyDataCache):
+        //   strict → exemption bound to session+tool+args_hash (exact args required)
+        //   lax    → exemption bound to session+tool (any args, tolerates LLM args jitter)
+        String approvalMode = lookupApprovalMode(req.tenantId(), toolName);
+
+        // Check session-level exemption: if this session+tool was previously approved
+        // (binding per approval_mode), bypass the challenge and allow the call.
         // This check is done BEFORE risk score update so that exempted calls
         // do not accumulate chain_anomaly risk from the triggering rule.
         String effectiveAction = decision.effectiveAction();
         String challengeId = null;
         boolean exempted = "challenge".equalsIgnoreCase(effectiveAction)
-                && challengeService.hasActiveExemption(sessionId, toolName, argsHash);
+                && challengeService.hasActiveExemption(sessionId, toolName, argsHash, approvalMode);
         if (exempted) {
-            log.info("challenge bypassed by session exemption: tenant={} session={} tool={} args_hash={}",
-                    req.tenantId(), sessionId, toolName, argsHash);
+            log.info("challenge bypassed by session exemption: tenant={} session={} tool={} args_hash={} approval_mode={}",
+                    req.tenantId(), sessionId, toolName, argsHash, approvalMode);
             effectiveAction = "allow";
         }
 
@@ -228,7 +237,8 @@ public class EvaluateOrchestrator {
                     argsHash,
                     primaryRuleId,
                     reasonCode,
-                    decision.maxRiskScore());
+                    decision.maxRiskScore(),
+                    approvalMode);
         }
 
         return new EvaluateResponseDto(
@@ -243,6 +253,37 @@ public class EvaluateOrchestrator {
                 decision.enforceMode(),
                 challengeId,
                 argsHash);
+    }
+
+    /**
+     * Look up the tool's challenge approval mode from the policy cache.
+     *
+     * <p>Unregistered tools (or registries without the field) default to
+     * {@code strict} — the safe, args-bound behavior.
+     *
+     * @param tenantId the request tenant (falls back to "default")
+     * @param toolName the tool being called
+     * @return {@code strict} or {@code lax}
+     */
+    private String lookupApprovalMode(String tenantId, String toolName) {
+        if (toolName == null || toolName.isBlank()) {
+            return ChallengeService.APPROVAL_MODE_STRICT;
+        }
+        try {
+            PolicyDataCache.TenantPolicyData data =
+                    policyDataCache.get(tenantId != null && !tenantId.isBlank() ? tenantId : "default");
+            if (data == null) {
+                return ChallengeService.APPROVAL_MODE_STRICT;
+            }
+            PolicyDataCache.ToolPolicyEntry entry = data.toolPolicies().get(toolName);
+            if (entry != null && ChallengeService.APPROVAL_MODE_LAX.equalsIgnoreCase(
+                    entry.approvalMode() != null ? entry.approvalMode().trim() : "")) {
+                return ChallengeService.APPROVAL_MODE_LAX;
+            }
+        } catch (Exception e) {
+            log.warn("approval_mode lookup failed for tool={}: {}", toolName, e.getMessage());
+        }
+        return ChallengeService.APPROVAL_MODE_STRICT;
     }
 
     /**

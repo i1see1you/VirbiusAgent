@@ -54,7 +54,8 @@ public class PolicyDataCache {
             @JsonProperty("risk_class") String riskClass,
             @JsonProperty("sandbox_type") String sandboxType,
             @JsonProperty("timeout_ms") long timeoutMs,
-            @JsonProperty("fast_path") boolean fastPath) {}
+            @JsonProperty("fast_path") boolean fastPath,
+            @JsonProperty("approval_mode") String approvalMode) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ListBlock(
@@ -63,11 +64,13 @@ public class PolicyDataCache {
             List<String> entries,
             @JsonProperty("value_source") ValueSource valueSource) {}
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record RedisListIndexBlock(
             @JsonProperty("list_name") String listName,
             String dimension,
             @JsonProperty("redis_key") String redisKey) {}
 
+    @JsonIgnoreProperties(ignoreUnknown = true)
     public record CumulativeBlock(
             @JsonProperty("cumulative_name") String cumulativeName,
             String dimension,

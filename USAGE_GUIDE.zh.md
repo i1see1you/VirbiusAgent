@@ -569,6 +569,7 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants/default/tools \
 | `sandbox_type` | 枚举 `none` / `landlock` / `gvisor`（默认 `none`） |
 | `timeout_ms` | 范围 1000–300000（默认 30000） |
 | `allowed_args_schema` | 合法的 JSON Schema 字符串 |
+| `approval_mode` | 枚举 `strict` / `lax`（默认 `strict`）。`strict`（强审批）：Challenge 豁免要求工具参数完全一致（session+tool+args_hash）；`lax`（弱审批）：审批一次后同工具任意参数在 session 豁免窗口（10 分钟）内直接放行 |
 
 #### 4.4.2 工具注册 ≠ 许可证白名单（最常踩的坑）
 
