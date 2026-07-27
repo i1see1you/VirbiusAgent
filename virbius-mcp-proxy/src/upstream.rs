@@ -138,7 +138,7 @@ impl UpstreamClient {
         // total request timeout so the stream is not killed after N seconds.
         let sse_http = reqwest::Client::builder()
             .build()
-            .map_err(|e| UpstreamError::Http(e))?;
+            .map_err(UpstreamError::Http)?;
         let resp = sse_http
             .get(&sse_url)
             .header("Accept", "text/event-stream")
