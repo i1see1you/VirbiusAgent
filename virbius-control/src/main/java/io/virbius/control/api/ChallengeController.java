@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.util.UriComponentsBuilder;
 
 /**
  * Challenge approval queue API for the Control dashboard.
@@ -55,13 +56,16 @@ public class ChallengeController {
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "50") int max) {
         try {
-            String url = String.format("%s/v1/challenges?tenant_id=%s&max=%d",
-                    engineBaseUrl, tenantId, max);
-            if (status != null && !status.isBlank()) {
-                url += "&status=" + status;
-            }
+            URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
+                    .path("/v1/challenges")
+                    .queryParam("tenant_id", tenantId)
+                    .queryParam("max", max)
+                    .queryParam("status", status != null && !status.isBlank() ? status : null)
+                    .build()
+                    .encode()
+                    .toUri();
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
+                    .uri(uri)
                     .timeout(Duration.ofSeconds(5))
                     .GET()
                     .build();
@@ -87,9 +91,13 @@ public class ChallengeController {
     @GetMapping("/{id}/status")
     public ResponseEntity<Map> getStatus(@PathVariable String id) {
         try {
-            String url = String.format("%s/v1/challenge/%s/status", engineBaseUrl, id);
+            URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
+                    .pathSegment("v1", "challenge", id, "status")
+                    .build()
+                    .encode()
+                    .toUri();
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
+                    .uri(uri)
                     .timeout(Duration.ofSeconds(5))
                     .GET()
                     .build();
@@ -118,10 +126,14 @@ public class ChallengeController {
             @PathVariable String id,
             @RequestBody Map<String, String> body) {
         try {
-            String url = String.format("%s/v1/challenge/%s/approve", engineBaseUrl, id);
+            URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
+                    .pathSegment("v1", "challenge", id, "approve")
+                    .build()
+                    .encode()
+                    .toUri();
             String json = mapper.writeValueAsString(body);
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
+                    .uri(uri)
                     .header("Content-Type", "application/json")
                     .timeout(Duration.ofSeconds(5))
                     .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
@@ -148,10 +160,14 @@ public class ChallengeController {
             @PathVariable String id,
             @RequestBody Map<String, String> body) {
         try {
-            String url = String.format("%s/v1/challenge/%s/reject", engineBaseUrl, id);
+            URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
+                    .pathSegment("v1", "challenge", id, "reject")
+                    .build()
+                    .encode()
+                    .toUri();
             String json = mapper.writeValueAsString(body);
             HttpRequest req = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
+                    .uri(uri)
                     .header("Content-Type", "application/json")
                     .timeout(Duration.ofSeconds(5))
                     .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
