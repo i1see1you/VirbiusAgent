@@ -10,5 +10,5 @@ crate-type = ["cdylib"]
 
 [dependencies]
 virbius-core = { path = "../virbius-core" }
-pyo3 = { version = "0.22", features = ["extension-module"] }
+pyo3 = { version = "0.29", features = ["extension-module"] }
 serde_json = "1"
