@@ -13,6 +13,8 @@
 
 **VirbiusAgent** is a deep security platform purpose-built for AI Agents. Leveraging eBPF and a four-tier **Edge–Gateway–Kernel–Cloud**  architecture, it provides real-time visibility and precise blocking of Agent behaviors, effectively tackling the challenges of privilege abuse and loss of security control.
 
+The Agent security landscape falls into two categories: **endpoint-side controls** — DLP and related measures to govern employee usage of AI and Agents, preventing data leaks, shadow AI, and prompt leakage — and **server-side protection**, which is VirbiusAgent's core focus. As an Agent security platform, VirbiusAgent secures your self-developed intelligent agents against prompt injection, MCP tool abuse, and privilege escalation. It fully aligns with national AI safety regulations, supporting enterprise compliance filings and audits. Endpoint controls are largely standardized with low business coupling, whereas VirbiusAgent provides a highly customizable security policy framework on the server side, requiring security engineers who understand both policy and business to tailor configurations for precise, scenario-matched protection.
+
 ## Operations Console
 
 ![VirbiusAgent operations console — rule registry (English)](docs/images/ops-en.png)
@@ -441,6 +443,7 @@ virbius-agent/
 | Document | Description |
 |----------|-------------|
 | [USAGE_GUIDE.md](USAGE_GUIDE.md) | User guide — installation, integration, rule authoring, operations |
+| [rule-examples.en.md](rule-examples.en.md) | Risk rule configuration examples — complete guide for 12 typical rules |
 | [DESIGN.md](DESIGN.md) | System architecture design document |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Detailed architecture documentation |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Deployment topology and operations |

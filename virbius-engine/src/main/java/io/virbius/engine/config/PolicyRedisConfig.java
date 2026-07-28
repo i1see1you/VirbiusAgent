@@ -3,10 +3,10 @@ package io.virbius.engine.config;
 import io.virbius.policy.CounterStore;
 import io.virbius.policy.GatewayListRedisMatcher;
 import io.virbius.policy.ListMatchResultCache;
-import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -40,11 +40,25 @@ public class PolicyRedisConfig {
         return new JedisPool(redisUrl);
     }
 
+    /**
+     * Registers a {@link GatewayListRedisMatcher} bean when a {@link JedisPool}
+     * is available.
+     *
+     * <p>Must return {@link GatewayListRedisMatcher} directly (not
+     * {@code Optional<GatewayListRedisMatcher>}) so that Spring's
+     * optional-dependency mechanism can find it by type at injection points
+     * such as {@code Optional<GatewayListRedisMatcher>} in
+     * {@link io.virbius.engine.eval.ScriptRuleRunner}. When Redis is disabled,
+     * {@code @ConditionalOnBean} skips creation and injection points get
+     * {@code Optional.empty()}.
+     */
     @Bean
-    public Optional<GatewayListRedisMatcher> gatewayListRedisMatcher(
-            Optional<JedisPool> jedisPool,
+    @ConditionalOnBean(JedisPool.class)
+    public GatewayListRedisMatcher gatewayListRedisMatcher(
+            JedisPool jedisPool,
             @Value("${virbius.lists.redis.match-cache-ttl-sec:60}") long cacheTtlSec,
             @Value("${virbius.lists.redis.match-cache-max-entries:200000}") int cacheMaxEntries) {
-        return GatewayListRedisMatcher.create(jedisPool, cacheTtlSec, cacheMaxEntries);
+        return new GatewayListRedisMatcher(
+                jedisPool, new ListMatchResultCache(cacheTtlSec * 1000L, cacheMaxEntries));
     }
 }

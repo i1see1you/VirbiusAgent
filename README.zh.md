@@ -13,6 +13,8 @@ English: [README.md](README.md)
 
 **VirbiusAgent** 是专为AI Agent 打造的深层安全防护平台。基于 eBPF 与**端—管—核—云**架构实现了对 Agent 行为的实时感知与精准阻断，解决Agent 越权与安全失控难题。
 
+Agent 安全体系大致分为两类：一是终端侧管控，即通过 DLP 等手段管控员工使用 AI 和 Agent 带来的风险，防范机密外发、影子 AI、Prompt 泄露等风险；二是服务端防护，这也是 VirbiusAgent 的核心定位。作为 Agent 安全防护平台，VirbiusAgent 专注于保障自研智能体的内生安全，有效抵御提示注入、MCP 工具滥用及 Agent 越权逃逸等攻击。此外，产品完全契合国家 AI 安全合规要求，可有力支撑企业的安全备案与合规审查工作。终端侧管控和业务耦合度低，基本都是标准化的一套策略和产品，VirbiusAgent 是服务端 Agent 护栏，可提供高度可定制的安全策略框架，需要懂安全策略的安全工程师基于对业务的理解，针对不同业务差异化的配置和优化策略，才能确保防护效果精准匹配实际业务场景。
+
 ## 运营台
 
 ![VirbiusAgent 运营台 — 规则配置（中文）](docs/images/ops-zh.png)
@@ -436,6 +438,7 @@ virbius-agent/
 | 文档 | 说明 |
 |------|------|
 | [USAGE_GUIDE.zh.md](USAGE_GUIDE.zh.md) | 使用指南 — 安装、集成、规则编写、运维 |
+| [rule-examples.zh.md](rule-examples.zh.md) | 风险规则配置示例 — 12 条典型规则的完整配置指南 |
 | [DESIGN.zh.md](DESIGN.zh.md) | 系统架构设计文档 |
 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md) | 详细架构说明 |
 | [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) | 部署拓扑与运维 |

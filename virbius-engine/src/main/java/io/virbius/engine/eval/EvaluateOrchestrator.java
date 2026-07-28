@@ -6,6 +6,8 @@ import io.virbius.engine.challenge.ChallengeService;
 import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
 import io.virbius.engine.eval.StiTaintDetector.TaintResult;
 import io.virbius.engine.eval.TrustViolationDetector.TrustViolationResult;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.virbius.policy.MatchContext;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -31,6 +33,8 @@ public class EvaluateOrchestrator {
     private final SessionRiskManager sessionRiskManager;
     private final TrustViolationDetector trustViolationDetector;
     private final PolicyDataCache policyDataCache;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     // P2: intent_action weighted risk accumulation
     private final double blockWeight;
@@ -81,6 +85,22 @@ public class EvaluateOrchestrator {
         // Expose request content as a var so groovy rules can inspect it via ctx.var('content')
         if (req.content() != null && !req.content().isBlank()) {
             vars.put("content", req.content());
+        }
+        // Expose individual tool call args as vars with "args." prefix to avoid conflicts with system vars.
+        // Groovy rules access tool args via ctx.var('args.entity_type'), ctx.var('args.limit'), etc.
+        if (req.argsJson() != null && !req.argsJson().isBlank()) {
+            try {
+                Map<String, Object> parsed = objectMapper.readValue(
+                        req.argsJson(), new TypeReference<Map<String, Object>>() {});
+                for (Map.Entry<String, Object> e : parsed.entrySet()) {
+                    if (e.getValue() != null) {
+                        vars.put("args." + e.getKey(), String.valueOf(e.getValue()));
+                    }
+                }
+            } catch (Exception e) {
+                // argsJson is caller-provided — parse failures are non-fatal
+                log.debug("failed to parse argsJson: {}", e.getMessage());
+            }
         }
         List<SignalDto> signals = new ArrayList<>();
         if (req.priorSignals() != null) {
