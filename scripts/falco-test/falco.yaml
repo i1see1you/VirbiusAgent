@@ -1,18 +1,16 @@
 # Falco configuration for local Docker testing
 #
 # This config enables:
-# - modern_ebpf driver (built into kernel, no module needed)
 # - JSON output (for parsing)
 # - stdout output (for real-time alert visibility)
 # - HTTP output to Virbius Engine (when ENGINE_URL is set)
 # - Web server on port 8765 (health check)
 #
+# Driver: auto-detected by falcoctl (modern_ebpf on supported kernels).
+# Do NOT set driver.kind here — it causes falcoctl to skip driver config
+# and fall back to kernel module (which fails if kernel-devel is not installed).
+#
 # Usage: mount as /etc/falco/falco.yaml in the Falco container
-
-# Use modern_ebpf driver — it's built into the kernel and doesn't require
-# loading a kernel module. This works on Docker Desktop VMs (LinuxKit).
-driver:
-  kind: modern_ebpf
 
 json_output: true
 json_include_output_property: true

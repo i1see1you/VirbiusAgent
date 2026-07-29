@@ -18,7 +18,7 @@ spec:
       hostNetwork: true
       containers:
         - name: falco
-          image: falcosecurity/falco:0.39.0
+          image: falcosecurity/falco:0.41.0
           securityContext:
             privileged: true
           volumeMounts:
@@ -42,6 +42,11 @@ spec:
             - name: kernel-modules
               mountPath: /host/lib/modules
               readOnly: true
+            - name: btf
+              mountPath: /sys/kernel/btf
+              readOnly: true
+            - name: tracing
+              mountPath: /sys/kernel/tracing
           livenessProbe:
             httpGet:
               path: /healthz
@@ -85,3 +90,9 @@ spec:
         - name: kernel-modules
           hostPath:
             path: /lib/modules
+        - name: btf
+          hostPath:
+            path: /sys/kernel/btf
+        - name: tracing
+          hostPath:
+            path: /sys/kernel/tracing
