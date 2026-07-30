@@ -293,7 +293,10 @@ async fn handle_post_message(
 
     if needs_init {
         // Auto-initialize the session to be compatible with clients that skip initialize
-        debug!("Auto-initializing session {} (client skipped initialize)", session_id);
+        debug!(
+            "Auto-initializing session {} (client skipped initialize)",
+            session_id
+        );
         let init_params = serde_json::json!({
             "protocolVersion": "2024-11-05",
             "capabilities": {},

@@ -384,8 +384,15 @@ mod tests {
     fn test_trace_event_tool_call() {
         let session = make_session();
         let args = serde_json::json!({"path": "/tmp/test.txt"});
-        let event =
-            TraceEvent::tool_call(&session, "step-1", Some("parent-0"), 1, "read_file", &args, Some("fs"));
+        let event = TraceEvent::tool_call(
+            &session,
+            "step-1",
+            Some("parent-0"),
+            1,
+            "read_file",
+            &args,
+            Some("fs"),
+        );
         assert_eq!(event.trace_id, session.trace_id);
         assert_eq!(event.session_id, "trace-sid");
         assert_eq!(event.step_id, "step-1");
@@ -421,8 +428,16 @@ mod tests {
     fn test_trace_event_tool_result() {
         let session = make_session();
         let result = serde_json::json!({"stdout": "ok"});
-        let event =
-            TraceEvent::tool_result(&session, "step-2", "step-1", 2, "success", 150, &result, Some("fs"));
+        let event = TraceEvent::tool_result(
+            &session,
+            "step-2",
+            "step-1",
+            2,
+            "success",
+            150,
+            &result,
+            Some("fs"),
+        );
         assert_eq!(event.step_id, "step-2");
         assert_eq!(event.parent_step_id.as_deref(), Some("step-1"));
         assert_eq!(event.step_seq, 2);
@@ -442,8 +457,16 @@ mod tests {
         let session = make_session();
         let long_content = "x".repeat(3000);
         let result = serde_json::json!({"data": long_content});
-        let event =
-            TraceEvent::tool_result(&session, "step-3", "step-2", 3, "success", 500, &result, Some("fs"));
+        let event = TraceEvent::tool_result(
+            &session,
+            "step-3",
+            "step-2",
+            3,
+            "success",
+            500,
+            &result,
+            Some("fs"),
+        );
         let preview = event.tool_result_preview.unwrap();
         assert!(preview.len() <= 2048);
     }
@@ -451,9 +474,16 @@ mod tests {
     #[test]
     fn test_trace_event_with_decision() {
         let session = make_session();
-        let event =
-            TraceEvent::tool_call(&session, "step-1", None, 0, "rm", &serde_json::json!({}), None)
-                .with_decision("block", Some("rule-42"), Some("high_risk"), Some(85));
+        let event = TraceEvent::tool_call(
+            &session,
+            "step-1",
+            None,
+            0,
+            "rm",
+            &serde_json::json!({}),
+            None,
+        )
+        .with_decision("block", Some("rule-42"), Some("high_risk"), Some(85));
         assert_eq!(event.tool_decision.as_deref(), Some("block"));
         assert_eq!(event.rule_id.as_deref(), Some("rule-42"));
         assert_eq!(event.reason_code.as_deref(), Some("high_risk"));
@@ -463,9 +493,16 @@ mod tests {
     #[test]
     fn test_trace_event_with_decision_none_fields() {
         let session = make_session();
-        let event =
-            TraceEvent::tool_call(&session, "step-1", None, 0, "ls", &serde_json::json!({}), None)
-                .with_decision("allow", None, None, None);
+        let event = TraceEvent::tool_call(
+            &session,
+            "step-1",
+            None,
+            0,
+            "ls",
+            &serde_json::json!({}),
+            None,
+        )
+        .with_decision("allow", None, None, None);
         assert_eq!(event.tool_decision.as_deref(), Some("allow"));
         assert!(event.rule_id.is_none());
         assert!(event.reason_code.is_none());
@@ -497,8 +534,15 @@ mod tests {
         let collector = TraceCollector::new(TraceBackend::Disabled);
         // Should not panic when recording
         let session = make_session();
-        let event =
-            TraceEvent::tool_call(&session, "step-1", None, 0, "test", &serde_json::json!({}), None);
+        let event = TraceEvent::tool_call(
+            &session,
+            "step-1",
+            None,
+            0,
+            "test",
+            &serde_json::json!({}),
+            None,
+        );
         // We can't easily assert on the internal sender, but ensure no panic
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {

@@ -276,7 +276,14 @@ impl SecurityPipeline {
 
                     // 4. Engine evaluate
                     return self
-                        .check_engine(session, tool_name, args, license.claims.risk_quota, &pre, upstream_name)
+                        .check_engine(
+                            session,
+                            tool_name,
+                            args,
+                            license.claims.risk_quota,
+                            &pre,
+                            upstream_name,
+                        )
                         .await;
                 }
                 Err(e) => {
