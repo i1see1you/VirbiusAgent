@@ -6,8 +6,13 @@ import org.springframework.web.bind.annotation.GetMapping;
 @Controller
 public class OpsUiController {
 
-    @GetMapping({"/ui", "/ui/", "/ops"})
+    @GetMapping({"/ui", "/ui/"})
     public String console() {
+        return "forward:/ui/index.html";
+    }
+
+    @GetMapping({"/ops", "/ops-legacy"})
+    public String legacyOps() {
         return "redirect:/ops.html";
     }
 
@@ -22,6 +27,6 @@ public class OpsUiController {
         "/policies.html"
     })
     public String legacyUi() {
-        return "redirect:/ops.html";
+        return "redirect:/ui/";
     }
 }
