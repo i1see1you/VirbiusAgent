@@ -116,6 +116,7 @@ impl TraceEvent {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn tool_result(
         session: &crate::session::Session,
         step_id: &str,
