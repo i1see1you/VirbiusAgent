@@ -55,7 +55,7 @@
         <router-view :key="routeKey" />
       </div>
 
-      <pre class="v-log" :class="'log-' + feedback.logLevel">{{ feedback.logMsg }}</pre>
+      <el-alert v-if="feedback.logMsg" :type="alertType" :title="feedback.logMsg" closable show-icon @close="feedback.clear()" style="margin:0 20px 16px;flex-shrink:0" />
     </div>
   </div>
 </template>
@@ -117,6 +117,10 @@ const rulesExpanded = ref(true);
 const tenants = ref<{ id: string; name: string }[]>([]);
 const tenantModel = computed(() => session.tenant);
 
+const alertType = computed(() => {
+  const m: Record<string, any> = { ok: 'success', err: 'error', warn: 'warning', info: 'info' };
+  return m[feedback.logLevel] || 'info';
+});
 const routeKey = computed(() => route.path + ':' + session.tenant + ':' + rules.currentLayer);
 
 function isActive(to: string) { return route.path === to; }

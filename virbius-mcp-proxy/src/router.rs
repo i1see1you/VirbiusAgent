@@ -164,7 +164,7 @@ pub async fn route_request(
 /// On reconnect (same logical session ID already in SessionManager), accumulated
 /// state (risk_score, tool_call_count, trace_id, step_seq) is preserved.
 #[allow(clippy::too_many_arguments)]
-async fn handle_initialize(
+pub(crate) async fn handle_initialize(
     id: &Value,
     params: &Value,
     transport_session_id: &str,
@@ -192,6 +192,7 @@ async fn handle_initialize(
     let logical_sid = session.session_id.clone();
 
     // Reconnect: preserve accumulated state from the previous connection
+    let is_reconnect = session_mgr.get(&logical_sid).is_some();
     if let Some(old) = session_mgr.get(&logical_sid) {
         session.session_risk_score = old.session_risk_score;
         session.tool_call_count = old.tool_call_count;
@@ -223,6 +224,29 @@ async fn handle_initialize(
             }
         };
 
+        // On reconnect, skip upstream re-initialization if the connection
+        // is still alive (within the 10s grace period after SSE disconnect).
+        if is_reconnect && upstream.is_connected() {
+            debug!(
+                "initialize: session {} reconnect, upstream still alive, skipping forward",
+                logical_sid
+            );
+            if let Some(mut s) = session_mgr.get(&logical_sid) {
+                s.mark_upstream_initialized("default");
+                session_mgr.update(logical_sid.clone(), s);
+            }
+            // Return a minimal initialize result with proxy capabilities injected
+            return Some(inject_proxy_capabilities(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "serverInfo": {"name": "virbius-mcp-proxy", "version": "0.1.0"}
+                }
+            })));
+        }
+
         let forward_req = serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -248,7 +272,7 @@ async fn handle_initialize(
         // ── Multi-upstream mode ──
         let upstream_names = upstream_mgr.upstream_names();
 
-        // Forward initialize to all upstreams concurrently
+        // Forward initialize to all upstreams, skipping alive ones on reconnect
         let mut tasks = Vec::new();
         for name in &upstream_names {
             let name = name.to_string();
@@ -256,11 +280,22 @@ async fn handle_initialize(
             let id_clone = id.clone();
             let params_clone = params.clone();
             let mgr_ref = upstream_mgr;
-            // We can't easily spawn async tasks that borrow upstream_mgr,
-            // so we connect sequentially (connections are cached after first call)
             let connect_result = mgr_ref.get_or_connect(&sid, &name).await;
             match connect_result {
                 Ok(upstream) => {
+                    // On reconnect, skip upstreams that are still alive
+                    // (within the 10s grace period after SSE disconnect)
+                    if is_reconnect && upstream.is_connected() {
+                        debug!(
+                            "initialize: session {} reconnect, upstream {} still alive, skipping forward",
+                            logical_sid, name
+                        );
+                        if let Some(mut s) = session_mgr.get(&logical_sid) {
+                            s.mark_upstream_initialized(&name);
+                            session_mgr.update(logical_sid.clone(), s);
+                        }
+                        continue;
+                    }
                     let forward_req = serde_json::json!({
                         "jsonrpc": "2.0",
                         "id": &id_clone,
@@ -275,7 +310,19 @@ async fn handle_initialize(
             }
         }
 
+        // If all upstreams were alive on reconnect, return early
         if tasks.is_empty() {
+            if is_reconnect {
+                return Some(inject_proxy_capabilities(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "serverInfo": {"name": "virbius-mcp-proxy", "version": "0.1.0"}
+                    }
+                })));
+            }
             return Some(jsonrpc_error(
                 -32603,
                 id,
@@ -858,7 +905,7 @@ async fn handle_tools_call(
     // Run security pipeline with the ORIGINAL tool name (before any prefix stripping).
     // The License allowed_tools contains original names, not prefixed ones.
     let result = pipeline
-        .check_tool_call(&session, &original_tool_name, &args)
+        .check_tool_call(&session, &original_tool_name, &args, Some(&upstream_name))
         .await;
 
     match result {
@@ -884,6 +931,7 @@ async fn handle_tools_call(
                 step_seq,
                 &original_tool_name,
                 &args,
+                Some(&upstream_name),
             )
             .with_decision("allow", None, None, risk_score);
             trace_collector.record(tc_event).await;
@@ -916,6 +964,7 @@ async fn handle_tools_call(
                     "success",
                     duration_ms,
                     &resp,
+                    Some(&upstream_name),
                 );
                 trace_collector.record(tr_event).await;
                 session.set_last_step_id(result_step_id);
@@ -990,6 +1039,7 @@ async fn handle_tools_call(
                         "success",
                         duration_ms,
                         &resp,
+                        Some(&upstream_name),
                     );
                     trace_collector.record(tr_event).await;
                     session.set_last_step_id(result_step_id);
@@ -1010,6 +1060,7 @@ async fn handle_tools_call(
                         "error",
                         duration_ms,
                         &err_val,
+                        Some(&upstream_name),
                     );
                     trace_collector.record(tr_event).await;
                     session.set_last_step_id(result_step_id);
@@ -1042,6 +1093,7 @@ async fn handle_tools_call(
                 step_seq,
                 &original_tool_name,
                 &args,
+                Some(&upstream_name),
             )
             .with_decision("block", None, Some(&reason), risk_score);
             trace_collector.record(tc_event).await;
@@ -1074,6 +1126,7 @@ async fn handle_tools_call(
                 step_seq,
                 &original_tool_name,
                 &args,
+                Some(&upstream_name),
             )
             .with_decision(
                 "challenge",

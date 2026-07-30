@@ -1,0 +1,2 @@
+ALTER TABLE tb_agent_trace ADD COLUMN upstream_name VARCHAR(128) DEFAULT NULL;
+ALTER TABLE tb_agent_trace ADD COLUMN app_id VARCHAR(128) DEFAULT NULL;

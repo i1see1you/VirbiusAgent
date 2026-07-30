@@ -14,6 +14,7 @@
 /// - Sessions persist across TCP reconnects (within TTL)
 /// - Upstream connections are per-session (via UpstreamManager)
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::{
     extract::{Query, State},
@@ -203,16 +204,47 @@ async fn handle_sse(State(state): State<AppState>) -> Response {
                 "SSE connection {} disconnected, cleaning up resources",
                 mon_conn_id
             );
-            // Resolve logical session ID for upstream cleanup
-            if let Some(logical) = mon_conn_to_session
+
+            // Resolve logical session ID before removing mapping
+            let logical = mon_conn_to_session
                 .get(&mon_conn_id)
-                .map(|e| e.value().clone())
-            {
-                mon_upstream_mgr.remove(&logical);
-            }
+                .map(|e| e.value().clone());
+
+            // Immediately clean up SSE channel and transport mapping
+            // (old transport_id is useless after disconnect)
             mon_sse.remove(&mon_conn_id);
             mon_conn_to_session.remove(&mon_conn_id);
-            // session_mgr entry stays for reconnect TTL window
+
+            // Delay upstream cleanup by 10s to allow quick reconnect.
+            // If the client reconnects within the grace period, handle_initialize
+            // will rebind a new transport_id -> logical_sid mapping, and the
+            // upstream connection can be reused (skip re-initialize).
+            // session_mgr entry stays for reconnect TTL window (30min).
+            if let Some(logical) = logical {
+                let delay_conn_to_session = mon_conn_to_session.clone();
+                let delay_upstream_mgr = mon_upstream_mgr.clone();
+                let delay_logical = logical;
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    // Check if client reconnected: any new transport_id
+                    // mapped to the same logical session?
+                    let rebound = delay_conn_to_session
+                        .iter()
+                        .any(|entry| entry.value() == &delay_logical);
+                    if !rebound {
+                        debug!(
+                            "Grace period expired for session {}, cleaning up upstream",
+                            delay_logical
+                        );
+                        delay_upstream_mgr.remove(&delay_logical);
+                    } else {
+                        debug!(
+                            "Session {} reconnected within grace period, keeping upstream",
+                            delay_logical
+                        );
+                    }
+                });
+            }
         });
     }
 
@@ -252,6 +284,34 @@ async fn handle_post_message(
         Some(s) => s.clone(),
         None => return StatusCode::NOT_FOUND.into_response(),
     };
+
+    // Check if this is a tools/call or tools/list without prior initialize
+    // Some MCP clients (like older OpenClaw versions) skip the initialize step
+    let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("");
+    let needs_init = (method == "tools/call" || method == "tools/list")
+        && !state.conn_to_session.contains_key(&session_id);
+
+    if needs_init {
+        // Auto-initialize the session to be compatible with clients that skip initialize
+        debug!("Auto-initializing session {} (client skipped initialize)", session_id);
+        let init_params = serde_json::json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "openclaw-auto", "version": "0.1.0"}
+        });
+        let init_id = Value::from(0);
+        let _ = router::handle_initialize(
+            &init_id,
+            &init_params,
+            &session_id,
+            &state.session_mgr,
+            &state.upstream_mgr,
+            &state.public_key_pem,
+            &state.fallback_license_jwt,
+            &state.conn_to_session,
+        )
+        .await;
+    }
 
     // Spawn task to route the request and send response via SSE
     let state_clone = state.clone();

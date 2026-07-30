@@ -53,8 +53,9 @@ public class TraceEventIngestor {
                     + "  input_role, input_content_hash,"
                     + "  tool_name, tool_args_hash, tool_args, tool_decision, rule_id, reason_code, risk_score,"
                     + "  tool_status, tool_duration_ms,"
-                    + "  content_size, content_sampled, dlp_masked, occurred_at"
-                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    + "  content_size, content_sampled, dlp_masked,"
+                    + "  upstream_name, app_id, occurred_at"
+                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
             int updated = jdbc.update(sql,
                     traceId,
@@ -81,6 +82,8 @@ public class TraceEventIngestor {
                     intValOrNull(event.get("content_size")),
                     boolInt(event.get("content_sampled")),
                     boolInt(event.get("dlp_masked")),
+                    nullIfBlank(str(event.get("upstream_name"))),
+                    nullIfBlank(str(event.get("app_id"))),
                     str(event.get("occurred_at")));
 
             if (updated == 0) {

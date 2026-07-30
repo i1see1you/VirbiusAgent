@@ -58,7 +58,7 @@
           <el-button @click="addEntry">{{ t('lists.btn-add-entry') }}</el-button>
         </div>
 
-        <el-table :data="entryRows" size="small" border stripe>
+        <el-table :data="paginatedEntryRows" size="small" border stripe>
           <el-table-column :label="t('lists.header-value')" prop="value">
             <template #default="{ row }"><code>{{ row.value }}</code></template>
           </el-table-column>
@@ -75,6 +75,9 @@
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination v-if="entryTotal > size" small background layout="prev, pager, next"
+          v-model:current-page="entryPage" :page-size="size" :total="entryTotal"
+          @current-change="scrollTop" />
       </el-tab-pane>
     </el-tabs>
   </div>
@@ -112,6 +115,12 @@ const listNames = computed(() => Object.keys(listMeta.value).sort());
 const logicals = computed(() => rulesStore.contextVars.map((v: any) => v.logical).filter(Boolean));
 const catalogRows = ref<any[]>([]);
 const entryRows = ref<any[]>([]);
+
+function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
+const entryPage = ref(1);
+const size = ref(50);
+const entryTotal = ref(0);
+const paginatedEntryRows = computed(() => entryRows.value.slice((entryPage.value - 1) * size.value, entryPage.value * size.value));
 
 function syncDim() {
   if (newListDim.value === 'var' && logicals.value.length) {
@@ -188,8 +197,9 @@ async function loadLists() {
 }
 
 function loadEntriesForList() {
-  if (!rawData || !entryListName.value) { entryRows.value = []; return; }
+  if (!rawData || !entryListName.value) { entryRows.value = []; entryTotal.value = 0; return; }
   entryRows.value = flattenEntries(entryListName.value, rawData.lists);
+  entryTotal.value = entryRows.value.length; entryPage.value = 1;
 }
 
 function viewListEntries(name: string) {
@@ -254,7 +264,7 @@ async function deleteList(name: string) {
   try {
     await admin('/lists/' + encodeURIComponent(name), { method: 'DELETE' });
     await loadLists();
-    if (entryListName.value === name) { entryListName.value = ''; entryRows.value = []; }
+    if (entryListName.value === name) { entryListName.value = ''; entryRows.value = []; entryTotal.value = 0; }
     feedback.log(t('lists.list-deleted'), 'ok');
   } catch (e: any) { feedback.log(e.message, 'err'); }
 }

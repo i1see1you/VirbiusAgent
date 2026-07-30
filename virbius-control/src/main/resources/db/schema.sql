@@ -412,6 +412,8 @@ CREATE TABLE IF NOT EXISTS tb_agent_trace (
     content_size     INTEGER,
     content_sampled  INTEGER      DEFAULT 0,
     dlp_masked       INTEGER      DEFAULT 0,
+    upstream_name    VARCHAR(128),
+    app_id           VARCHAR(128),
     occurred_at      TIMESTAMP    NOT NULL,
     created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (trace_id, step_id)
@@ -533,3 +535,33 @@ CREATE TABLE IF NOT EXISTS tb_audit_chain_state (
     version     INT          NOT NULL DEFAULT 0,
     updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ============================================================
+-- Challenge approval records (approved / rejected)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS tb_challenge_approvals (
+    id              BIGINT       AUTO_INCREMENT PRIMARY KEY,
+    challenge_id    VARCHAR(64)  NOT NULL,
+    tenant_id       VARCHAR(64)  NOT NULL,
+    status          VARCHAR(16)  NOT NULL DEFAULT 'approved',
+    tool_name       VARCHAR(256) DEFAULT NULL,
+    args_hash       VARCHAR(80)  DEFAULT NULL,
+    session_id      VARCHAR(64)  DEFAULT NULL,
+    rule_id         VARCHAR(64)  DEFAULT NULL,
+    reason_code     VARCHAR(64)  DEFAULT NULL,
+    risk_score      INT          DEFAULT 0,
+    approval_mode   VARCHAR(8)   DEFAULT NULL,
+    created_at      BIGINT       DEFAULT NULL,
+    expires_at      BIGINT       DEFAULT NULL,
+    approved_by     VARCHAR(64)  DEFAULT NULL,
+    approved_at     BIGINT       DEFAULT NULL,
+    rejected_by     VARCHAR(64)  DEFAULT NULL,
+    rejected_at     BIGINT       DEFAULT NULL,
+    comment         TEXT         DEFAULT NULL,
+    created_ts      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (challenge_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_challenge_approvals_tenant_status
+    ON tb_challenge_approvals (tenant_id, status);

@@ -156,6 +156,7 @@ public class EvaluateOrchestrator {
                 req.sessionId(),
                 vars,
                 req.routeUri(),
+                req.upstreamId(),
                 toolName);
 
         signals.addAll(promptRunner.run(req.tenantId(), matchCtx));

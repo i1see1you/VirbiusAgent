@@ -66,6 +66,8 @@ pub struct TraceEvent {
     pub content_size: Option<usize>,
     pub content_sampled: bool,
     pub dlp_masked: bool,
+    pub upstream_name: Option<String>,
+    pub app_id: String,
     pub occurred_at: String,
 }
 
@@ -77,6 +79,7 @@ impl TraceEvent {
         step_seq: u32,
         tool_name: &str,
         args: &Value,
+        upstream_name: Option<&str>,
     ) -> Self {
         let args_json = serde_json::to_string(args).unwrap_or_default();
         let args_hash = sha256_hex(&format!("{}:{}", tool_name, args_json));
@@ -107,6 +110,8 @@ impl TraceEvent {
             content_size: Some(args_size),
             content_sampled: true,
             dlp_masked: false,
+            upstream_name: upstream_name.map(String::from),
+            app_id: session.app_id.clone(),
             occurred_at: chrono::Utc::now().to_rfc3339(),
         }
     }
@@ -119,6 +124,7 @@ impl TraceEvent {
         status: &str,
         duration_ms: u64,
         result: &Value,
+        upstream_name: Option<&str>,
     ) -> Self {
         let result_str = serde_json::to_string(result).unwrap_or_default();
         let result_size = result_str.len();
@@ -153,6 +159,8 @@ impl TraceEvent {
             content_size: Some(result_size),
             content_sampled: true,
             dlp_masked: false,
+            upstream_name: upstream_name.map(String::from),
+            app_id: session.app_id.clone(),
             occurred_at: chrono::Utc::now().to_rfc3339(),
         }
     }
@@ -377,7 +385,7 @@ mod tests {
         let session = make_session();
         let args = serde_json::json!({"path": "/tmp/test.txt"});
         let event =
-            TraceEvent::tool_call(&session, "step-1", Some("parent-0"), 1, "read_file", &args);
+            TraceEvent::tool_call(&session, "step-1", Some("parent-0"), 1, "read_file", &args, Some("fs"));
         assert_eq!(event.trace_id, session.trace_id);
         assert_eq!(event.session_id, "trace-sid");
         assert_eq!(event.step_id, "step-1");
@@ -390,6 +398,8 @@ mod tests {
         assert_eq!(event.tool_args, Some(args));
         assert!(event.tool_decision.is_none());
         assert!(event.content_sampled);
+        assert_eq!(event.upstream_name.as_deref(), Some("fs"));
+        assert_eq!(event.app_id, "trace-app");
     }
 
     #[test]
@@ -402,6 +412,7 @@ mod tests {
             0,
             "shell",
             &serde_json::json!({"cmd":"ls"}),
+            Some("shell-mcp"),
         );
         assert!(event.parent_step_id.is_none());
     }
@@ -411,7 +422,7 @@ mod tests {
         let session = make_session();
         let result = serde_json::json!({"stdout": "ok"});
         let event =
-            TraceEvent::tool_result(&session, "step-2", "step-1", 2, "success", 150, &result);
+            TraceEvent::tool_result(&session, "step-2", "step-1", 2, "success", 150, &result, Some("fs"));
         assert_eq!(event.step_id, "step-2");
         assert_eq!(event.parent_step_id.as_deref(), Some("step-1"));
         assert_eq!(event.step_seq, 2);
@@ -432,7 +443,7 @@ mod tests {
         let long_content = "x".repeat(3000);
         let result = serde_json::json!({"data": long_content});
         let event =
-            TraceEvent::tool_result(&session, "step-3", "step-2", 3, "success", 500, &result);
+            TraceEvent::tool_result(&session, "step-3", "step-2", 3, "success", 500, &result, Some("fs"));
         let preview = event.tool_result_preview.unwrap();
         assert!(preview.len() <= 2048);
     }
@@ -441,7 +452,7 @@ mod tests {
     fn test_trace_event_with_decision() {
         let session = make_session();
         let event =
-            TraceEvent::tool_call(&session, "step-1", None, 0, "rm", &serde_json::json!({}))
+            TraceEvent::tool_call(&session, "step-1", None, 0, "rm", &serde_json::json!({}), None)
                 .with_decision("block", Some("rule-42"), Some("high_risk"), Some(85));
         assert_eq!(event.tool_decision.as_deref(), Some("block"));
         assert_eq!(event.rule_id.as_deref(), Some("rule-42"));
@@ -453,7 +464,7 @@ mod tests {
     fn test_trace_event_with_decision_none_fields() {
         let session = make_session();
         let event =
-            TraceEvent::tool_call(&session, "step-1", None, 0, "ls", &serde_json::json!({}))
+            TraceEvent::tool_call(&session, "step-1", None, 0, "ls", &serde_json::json!({}), None)
                 .with_decision("allow", None, None, None);
         assert_eq!(event.tool_decision.as_deref(), Some("allow"));
         assert!(event.rule_id.is_none());
@@ -487,7 +498,7 @@ mod tests {
         // Should not panic when recording
         let session = make_session();
         let event =
-            TraceEvent::tool_call(&session, "step-1", None, 0, "test", &serde_json::json!({}));
+            TraceEvent::tool_call(&session, "step-1", None, 0, "test", &serde_json::json!({}), None);
         // We can't easily assert on the internal sender, but ensure no panic
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -505,6 +516,7 @@ mod tests {
             1,
             "read_file",
             &serde_json::json!({"p":"/x"}),
+            None,
         );
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["step_id"], "s1");

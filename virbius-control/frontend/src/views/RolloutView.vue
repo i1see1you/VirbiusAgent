@@ -14,11 +14,11 @@
       </div>
       <div class="v-row" style="flex-wrap:wrap;gap:6px">
         <el-input v-model="drDescription" :placeholder="t('rollout.desc-placeholder')" style="width:240px" />
-        <el-button @click="openVersionModal('cloud', t('dr.prepare-engine'))">{{ t('rollout.btn-prepare-engine') }}</el-button>
-        <el-button @click="openVersionModal('gateway', t('dr.prepare-gateway'))">{{ t('rollout.btn-prepare-gateway') }}</el-button>
-        <el-button @click="openVersionModal('edge', t('dr.prepare-edge'))">{{ t('rollout.btn-prepare-edge') }}</el-button>
-        <el-button @click="openVersionModal('falco', t('dr.prepare-falco'))">{{ t('rollout.btn-prepare-falco') }}</el-button>
-        <el-button @click="openVersionModal('', t('dr.prepare-all'))">{{ t('rollout.btn-prepare-all') }}</el-button>
+        <el-button :disabled="!!active" @click="openVersionModal('cloud', t('dr.prepare-engine'))">{{ t('rollout.btn-prepare-engine') }}</el-button>
+        <el-button :disabled="!!active" @click="openVersionModal('gateway', t('dr.prepare-gateway'))">{{ t('rollout.btn-prepare-gateway') }}</el-button>
+        <el-button :disabled="!!active" @click="openVersionModal('edge', t('dr.prepare-edge'))">{{ t('rollout.btn-prepare-edge') }}</el-button>
+        <el-button :disabled="!!active" style="background:#9333ea;color:#fff;border-color:#9333ea" @click="openVersionModal('falco', t('dr.prepare-falco'))">{{ t('rollout.btn-prepare-falco') }}</el-button>
+        <el-button :disabled="!!active" style="background:#6366f1;color:#fff;border-color:#6366f1" @click="openVersionModal('', t('dr.prepare-all'))">{{ t('rollout.btn-prepare-all') }}</el-button>
         <el-button :disabled="!canUpgrade" @click="drUpgrade">{{ t('rollout.btn-upgrade') }}</el-button>
         <el-button :disabled="!canPause" @click="drPause">{{ t('rollout.btn-pause') }}</el-button>
         <el-button :disabled="!canRollback" type="danger" @click="drRollback">{{ t('rollout.btn-rollback') }}</el-button>
@@ -41,6 +41,22 @@
           <el-table-column :label="t('rollout.header-operator')" prop="operator" />
           <el-table-column :label="t('rollout.header-notes')" prop="note" />
         </el-table>
+        <h4 style="font-size:13px;margin:12px 0 6px">{{ t('rollout.node-dist') }}</h4>
+        <div id="drNodeDistribution" class="kpi-grid" style="margin-bottom:12px">
+          <div v-if="!active.pool_distribution" class="kpi-card" style="grid-column:1/-1"><div class="value">{{ t('rollout.no-active-deploy') }}</div></div>
+          <template v-else>
+            <div v-for="(pools, layer) in active.pool_distribution" :key="layer" class="kpi-card">
+              <div class="label">{{ layer }}</div>
+              <div class="value">{{ t('dr.nodes', [Object.values(pools).reduce((a:any,b:any)=>a+b, 0)]) }}</div>
+              <span v-for="(cnt, pool) in pools" :key="String(pool)" class="tag" :style="String(pool)==='canary'?'background:#16a34a;color:#fff':''">{{ pool }}: {{ cnt }}</span>
+            </div>
+          </template>
+        </div>
+        <h4 style="font-size:13px;margin:12px 0 6px">{{ t('rollout.block-rate-chart') }}</h4>
+        <div class="chart-wrap" style="margin-bottom:12px">
+          <Line v-if="drChartData" :data="drChartData" :options="drChartOpts" />
+          <p v-else class="v-hint">{{ t('rollout.no-metrics') }}</p>
+        </div>
         <h4 style="font-size:13px;margin:12px 0 6px">{{ t('rollout.events') }}</h4>
         <el-table :data="active.events || []" size="small" border stripe>
           <el-table-column :label="t('rollout.header-time')"><template #default="{ row }">{{ fmtTime(row.created_at) }}</template></el-table-column>
@@ -64,6 +80,29 @@
       </el-table>
     </div>
 
+    <!-- Deploy status bar -->
+    <div class="v-section">
+      <h3>{{ t('rollout.status-deploy') }}</h3>
+      <div id="deployStatusBar" class="kpi-grid">
+        <div v-for="(st, layer) in deployStatus" :key="layer" class="kpi-card">
+          <div class="label">
+            <span :style="{ display:'inline-block', width:'8px', height:'8px', borderRadius:'50%', background: st.has_unpublished ? '#ef4444' : '#22c55e', marginRight:'4px' }"></span>
+            {{ layerLabels[layer] || layer }}
+          </div>
+          <div class="value" style="font-size:0.82rem">{{ deployStatusText(st) }}</div>
+          <div style="font-size:0.72rem;color:#94a3b8">{{ st.deployed_at ? fmtTimeAgo(st.deployed_at) : '-' }}</div>
+          <div v-if="st.has_unpublished && st.pending_rules?.length" style="font-size:0.72rem;color:#64748b;margin-top:2px">
+            <template v-for="(ids, grp) in groupPending(st.pending_rules)" :key="grp">
+              <span style="font-size:0.68rem;color:#64748b;margin-right:0.25rem">[{{ pendingLabel(grp) }}]</span>
+              <code style="font-size:0.7rem" v-for="id in ids.slice(0,2)" :key="id">{{ id }}</code>
+              <span v-if="ids.length > 2" style="font-size:0.68rem;color:#64748b">{{ t('rollout.et', ids.length) }}</span>
+              &nbsp;
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Rule rollout dashboard -->
     <div class="v-row" style="margin-top:16px">
       <label>{{ t('rollout.header-rule') }}
@@ -74,6 +113,11 @@
       </label>
       <el-button @click="refreshDashboard">{{ t('rollout.refresh-dashboard') }}</el-button>
       <span class="v-hint" style="margin:0">{{ t('rollout.auto-refresh') }}</span>
+      <span v-if="roMeta" id="roBadge">
+        <el-tag :type="roTagType" size="small">{{ roMeta.rollout_state || 'draft' }}</el-tag>
+        <el-tag v-if="roMeta.canary_percent != null" size="small">{{ roMeta.canary_percent }}%</el-tag>
+        <span class="v-hint" style="margin-left:4px">{{ roMeta.layer }}/{{ roMeta.runtime }}</span>
+      </span>
     </div>
 
     <div class="flow-strip">
@@ -81,6 +125,8 @@
         <span v-if="i > 0" class="flow-arrow">-></span>
         <span class="flow-step" :class="flowClass(step)">{{ flowLabel(step) }}</span>
       </template>
+      <span v-if="roMeta?.rollout_state === 'disabled'" class="flow-arrow">|</span>
+      <span v-if="roMeta?.rollout_state === 'disabled'" class="flow-step active">{{ t('rollout.btn-disable') }}</span>
     </div>
 
     <div class="kpi-grid">
@@ -113,7 +159,7 @@
     <div class="v-section">
       <h3>{{ t('rollout.upgrade-title') }}</h3>
       <div class="v-row" style="flex-wrap:wrap;align-items:center;gap:8px">
-        <el-button type="primary" :disabled="!canRoApply" @click="roApply">{{ t('rollout.btn-next') }}</el-button>
+        <el-button v-if="canRoApply" type="primary" @click="roApply">{{ t('rollout.btn-next') }}</el-button>
         <el-checkbox v-model="roForce">{{ t('rollout.force-bypass') }}</el-checkbox>
         <el-input v-model="roForceComment" :placeholder="t('rollout.placeholder-force')" style="width:260px" />
       </div>
@@ -184,7 +230,7 @@ import { Line } from 'vue-chartjs';
 import { useFeedbackStore } from '@/stores/feedback';
 import { useSessionStore } from '@/stores/session';
 import { admin } from '@/api/client';
-import { field, fmtTime, parseUtc, inExecutionPlane } from '@/utils/format';
+import { field, fmtTime, fmtTimeAgo, parseUtc, inExecutionPlane } from '@/utils/format';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
@@ -215,6 +261,9 @@ const combinedData = ref<any>(null);
 const traceModalVisible = ref(false);
 const traceHint = ref('');
 const traceRows = ref<any[]>([]);
+const deployStatus = ref<any>({});
+const drChartData = ref<any>(null);
+const layerLabels: Record<string, string> = { cloud: 'cloud', gateway: 'gateway', edge: 'edge' };
 let timer: any = null;
 
 const drState = computed(() => (active.value?.state || '').toLowerCase());
@@ -228,6 +277,13 @@ const rateCls = computed(() => {
   const r = roTotals.value.block_rate;
   if (r == null) return '';
   if (r < 0.01) return 'rate-low'; if (r < 0.05) return 'rate-mid'; return 'rate-high';
+});
+const roTagType = computed(() => {
+  const s = roMeta.value?.rollout_state;
+  if (s === 'disabled') return 'danger';
+  if (s === 'draft') return 'warning';
+  if (s === 'full') return 'success';
+  return 'info';
 });
 const flowSteps = computed(() => FLOW_STEPS);
 const roHint = computed(() => {
@@ -243,6 +299,27 @@ const roHint = computed(() => {
 
 function fmtPct(n: any) { if (n == null || isNaN(n)) return 'N/A'; return (n * 100).toFixed(2) + '%'; }
 function stateLabel(st: string, pct: any) { return st === 'canary' && pct != null ? `canary@${pct}%` : (st || 'draft'); }
+function deployStatusText(st: any) {
+  if (!st.deployed_at) {
+    const cnt = st.pending_rules?.length || 0;
+    return cnt > 0 ? t('rollout.not-deployed-count', [cnt]) : t('rollout.not-deployed');
+  }
+  if (st.has_unpublished) return t('rollout.pending-deploy', [st.pending_rules?.length || 0]);
+  return t('rollout.synced');
+}
+function groupPending(rules: any[]) {
+  const groups: Record<string, string[]> = {};
+  (rules || []).forEach((r: any) => {
+    const g = r.rollout_state || 'unknown';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(r.rule_id);
+  });
+  return groups;
+}
+function pendingLabel(g: string) {
+  const m: Record<string, string> = { dry_run: t('ro-deploy.pending'), canary: t('ro-deploy.canary'), full: t('ro-deploy.full'), disabled: t('ro-deploy.disabled') };
+  return m[g] || g;
+}
 
 function flowClass(step: string) {
   if (!roMeta.value) return step === 'draft' ? 'active' : '';
@@ -285,12 +362,46 @@ const combinedOpts: any = {
   plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12, font: { size: 10 } } } }
 };
 
+const drChartOpts: any = {
+  responsive: true, maintainAspectRatio: false, spanGaps: true,
+  interaction: { mode: 'index', intersect: false },
+  scales: {
+    y: { type: 'linear', position: 'left', title: { display: true, text: 'block_rate %' }, min: 0, ticks: { callback: (v: any) => v + '%' } },
+    y1: { type: 'linear', position: 'right', title: { display: true, text: 'total_requests' }, grid: { drawOnChartArea: false } }
+  },
+  plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 12, font: { size: 10 } } } }
+};
+
+function renderDrBlockRateChart(metrics: any) {
+  if (!metrics) { drChartData.value = null; return; }
+  const series = metrics.series || [];
+  const series1m = metrics.series_1m || [];
+  const cutoff = Date.now() - 2 * 3600 * 1000;
+  const hourPoints = series.filter((p: any) => { const d = parseUtc(p.bucket); return d && d.getTime() < cutoff; });
+  const merged = hourPoints.concat(series1m).sort((a: any, b: any) => (parseUtc(a.bucket)?.getTime() ?? 0) - (parseUtc(b.bucket)?.getTime() ?? 0));
+  if (!merged.length) { drChartData.value = null; return; }
+  const labels = merged.map((p: any) => { const d = parseUtc(p.bucket); return d ? d.toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; });
+  drChartData.value = {
+    labels,
+    datasets: [
+      { label: 'block_rate (%)', data: merged.map((p: any) => { const t = p.total_requests || 0; return t > 0 ? ((p.block || 0) / t * 100) : null; }), yAxisID: 'y', borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', fill: true, tension: 0.2, pointRadius: 0 },
+      { label: 'total_requests', data: merged.map((p: any) => p.total_requests || 0), yAxisID: 'y1', borderColor: '#94a3b8', backgroundColor: 'rgba(148,163,184,0.08)', fill: true, tension: 0.2, pointRadius: 0 }
+    ]
+  };
+}
+
 async function drRefresh() {
   try {
-    const act = await admin<any>('/deploy-rollout/active').catch(() => null);
+    const [act, list, overview, drMetrics] = await Promise.all([
+      admin<any>('/deploy-rollout/active').catch(() => null),
+      admin<any[]>('/deploy-rollout/list').catch(() => []),
+      admin<any>('/dashboard/overview').catch(() => ({ deploy_status: {} })),
+      admin<any>('/deploy-rollout/metrics?hours=24').catch(() => null)
+    ]);
     active.value = act && act.deploy_id ? act : null;
-    const list = await admin<any[]>('/deploy-rollout/list').catch(() => []);
     history.value = list || [];
+    deployStatus.value = (overview as any)?.deploy_status || {};
+    renderDrBlockRateChart(drMetrics);
   } catch (e: any) { feedback.log(e.message, 'err'); }
 }
 

@@ -24,17 +24,23 @@
       <el-button @click="search">{{ t('trace.btn-refresh') }}</el-button>
     </div>
 
-    <el-table :data="results" size="small" border stripe style="margin-bottom:24px" @row-click="onRowClick">
-      <el-table-column :label="t('trace.header-trace-id')">
-        <template #default="{ row }">{{ (row.trace_id || '').slice(0, 12) }}…</template>
+    <el-table :data="paginatedResults" size="small" border stripe style="margin-bottom:24px" @row-click="onRowClick">
+      <el-table-column :label="t('trace.header-trace-id')" prop="trace_id" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.trace_id || '-' }}</template>
       </el-table-column>
-      <el-table-column :label="t('trace.header-session')">
-        <template #default="{ row }">{{ (row.session_id || '').slice(0, 12) }}…</template>
+      <el-table-column :label="t('trace.header-session')" prop="session_id" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.session_id || '-' }}</template>
       </el-table-column>
       <el-table-column :label="t('trace.header-type')">
         <template #default="{ row }"><el-tag size="small">{{ row.step_type || '-' }}</el-tag></template>
       </el-table-column>
-      <el-table-column :label="t('trace.header-tool')" prop="tool_name" />
+      <el-table-column :label="t('trace.header-tool')" prop="tool_name" show-overflow-tooltip />
+      <el-table-column :label="t('trace.header-mcp-server')" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.upstream_name || '-' }}</template>
+      </el-table-column>
+      <el-table-column :label="t('trace.header-app-id')" show-overflow-tooltip>
+        <template #default="{ row }">{{ row.app_id || '-' }}</template>
+      </el-table-column>
       <el-table-column :label="t('trace.header-decision')">
         <template #default="{ row }">
           <el-tag v-if="row.tool_decision" size="small" :type="row.tool_decision === 'allow' ? 'success' : 'danger'">{{ row.tool_decision }}</el-tag>
@@ -52,12 +58,16 @@
       </el-table-column>
     </el-table>
 
+    <el-pagination v-if="total > size" small background layout="prev, pager, next"
+      v-model:current-page="page" :page-size="size" :total="total"
+      @current-change="scrollTop" />
+
     <h3 style="font-size:15px;margin:16px 0 8px">
       {{ t('trace.timeline-title') }} · <code>{{ timelineSession || '-' }}</code>
     </h3>
     <div v-if="!timeline.length" class="v-hint">{{ t('trace.timeline-hint') }}</div>
     <div v-for="g in groupedTimeline" :key="g.traceId" class="v-card" style="background:#f8fafc;margin-bottom:12px">
-      <h4 style="font-size:13px;margin:0 0 8px;color:#334155">Trace: {{ g.traceId.slice(0, 16) }}… ({{ g.steps.length }} steps)</h4>
+      <h4 style="font-size:13px;margin:0 0 8px;color:#334155">Trace: <el-tooltip :content="g.traceId" placement="top"><span style="cursor:pointer">{{ g.traceId.slice(0, 16) }}…</span></el-tooltip> ({{ g.steps.length }} steps)</h4>
       <div v-for="(s, i) in g.steps" :key="i">
         <div class="v-card" style="padding:8px 12px;margin:4px 0" :style="{ borderLeft: '3px solid ' + stepColor(s.step_type) }">
           <div style="display:flex;align-items:center;gap:6px">
@@ -67,6 +77,8 @@
           </div>
           <div style="font-size:12px;color:#475569;margin-top:4px">
             <span v-if="s.tool_name"> · {{ s.tool_name }}</span>
+            <span v-if="s.upstream_name"> · {{ s.upstream_name }}</span>
+            <span v-if="s.app_id"> · app: {{ s.app_id }}</span>
             <span v-if="s.tool_duration_ms != null"> · {{ s.tool_duration_ms }}ms</span>
             <span v-if="s.rule_id"> · rule: {{ s.rule_id }}</span>
           </div>
@@ -88,7 +100,7 @@
         <div class="kpi-card"><div class="label">启用</div><div class="value">{{ ingest.enabled ? '✅ 是' : '❌ 否' }}</div></div>
         <div class="kpi-card"><div class="label">Redis</div><div class="value">{{ ingest.redis_ok ? '✅ 已连接' : '❌ 未连接' }}</div></div>
         <div class="kpi-card"><div class="label">Stream</div><div class="value" style="font-size:13px">{{ ingest.stream_key || '-' }}</div></div>
-        <div class="kpi-card"><div class="label">积压</div><div class="value">{{ ingest.stream_length ?? '-' }}</div></div>
+        <div class="kpi-card"><div class="label">记录数</div><div class="value">{{ ingest.stream_length ?? '-' }}</div></div>
         <div class="kpi-card"><div class="label">最近轮询</div><div class="value" style="font-size:12px">{{ ingest.last_poll_at ? fmtTime(ingest.last_poll_at) : '-' }}</div></div>
       </div>
     </div>
@@ -107,11 +119,17 @@ const { t } = useI18n();
 const feedback = useFeedbackStore();
 const session = useSessionStore();
 
+const page = ref(1);
+const size = ref(50);
+const total = ref(0);
 const toolName = ref('');
 const stepType = ref('');
 const decision = ref('');
 const limit = ref(50);
 const results = ref<any[]>([]);
+
+function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
+const paginatedResults = computed(() => results.value.slice((page.value - 1) * size.value, page.value * size.value));
 const timeline = ref<any[]>([]);
 const timelineSession = ref('');
 const ingest = ref<any>({});
@@ -134,7 +152,10 @@ async function search() {
   if (decision.value) params.set('tool_decision', decision.value);
   params.set('limit', String(limit.value));
   try {
-    results.value = await admin<any[]>('/trace/search?' + params.toString()) || [];
+    const data = await admin<any>('/trace/search?' + params.toString()) || [];
+    results.value = Array.isArray(data) ? data : (data.items || []);
+    total.value = Array.isArray(data) ? data.length : (data.total ?? results.value.length);
+    page.value = 1;
   } catch (e: any) { feedback.log(e.message, 'err'); }
 }
 

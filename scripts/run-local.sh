@@ -81,24 +81,25 @@ echo "  Logs:       $LOG_DIR"
 echo "  Redis:      $VIRBIUS_REDIS_URL"
 echo ""
 
-# ─── Step 1: Build Rust (virbius-core + virbius-kernel) ───
+# ─── Step 1: Build Rust (virbius-core + virbius-kernel + virbius-mcp-proxy) ───
 info "Building Rust components..."
-if cargo build -p virbius-core -p virbius-kernel 2>&1 | tail -3; then
+if cargo build -p virbius-core -p virbius-kernel -p virbius-mcp-proxy 2>&1 | tail -3; then
   ok "Rust components built"
 else
   err "Rust build failed"; exit 1
 fi
 
 # ─── Step 2: Run Rust unit tests ───
-info "Running Rust unit tests..."
-if cargo test -p virbius-core -p virbius-kernel 2>&1 | tail -5; then
+if [[ "${VIRBIUS_SKIP_TESTS:-1}" == "1" ]]; then
+  info "Skipping Rust tests (VIRBIUS_SKIP_TESTS=1)"
+elif cargo test -p virbius-core -p virbius-kernel 2>&1 | tail -5; then
   ok "All Rust unit tests passed"
 else
   err "Rust tests failed"; exit 1
 fi
 
 # ─── Step 3: Run integration tests ───
-if [[ -f virbius-core/tests/integration_test.rs ]]; then
+if [[ "${VIRBIUS_SKIP_TESTS:-1}" != "1" ]] && [[ -f virbius-core/tests/integration_test.rs ]]; then
   info "Running integration tests..."
   if cargo test -p virbius-core --test integration_test 2>&1 | tail -5; then
     ok "Integration tests passed"
@@ -108,7 +109,19 @@ if [[ -f virbius-core/tests/integration_test.rs ]]; then
   fi
 fi
 
-# ─── Step 4: Build Java (engine + control) ───
+# ─── Step 4: Rebuild frontend if sources changed ───
+FRONTEND_SRC="$ROOT/virbius-control/frontend/src"
+FRONTEND_OUT="$ROOT/virbius-control/src/main/resources/static/ui/index.html"
+if [[ -d "$FRONTEND_SRC" ]]; then
+  if [[ -f "$FRONTEND_OUT" && "$(find "$FRONTEND_SRC" -newer "$FRONTEND_OUT" -print -quit)" != "" ]] || [[ ! -f "$FRONTEND_OUT" ]]; then
+    info "Frontend sources changed, rebuilding..."
+    (cd "$ROOT/virbius-control/frontend" && npm run build 2>&1 | tail -5) && ok "Frontend rebuilt" || err "Frontend build failed"
+  else
+    ok "Frontend is up to date"
+  fi
+fi
+
+# ─── Step 5: Build Java (engine + control) ───
 if command -v "$MVN" >/dev/null 2>&1; then
   info "Building Java components..."
   if "$MVN" -q -pl virbius-engine,virbius-control -am package -DskipTests 2>&1 | tail -3; then

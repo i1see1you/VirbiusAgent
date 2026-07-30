@@ -31,7 +31,8 @@ public class TraceQueryService {
                        input_role, input_content_hash,
                        tool_name, tool_args_hash, tool_args, tool_decision, rule_id, reason_code, risk_score,
                        tool_status, tool_duration_ms,
-                       content_size, content_sampled, dlp_masked, occurred_at
+                       content_size, content_sampled, dlp_masked,
+                       upstream_name, app_id, occurred_at
                 FROM tb_agent_trace
                 WHERE tenant_id = ? AND session_id = ?
                 ORDER BY step_seq
@@ -62,6 +63,8 @@ public class TraceQueryService {
                     row.put("content_size", rs.getObject("content_size"));
                     row.put("content_sampled", rs.getInt("content_sampled"));
                     row.put("dlp_masked", rs.getInt("dlp_masked"));
+                    row.put("upstream_name", rs.getString("upstream_name"));
+                    row.put("app_id", rs.getString("app_id"));
                     row.put("occurred_at", rs.getString("occurred_at"));
                     return row;
                 },
@@ -80,7 +83,8 @@ public class TraceQueryService {
                        input_role, input_content_hash,
                        tool_name, tool_args_hash, tool_args, tool_decision, rule_id, reason_code, risk_score,
                        tool_status, tool_duration_ms,
-                       content_size, content_sampled, dlp_masked, occurred_at
+                       content_size, content_sampled, dlp_masked,
+                       upstream_name, app_id, occurred_at
                 FROM tb_agent_trace
                 WHERE tenant_id = ? AND trace_id = ?
                 ORDER BY step_seq
@@ -111,6 +115,8 @@ public class TraceQueryService {
                     row.put("content_size", rs.getObject("content_size"));
                     row.put("content_sampled", rs.getInt("content_sampled"));
                     row.put("dlp_masked", rs.getInt("dlp_masked"));
+                    row.put("upstream_name", rs.getString("upstream_name"));
+                    row.put("app_id", rs.getString("app_id"));
                     row.put("occurred_at", rs.getString("occurred_at"));
                     return row;
                 },
@@ -130,7 +136,8 @@ public class TraceQueryService {
         StringBuilder sql = new StringBuilder("""
                 SELECT trace_id, session_id, step_id, step_seq, step_type, layer,
                        tool_name, tool_args_hash, tool_decision, rule_id, reason_code, risk_score,
-                       tool_status, tool_duration_ms, occurred_at
+                       tool_status, tool_duration_ms,
+                       upstream_name, app_id, occurred_at
                 FROM tb_agent_trace
                 WHERE tenant_id = ?
                 """);
@@ -168,6 +175,8 @@ public class TraceQueryService {
             row.put("risk_score", rs.getInt("risk_score"));
             row.put("tool_status", rs.getString("tool_status"));
             row.put("tool_duration_ms", rs.getObject("tool_duration_ms"));
+            row.put("upstream_name", rs.getString("upstream_name"));
+            row.put("app_id", rs.getString("app_id"));
             row.put("occurred_at", rs.getString("occurred_at"));
             return row;
         }, args.toArray());

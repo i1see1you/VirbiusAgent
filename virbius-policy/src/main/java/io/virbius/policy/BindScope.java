@@ -108,6 +108,14 @@ public final class BindScope {
                     return false;
                 }
             }
+            List<String> mcpServers = stringList(ref.get("mcp_servers"));
+            if (!mcpServers.isEmpty()) {
+                String upstreamId = ctx.upstreamId();
+                if (upstreamId == null || upstreamId.isBlank()
+                        || mcpServers.stream().noneMatch(id -> "*".equals(id) || upstreamId.equals(id))) {
+                    return false;
+                }
+            }
             List<String> appIds = stringList(ref.get("app_ids"));
             if (!appIds.isEmpty()) {
                 String appId = ctx.vars() != null ? ctx.vars().get("app_id") : null;

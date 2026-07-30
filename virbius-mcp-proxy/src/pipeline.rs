@@ -1,4 +1,5 @@
 /// Security pipeline: License -> precheck -> fast-path -> engine -> audit.
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -86,6 +87,8 @@ struct EvaluateRequest<'a> {
     args_json: String,
     license_risk_quota: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
+    upstream_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     content: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<&'a str>,
@@ -93,6 +96,8 @@ struct EvaluateRequest<'a> {
     user_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     device_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    vars: HashMap<String, String>,
 }
 
 /// Engine evaluate response body.
@@ -238,6 +243,7 @@ impl SecurityPipeline {
         session: &Session,
         tool_name: &str,
         args: &Value,
+        upstream_name: Option<&str>,
     ) -> PipelineResult {
         // 1. License verification
         if session.has_license() {
@@ -270,7 +276,7 @@ impl SecurityPipeline {
 
                     // 4. Engine evaluate
                     return self
-                        .check_engine(session, tool_name, args, license.claims.risk_quota, &pre)
+                        .check_engine(session, tool_name, args, license.claims.risk_quota, &pre, upstream_name)
                         .await;
                 }
                 Err(e) => {
@@ -300,6 +306,7 @@ impl SecurityPipeline {
         args: &Value,
         risk_quota: u32,
         pre: &PrecheckResult,
+        upstream_name: Option<&str>,
     ) -> PipelineResult {
         // Serialize args once; reuse as `content` so the Engine's
         // PromptInjectionDetector / TrustViolationDetector / MatchContext
@@ -307,6 +314,7 @@ impl SecurityPipeline {
         // caused both detectors to no-op).  role="tool_call" distinguishes
         // the input path from the output-review path (role="output").
         let args_json = serde_json::to_string(args).unwrap_or_default();
+        let vars = HashMap::from([("app_id".to_string(), session.app_id.clone())]);
         let req = EvaluateRequest {
             trace_id: &session.trace_id,
             session_id: &session.session_id,
@@ -316,10 +324,12 @@ impl SecurityPipeline {
             args,
             args_json: args_json.clone(),
             license_risk_quota: risk_quota,
+            upstream_id: upstream_name,
             content: Some(&args_json),
             role: Some("tool_call"),
             user_id: session.user_id.as_deref(),
             device_id: session.device_id.as_deref(),
+            vars,
         };
 
         match self.engine.evaluate(&req).await {
@@ -638,6 +648,7 @@ impl SecurityPipeline {
         tool_name: &str,
         content: &str,
     ) -> Result<EvaluateResponse, EngineError> {
+        let vars = HashMap::from([("app_id".to_string(), session.app_id.clone())]);
         let req = EvaluateRequest {
             trace_id: &session.trace_id,
             session_id: &session.session_id,
@@ -647,10 +658,12 @@ impl SecurityPipeline {
             args: &serde_json::Value::Null,
             args_json: String::new(),
             license_risk_quota: session.risk_quota,
+            upstream_id: None,
             content: Some(content),
             role: Some("output"),
             user_id: session.user_id.as_deref(),
             device_id: session.device_id.as_deref(),
+            vars,
         };
         self.engine.evaluate(&req).await
     }

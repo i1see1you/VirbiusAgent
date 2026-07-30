@@ -8,7 +8,7 @@
       <el-button type="primary" @click="openNew">{{ t('rules.btn-new') }}</el-button>
     </div>
 
-    <el-table :data="ruleList" size="small" border stripe @row-click="onRowClick">
+    <el-table :data="paginatedRules" size="small" border stripe @row-click="onRowClick">
       <el-table-column :label="t('rules.header-id')" prop="rule_id" />
       <el-table-column :label="t('rules.header-runtime')" prop="runtime" width="90" />
       <el-table-column :label="t('rules.header-bind')" width="140">
@@ -31,6 +31,10 @@
       <el-table-column :label="t('rules.header-reason')" prop="reason_code" />
     </el-table>
 
+    <el-pagination v-if="total > size" small background layout="prev, pager, next"
+      v-model:current-page="page" :page-size="size" :total="total"
+      @current-change="scrollTop" />
+
     <div v-if="editorVisible" class="v-card" style="margin-top:16px;background:#f8fafc">
       <h3 style="font-size:15px;margin:0 0 8px">
         {{ isNew ? t('rules.edit-title-new') : t('rules.edit-title-edit') }}
@@ -47,19 +51,19 @@
       </div>
 
       <div class="v-row">
-        <label>{{ t('rules.label-reason') }} <el-input v-model="form.reason" style="width:200px" /></label>
+        <label>{{ t('rules.label-reason') }} <el-input v-model="form.reason" :disabled="isReadOnly" style="width:200px" /></label>
         <label>{{ t('rules.label-risk') }}
-          <el-input-number v-model="form.risk" :min="0" :max="100" :disabled="isDlp" style="width:100px" />
+          <el-input-number v-model="form.risk" :min="0" :max="100" :disabled="isReadOnly || isDlp" style="width:100px" />
         </label>
         <label>{{ t('rules.label-intent') }}
-          <el-select v-model="form.intent" :disabled="isAsync || isDlp" style="width:120px">
+          <el-select v-model="form.intent" :disabled="isReadOnly || isAsync || isDlp" style="width:120px">
             <el-option value="deny" label="deny" />
             <el-option value="allow" label="allow" />
             <el-option value="challenge" label="challenge" />
             <el-option value="review" label="review" />
           </el-select>
         </label>
-        <el-checkbox v-if="showAsync" v-model="form.is_async" @change="onAsyncChange">{{ t('rules.label-async') }}</el-checkbox>
+        <el-checkbox v-if="showAsync" v-model="form.is_async" :disabled="isReadOnly" @change="onAsyncChange">{{ t('rules.label-async') }}</el-checkbox>
       </div>
 
       <div v-if="form.is_async" class="v-card" style="padding:12px;background:#fff;border:1px dashed #cbd5e1;margin:8px 0">
@@ -84,18 +88,21 @@
 
       <div v-if="showBindScope" class="v-row">
         <label>bind_scope
-          <el-select v-model="form.bind_scope" style="width:200px" @change="onBindScopeChange">
+          <el-select v-model="form.bind_scope" :disabled="isReadOnly" style="width:200px" @change="onBindScopeChange">
             <el-option v-for="o in bindScopeOptions" :key="o.value" :value="o.value" :label="o.label" />
           </el-select>
         </label>
-        <label v-if="showToolNames">tool_names <el-input v-model="form.bind_tools" style="width:200px" /></label>
-        <label v-if="showAppIds">app_ids <el-input v-model="form.bind_app_ids" style="width:240px" /></label>
+        <label v-if="showToolNames">tool_names <el-input v-model="form.bind_tools" :disabled="isReadOnly" style="width:200px" /></label>
+      </div>
+      <div v-if="showBindScope" class="v-row">
+        <label v-if="showToolNames">mcp_servers <el-input v-model="form.bind_mcp_servers" :disabled="isReadOnly" style="width:200px" /></label>
+        <label v-if="showAppIds">app_ids <el-input v-model="form.bind_app_ids" :disabled="isReadOnly" style="width:240px" /></label>
       </div>
       <p v-if="showBindScope" class="v-hint" v-html="t('gw.scope-hint')"></p>
 
       <div v-if="isScript" class="v-row">
         <label>{{ t('rules.editor-mode') }}
-          <el-select v-model="form.editor_mode" style="width:160px" @change="onEditorModeChange">
+          <el-select v-model="form.editor_mode" :disabled="isReadOnly" style="width:160px" @change="onEditorModeChange">
             <el-option value="simple" :label="t('rules.editor-simple')" />
             <el-option value="advanced" :label="t('rules.editor-advanced')" />
           </el-select>
@@ -181,6 +188,7 @@
           :language="editorLanguage"
           :completion-sources="completionSources"
           :lint-fn="lintFn"
+          :read-only="isReadOnly"
           @save="onSaveShortcut"
         />
         <div class="v-row" style="margin-top:4px">
@@ -189,12 +197,12 @@
       </div>
 
       <div v-if="showValidate" class="v-row" style="margin-top:8px">
-        <el-button @click="validateScript">{{ t('rules.btn-validate') }}</el-button>
+        <el-button :disabled="isReadOnly" @click="validateScript">{{ t('rules.btn-validate') }}</el-button>
         <span class="v-hint" style="margin:0" :style="validateStyle">{{ validateMsg }}</span>
       </div>
 
       <div v-if="showSimulate" class="v-row" style="margin-top:8px">
-        <el-checkbox v-model="enableSimulate">{{ t('rules.enable-simulate') }}</el-checkbox>
+        <el-checkbox v-model="enableSimulate" :disabled="isReadOnly">{{ t('rules.enable-simulate') }}</el-checkbox>
       </div>
       <RuleSimulate v-if="enableSimulate && showSimulate"
         :rule-id="selectedRuleId || form.rule_id"
@@ -211,9 +219,9 @@
       />
 
       <div class="v-row" style="margin-top:8px">
-        <el-button type="primary" :loading="saving" @click="saveWithDiff">{{ isNew ? t('rules.btn-create') : t('rules.btn-save') }}</el-button>
+        <el-button v-if="(!editMeta && isNew) || (editMeta && editMeta.rollout_state !== 'disabled' && !inExecutionPlane(editMeta.rollout_state))" type="primary" :loading="saving" @click="saveWithDiff">{{ isNew ? t('rules.btn-create') : t('rules.btn-save') }}</el-button>
         <el-button v-if="!isNew && editMeta?.rollout_state === 'draft'" @click="activate">{{ t('rules.btn-activate') }}</el-button>
-        <el-button v-if="!isNew && editMeta && !inExecutionPlane(editMeta.rollout_state) && editMeta.rollout_state !== 'disabled'" type="danger" @click="disable">{{ t('rules.btn-disable') }}</el-button>
+        <el-button v-if="!isNew && editMeta && editMeta.rollout_state !== 'disabled'" type="danger" @click="disable">{{ t('rules.btn-disable') }}</el-button>
         <el-button v-if="!isNew && editMeta?.rollout_state === 'disabled'" @click="recover">{{ t('rules.btn-enable') }}</el-button>
       </div>
     </div>
@@ -246,7 +254,11 @@ const feedback = useFeedbackStore();
 const rules = useRulesStore();
 const session = useSessionStore();
 
+const page = ref(1);
+const size = ref(50);
+const total = ref(0);
 const ruleList = ref<any[]>([]);
+const paginatedRules = computed(() => ruleList.value.slice((page.value - 1) * size.value, page.value * size.value));
 const editorVisible = ref(false);
 const isNew = ref(false);
 const selectedRuleId = ref<string | null>(null);
@@ -264,7 +276,7 @@ const enableSimulate = ref(false);
 
 const form = reactive<any>({
   rule_id: '', runtime: 'groovy', reason: 'CUSTOM_RULE', risk: 100, intent: 'deny',
-  is_async: false, bind_scope: 'global', bind_tools: '', bind_app_ids: '',
+  is_async: false, bind_scope: 'global', bind_tools: '', bind_mcp_servers: '', bind_app_ids: '',
   editor_mode: 'simple', body: ''
 });
 const asyncCfg = reactive<any>({ type: 'redis_stream', stream_key: '', url: '', message: '' });
@@ -292,6 +304,7 @@ const bindScopeOptions = computed(() => {
   if (isFalco.value) return [{ value: 'global', label: t('gw.scope.global') }, { value: 'service', label: t('gw.scope.service') }];
   return [{ value: 'global', label: t('gw.scope.global') }, { value: 'tool', label: t('gw.scope.tool') }, { value: 'service', label: t('gw.scope.service') }];
 });
+const isReadOnly = computed(() => !isNew.value && editMeta.value?.rollout_state === 'disabled');
 const showToolNames = computed(() => !isEdgeForm.value && form.bind_scope === 'tool');
 const showAppIds = computed(() => form.bind_scope === 'service' || (!isEdgeForm.value && form.bind_scope === 'tool'));
 
@@ -329,6 +342,7 @@ const lintFn = computed<((view: EditorView) => Diagnostic[]) | null>(() => {
   };
 });
 
+function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
 function statusCls(st: string) { return ruleStatusTagClass(st); }
 function effectiveLayer(): string {
   if (rules.currentLayer === 'kernel') return form.runtime === 'falco' ? 'falco' : 'sandbox';
@@ -367,7 +381,7 @@ async function loadRules() {
     } else {
       r = await admin('/rules?layer=' + encodeURIComponent(rules.currentLayer));
     }
-    ruleList.value = r;
+    ruleList.value = r; total.value = r.length; page.value = 1;
   } catch (e: any) { feedback.log(e.message, 'err'); }
 }
 
@@ -380,7 +394,7 @@ async function onRowClick(row: any) {
 }
 
 function resetEditor() {
-  Object.assign(form, { rule_id: '', runtime: layerRuntimes.value[0], reason: 'CUSTOM_RULE', risk: 100, intent: 'deny', is_async: false, bind_scope: 'global', bind_tools: '', bind_app_ids: '', editor_mode: 'simple', body: '' });
+  Object.assign(form, { rule_id: '', runtime: layerRuntimes.value[0], reason: 'CUSTOM_RULE', risk: 100, intent: 'deny', is_async: false, bind_scope: 'global', bind_tools: '', bind_mcp_servers: '', bind_app_ids: '', editor_mode: 'simple', body: '' });
   Object.assign(asyncCfg, { type: 'redis_stream', stream_key: '', url: '', message: '' });
   Object.assign(edgeBody, { list_type: 'deny', keywordsText: '' });
   Object.assign(dlpBody, { entity_type: 'phone_cn', priority: 0, pattern: '', mask_template: '' });
@@ -418,6 +432,7 @@ function loadBindUiFromScope(scope: any) {
   form.bind_scope = bs;
   const ref = s.bind_ref || {};
   form.bind_tools = Array.isArray(ref.tool_names) ? ref.tool_names.join(', ') : '';
+  form.bind_mcp_servers = Array.isArray(ref.mcp_servers) ? ref.mcp_servers.join(', ') : '';
   form.bind_app_ids = Array.isArray(ref.app_ids) ? ref.app_ids.join(', ') : '';
 }
 
@@ -515,6 +530,8 @@ function buildScope(): any {
   if (form.bind_scope === 'tool') {
     const tools = String(form.bind_tools || '').split(',').map(s => s.trim()).filter(Boolean);
     if (tools.length) ref.tool_names = tools;
+    const upstreams = String(form.bind_mcp_servers || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (upstreams.length) ref.mcp_servers = upstreams;
     const ids = String(form.bind_app_ids || '').split(',').map(s => s.trim()).filter(Boolean);
     if (ids.length) ref.app_ids = ids;
   } else if (form.bind_scope === 'service') {
@@ -576,6 +593,11 @@ async function doSave() {
   if (form.bind_scope === 'service' && isEdgeForm.value) {
     const ids = String(form.bind_app_ids || '').split(',').map(s => s.trim()).filter(Boolean);
     if (!ids.length) { feedback.log(t('rules.edge-service-required'), 'warn'); return; }
+  }
+  if (form.bind_scope === 'tool') {
+    const tools = String(form.bind_tools || '').split(',').map(s => s.trim()).filter(Boolean);
+    const servers = String(form.bind_mcp_servers || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!tools.length && !servers.length) { feedback.log(t('rules.tool-bind-required'), 'warn'); return; }
   }
   saving.value = true;
   try {

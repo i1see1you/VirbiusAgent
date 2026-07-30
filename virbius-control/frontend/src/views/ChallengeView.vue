@@ -10,22 +10,22 @@
     <el-tabs v-model="activeTab">
       <el-tab-pane :name="'pending'">
         <template #label>{{ t('challenge.tab-pending') }} <el-badge :value="pending.length" :hidden="!pending.length" /></template>
-        <el-table :data="pending" size="small" border stripe>
-          <el-table-column :label="t('challenge.header-id')">
+        <el-table :data="paginatedPending" size="small" border stripe>
+          <el-table-column :label="t('challenge.header-id')" show-overflow-tooltip>
             <template #default="{ row }"><code>{{ row.challenge_id }}</code></template>
           </el-table-column>
-          <el-table-column :label="t('challenge.header-tool')" prop="tool_name" />
+          <el-table-column :label="t('challenge.header-tool')" prop="tool_name" show-overflow-tooltip />
           <el-table-column :label="t('challenge.header-risk')" width="120">
             <template #default="{ row }">
               <el-tag size="small" :type="riskType(row.risk_score)">{{ riskLabel(row.risk_score) }}</el-tag>
               <span style="color:#94a3b8;margin-left:4px">({{ row.risk_score || 0 }})</span>
             </template>
           </el-table-column>
-          <el-table-column :label="t('challenge.header-rule')">
+          <el-table-column :label="t('challenge.header-rule')" show-overflow-tooltip>
             <template #default="{ row }"><code>{{ row.rule_id || '-' }}</code></template>
           </el-table-column>
-          <el-table-column :label="t('challenge.header-session')">
-            <template #default="{ row }">{{ row.session_id ? row.session_id.slice(0, 12) + '…' : '-' }}</template>
+          <el-table-column :label="t('challenge.header-session')" prop="session_id" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.session_id || '-' }}</template>
           </el-table-column>
           <el-table-column :label="t('challenge.header-created')">
             <template #default="{ row }">{{ fmtEpoch(row.created_at) }}</template>
@@ -45,23 +45,26 @@
             </template>
           </el-table-column>
         </el-table>
+        <el-pagination v-if="totalPending > size" small background layout="prev, pager, next"
+          v-model:current-page="pagePending" :page-size="size" :total="totalPending"
+          @current-change="scrollTop" />
       </el-tab-pane>
 
       <el-tab-pane :name="'approved'">
         <template #label>{{ t('challenge.tab-approved') }} <el-badge :value="approved.length" :hidden="!approved.length" type="success" /></template>
-        <el-table :data="approved" size="small" border stripe>
-          <el-table-column :label="t('challenge.header-id')">
+        <el-table :data="paginatedApproved" size="small" border stripe>
+          <el-table-column :label="t('challenge.header-id')" show-overflow-tooltip>
             <template #default="{ row }"><code>{{ row.challenge_id }}</code></template>
           </el-table-column>
-          <el-table-column :label="t('challenge.header-tool')" prop="tool_name" />
+          <el-table-column :label="t('challenge.header-tool')" prop="tool_name" show-overflow-tooltip />
           <el-table-column :label="t('challenge.header-risk')" width="120">
             <template #default="{ row }"><el-tag size="small" :type="riskType(row.risk_score)">{{ riskLabel(row.risk_score) }}</el-tag></template>
           </el-table-column>
-          <el-table-column :label="t('challenge.header-rule')">
+          <el-table-column :label="t('challenge.header-rule')" show-overflow-tooltip>
             <template #default="{ row }"><code>{{ row.rule_id || '-' }}</code></template>
           </el-table-column>
-          <el-table-column :label="t('challenge.header-session')">
-            <template #default="{ row }">{{ row.session_id ? row.session_id.slice(0, 12) + '…' : '-' }}</template>
+          <el-table-column :label="t('challenge.header-session')" prop="session_id" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.session_id || '-' }}</template>
           </el-table-column>
           <el-table-column :label="t('challenge.header-created')">
             <template #default="{ row }">{{ fmtEpoch(row.created_at) }}</template>
@@ -71,13 +74,14 @@
             <template #default="{ row }">{{ fmtEpoch(row.approved_at) }}</template>
           </el-table-column>
         </el-table>
+        <el-pagination v-if="totalApproved > size" small background layout="prev, pager, next"
+          v-model:current-page="pageApproved" :page-size="size" :total="totalApproved"
+          @current-change="scrollTop" />
       </el-tab-pane>
     </el-tabs>
   </div>
-</template>
-
-<script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue';
+</template><script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage } from 'element-plus';
 import { useSessionStore } from '@/stores/session';
@@ -86,9 +90,18 @@ import { rawJson } from '@/api/client';
 const { t } = useI18n();
 const session = useSessionStore();
 
+const size = ref(50);
+const pagePending = ref(1);
+const totalPending = ref(0);
+const pageApproved = ref(1);
+const totalApproved = ref(0);
 const activeTab = ref('pending');
 const pending = ref<any[]>([]);
 const approved = ref<any[]>([]);
+
+function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
+const paginatedPending = computed(() => pending.value.slice((pagePending.value - 1) * size.value, pagePending.value * size.value));
+const paginatedApproved = computed(() => approved.value.slice((pageApproved.value - 1) * size.value, pageApproved.value * size.value));
 let timer: any = null;
 
 function fmtEpoch(s: any): string {
@@ -105,8 +118,8 @@ async function load() {
       rawJson<any[]>(`/api/v1/challenges?tenant_id=${encodeURIComponent(session.tenant)}&status=pending&max=50`),
       rawJson<any[]>(`/api/v1/challenges?tenant_id=${encodeURIComponent(session.tenant)}&status=approved&max=50`).catch(() => [])
     ]);
-    pending.value = p || [];
-    approved.value = a || [];
+    pending.value = p || []; totalPending.value = pending.value.length; pagePending.value = 1;
+    approved.value = a || []; totalApproved.value = approved.value.length; pageApproved.value = 1;
   } catch (e: any) { ElMessage.error(e.message); }
 }
 

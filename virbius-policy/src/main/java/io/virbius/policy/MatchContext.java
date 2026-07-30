@@ -90,10 +90,11 @@ public record MatchContext(
             String sessionId,
             Map<String, String> vars,
             String routeUri,
+            String upstreamId,
             String toolName) {
         return new MatchContext(
                 content, userId, deviceId, clientIp, sessionId, vars, Map.of(), Map.of(),
-                routeUri, null, null, null, toolName);
+                routeUri, upstreamId, null, null, toolName);
     }
 
     public Map<String, String> varsOrEmpty() {

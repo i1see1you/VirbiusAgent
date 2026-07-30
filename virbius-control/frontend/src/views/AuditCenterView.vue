@@ -15,7 +15,7 @@
 
     <div class="v-section">
       <h3 v-html="t('ac.tb-audit-title', [dbCount])"></h3>
-      <el-table :data="events" size="small" border stripe>
+      <el-table :data="paginatedEvents" size="small" border stripe>
         <el-table-column :label="t('rollout.header-time')" width="170">
           <template #default="{ row }">{{ fmtTime(row.intercepted_at) }}</template>
         </el-table-column>
@@ -30,12 +30,15 @@
         </el-table-column>
         <el-table-column :label="t('rollout.header-user-id')" prop="user_id" />
       </el-table>
+      <el-pagination v-if="total > size" small background layout="prev, pager, next"
+        v-model:current-page="page" :page-size="size" :total="total"
+        @current-change="scrollTop" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useFeedbackStore } from '@/stores/feedback';
@@ -48,10 +51,16 @@ const route = useRoute();
 const feedback = useFeedbackStore();
 const session = useSessionStore();
 
+const page = ref(1);
+const size = ref(50);
+const total = ref(0);
 const traceId = ref('');
 const dbCount = ref(0);
 const events = ref<any[]>([]);
+const paginatedEvents = computed(() => events.value.slice((page.value - 1) * size.value, page.value * size.value));
 const summary = ref('');
+
+function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
 
 function rolloutLabel(st: string, pct: any): string {
   const s = st || '';
@@ -66,6 +75,7 @@ async function searchRecent(limit = 100) {
     const data = await admin<any>(`/audit/recent?limit=${limit}`);
     dbCount.value = data?.db_count ?? 0;
     events.value = data?.db_events || [];
+    total.value = events.value.length; page.value = 1;
     summary.value = data?.note || (events.value.length ? '' : t('ac.no-db-records'));
   } catch (e: any) { summary.value = e.message; events.value = []; }
 }
@@ -77,6 +87,7 @@ async function search() {
     const data = await admin<any>('/audit/trace/' + encodeURIComponent(traceId.value.trim()));
     dbCount.value = data?.db_count ?? 0;
     events.value = data?.db_events || [];
+    total.value = events.value.length; page.value = 1;
     summary.value = data?.note || (events.value.length ? '' : t('ac.no-db-records'));
   } catch (e: any) { summary.value = e.message; events.value = []; }
 }

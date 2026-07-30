@@ -13,7 +13,7 @@ public class OpsUiController {
 
     @GetMapping({"/ops", "/ops-legacy"})
     public String legacyOps() {
-        return "redirect:/ops.html";
+        return "redirect:/ui/";
     }
 
     @GetMapping({
