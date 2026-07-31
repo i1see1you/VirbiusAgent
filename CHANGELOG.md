@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Falco Custom Rule Management**: eBPF rules managed via console with canary deployment (PENDING → CANARY → FULL → FINALIZED).
 - **Go virbius-audit Falco Plugin**: C-shared library consuming Redis Stream audit events with PID map association.
 - **Rust config_subscriber**: Redis Stream → `/etc/falco/falco_rules.d/` → SIGHUP reload.
-- **Prompt Injection Detection**: multi-LLM detection with dynamic risk scoring.
+- **Prompt Injection Detection**: single-model (Qwen3Guard) semantic detection with dynamic risk scoring.
 - **STI Taint Tracking**: cross-tool untrusted output propagation detection.
 - **Hash Chain Audit Integrity**: SHA-256 hash chain for tamper-proof audit logs (Oracle + Redis Lua CAS).
 - **Agent Runtime License System**: Ed25519-signed JWT licenses with revocation support.

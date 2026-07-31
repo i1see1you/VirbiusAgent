@@ -62,7 +62,7 @@ flowchart TD
 | **Decision Trace** | Full-chain tool_call/tool_result tracing, session timeline + causal chain visualization |
 | **Human Approval** | High-risk tool approval flow: engine challenge → console approve → token-gated execution |
 | **Audit Dashboard** | Session risk, tool calls, alerts, approval queue, decision trace visualization |
-| **Prompt Injection Detection** | Multi-LLM prompt injection detection with dynamic risk scoring |
+| **Prompt Injection Detection** | Single-model semantic detection with dynamic risk scoring |
 | **LLM + Traditional Models** | Built-in Qwen3Guard safety classification + Groovy L3 `mlPredict()` for external ML models |
 | **STI Taint Tracking** | Track untrusted outputs across tool chains, prevent data leakage |
 | **Hash Chain Audit** | Tamper-proof audit log with SHA-256 hash chain integrity verification |

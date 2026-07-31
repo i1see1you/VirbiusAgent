@@ -885,8 +885,9 @@ Agent memory operations
 
 pub struct MemoryInterceptor {
     dlp_engine: DlpEngine,                              // reuses existing PII desensitization
-    guard_model: GuardModelClient,                      // qwen3guard:0.6b, reuses STI Taint
     policies: MemoryPolicies,                           // from virbius-control
+    // LLM injection detection is delegated to the engine over HTTP (triggered via need_llm_check
+    // calling /v1/memory/check); no guard model is embedded locally
 }
 
 pub struct MemoryPolicies {

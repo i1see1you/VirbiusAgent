@@ -38,6 +38,16 @@
 > **Removed original AgentGateway (9080)**: MCP routing is handled by Higress.
 > **Removed original virbius-gateway-agent (9070)**: Security precheck is handled by the Higress WASM plugin.
 
+> **Prompt Protection Chain**: LLM prompt security (prompt injection detection, constitutional injection, PII desensitization, output review) is not executed on the MCP tool-call path. It offers two integration modes, both reusing the virbius-engine cloud prompt rules (`runtime="prompt"`, recommend `bind_scope=global`) and Qwen3Guard semantic detection, independent of MCP Proxy tool-call security (the tool_call chain):
+>
+> - **Mode 1: VirbiusLLM gateway (zero code)**: The APISIX/Higress `virbius-guard` plugin intercepts `POST /v1/chat/completions`, extracts the user prompt, and calls engine `POST /v1/evaluate` via `virbius-gateway-agent` (:9070); hits return 403. Only requires deploying the APISIX plugin, configuring engine rules, and pointing the Agent's LLM baseUrl at the gateway. For production set `fail_mode="close"` so requests are rejected when the engine is unavailable rather than passed through, preventing bypass.
+> - **Mode 2: Application-side code integration (self-developed Agent)**: The application calls engine `POST /v1/evaluate` directly from code (snake_case JSON, fields aligned with `EvaluateRequestDto`), no gateway deployment needed:
+>   - **Inbound prompt check** (before user prompt → LLM): `content=user prompt`, `role="user"`; intercept when the returned `effective_action` is `block`/`deny`;
+>   - **Output review** (before LLM response → user): `content=LLM generated text`, `role="output"`; on `block`/`deny`, replace with a safety prompt or drop the response.
+>   - Response fields: `effective_action` (`allow`/`block`/`deny`/`challenge`/`review`), `max_risk_score`, `reason_code`, `rule_id`, `trace_id`. When the engine is unreachable requests default to pass-through (fail-open); fail-close is implemented by the application catching timeout/connection errors itself.
+>
+> > Note: the `role` field currently does **not** affect rule selection — inbound/output reuse the same set of prompt rules; if distinct rule sets are needed, engine-side role filtering would be required (not yet implemented).
+
 ### 8.2 Deployment Topology
 
 **Mode A: Sidecar Deployment (Inside K8s Pod, primarily East-West)**

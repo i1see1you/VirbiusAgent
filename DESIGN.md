@@ -996,7 +996,7 @@ decay(stored_value, elapsed_minutes) = stored_value × exp(-elapsed_minutes / 30
 | `base_risk` | `round(risk_quota × 0.1)` | 0-10 | 10% of License `risk_quota`, different Agent baselines differ |
 | `tool_weight` | `Σ(tool_risk_class(tool) × round(log(call_count + 1)))` | 0-∞ | Logarithmic accumulation to avoid linear explosion (see §13.3.3) |
 | `chain_anomaly` | `Σ(L3 rule hit risk delta)` | 0-∞ | Groovy L3 tool chain anomaly detection, accumulated per hit (see §13.3.4) |
-| `prompt_injection` | `hit count × 15` | 0-∞ | Each prompt injection hit adds 15 points |
+| `prompt_injection` | `hit count × max(risk delta, 15)` | 0-∞ | Each prompt injection hit adds 30 points (LLM detection returns `risk_delta=30`; SessionRiskManager uses `max(risk_delta, injection_weight)`, see `EvaluateOrchestrator`/`SessionRiskManager`) |
 | `falco_alert` | `alert count × 10` | 0-∞ | Each Falco alert adds 10 points (see §13.3.10) |
 
 ##### Tool Risk Class Weights
@@ -1149,7 +1149,7 @@ updateRiskScore called (at each tool call evaluation)
   |      falco_alert_stored      *= decay_factor
   ├── 5. Add new events from this request:
   |      chain_anomaly    += this L3 rule hit delta
-  |      prompt_injection += this injection hit × 15
+  |      prompt_injection += this injection hit × max(risk delta, 15)   // LLM-detected hit uses risk delta 30
   |      falco_alert      += this Falco alert × 10
   ├── 6. State-derived dimensions computed in real time:
   |      base_risk   = round(risk_quota × 0.1)
@@ -2353,9 +2353,10 @@ virbius:
 ```rust
 pub struct MemoryInterceptor {
     dlp_engine: DlpEngine,                              // Reuse existing PII desensitization
-    guard_model: GuardModelClient,                      // qwen3guard:0.6b
     policies: MemoryPolicies,                           // from virbius-control
     audit_sink: AuditSink,                              // audit reporting
+    // LLM injection detection is delegated to the engine over HTTP (need_llm_check → /v1/memory/check);
+    // no guard model is embedded locally
 }
 
 impl MemoryInterceptor {

@@ -882,8 +882,8 @@ Agent 记忆操作
 
 pub struct MemoryInterceptor {
     dlp_engine: DlpEngine,                              // 复用现有 PII 脱敏
-    guard_model: GuardModelClient,                      // qwen3guard:0.6b，复用 STI Taint
     policies: MemoryPolicies,                           // from virbius-control
+    // LLM 注入检测委托 engine HTTP（need_llm_check 触发 /v1/memory/check），本地不内嵌 guard 模型
 }
 
 pub struct MemoryPolicies {

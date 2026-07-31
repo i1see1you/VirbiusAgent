@@ -996,7 +996,7 @@ decay(stored_value, elapsed_minutes) = stored_value × exp(-elapsed_minutes / 30
 | `base_risk` | `round(risk_quota × 0.1)` | 0-10 | License `risk_quota` 的 10%，不同 Agent 基线不同 |
 | `tool_weight` | `Σ(tool_risk_class(tool) × round(log(call_count + 1)))` | 0-∞ | 对数累积，避免线性爆炸（详见 §13.3.3） |
 | `chain_anomaly` | `Σ(L3 规则命中风险增量)` | 0-∞ | Groovy L3 工具链异常检测，每次命中累加（详见 §13.3.4） |
-| `prompt_injection` | `命中次数 × 15` | 0-∞ | 每次 Prompt 注入命中加 15 分 |
+| `prompt_injection` | `命中次数 × max(风险增量, 15)` | 0-∞ | 每次 Prompt 注入命中加 30 分（LLM 检测返回 `risk_delta=30`，SessionRiskManager 取 `max(risk_delta, injection_weight)`，见 `EvaluateOrchestrator`/`SessionRiskManager`） |
 | `falco_alert` | `告警数 × 10` | 0-∞ | 每次 Falco 告警加 10 分（详见 §13.3.10） |
 
 ##### 工具风险等级权重
@@ -1149,7 +1149,7 @@ updateRiskScore 被调用（每次工具调用评估时）
   │      falco_alert_stored      *= decay_factor
   ├── 5. 叠加本次新事件:
   │      chain_anomaly    += 本次 L3 规则命中增量
-  │      prompt_injection += 本次注入命中 × 15
+  │      prompt_injection += 本次注入命中 × max(风险增量, 15)   // LLM 检测命中时风险增量为 30
   │      falco_alert      += 本次 Falco 告警 × 10
   ├── 6. 状态派生维度实时计算:
   │      base_risk   = round(risk_quota × 0.1)
@@ -2351,9 +2351,9 @@ virbius:
 ```rust
 pub struct MemoryInterceptor {
     dlp_engine: DlpEngine,                              // 复用现有 PII 脱敏
-    guard_model: GuardModelClient,                      // qwen3guard:0.6b
     policies: MemoryPolicies,                           // from virbius-control
     audit_sink: AuditSink,                              // 审计上报
+    // LLM 注入检测委托 engine HTTP（need_llm_check → /v1/memory/check），本地不内嵌 guard 模型
 }
 
 impl MemoryInterceptor {

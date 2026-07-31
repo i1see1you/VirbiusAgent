@@ -38,6 +38,16 @@
 > **删除原设计的 AgentGateway (9080)**：MCP 路由由 Higress 承担。
 > **删除原设计的 virbius-gateway-agent (9070)**：安全预检由 Higress WASM 插件承担。
 
+> **Prompt 防护链路**：LLM 提示词安全（提示词注入检测、宪法注入、PII 脱敏、输出审查）不在 MCP 工具调用链路上执行，提供两种接入方式，均复用 virbius-engine 云层 prompt 规则（`runtime="prompt"`，建议 `bind_scope=global`）与 Qwen3Guard 语义检测，与 MCP Proxy 工具调用安全（tool_call 链路）相互独立、互不影响：
+>
+> - **方式一：VirbiusLLM 网关（零代码）**：APISIX/Higress `virbius-guard` 插件拦截 `POST /v1/chat/completions`，提取 user 提示词，经 `virbius-gateway-agent`(:9070) 调用 engine `POST /v1/evaluate`，命中即 403。仅需部署 APISIX 插件、配置引擎规则、将 Agent 的 LLM baseUrl 指向网关。生产建议 `fail_mode="close"`，引擎不可用时拒绝而非放行，防止绕过。
+> - **方式二：应用方代码集成（自研 Agent）**：应用代码直接调用 engine `POST /v1/evaluate`（snake_case JSON，字段对齐 `EvaluateRequestDto`），无需部署网关：
+>   - **入站 Prompt 检测**（用户 prompt → LLM 前）：`content=用户提示词`、`role="user"`，返回 `effective_action` 为 `block`/`deny` 时拦截；
+>   - **输出审查**（LLM 响应 → 用户前）：`content=LLM 生成文本`、`role="output"`，命中 `block`/`deny` 时替换为安全提示或丢弃。
+>   - 响应字段：`effective_action`（`allow`/`block`/`deny`/`challenge`/`review`）、`max_risk_score`、`reason_code`、`rule_id`、`trace_id`。引擎不可达默认放行（fail-open），fail-close 由应用方自行捕获超时/连接异常。
+>
+> > 注：`role` 字段当前**不影响**规则选择——入站/出站复用同一套 prompt 规则；若需区分规则集，需在 engine 侧增加 role 过滤（尚未实现）。
+
 ### 8.2 部署拓扑
 
 **模式 A：Sidecar 部署（K8s Pod 内，东西向为主）**
