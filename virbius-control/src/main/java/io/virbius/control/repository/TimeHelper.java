@@ -13,7 +13,7 @@ final class TimeHelper {
     private TimeHelper() {}
 
     static String nowIso() {
-        return Instant.now().toString();
+        return SQL_TIMESTAMP.format(LocalDateTime.now(ZoneOffset.UTC));
     }
 
     static Instant parseInstant(String s) {
