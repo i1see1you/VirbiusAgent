@@ -394,6 +394,7 @@ pub const HIGH_RISK_TOOLS: &[&str] = &[
     "shell",
     "execute_python",
     "execute_code",
+    "execute_node",
     "read_file",
     "write_file",
     "delete_file",

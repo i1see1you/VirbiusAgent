@@ -149,9 +149,8 @@ pub fn execute(req: ExecutionRequest) -> Result<ExecutionResult, String> {
         }
 
         SandboxType::Gvisor => {
-            // Try gVisor first.
-            let gvisor_config = req.gvisor_config.clone().unwrap_or_default();
-            let pool = GvisorPool::new(gvisor_config);
+            // Try gVisor first using the shared global pool.
+            let pool = GvisorPool::global();
 
             if pool.is_available() {
                 let language = req.gvisor_language.unwrap_or(Language::Shell);
@@ -191,9 +190,112 @@ pub fn execute(req: ExecutionRequest) -> Result<ExecutionResult, String> {
     }
 }
 
+/// Unsandboxed subprocess execution (P0, sandbox_type="none").
+///
+/// Spawns the interpreter without any file/network/capability isolation.
+/// Applies hard-wall-clock timeout (SIGKILL) and RLIMIT_AS/RLIMIT_CPU
+/// to mitigate memory exhaustion / fork bombs.
+///
+/// Only local code-execution tools with `sandbox_type=none` and the
+/// `VIRBIUS_ALLOW_UNSANDBOXED` gate open will reach this path.
+#[cfg(target_os = "linux")]
+pub fn run_unsandboxed(
+    language: Language,
+    code: &str,
+    timeout_ms: u64,
+) -> Result<ExecutionResult, String> {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let interpreter = language.interpreter();
+    let flag = match language {
+        Language::Node => "-e",
+        _ => "-c",
+    };
+
+    let mem_limit: u64 = match language {
+        Language::Node => 512 * 1024 * 1024, // V8 needs larger CodeRange reservation
+        _               => 256 * 1024 * 1024,
+    };
+    let cpu_limit = (timeout_ms / 1000).max(2); // RLIMIT_CPU seconds
+
+    let mut cmd = Command::new(interpreter);
+    cmd.arg(flag)
+        .arg(code)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    unsafe {
+        cmd.pre_exec(move || {
+            let rlim = libc::rlimit {
+                rlim_cur: mem_limit,
+                rlim_max: mem_limit,
+            };
+            libc::setrlimit(libc::RLIMIT_AS, &rlim);
+            let cpu = libc::rlimit {
+                rlim_cur: cpu_limit,
+                rlim_max: cpu_limit,
+            };
+            libc::setrlimit(libc::RLIMIT_CPU, &cpu);
+            Ok(())
+        });
+    }
+
+    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    let start = std::time::Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut s) = child.stdout.take() {
+                    s.read_to_string(&mut stdout).ok();
+                }
+                if let Some(mut s) = child.stderr.take() {
+                    s.read_to_string(&mut stderr).ok();
+                }
+                return Ok(ExecutionResult {
+                    stdout,
+                    stderr,
+                    exit_code: status.code().unwrap_or(-1),
+                    sandbox_used: SandboxType::None,
+                    degraded: false,
+                    degrade_note: None,
+                    landlock_applied: false,
+                });
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "unsandboxed exec timed out after {}ms",
+                        timeout_ms
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(format!("wait failed: {e}")),
+        }
+    }
+}
+
 /// Non-Linux stub: sandbox features are unavailable on macOS/Windows.
 #[cfg(not(target_os = "linux"))]
 pub fn execute(_req: ExecutionRequest) -> Result<ExecutionResult, String> {
+    Err("sandbox not available on this platform (Linux only)".to_string())
+}
+
+/// Non-Linux stub for run_unsandboxed.
+#[cfg(not(target_os = "linux"))]
+pub fn run_unsandboxed(
+    _language: Language,
+    _code: &str,
+    _timeout_ms: u64,
+) -> Result<ExecutionResult, String> {
     Err("sandbox not available on this platform (Linux only)".to_string())
 }
 

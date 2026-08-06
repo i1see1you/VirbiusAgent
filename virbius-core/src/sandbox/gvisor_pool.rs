@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -160,7 +160,34 @@ pub struct GvisorPool {
     pub(crate) runsc_available: bool,
 }
 
+/// Process-wide shared gVisor pool, lazily initialized on first use.
+/// Every call to `execute` reuses the same warm-container pool, avoiding
+/// per-call cold-start latency and checking `runsc` availability once.
+static GLOBAL_GVISOR_POOL: OnceLock<GvisorPool> = OnceLock::new();
+
 impl GvisorPool {
+    /// Get the process-wide shared gVisor pool, initializing it on first access.
+    ///
+    /// Configuration is taken from defaults; set `VIRBIUS_RUNSC_PATH`,
+    /// `VIRBIUS_GVISOR_ROOTFS`, and `VIRBIUS_GVISOR_MIN_WARM` to override.
+    pub fn global() -> &'static GvisorPool {
+        GLOBAL_GVISOR_POOL.get_or_init(|| {
+            let mut config = GvisorPoolConfig::default();
+            if let Ok(p) = std::env::var("VIRBIUS_RUNSC_PATH") {
+                config.runsc_path = p;
+            }
+            if let Ok(r) = std::env::var("VIRBIUS_GVISOR_ROOTFS") {
+                config.rootfs_path = r;
+            }
+            if let Ok(m) = std::env::var("VIRBIUS_GVISOR_MIN_WARM") {
+                if let Ok(n) = m.parse() {
+                    config.min_warm = n;
+                }
+            }
+            GvisorPool::new(config)
+        })
+    }
+
     /// Create a new pool with the given configuration.
     pub fn new(config: GvisorPoolConfig) -> Self {
         let runsc_available = Path::new(&config.runsc_path).exists();

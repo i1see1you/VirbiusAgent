@@ -22,6 +22,52 @@ const MAX_REDIRECTS: usize = 5;
 /// Tools that trigger egress proxy behavior.
 const EGRESS_TOOLS: &[&str] = &["curl", "http_request", "fetch", "web_search"];
 
+/// Local code-execution tools executed by the proxy itself in a sandbox
+/// (none/landlock/gvisor). These are never forwarded to an upstream.
+///
+/// Each entry: (tool_name, language, code_arg).
+pub const LOCAL_EXEC_TOOLS: &[(&str, &str, &str)] = &[
+    ("shell", "shell", "command"),
+    ("execute_python", "python", "code"),
+    ("execute_code", "python", "code"),
+    ("execute_node", "node", "code"),
+];
+
+/// If `tool_name` is a local code-execution tool, returns `(language, code_arg)`.
+pub fn local_exec_info(tool_name: &str) -> Option<(&'static str, &'static str)> {
+    LOCAL_EXEC_TOOLS
+        .iter()
+        .find(|(name, _, _)| *name == tool_name)
+        .map(|(_, lang, arg)| (*lang, *arg))
+}
+
+/// Synthesized tool descriptors for local code-execution tools, injected into
+/// `tools/list` so agents can discover and call them.
+pub fn local_exec_tool_descriptors() -> Vec<Value> {
+    LOCAL_EXEC_TOOLS
+        .iter()
+        .map(|&(name, _lang, code_arg)| {
+            let desc = match name {
+                "shell" => "Execute a shell command (sandboxed locally by virbius proxy)",
+                "execute_python" | "execute_code" => "Execute Python code (sandboxed locally by virbius proxy)",
+                "execute_node" => "Execute Node.js code (sandboxed locally by virbius proxy)",
+                _ => "Execute code (sandboxed locally by virbius proxy)",
+            };
+            serde_json::json!({
+                "name": name,
+                "description": desc,
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        code_arg: {"type": "string", "description": "Code to execute"}
+                    },
+                    "required": [code_arg]
+                }
+            })
+        })
+        .collect()
+}
+
 /// HTTP client for proxying egress tool calls to external APIs.
 ///
 /// Streaming is handled via `reqwest::Response::bytes_stream()`: response body

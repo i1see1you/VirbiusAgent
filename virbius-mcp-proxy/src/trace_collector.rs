@@ -322,13 +322,18 @@ async fn kafka_trace_worker(brokers: String, topic: String, mut rx: mpsc::Receiv
 /// Parse a Redis address string into a `SocketAddr`.
 ///
 /// Accepts both `host:port` and `redis://host:port` formats.
-/// Parsing as `SocketAddr` avoids going through the system DNS resolver
-/// (which can fail spuriously on macOS for literal IPs).
+/// Uses DNS resolution to support hostnames (e.g. Docker service names).
 fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
+    use std::net::ToSocketAddrs;
     let raw = url.strip_prefix("redis://").unwrap_or(url);
-    raw.parse::<std::net::SocketAddr>().unwrap_or_else(|e| {
-        panic!("invalid Redis address '{url}': {e}. Expected 'host:port' or 'redis://host:port'")
-    })
+    raw.to_socket_addrs()
+        .ok()
+        .and_then(|mut addrs| addrs.next())
+        .unwrap_or_else(|| {
+            panic!(
+                "invalid Redis address '{url}': cannot resolve. Expected 'host:port' or 'redis://host:port'"
+            )
+        })
 }
 
 fn sha256_hex(input: &str) -> String {

@@ -541,7 +541,7 @@ CREATE TABLE IF NOT EXISTS tb_audit_chain_state (
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS tb_challenge_approvals (
-    id              BIGINT       AUTO_INCREMENT PRIMARY KEY,
+    id              INTEGER       PRIMARY KEY AUTOINCREMENT,
     challenge_id    VARCHAR(64)  NOT NULL,
     tenant_id       VARCHAR(64)  NOT NULL,
     status          VARCHAR(16)  NOT NULL DEFAULT 'approved',

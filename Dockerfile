@@ -49,6 +49,7 @@ ENV all_proxy=""
 
 # Configure crates.io mirror (optional, set CRATES_MIRROR=cn for China users)
 ARG CRATES_MIRROR=""
+ARG APT_MIRROR=""
 RUN if [ "$CRATES_MIRROR" = "cn" ]; then \
       mkdir -p /usr/local/cargo && \
       printf '%s\n' \
@@ -66,8 +67,14 @@ RUN if [ "$CRATES_MIRROR" = "cn" ]; then \
         > /usr/local/cargo/config.toml; \
     fi
 
-# Install system deps for native libs
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install system deps for native libs (apt mirror switch when APT_MIRROR=cn)
+RUN if [ "$APT_MIRROR" = "cn" ]; then \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+      sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list 2>/dev/null || true; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev g++ python3 make && rm -rf /var/lib/apt/lists/*
 
 # Copy all source and build
@@ -90,7 +97,12 @@ RUN cargo build --release -p virbius-mcp-proxy
 FROM eclipse-temurin:17-jre-jammy AS virbius-engine
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+ARG APT_MIRROR=""
+RUN if [ "$APT_MIRROR" = "cn" ]; then \
+      sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list 2>/dev/null || true; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
@@ -116,7 +128,12 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 FROM eclipse-temurin:17-jre-jammy AS virbius-control
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+ARG APT_MIRROR=""
+RUN if [ "$APT_MIRROR" = "cn" ]; then \
+      sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list 2>/dev/null || true; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
@@ -142,7 +159,22 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 FROM debian:bookworm-slim AS virbius-mcp-proxy
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl \
+# Clear proxy env vars inherited from Docker daemon (not reachable inside container)
+ENV HTTP_PROXY=""
+ENV HTTPS_PROXY=""
+ENV http_proxy=""
+ENV https_proxy=""
+ENV ALL_PROXY=""
+ENV all_proxy=""
+
+ARG APT_MIRROR=""
+RUN if [ "$APT_MIRROR" = "cn" ]; then \
+      sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
+      sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list 2>/dev/null || true; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends curl python3 nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius

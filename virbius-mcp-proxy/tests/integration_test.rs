@@ -276,8 +276,8 @@ async fn test_initialize_tools_list_and_call() {
     let tools = resp["result"]["tools"].as_array().unwrap();
     assert_eq!(
         tools.len(),
-        4,
-        "all 4 tools should be returned (no license)"
+        7,
+        "4 upstream tools + 3 local exec (execute_python deduped)"
     );
 
     // 3. tools/call — "search" is not high-risk, allowed by fallback policy
@@ -769,7 +769,7 @@ async fn test_multi_upstream_no_conflict() {
     let resp = route(&env, &list_req, sid).await;
     let resp = resp.unwrap();
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 4, "should have 4 merged tools");
+    assert_eq!(tools.len(), 8, "should have 8 merged tools (4 upstream + 4 local exec)");
 
     // No conflicts — no prefixing
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -870,7 +870,7 @@ async fn test_multi_upstream_name_conflict() {
     let resp = route(&env, &list_req, sid).await;
     let resp = resp.unwrap();
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 4, "should have 4 tools (2+2)");
+    assert_eq!(tools.len(), 8, "should have 8 tools (4 upstream + 4 local exec)");
 
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     // Conflicting read_file should be prefixed

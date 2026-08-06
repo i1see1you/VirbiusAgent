@@ -166,18 +166,13 @@ impl Session {
         self.risk_quota = extract_risk_quota_from_jwt(jwt);
 
         if let Some(claims) = extract_claims_from_jwt(jwt) {
-            // app_id must match between session and JWT for License::verify.
-            // If Agent didn't provide app_id, use the one from JWT.
-            if self.app_id.is_empty() {
-                if let Some(app_id) = claims.get("app_id").and_then(|v| v.as_str()) {
-                    self.app_id = app_id.to_string();
-                }
+            // Fallback license JWT is the authoritative identity — always
+            // align session app_id/tenant_id to JWT claims for verify.
+            if let Some(app_id) = claims.get("app_id").and_then(|v| v.as_str()) {
+                self.app_id = app_id.to_string();
             }
-            // Similarly for tenant_id.
-            if self.tenant_id.is_empty() || self.tenant_id == "default" {
-                if let Some(tenant_id) = claims.get("tenant_id").and_then(|v| v.as_str()) {
-                    self.tenant_id = tenant_id.to_string();
-                }
+            if let Some(tenant_id) = claims.get("tenant_id").and_then(|v| v.as_str()) {
+                self.tenant_id = tenant_id.to_string();
             }
         }
     }

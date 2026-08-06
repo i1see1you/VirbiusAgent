@@ -1,5 +1,6 @@
 package io.virbius.control.service;
 
+import io.virbius.control.config.SqlDialectConfig;
 import io.virbius.control.repository.RegistryRepository;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -12,17 +13,23 @@ public class DeployStateService {
 
     private final JdbcTemplate jdbc;
     private final RegistryRepository store;
+    private final SqlDialectConfig dialect;
 
-    public DeployStateService(JdbcTemplate jdbc, RegistryRepository store) {
+    public DeployStateService(JdbcTemplate jdbc, RegistryRepository store, SqlDialectConfig dialect) {
         this.jdbc = jdbc;
         this.store = store;
+        this.dialect = dialect;
     }
 
     public void record(String tenantId, String layer) {
         String nowStr = Instant.now().toString();
-        jdbc.update(
-                "INSERT OR REPLACE INTO tb_deploy_state (tenant_id, layer, deployed_at) VALUES (?, ?, ?)",
-                tenantId, layer, nowStr);
+        String sql;
+        if (dialect.isMysql()) {
+            sql = "REPLACE INTO tb_deploy_state (tenant_id, layer, deployed_at) VALUES (?, ?, ?)";
+        } else {
+            sql = "INSERT OR REPLACE INTO tb_deploy_state (tenant_id, layer, deployed_at) VALUES (?, ?, ?)";
+        }
+        jdbc.update(sql, tenantId, layer, nowStr);
     }
 
     public Map<String, Object> status(String tenantId) {

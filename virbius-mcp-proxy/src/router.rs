@@ -310,6 +310,24 @@ pub(crate) async fn handle_initialize(
             }
         }
 
+        // Standalone mode: no upstreams configured (local tools only)
+        if upstream_names.is_empty() {
+            debug!("initialize: standalone mode (no upstreams), serving local tools only");
+            if let Some(mut s) = session_mgr.get(&logical_sid) {
+                s.mark_upstream_initialized("__local__");
+                session_mgr.update(logical_sid.clone(), s);
+            }
+            return Some(inject_proxy_capabilities(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "serverInfo": {"name": "virbius-mcp-proxy", "version": "0.1.0"}
+                }
+            })));
+        }
+
         // If all upstreams were alive on reconnect, return early
         if tasks.is_empty() {
             if is_reconnect {
@@ -405,7 +423,7 @@ async fn handle_tools_list(
         });
 
         match upstream.forward(&forward_req).await {
-            Ok(resp) => filter_tools_list(resp, &session),
+            Ok(resp) => filter_tools_list(inject_local_tools(resp), &session),
             Err(e) => Some(jsonrpc_error(
                 -32603,
                 id,
@@ -476,7 +494,7 @@ async fn handle_tools_list(
             }
         });
 
-        filter_tools_list(merged, &session)
+        filter_tools_list(inject_local_tools(merged), &session)
     }
 }
 
@@ -666,29 +684,47 @@ async fn handle_tools_call(
         ));
     }
 
-    // Resolve tool route: determine upstream_name and original_tool_name.
-    // In single-upstream mode, route_tool always returns the sole upstream.
-    let (upstream_name, original_tool_name) = match upstream_mgr.route_tool(displayed_tool_name) {
-        Some(route) => route,
-        None => {
-            // Tool not in routes. In multi-upstream mode, this means tools/list
-            // wasn't called or the tool doesn't exist. Try to use the displayed
-            // name as-is and pick the first upstream as best-effort.
-            if upstream_mgr.is_single_upstream() {
-                (
-                    upstream_mgr.upstream_names()[0].to_string(),
-                    displayed_tool_name.to_string(),
-                )
-            } else {
-                // Try stripping a prefix in case the route wasn't registered
-                let stripped = strip_tool_prefix(displayed_tool_name);
-                if stripped != displayed_tool_name {
-                    // Has a prefix — try to find the upstream by the prefix
-                    let prefix_end = displayed_tool_name.find(TOOL_PREFIX_SEP).unwrap_or(0);
-                    let possible_upstream = &displayed_tool_name[..prefix_end];
-                    let names = upstream_mgr.upstream_names();
-                    if names.contains(&possible_upstream) {
-                        (possible_upstream.to_string(), stripped.to_string())
+    // Detect local code-execution tools (shell, execute_python, etc.).
+    // These are executed by the proxy itself in a sandbox and never
+    // forwarded to an upstream → skip route resolution.
+    let local_exec = crate::egress::local_exec_info(displayed_tool_name);
+
+    let (upstream_name, original_tool_name) = if local_exec.is_some() {
+        ("__local__".to_string(), displayed_tool_name.to_string())
+    } else {
+        // Resolve tool route: determine upstream_name and original_tool_name.
+        // In single-upstream mode, route_tool always returns the sole upstream.
+        match upstream_mgr.route_tool(displayed_tool_name) {
+            Some(route) => route,
+            None => {
+                // Tool not in routes. In multi-upstream mode, this means tools/list
+                // wasn't called or the tool doesn't exist. Try to use the displayed
+                // name as-is and pick the first upstream as best-effort.
+                if upstream_mgr.is_single_upstream() {
+                    (
+                        upstream_mgr.upstream_names()[0].to_string(),
+                        displayed_tool_name.to_string(),
+                    )
+                } else {
+                    // Try stripping a prefix in case the route wasn't registered
+                    let stripped = strip_tool_prefix(displayed_tool_name);
+                    if stripped != displayed_tool_name {
+                        // Has a prefix — try to find the upstream by the prefix
+                        let prefix_end = displayed_tool_name.find(TOOL_PREFIX_SEP).unwrap_or(0);
+                        let possible_upstream = &displayed_tool_name[..prefix_end];
+                        let names = upstream_mgr.upstream_names();
+                        if names.contains(&possible_upstream) {
+                            (possible_upstream.to_string(), stripped.to_string())
+                        } else {
+                            return Some(jsonrpc_error(
+                                -32602,
+                                id,
+                                &format!(
+                                    "unknown tool '{}' — call tools/list first to discover available tools",
+                                    displayed_tool_name
+                                ),
+                            ));
+                        }
                     } else {
                         return Some(jsonrpc_error(
                             -32602,
@@ -699,15 +735,6 @@ async fn handle_tools_call(
                             ),
                         ));
                     }
-                } else {
-                    return Some(jsonrpc_error(
-                        -32602,
-                        id,
-                        &format!(
-                            "unknown tool '{}' — call tools/list first to discover available tools",
-                            displayed_tool_name
-                        ),
-                    ));
                 }
             }
         }
@@ -802,6 +829,13 @@ async fn handle_tools_call(
                 );
                 session.increment_calls();
                 session_mgr.update(session_id.to_string(), session.clone());
+
+                // Local code-execution tools: execute in sandbox (same as Allow path)
+                if let Some((lang, code_arg)) = local_exec {
+                    return Some(
+                        execute_in_sandbox(id, &original_tool_name, &args, lang, code_arg).await,
+                    );
+                }
 
                 // Forward to upstream (same as Allow path)
                 if crate::egress::is_egress_tool(&original_tool_name) {
@@ -935,6 +969,40 @@ async fn handle_tools_call(
             )
             .with_decision("allow", None, None, risk_score);
             trace_collector.record(tc_event).await;
+
+            // Local code-execution tools: execute in sandbox with full post-processing.
+            if let Some((lang, code_arg)) = local_exec {
+                let mut resp =
+                    execute_in_sandbox(id, &original_tool_name, &args, lang, code_arg).await;
+                // ── Output PII masking ──
+                mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
+                // ── Trust boundary tagging (high/network risk only) ──
+                tag_tool_result(&mut resp, &original_tool_name, false);
+                // ── Memory read interception (T3 cross-session defense) ──
+                intercept_memory_read(&mut resp, &session, &original_tool_name, pipeline.as_ref())
+                    .await;
+                // ── Output content safety review (LLM-based) ──
+                review_tool_output(&mut resp, &session, &original_tool_name, pipeline.as_ref())
+                    .await;
+                // ── Trace: record tool_result ──
+                let duration_ms = trace_start.elapsed().as_millis() as u64;
+                let result_step_id = uuid::Uuid::new_v4().to_string();
+                let result_seq = session.next_step_seq();
+                let tr_event = TraceEvent::tool_result(
+                    &session,
+                    &result_step_id,
+                    &tool_call_step_id,
+                    result_seq,
+                    "success",
+                    duration_ms,
+                    &resp,
+                    Some(&upstream_name),
+                );
+                trace_collector.record(tr_event).await;
+                session.set_last_step_id(result_step_id);
+                session_mgr.update(session_id.to_string(), session);
+                return Some(resp);
+            }
 
             // Egress tools: Proxy HTTP request directly with streaming response.
             // Check against the original tool name.
@@ -1580,6 +1648,221 @@ async fn intercept_memory_read(
             }
         }
     }
+}
+
+/// Inject synthesized local code-execution tool descriptors (`shell`,
+/// `execute_python`, `execute_code`, `execute_node`) into a `tools/list`
+/// response, so agents can discover and call them.
+fn inject_local_tools(mut resp: Value) -> Value {
+    let new_tools = crate::egress::local_exec_tool_descriptors();
+    if new_tools.is_empty() {
+        return resp;
+    }
+    if let Some(result) = resp.get_mut("result").and_then(|r| r.as_object_mut()) {
+        if let Some(existing) = result.get_mut("tools").and_then(|t| t.as_array_mut()) {
+            for tool in new_tools {
+                let name = tool.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                if !existing
+                    .iter()
+                    .any(|t| t.get("name").and_then(|n| n.as_str()) == Some(name))
+                {
+                    existing.push(tool);
+                }
+            }
+        }
+    }
+    resp
+}
+
+/// Execute a local code-execution tool in the configured sandbox.
+///
+/// On Linux: reads the tool's `sandbox_type` from the edge manifest, extracts
+/// the code argument, and delegates to [`virbius_core::sandbox::execute`] or
+/// [`virbius_core::sandbox::run_unsandboxed`] depending on the isolated mode
+/// (none/landlock/gvisor).  Degradation is reported via `_meta`.
+#[cfg(target_os = "linux")]
+async fn execute_in_sandbox(
+    id: &Value,
+    tool_name: &str,
+    args: &Value,
+    lang: &str,
+    code_arg: &str,
+) -> Value {
+    use std::time::Duration;
+    use virbius_core::manifest;
+    use virbius_core::sandbox::{
+        execute, run_unsandboxed, ExecutionRequest, GvisorPool, LandlockRules, Language, SandboxType,
+    };
+
+    // 1. Extract code
+    let code = match args.get(code_arg).and_then(|v| v.as_str()) {
+        Some(c) => c.to_string(),
+        None => {
+            return jsonrpc_error(
+                -32602,
+                id,
+                &format!(
+                    "missing '{}' argument for local exec tool '{}'",
+                    code_arg, tool_name
+                ),
+            );
+        }
+    };
+
+    // 2. Tool policy (sandbox_type / timeout from edge manifest)
+    let policy = manifest::tool_policy(tool_name);
+    let sandbox_type_str = policy
+        .as_ref()
+        .map(|p| p.sandbox_type.clone())
+        .unwrap_or_default();
+    let sandbox_type = if sandbox_type_str.is_empty() {
+        SandboxType::None
+    } else {
+        SandboxType::parse(&sandbox_type_str)
+    };
+    let timeout_ms = policy
+        .as_ref()
+        .map(|p| p.timeout_ms)
+        .filter(|&t| t > 0)
+        .unwrap_or(30_000);
+
+    // 3. Language from whitelist string
+    let lang_enum = Language::parse(lang).unwrap_or(Language::Shell);
+
+    // 4. Dispatch
+    let exec_result: Result<virbius_core::sandbox::ExecutionResult, String> = match sandbox_type {
+        SandboxType::None => {
+            let allow = std::env::var("VIRBIUS_ALLOW_UNSANDBOXED")
+                .map(|v| v != "false" && v != "0")
+                .unwrap_or(true);
+            if !allow {
+                warn!("local exec '{}' denied: unsandboxed disabled", tool_name);
+                return jsonrpc_error(
+                    -32603,
+                    id,
+                    "unsandboxed_local_exec_not_allowed (set VIRBIUS_ALLOW_UNSANDBOXED=true)",
+                );
+            }
+            let code = code;
+            let timeout_ms = timeout_ms;
+            let lang_enum = lang_enum;
+            match tokio::task::spawn_blocking(move || run_unsandboxed(lang_enum, &code, timeout_ms))
+                .await
+            {
+                Ok(inner) => inner,
+                Err(e) => {
+                    warn!("local exec '{}' unsandboxed spawn failed: {}", tool_name, e);
+                    return jsonrpc_error(-32603, id, &format!("sandbox spawn failed: {e}"));
+                }
+            }
+        }
+        SandboxType::Landlock => {
+            let interpreter = lang_enum.interpreter().to_string();
+            let flag = match lang_enum {
+                Language::Node => "-e",
+                _ => "-c",
+            };
+            let req = ExecutionRequest {
+                sandbox_type: SandboxType::Landlock,
+                program: interpreter,
+                args: vec![flag.to_string(), code],
+                landlock_rules: LandlockRules::default(),
+                timeout: Duration::from_millis(timeout_ms),
+                gvisor_config: None,
+                gvisor_language: None,
+            };
+            match tokio::task::spawn_blocking(move || execute(req)).await {
+                Ok(inner) => inner,
+                Err(e) => {
+                    warn!("local exec '{}' landlock spawn failed: {}", tool_name, e);
+                    return jsonrpc_error(-32603, id, &format!("sandbox spawn failed: {e}"));
+                }
+            }
+        }
+        SandboxType::Gvisor => {
+            let fail_closed = std::env::var("VIRBIUS_SANDBOX_DEGRADE_MODE")
+                .map(|v| v == "fail_closed")
+                .unwrap_or(false);
+            if fail_closed && !GvisorPool::global().is_available() {
+                warn!("local exec '{}' denied: gVisor unavailable, fail_closed", tool_name);
+                return jsonrpc_error(
+                    -32603,
+                    id,
+                    "gVisor sandbox unavailable (degrade mode=fail_closed)",
+                );
+            }
+            let req = ExecutionRequest {
+                sandbox_type: SandboxType::Gvisor,
+                program: code,
+                args: vec![],
+                landlock_rules: LandlockRules::default(),
+                timeout: Duration::from_millis(timeout_ms),
+                gvisor_config: None,
+                gvisor_language: Some(lang_enum),
+            };
+            match tokio::task::spawn_blocking(move || execute(req)).await {
+                Ok(inner) => inner,
+                Err(e) => {
+                    warn!("local exec '{}' gvisor spawn failed: {}", tool_name, e);
+                    return jsonrpc_error(-32603, id, &format!("sandbox spawn failed: {e}"));
+                }
+            }
+        }
+    };
+
+    // 5. Shape MCP response; include degradation metadata in _meta
+    match exec_result {
+        Ok(r) => {
+            let is_error = r.exit_code != 0;
+            let output = if r.stderr.is_empty() {
+                r.stdout.trim().to_string()
+            } else {
+                format!("{}\n{}", r.stdout.trim(), r.stderr.trim()).trim().to_string()
+            };
+            if r.degraded {
+                let meta = serde_json::json!({
+                    "sandbox_configured": sandbox_type_str,
+                    "sandbox_used": r.sandbox_used.as_str(),
+                    "degraded": true,
+                    "degrade_note": r.degrade_note
+                });
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": output}],
+                        "isError": is_error,
+                        "_meta": meta
+                    }
+                })
+            } else {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": output}],
+                        "isError": is_error
+                    }
+                })
+            }
+        }
+        Err(e) => {
+            warn!("local exec '{}' sandbox failed: {}", tool_name, e);
+            jsonrpc_error(-32603, id, &format!("sandbox exec failed: {}", e))
+        }
+    }
+}
+
+/// Non-Linux stub for local code-execution sandbox.
+#[cfg(not(target_os = "linux"))]
+async fn execute_in_sandbox(
+    id: &Value,
+    _tool_name: &str,
+    _args: &Value,
+    _lang: &str,
+    _code_arg: &str,
+) -> Value {
+    jsonrpc_error(-32603, id, "sandbox not available on this platform (Linux only)")
 }
 
 #[cfg(test)]
