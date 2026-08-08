@@ -1,0 +1,28 @@
+{
+  "_comment": "virbiusDemo · VirbiusAgent 防护规则来源配置。切换 active_mode 即可在 离线/本地control/云端 control 之间切换规则下发源。各 mode 的字段对齐 virbius-core 的 EdgeInitConfig（部分字段带默认值，可省略）。",
+  "active_mode": "control",
+  "modes": {
+    "offline": {
+      "offline_manifest_path": "data/edge/default/demo-app/edge-manifest.json",
+      "cache_dir": "data/edge/offline/default/demo-app",
+      "tenant_id": "default",
+      "app_id": "demo-app"
+    },
+    "control": {
+      "control_base_url": "http://127.0.0.1:8080",
+      "tenant_id": "default",
+      "app_id": "demo-app",
+      "edge_api_key": "",
+      "device_id": "",
+      "cache_dir": "data/edge/control/default/demo-app"
+    },
+    "cloud": {
+      "control_base_url": "https://virbius-cloud.example.com",
+      "tenant_id": "default",
+      "app_id": "demo-app",
+      "edge_api_key": "",
+      "device_id": "",
+      "cache_dir": "data/edge/cloud/default/demo-app"
+    }
+  }
+}

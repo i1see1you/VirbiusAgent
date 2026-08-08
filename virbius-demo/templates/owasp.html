@@ -1,0 +1,20 @@
+{% extends "_base.html" %}
+{% block title %}OWASP LLM Top 10{% endblock %}
+{% block body %}
+<h1>📋 OWASP LLM Top 10 靶场</h1>
+<p class="sub">2025 版十大风险，每类一个可上手的 lab。已破 {{ solved|length }}/{{ labs|length }}。</p>
+
+<div class="grid">
+{% for lab in labs %}
+  <a class="card" href="/owasp/lab/{{ lab.code }}">
+    <h3>{{ lab.code }}
+      <span class="badge {{ 'hi' if lab.severity=='高' else 'mid' }}">{{ lab.severity }}危</span>
+      {% if lab.code in solved %}<span class="badge solved">✓</span>{% endif %}
+    </h3>
+    <p><b style="color:var(--fg)">{{ lab.title }}</b></p>
+    <p>{{ lab.scenario[:60] }}…</p>
+    <p style="color:var(--cyan)">{{ '🎮 可攻击' if lab.interactive else '📖 讲解关' }}</p>
+  </a>
+{% endfor %}
+</div>
+{% endblock %}

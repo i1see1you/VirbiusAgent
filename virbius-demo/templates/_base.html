@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}virbiusDemo 攻防演示台{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+  <nav class="nav">
+    <a class="brand" href="/"><img class="brand-logo" src="{{ url_for('static', filename='images/logo.png') }}" alt="virbiusDemo"></a>
+    <div class="links">
+      <a href="/owasp/">OWASP Top10</a>
+      <a href="/agent/">Agent 靶场</a>
+    </div>
+    <label class="target-sel" title="选择被攻击的目标模型">
+      <span class="dot">●</span> target:
+      <select id="model-select">
+        {% for m in models %}
+        <option value="{{ m.id }}" {{ 'selected' if m.id==current_model else '' }}>{{ m.label }} · {{ m.note }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="prot-sel" title="是否启用 VirbiusAgent 防护引擎">
+      <input type="checkbox" id="prot-toggle" {{ 'checked' if protection else '' }}>
+      <span class="prot-name">🛡 VirbiusAgent 防护</span>
+    </label>
+  </nav>
+  <main class="wrap">
+    {% block body %}{% endblock %}
+  </main>
+  <footer class="foot">
+    本系统为<strong>授权的安全教育/渗透测试训练靶场</strong>，所有漏洞与危险操作均隔离在本地沙箱内。请勿用于真实攻击。 · 基于 <a href="https://github.com/" rel="noopener">llm-sec-range</a> fork，MIT License © 2026 gatsby
+  </footer>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  {% block script %}{% endblock %}
+</body>
+</html>

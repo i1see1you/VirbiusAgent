@@ -1,0 +1,149 @@
+{% extends "_base.html" %}
+{% block title %}{{ lab.code }} {{ lab.title }}{% endblock %}
+{% block body %}
+<p><a href="/owasp/">← 返回 Top10 列表</a></p>
+<h1>{{ lab.code }} · {{ lab.title }}
+  <span class="badge {{ 'hi' if lab.severity=='高' else 'mid' }}">{{ lab.severity }}危</span>
+  {% if lab.code in solved %}<span class="badge solved">✓ 已破</span>{% endif %}
+</h1>
+<p class="sub" style="white-space:pre-wrap">{{ lab.scenario }}</p>
+<div class="goal"><b>🎯 目标：</b>{{ lab.goal }}</div>
+
+{% if lab.interactive %}
+<div class="panel">
+  {% if lab.xss %}<p class="note">⚠️ 下方“渲染预览”会真的执行模型返回的 HTML（模拟未转义直出），命中 JS 执行即自动通关。</p>{% endif %}
+  <div class="sessbar">
+    <span class="sess-state">🟢 会话进行中 · <b id="turns">0</b> 轮记忆</span>
+    <button class="ghost sm" id="reset">🗑️ 清空记忆 / 新会话</button>
+  </div>
+  <div class="chat" id="chat"><div class="msg sys">开始攻击 👇（多轮对话有记忆）</div></div>
+  <div class="row">
+    <textarea id="msg" placeholder="输入攻击 payload…（Enter 发送）"></textarea>
+    <button id="send">发送</button>
+  </div>
+  {% if lab.xss %}<div class="render-preview" id="preview"><i style="color:#888">渲染预览区</i></div>{% endif %}
+
+  {% if not lab.xss %}
+  <div class="flagbox">
+    <input type="text" id="guess" placeholder="拿到 flag 后填这里提交…">
+    <button class="ghost" id="submit">提交 flag</button>
+  </div>{% endif %}
+  <div id="result"></div>
+  {% if lab.payloads %}
+  <div class="payloads">
+    <div class="ptitle">⚔️ 完整渗透语句 <span>点击直接填入输入框</span></div>
+    {% for p in lab.payloads %}<code class="payload">{{ p }}</code>{% endfor %}
+    {% if lab.payload_note %}<p class="pnote">💡 {{ lab.payload_note }}</p>{% endif %}
+  </div>
+  {% endif %}
+  <details class="hintbox"><summary>💡 思路提示</summary><div class="note">{{ lab.hint }}</div></details>
+</div>
+
+<h2>🔬 对话检查器 <span class="insp-sub">聊天框之外 · 每轮完整提交 prompt 与模型原始返回（藏在系统提示里的 flag 已打码）</span></h2>
+<div class="panel"><div class="inspector" id="inspector">
+  <p class="spin insp-ph">发送后，这里显示每轮发给模型的完整 prompt 与原始返回</p>
+</div></div>
+{% else %}
+<div class="panel">
+  <h2 style="margin-top:0">缓解措施 Checklist</h2>
+  <ul class="check">
+    {% for c in lab.checklist %}<li>✅ {{ c }}</li>{% endfor %}
+  </ul>
+  {% if lab.link %}<p><a class="card" style="display:inline-block" href="{{ lab.link }}">→ 前往实操靶场</a></p>{% endif %}
+</div>
+{% endif %}
+
+{% if lab.protection_guide %}
+<hr class="prot-divider">
+<details class="prot-guide" open>
+  <summary>🛡 接入 VirbiusAgent 防护说明 <span class="insp-sub">漏洞 → 能力 → 配置 → 生效</span></summary>
+  {% for sec in lab.protection_guide %}
+  <div class="pg-sec">
+    <h3 style="margin:10px 0 4px">{{ sec.title }}</h3>
+    {% for line in sec.content %}<p style="margin:2px 0">{{ line }}</p>{% endfor %}
+  </div>
+  {% endfor %}
+</details>
+{% endif %}
+{% endblock %}
+
+{% block script %}
+{% if lab.interactive %}
+<script>
+const CODE = "{{ lab.code }}";
+const IS_XSS = {{ 'true' if lab.xss else 'false' }};
+const chat = document.getElementById('chat');
+const msg = document.getElementById('msg');
+const send = document.getElementById('send');
+let solved = {{ 'true' if lab.code in solved else 'false' }};
+
+function markWin(extra){
+  document.getElementById('result').innerHTML =
+    '<div class="win">🎉 攻击成功，本关通过！'+(extra||'')+'</div>';
+}
+
+async function doSend(){
+  const text = msg.value.trim(); if(!text) return;
+  addMsg(chat,'user',text); msg.value=''; send.disabled=true;
+  const wait = addMsg(chat,'sys','模型思考中…');
+  try{
+    const r = await postJSON('/owasp/chat/'+CODE, {message:text});
+    wait.remove();
+    if(r.error){ addMsg(chat,'blocked','错误：'+r.error); }
+    else{
+      addMsg(chat,'bot',r.answer);
+      if(r.protection){
+        let pd = '🛡 '+r.protection.note;
+        if(r.protection.action === 'block'){
+          pd += ' | 层='+r.protection.layer+' | 规则='+r.protection.rule_id+
+                ' | 码='+r.protection.reason_code+' | 风险='+r.protection.risk_score;
+          if(r.protection.matched_keywords && r.protection.matched_keywords.length){
+            pd += '\n命中关键词：'+r.protection.matched_keywords.join(' / ');
+          }
+        }
+        if(r.output_dlp && r.output_dlp.masked){
+          pd += '\n🔒 模型输出中的敏感信息已被 DLP 脱敏（entity='+(r.output_dlp.entity||'dlp')+
+                '，mode='+(r.output_dlp.mode||'')+'）';
+        }
+        addMsg(chat,'prot',pd);
+      }
+      if(IS_XSS){
+        // 故意未转义直出，触发探针
+        const pv = document.getElementById('preview');
+        window.__xss_fired = false;
+        pv.innerHTML = r.answer;
+        setTimeout(()=>{ if(window.__xss_fired || r.auto_solved){ markWin(' XSS 探针被触发。'); } }, 400);
+      }
+      if(r.auto_solved){ markWin(); }
+      if(r.debug) appendInspector(r.debug);
+      if(r.turns!=null) document.getElementById('turns').textContent = r.turns;
+    }
+  }catch(e){ wait.remove(); addMsg(chat,'blocked','网络错误'); }
+  send.disabled=false; msg.focus();
+}
+
+document.getElementById('reset').onclick = async ()=>{
+  await postJSON('/owasp/reset/'+CODE, {});
+  chat.innerHTML = '<div class="msg sys">🧹 会话记忆已清空，已开启新会话。</div>';
+  document.getElementById('turns').textContent = '0';
+  document.getElementById('result').innerHTML='';
+  const pv=document.getElementById('preview'); if(pv) pv.innerHTML='<i style="color:#888">渲染预览区</i>';
+  clearInspector();
+};
+send.onclick = doSend;
+msg.addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();doSend();}});
+
+const sb = document.getElementById('submit');
+if(sb){ sb.onclick = async ()=>{
+  const guess = document.getElementById('guess').value.trim(); if(!guess) return;
+  const r = await postJSON('/owasp/submit/'+CODE, {guess});
+  document.getElementById('result').innerHTML = r.correct
+    ? '<div class="win">🎉 flag 正确，本关通过！</div>'
+    : '<div class="fail">❌ 不对，再试试。</div>';
+};}
+
+// XSS 探针：任何脚本执行都会调用它
+window.xssProbe = ()=>{ window.__xss_fired = true; };
+</script>
+{% endif %}
+{% endblock %}

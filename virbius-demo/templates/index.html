@@ -1,0 +1,29 @@
+{% extends "_base.html" %}
+{% block body %}
+<div class="hero">
+  <span class="tag">● 本地演示台 · 目标模型可切换</span>
+  <h1>VirbiusAgent 攻防演示台</h1>
+  <p class="sub">virbiusDemo — 以 OWASP LLM Top10 为核心，交互式演示 AI Agent 攻击面及 VirbiusAgent 防护效果。</p>
+</div>
+
+<div class="grid">
+  <a class="card" href="/owasp/">
+    <div class="ico">📋</div>
+    <h3>OWASP LLM Top 10</h3>
+    <p>覆盖 2025 版十大风险：提示注入、敏感信息泄露、数据投毒、不当输出处理、过度代理…交互式 lab。</p>
+  </a>
+  <a class="card" href="/agent/">
+    <div class="ico">🤖</div>
+    <h3>Agent 靶场（dvla）</h3>
+    <p>脆弱的 ReAct 银行客服：越权读取他人交易 + UNION 注入窃取密码。基于 langchain 真实 ReAct agent。</p>
+  </a>
+</div>
+
+<h2>玩法说明</h2>
+<div class="panel">
+  <p>① 每个 lab 都有<strong>明确的攻击目标（flag）</strong>，攻破后会自动记录通关状态（存于会话）。</p>
+  <p>② 所有“被攻击”的大模型都可切换（DeepSeek / OpenRouter / 本地 Ollama），真实可被提示注入绕过。</p>
+  <p>③ 顶部 <span class="kbd">VirbiusAgent 防护</span> 开关：开启后攻击请求会先经过防护引擎评估；关闭则直连脆弱模型、暴露漏洞。用于直观对比"有防护 vs 无防护"。</p>
+  <p>④ 这是<strong>防御教育</strong>用途：理解攻击面 → 学会缓解。请勿对未授权目标使用。</p>
+</div>
+{% endblock %}

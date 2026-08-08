@@ -1,0 +1,18 @@
+{% extends "_base.html" %}
+{% block title %}CTF 提示注入闯关{% endblock %}
+{% block body %}
+<h1>🧩 CTF · 提示注入闯关</h1>
+<p class="sub">每关都有一个秘密密码，诱导模型把它吐出来。防御逐级加固——已破 {{ solved|length }}/{{ levels|length }} 关。</p>
+
+{% for lv in levels %}
+<a class="lv" href="/ctf/level/{{ lv.id }}">
+  <div class="n">{{ lv.id }}</div>
+  <div class="meta">
+    <b>{{ lv.title }}</b>
+    {% if lv.id in solved %}<span class="badge solved">✓ 已破</span>{% endif %}
+    <p>{{ lv.desc }}</p>
+  </div>
+  <div>→</div>
+</a>
+{% endfor %}
+{% endblock %}

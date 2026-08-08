@@ -1,0 +1,22 @@
+{% extends "_base.html" %}
+{% block title %}聚合清单{% endblock %}
+{% block body %}
+<h1>⭐ 大模型攻防靶场 · 聚合清单</h1>
+<p class="sub">精选 GitHub 优秀仓库。{{ data.note }}（更新于 {{ data.updated }}）</p>
+
+{% for cat in data.categories %}
+<h2>{{ cat.name }}</h2>
+<table class="cat">
+  <tr><th>仓库</th><th>Star</th><th>最近更新</th><th>状态</th><th>简介</th></tr>
+  {% for r in cat.repos %}
+  <tr>
+    <td><a href="{{ r.url }}" target="_blank">{{ r.name }}</a></td>
+    <td>★ {{ r.stars }}</td>
+    <td class="mono">{{ r.pushed }}</td>
+    <td>{% if r.active %}<span class="badge active">活跃</span>{% else %}<span class="badge stale">停更</span>{% endif %}</td>
+    <td style="color:var(--dim)">{{ r.desc }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endfor %}
+{% endblock %}
