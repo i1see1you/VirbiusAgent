@@ -79,6 +79,11 @@ public class EvaluateOrchestrator {
         String sessionId = req.sessionId() != null ? req.sessionId() : "";
         Map<String, String> vars = new HashMap<>(req.vars() != null ? req.vars() : Map.of());
         vars.put("tool_name", toolName);
+        // Expose the session user so groovy rules can inspect it via ctx.var('user_id').
+        // The caller may pass user_id either explicitly in vars or as the request user_id field.
+        if (req.userId() != null && !req.userId().isBlank() && !vars.containsKey("user_id")) {
+            vars.put("user_id", req.userId());
+        }
         if (!toolName.isEmpty() && !sessionId.isEmpty()) {
             vars.put("tool_session_key", "tool:" + toolName + "-session:" + sessionId);
         }
