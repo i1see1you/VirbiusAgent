@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Secrets — never commit. Copy .env.example -> .env and fill keys.
+.env
+
+# Local license public key & mcp-proxy config may embed endpoint/tenant info —
+# regenerate/patch locally, keep out of the repo.
+cfg/license-public.pem
+virbius-mcp-proxy.toml
+
+# Agent sandbox jail (runtime generated secrets/files)
+agent_sandbox/jail/
+
+# Runtime caches pulled from virbius-control/cloud — regenerated on sync, not tracked
+# Everything under data/edge/ is a sync cache (incl. default/<app>/edge-manifest.json),
+# never commit it. Only the source data files (catalog.json, virbius.json, *_labs.py)
+# at the data/ root are tracked.
+data/edge/
+
+# Local-only assets (per decision): screenshots & ad-hoc test scripts stay local
+docs/screenshots/
+test_*.py
+
+# Misc
+.DS_Store
+*.log

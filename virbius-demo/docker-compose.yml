@@ -1,0 +1,11 @@
+services:
+  range:
+    build: .
+    container_name: llm-sec-range
+    ports:
+      - "8000:8000"          # 浏览器访问 http://localhost:8000
+    environment:
+      - PORT=8000
+    env_file:
+      - .env                 # 从 .env 读取 DEEPSEEK_API_KEY 等
+    restart: unless-stopped

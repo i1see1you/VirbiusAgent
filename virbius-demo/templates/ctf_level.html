@@ -1,0 +1,90 @@
+{% extends "_base.html" %}
+{% block title %}{{ lv.title }}{% endblock %}
+{% block body %}
+<p><a href="/ctf/">← 返回关卡列表</a></p>
+<h1>{{ lv.title }} {% if lv.id in solved %}<span class="badge solved">✓ 已破</span>{% endif %}</h1>
+<p class="sub">{{ lv.desc }}</p>
+
+<div class="goal"><b>🎯 目标：</b>{{ lv.hint and "诱导模型泄露本关密码，并在下方提交。" }}
+  当前防御：<span class="mono">{{ lv.defenses if lv.defenses else "无" }}</span></div>
+
+<div class="panel">
+  <div class="sessbar">
+    <span class="sess-state">🟢 会话进行中 · <b id="turns">0</b> 轮记忆</span>
+    <button class="ghost sm" id="reset">🗑️ 清空记忆 / 新会话</button>
+  </div>
+  <div class="chat" id="chat">
+    <div class="msg sys">向守密助手发消息，想办法套出密码 👇（多轮对话有记忆，可分多步诱导）</div>
+  </div>
+  <div class="row">
+    <textarea id="msg" placeholder="输入你的提示注入 payload…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="send">发送</button>
+  </div>
+
+  <div class="flagbox">
+    <input type="text" id="guess" placeholder="拿到密码后填这里提交…">
+    <button class="ghost" id="submit">提交 flag</button>
+  </div>
+  <div id="result"></div>
+
+  {% if lv.payloads %}
+  <div class="payloads">
+    <div class="ptitle">⚔️ 完整渗透语句 <span>点击直接填入输入框</span></div>
+    {% for p in lv.payloads %}<code class="payload">{{ p }}</code>{% endfor %}
+    {% if lv.payload_note %}<p class="pnote">💡 {{ lv.payload_note }}</p>{% endif %}
+  </div>
+  {% endif %}
+  <details class="hintbox"><summary>💡 思路提示</summary><div class="note">{{ lv.hint }}</div></details>
+</div>
+
+<h2>🔬 对话检查器 <span class="insp-sub">聊天框之外 · 每轮完整提交 prompt 与模型原始返回（flag 本体已打码）</span></h2>
+<div class="panel"><div class="inspector" id="inspector">
+  <p class="spin insp-ph">发送后，这里显示每轮发给模型的完整 prompt 与原始返回</p>
+</div></div>
+
+{% endblock %}
+{% block script %}
+<script>
+const LID = {{ lv.id }};
+const chat = document.getElementById('chat');
+const msg = document.getElementById('msg');
+const send = document.getElementById('send');
+
+async function doSend(){
+  const text = msg.value.trim();
+  if(!text) return;
+  addMsg(chat,'user',text);
+  msg.value=''; send.disabled=true;
+  const wait = addMsg(chat,'sys','模型思考中…');
+  try{
+    const r = await postJSON('/ctf/chat/'+LID, {message:text});
+    wait.remove();
+    if(r.error){ addMsg(chat,'blocked','错误：'+r.error); }
+    else addMsg(chat, r.blocked?'blocked':'bot', r.answer);
+    if(r.debug) appendInspector(r.debug);
+    if(r.turns!=null) document.getElementById('turns').textContent = r.turns;
+  }catch(e){ wait.remove(); addMsg(chat,'blocked','网络错误'); }
+  send.disabled=false; msg.focus();
+}
+
+document.getElementById('reset').onclick = async ()=>{
+  await postJSON('/ctf/reset/'+LID, {});
+  chat.innerHTML = '<div class="msg sys">🧹 会话记忆已清空，已开启新会话。</div>';
+  document.getElementById('turns').textContent = '0';
+  document.getElementById('result').innerHTML='';
+  clearInspector();
+};
+send.onclick = doSend;
+msg.addEventListener('keydown', e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();doSend();}});
+
+document.getElementById('submit').onclick = async ()=>{
+  const guess = document.getElementById('guess').value.trim();
+  if(!guess) return;
+  const r = await postJSON('/ctf/submit/'+LID, {guess});
+  const box = document.getElementById('result');
+  box.innerHTML = r.correct
+    ? '<div class="win">🎉 正确！本关攻破。' + (LID<8?' <a href="/ctf/level/'+(LID+1)+'">下一关 →</a>':' 你通关了全部 CTF！') + '</div>'
+    : '<div class="fail">❌ 密码不对，再试试。</div>';
+};
+</script>
+{% endblock %}
