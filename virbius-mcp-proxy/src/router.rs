@@ -1744,6 +1744,9 @@ async fn execute_in_sandbox(
                     "unsandboxed_local_exec_not_allowed (set VIRBIUS_ALLOW_UNSANDBOXED=true)",
                 );
             }
+            let code = code;
+            let timeout_ms = timeout_ms;
+            let lang_enum = lang_enum;
             match tokio::task::spawn_blocking(move || run_unsandboxed(lang_enum, &code, timeout_ms))
                 .await
             {
