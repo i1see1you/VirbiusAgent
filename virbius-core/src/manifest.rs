@@ -63,7 +63,10 @@ impl<'de> Deserialize<'de> for RuleBody {
             String(String),
         }
         match BodyRepr::deserialize(deserializer)? {
-            BodyRepr::Object { keywords, list_type } => {
+            BodyRepr::Object {
+                keywords,
+                list_type,
+            } => {
                 let keywords_lower = precompute_keywords_lower(&keywords);
                 Ok(RuleBody {
                     keywords,
@@ -72,10 +75,14 @@ impl<'de> Deserialize<'de> for RuleBody {
                 })
             }
             BodyRepr::String(s) => {
-                let inner: BodyRepr = serde_json::from_str(&s)
-                    .map_err(|e| serde::de::Error::custom(format!("invalid rule body string: {e}")))?;
+                let inner: BodyRepr = serde_json::from_str(&s).map_err(|e| {
+                    serde::de::Error::custom(format!("invalid rule body string: {e}"))
+                })?;
                 match inner {
-                    BodyRepr::Object { keywords, list_type } => {
+                    BodyRepr::Object {
+                        keywords,
+                        list_type,
+                    } => {
                         let keywords_lower = precompute_keywords_lower(&keywords);
                         Ok(RuleBody {
                             keywords,
@@ -524,14 +531,18 @@ mod manifest_parse_debug {
     use super::*;
     #[test]
     fn debug_parse_control_manifest() {
-        let raw = std::fs::read_to_string(
-            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/edge-manifest-debug.json"),
-        )
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/edge-manifest-debug.json"
+        ))
         .unwrap();
         let parsed: Result<EdgeManifestFile, _> = serde_json::from_str(&raw);
         let parsed = parsed.expect("control-plane edge manifest must parse");
         assert!(
-            parsed.landlock_profiles.iter().any(|p| !p.exec_paths.is_empty()),
+            parsed
+                .landlock_profiles
+                .iter()
+                .any(|p| !p.exec_paths.is_empty()),
             "landlock_profiles should carry exec_paths"
         );
     }

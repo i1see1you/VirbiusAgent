@@ -71,27 +71,13 @@ impl ExecutionResult {
 
 /// Non-Linux stub for LandlockRules.
 #[cfg(not(target_os = "linux"))]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LandlockRules {}
-
-#[cfg(not(target_os = "linux"))]
-impl Default for LandlockRules {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 /// Non-Linux stub for GvisorPoolConfig.
 #[cfg(not(target_os = "linux"))]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GvisorPoolConfig {}
-
-#[cfg(not(target_os = "linux"))]
-impl Default for GvisorPoolConfig {
-    fn default() -> Self {
-        Self {}
-    }
-}
 
 /// Configuration for executing a tool in a sandbox.
 #[derive(Debug, Clone)]
@@ -240,7 +226,7 @@ pub fn run_unsandboxed(
 
     let mem_limit: u64 = match language {
         Language::Node => 512 * 1024 * 1024, // V8 needs larger CodeRange reservation
-        _               => 256 * 1024 * 1024,
+        _ => 256 * 1024 * 1024,
     };
     let cpu_limit = (timeout_ms / 1000).max(2); // RLIMIT_CPU seconds
 
@@ -295,10 +281,7 @@ pub fn run_unsandboxed(
                 if start.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!(
-                        "unsandboxed exec timed out after {}ms",
-                        timeout_ms
-                    ));
+                    return Err(format!("unsandboxed exec timed out after {}ms", timeout_ms));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
@@ -381,9 +364,7 @@ pub fn run_unsandboxed(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| format!("spawn failed: {e}"))?;
+    let mut child = cmd.spawn().map_err(|e| format!("spawn failed: {e}"))?;
     let timeout = std::time::Duration::from_millis(timeout_ms);
     let start = std::time::Instant::now();
 
@@ -412,10 +393,7 @@ pub fn run_unsandboxed(
                 if start.elapsed() > timeout {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err(format!(
-                        "unsandboxed exec timed out after {}ms",
-                        timeout_ms
-                    ));
+                    return Err(format!("unsandboxed exec timed out after {}ms", timeout_ms));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }

@@ -324,7 +324,8 @@ impl GvisorPool {
         // One-shot model: the container is spent. `runsc run` leaves state
         // behind after exit, so explicitly delete it and drop the bundle.
         self.delete_container(&container.id);
-        let _ = std::fs::remove_dir_all(PathBuf::from(&self.config.bundle_root).join(&container.id));
+        let _ =
+            std::fs::remove_dir_all(PathBuf::from(&self.config.bundle_root).join(&container.id));
 
         let elapsed = start.elapsed();
         let warm_hit = container.warm_hit;
@@ -518,9 +519,8 @@ impl GvisorPool {
                 let _ = c.child.kill();
                 let _ = c.child.wait();
                 self.delete_container(&c.id);
-                let _ = std::fs::remove_dir_all(
-                    PathBuf::from(&self.config.bundle_root).join(&c.id),
-                );
+                let _ =
+                    std::fs::remove_dir_all(PathBuf::from(&self.config.bundle_root).join(&c.id));
             }
         }
         pool.clear();

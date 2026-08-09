@@ -769,7 +769,11 @@ async fn test_multi_upstream_no_conflict() {
     let resp = route(&env, &list_req, sid).await;
     let resp = resp.unwrap();
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 8, "should have 8 merged tools (4 upstream + 4 local exec)");
+    assert_eq!(
+        tools.len(),
+        8,
+        "should have 8 merged tools (4 upstream + 4 local exec)"
+    );
 
     // No conflicts — no prefixing
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -870,7 +874,11 @@ async fn test_multi_upstream_name_conflict() {
     let resp = route(&env, &list_req, sid).await;
     let resp = resp.unwrap();
     let tools = resp["result"]["tools"].as_array().unwrap();
-    assert_eq!(tools.len(), 8, "should have 8 tools (4 upstream + 4 local exec)");
+    assert_eq!(
+        tools.len(),
+        8,
+        "should have 8 tools (4 upstream + 4 local exec)"
+    );
 
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     // Conflicting read_file should be prefixed

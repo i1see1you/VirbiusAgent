@@ -1691,7 +1691,8 @@ async fn execute_in_sandbox(
     use std::time::Duration;
     use virbius_core::manifest;
     use virbius_core::sandbox::{
-        execute, run_unsandboxed, ExecutionRequest, GvisorPool, LandlockRules, Language, SandboxType,
+        execute, run_unsandboxed, ExecutionRequest, GvisorPool, LandlockRules, Language,
+        SandboxType,
     };
 
     // 1. Extract code
@@ -1768,9 +1769,18 @@ async fn execute_in_sandbox(
             // treats as degradation to drop-caps only.
             let ll = manifest::landlock_profile(tool_name);
             let landlock_rules = LandlockRules {
-                read_paths: ll.as_ref().map(|p| p.read_paths.clone()).unwrap_or_default(),
-                write_paths: ll.as_ref().map(|p| p.write_paths.clone()).unwrap_or_default(),
-                exec_paths: ll.as_ref().map(|p| p.exec_paths.clone()).unwrap_or_default(),
+                read_paths: ll
+                    .as_ref()
+                    .map(|p| p.read_paths.clone())
+                    .unwrap_or_default(),
+                write_paths: ll
+                    .as_ref()
+                    .map(|p| p.write_paths.clone())
+                    .unwrap_or_default(),
+                exec_paths: ll
+                    .as_ref()
+                    .map(|p| p.exec_paths.clone())
+                    .unwrap_or_default(),
                 ..LandlockRules::default()
             };
             let req = ExecutionRequest {
@@ -1795,7 +1805,10 @@ async fn execute_in_sandbox(
                 .map(|v| v == "fail_closed")
                 .unwrap_or(false);
             if fail_closed && !GvisorPool::global().is_available() {
-                warn!("local exec '{}' denied: gVisor unavailable, fail_closed", tool_name);
+                warn!(
+                    "local exec '{}' denied: gVisor unavailable, fail_closed",
+                    tool_name
+                );
                 return jsonrpc_error(
                     -32603,
                     id,
@@ -1828,7 +1841,9 @@ async fn execute_in_sandbox(
             let output = if r.stderr.is_empty() {
                 r.stdout.trim().to_string()
             } else {
-                format!("{}\n{}", r.stdout.trim(), r.stderr.trim()).trim().to_string()
+                format!("{}\n{}", r.stdout.trim(), r.stderr.trim())
+                    .trim()
+                    .to_string()
             };
             if r.degraded {
                 let meta = serde_json::json!({
@@ -1915,17 +1930,16 @@ async fn execute_in_sandbox(
         .filter(|&t| t > 0)
         .unwrap_or(30_000);
 
-    let exec_result = match tokio::task::spawn_blocking(move || {
-        run_unsandboxed(lang_enum, &code, timeout_ms)
-    })
-    .await
-    {
-        Ok(inner) => inner,
-        Err(e) => {
-            warn!("local exec '{}' unsandboxed spawn failed: {}", tool_name, e);
-            return jsonrpc_error(-32603, id, &format!("unsandboxed spawn failed: {e}"));
-        }
-    };
+    let exec_result =
+        match tokio::task::spawn_blocking(move || run_unsandboxed(lang_enum, &code, timeout_ms))
+            .await
+        {
+            Ok(inner) => inner,
+            Err(e) => {
+                warn!("local exec '{}' unsandboxed spawn failed: {}", tool_name, e);
+                return jsonrpc_error(-32603, id, &format!("unsandboxed spawn failed: {e}"));
+            }
+        };
 
     match exec_result {
         Ok(r) => {

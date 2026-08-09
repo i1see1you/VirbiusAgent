@@ -50,7 +50,9 @@ pub fn local_exec_tool_descriptors() -> Vec<Value> {
         .map(|&(name, _lang, code_arg)| {
             let desc = match name {
                 "shell" => "Execute a shell command (sandboxed locally by virbius proxy)",
-                "execute_python" | "execute_code" => "Execute Python code (sandboxed locally by virbius proxy)",
+                "execute_python" | "execute_code" => {
+                    "Execute Python code (sandboxed locally by virbius proxy)"
+                }
                 "execute_node" => "Execute Node.js code (sandboxed locally by virbius proxy)",
                 _ => "Execute code (sandboxed locally by virbius proxy)",
             };
