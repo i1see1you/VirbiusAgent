@@ -9,11 +9,21 @@ the SSE upstream dvla_agent/mcp_sse_server.py, which executes the real tools.
 """
 from langchain.agents import Tool
 
-from dvla_agent import mcpproxy_client
+from dvla_agent import mcp_server, mcpproxy_client
+from modules import protection
 
 
 def _call_proxy(tool_name: str, args: dict) -> str:
-    """Invoke the tool through the Rust virbius-mcp-proxy (cloud groovy eval)."""
+    """Invoke a tool, honoring the protection master switch.
+
+    - switch ON  -> go through the Rust virbius-mcp-proxy (cloud groovy eval).
+    - switch OFF -> call the upstream tool directly, bypassing all filtering.
+    """
+    if not protection.is_enabled():
+        result = mcp_server.call_tool(tool_name, args)
+        if result.get("success"):
+            return result["result"]
+        return "[blocked] " + result.get("error", "tool failed")
     return mcpproxy_client.call_tool(tool_name, args)
 
 

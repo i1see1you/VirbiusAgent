@@ -55,6 +55,45 @@ Thought: I have to use the GetUserTransaction tool, keeping the userId exactly a
 <div id="flags" class="panel">
   {% for k,v in pwned.items() %}<div class="win">{{ k }}: {{ v }}</div>{% else %}<p class="spin">暂无</p>{% endfor %}
 </div>
+
+<hr class="prot-divider">
+<details class="prot-guide" open>
+  <summary>🛡 接入 VirbiusAgent 防护说明 <span class="insp-sub">漏洞 → 能力 → 配置 → 生效</span></summary>
+
+  <div class="pg-sec">
+    <h3 style="margin:10px 0 4px">1. 漏洞与本靶场</h3>
+    <p style="margin:2px 0">dvla 是一个故意脆弱的 ReAct 银行客服：Agent 被系统提示约束为『只操作 GetCurrentUser() 返回的 userId』，
+    但工具实现存在越权漏洞——GetUserTransactions 直接用传入的 userId 拼接 SQL 查询，没有任何校验。</p>
+    <p style="margin:2px 0">攻击者通过提示注入伪造系统更新（把当前 userId 改成 2）或伪造 Observation，诱导 Agent 把攻击者的 userId 当作合法 userId 传给工具，从而越权读取 DocBrown（userId=2）的交易记录。</p>
+    <p style="margin:2px 0">本质：工具调用参数（userId）来自大模型输出，是不可信的，必须做独立于模型的授权校验。</p>
+  </div>
+
+  <div class="pg-sec">
+    <h3 style="margin:10px 0 4px">2. 用到的 VirbiusAgent 能力（本靶场：云端 Cloud Groovy 越权评估）</h3>
+    <p style="margin:2px 0">工具调用链路：Agent → virbius-mcp-proxy（stdio）→ engine(/v1/evaluate 云端 Groovy 越权评估) → 上游工具执行。</p>
+    <p style="margin:2px 0">virbius-mcp-proxy 在把工具调用转发给上游执行前，先调用 engine 的 /v1/evaluate 做云端评估。</p>
+    <p style="margin:2px 0">评估时把会话用户 user_id 与工具参数 args.userId 一并暴露给 Cloud Groovy 规则，规则用 decide(ctx) 判断二者是否一致：不一致 → true（deny）拦截。</p>
+    <p style="margin:2px 0">这与模型无关，是独立于大模型的第二道防线：即使提示注入成功让模型输出 userId=2，engine 仍会拦截。</p>
+  </div>
+
+  <div class="pg-sec">
+    <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
+    <p style="margin:2px 0">为应用 demo-app 新增一条云端越权防护规则（layer=cloud，runtime=groovy，如 cloud_unauthorized_tx_deny）：</p>
+    <p style="margin:2px 0">· layer = cloud（云端评估，经 mcp-proxy 生效）</p>
+    <p style="margin:2px 0">· runtime = groovy（Groovy 脚本规则）</p>
+    <p style="margin:2px 0">· intent_action = deny（意图：拦截）</p>
+    <p style="margin:2px 0">· bind_scope = service，app_ids = ["demo-app"]（绑定到 demo-app）</p>
+    <p style="margin:2px 0">· rollout_state = full（全量生效，防止 dry_run 只观察不拦截）</p>
+    <p style="margin:2px 0">· Groovy 脚本：比较 ctx.var('user_id') 与 ctx.var('args.userId')，不一致则返回 true（deny）</p>
+  </div>
+
+  <div class="pg-sec">
+    <h3 style="margin:10px 0 4px">4. 如何生效</h3>
+    <p style="margin:2px 0">Control 通过 PublishService 把云端 Groovy 规则推送到 engine 的 Redis 缓存 → engine 预编译规则类。</p>
+    <p style="margin:2px 0">每次工具调用：mcp-proxy 收到 Agent 的 userId 参数 → 调 engine /v1/evaluate → Groovy 规则比较 user_id 与 args.userId → 不一致则返回 deny → proxy 返回 [blocked]，工具不执行。</p>
+    <p style="margin:2px 0">顶部『🛡 VirbiusAgent 防护』开关控制是否走这条评估链路：开=走 mcp-proxy 云层评估（越权被拦）、关=直连上游工具执行（越权可夺旗）。</p>
+  </div>
+</details>
 {% endblock %}
 
 {% block script %}

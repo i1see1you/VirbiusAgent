@@ -73,14 +73,19 @@ class McpProxyClient:
         }
         self.proc.stdin.write(json.dumps(req) + "\n")
         self.proc.stdin.flush()
-        line = self.proc.stdout.readline()
-        if not line:
-            stderr = (self.proc.stderr.read() or "").strip() or "no output"
-            raise RuntimeError("mcp-proxy exited: " + stderr)
-        try:
-            return json.loads(line)
-        except ValueError as exc:
-            raise RuntimeError("mcp-proxy invalid response: " + line.strip()) from exc
+        # The Rust proxy prints tracing logs to stdout, which would pollute the
+        # JSON-RPC stream. Skip any non-JSON line until we get a full response.
+        while True:
+            line = self.proc.stdout.readline()
+            if not line:
+                stderr = (self.proc.stderr.read() or "").strip() or "no output"
+                raise RuntimeError("mcp-proxy exited: " + stderr)
+            s = line.strip()
+            if s.startswith("{") and s.endswith("}"):
+                try:
+                    return json.loads(s)
+                except ValueError as exc:
+                    raise RuntimeError("mcp-proxy invalid response: " + s) from exc
 
     def _initialize(self, meta: dict) -> None:
         params = {

@@ -3,7 +3,7 @@
 Player uses prompt injection / SQLi to make the agent leak flags.
 UI & flow follow virbius-demo conventions; tool logic is ported from dvla-test.
 """
-from flask import Blueprint, render_template, request, jsonify, session
+from flask import Blueprint, render_template, request, jsonify, session, current_app
 
 # langchain ReAct agent
 from langchain.agents import ConversationalChatAgent, AgentExecutor
@@ -98,6 +98,9 @@ def run():
         res = executor.invoke({"input": user_msg})
     except llm_client.LLMError as e:
         return jsonify({"error": str(e)}), 502
+    except Exception as e:  # noqa: BLE001 - surface any agent/model error as JSON
+        current_app.logger.warning("agent run failed: %s", e)
+        return jsonify({"error": f"Agent 执行失败：{type(e).__name__}: {e}"}), 502
 
     for action, observation in res.get("intermediate_steps", []):
         if action.log.strip():

@@ -15,6 +15,7 @@ import queue
 import sys
 import threading
 import urllib.parse
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from dvla_agent import mcp_server
@@ -88,7 +89,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         qs = urllib.parse.parse_qs(parsed.query)
-        sid = qs.get("session_id", ["default"])[0]
+        # Bearers that omit session_id (e.g. the Rust mcp-proxy upstream client)
+        # all fall back to the same "default" slot, so concurrent connections
+        # would share one queue and steal each other's responses. Give each
+        # anonymous connection its own unique session_id to isolate them.
+        sid = qs.get("session_id", [""])[0].strip() or ("sess-" + uuid.uuid4().hex)
         q = _get_queue(sid)
 
         self.send_response(200)
