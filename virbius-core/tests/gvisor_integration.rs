@@ -53,6 +53,7 @@ fn test_config(rootfs: &str) -> GvisorPoolConfig {
         memory_limit_bytes: 128 * 1024 * 1024,
         cpu_quota: 1.0,
         network_disabled: true,
+        state_root: "/tmp/virbius-gvisor-test-state".to_string(),
     }
 }
 
@@ -128,7 +129,15 @@ fn test_gvisor_pool_available() {
         return;
     }
 
-    let config = GvisorPoolConfig::default();
+    let rootfs = match ensure_rootfs() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("SKIP: {e}");
+            return;
+        }
+    };
+
+    let config = test_config(&rootfs);
     let pool = GvisorPool::new(config);
     assert!(
         pool.is_available(),

@@ -1,0 +1,154 @@
+{
+  "tenant_id" : "default",
+  "manifest_version" : "1",
+  "app_id" : "test1",
+  "rules" : [ {
+    "rule_id" : "edge_l0_content_allow",
+    "rule_revision" : 1,
+    "reason_code" : "EDGE_CONTENT_KEYWORD_ALLOW",
+    "risk_score" : 0,
+    "intent_action" : "allow",
+    "enforce_mode" : "dry_run",
+    "rollout_state" : "dry_run",
+    "body" : {
+      "keywords" : [ ],
+      "list_type" : "allow"
+    }
+  }, {
+    "rule_id" : "edge_l0_content_deny",
+    "rule_revision" : 1,
+    "reason_code" : "EDGE_CONTENT_KEYWORD_DENY",
+    "risk_score" : 100,
+    "intent_action" : "deny",
+    "enforce_mode" : "dry_run",
+    "rollout_state" : "dry_run",
+    "body" : {
+      "keywords" : [ "demo-deny-keyword-1", "demo-deny-keyword-2", "jailbreak", "ignore previous instructions" ],
+      "list_type" : "deny"
+    }
+  }, {
+    "rule_id" : "verify_sandbox_edge_rule",
+    "rule_revision" : 6,
+    "reason_code" : "INFO",
+    "risk_score" : 5,
+    "intent_action" : "deny",
+    "enforce_mode" : "dry_run",
+    "rollout_state" : "dry_run",
+    "body" : "{\"list_type\":\"deny\",\"keywords\":[\"__never_match__\"]}"
+  } ],
+  "dlp_rules" : [ {
+    "rule_id" : "edge_dlp_phone",
+    "rule_revision" : 1,
+    "reason_code" : "DLP_PHONE",
+    "risk_score" : 0,
+    "intent_action" : "allow",
+    "enforce_mode" : "full",
+    "rollout_state" : "full",
+    "body" : {
+      "entity_type" : "phone_cn",
+      "priority" : 0,
+      "mask_template" : "{{VIRBIUS_PHONE_CN_{seq}}}"
+    }
+  } ],
+  "tool_policies" : [ {
+    "tool_name" : "curl",
+    "risk_class" : "network",
+    "sandbox_type" : "none",
+    "timeout_ms" : 15000,
+    "fast_path" : false,
+    "approval_mode" : "strict",
+    "allowed_args_schema" : {
+      "allowed_hosts" : [ "api.openai.com", "api.github.com" ],
+      "deny_cidrs" : [ "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.169.254/32" ]
+    }
+  }, {
+    "tool_name" : "exec_cmd",
+    "risk_class" : "high",
+    "sandbox_type" : "gvisor",
+    "timeout_ms" : 30000,
+    "fast_path" : false,
+    "approval_mode" : "strict",
+    "allowed_args_schema" : {
+      "runsc_path" : "/usr/local/bin/runsc",
+      "rootfs_path" : "/opt/virbius/rootfs",
+      "min_warm" : 2,
+      "max_idle" : 5,
+      "memory_limit_bytes" : 268435456,
+      "cpu_quota" : 1.0,
+      "network_disabled" : true,
+      "exec_timeout_ms" : 30000
+    }
+  }, {
+    "tool_name" : "execute_code",
+    "risk_class" : "high",
+    "sandbox_type" : "landlock",
+    "timeout_ms" : 30000,
+    "fast_path" : false,
+    "approval_mode" : "strict"
+  }, {
+    "tool_name" : "execute_node",
+    "risk_class" : "high",
+    "sandbox_type" : "landlock",
+    "timeout_ms" : 30000,
+    "fast_path" : false,
+    "approval_mode" : "strict"
+  }, {
+    "tool_name" : "execute_python",
+    "risk_class" : "high",
+    "sandbox_type" : "landlock",
+    "timeout_ms" : 30000,
+    "fast_path" : false,
+    "approval_mode" : "strict"
+  }, {
+    "tool_name" : "read_file",
+    "risk_class" : "low",
+    "sandbox_type" : "landlock",
+    "timeout_ms" : 5000,
+    "fast_path" : true,
+    "approval_mode" : "strict",
+    "allowed_args_schema" : {
+      "read_paths" : [ "/tmp/data/*", "/home/user/workdir/*", "/usr/lib/*" ],
+      "write_paths" : [ ],
+      "exec_paths" : [ "/usr/bin/cat", "/usr/bin/head" ]
+    }
+  }, {
+    "tool_name" : "shell",
+    "risk_class" : "high",
+    "sandbox_type" : "landlock",
+    "timeout_ms" : 30000,
+    "fast_path" : false,
+    "approval_mode" : "strict"
+  } ],
+  "landlock_profiles" : [ {
+    "tool_name" : "execute_code",
+    "read_paths" : [ "/usr/*", "/bin/*", "/etc/ssl/*", "/tmp/*", "/dev/null" ],
+    "write_paths" : [ "/tmp/*" ],
+    "exec_paths" : [ "/usr/bin/*", "/bin/*" ]
+  }, {
+    "tool_name" : "execute_node",
+    "read_paths" : [ "/usr/*", "/bin/*", "/etc/ssl/*", "/tmp/*", "/dev/null" ],
+    "write_paths" : [ "/tmp/*" ],
+    "exec_paths" : [ "/usr/bin/*", "/bin/*" ]
+  }, {
+    "tool_name" : "execute_python",
+    "read_paths" : [ "/usr/*", "/bin/*", "/etc/ssl/*", "/tmp/*", "/dev/null" ],
+    "write_paths" : [ "/tmp/*" ],
+    "exec_paths" : [ "/usr/bin/*", "/bin/*" ]
+  }, {
+    "tool_name" : "shell",
+    "read_paths" : [ "/usr/*", "/bin/*", "/etc/ssl/*", "/tmp/*", "/dev/null" ],
+    "write_paths" : [ "/tmp/*" ],
+    "exec_paths" : [ "/usr/bin/*", "/bin/*" ]
+  } ],
+  "gvisor_config" : { },
+  "sdk_config" : {
+    "audit_sample_rate_allow" : 0.1,
+    "audit_sample_rate_hit" : 1.0,
+    "audit_flush_interval_ms" : 30000,
+    "audit_queue_max" : 500,
+    "canary_session_key" : "device_id",
+    "dlp_vault_ttl_ms" : 1800000
+  },
+  "artifact_revision" : 13,
+  "published_at" : "2026-08-06T06:57:21.825422680Z"
+}

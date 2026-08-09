@@ -36,14 +36,67 @@ pub struct DlpRule {
     pub body: DlpRuleBody,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default)]
 pub struct RuleBody {
-    #[serde(default)]
     pub keywords: Vec<String>,
-    #[serde(default, rename = "list_type")]
     pub list_type: String,
-    #[serde(skip)]
     pub keywords_lower: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for RuleBody {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum BodyRepr {
+            Object {
+                #[serde(default)]
+                keywords: Vec<String>,
+                #[serde(default, rename = "list_type")]
+                list_type: String,
+            },
+            // Control-plane stores bodies produced with editor_mode=simple as a
+            // JSON string (e.g. "{\"list_type\":\"deny\",\"keywords\":[...]}");
+            // parse the inner string so the manifest still loads.
+            String(String),
+        }
+        match BodyRepr::deserialize(deserializer)? {
+            BodyRepr::Object { keywords, list_type } => {
+                let keywords_lower = precompute_keywords_lower(&keywords);
+                Ok(RuleBody {
+                    keywords,
+                    list_type,
+                    keywords_lower,
+                })
+            }
+            BodyRepr::String(s) => {
+                let inner: BodyRepr = serde_json::from_str(&s)
+                    .map_err(|e| serde::de::Error::custom(format!("invalid rule body string: {e}")))?;
+                match inner {
+                    BodyRepr::Object { keywords, list_type } => {
+                        let keywords_lower = precompute_keywords_lower(&keywords);
+                        Ok(RuleBody {
+                            keywords,
+                            list_type,
+                            keywords_lower,
+                        })
+                    }
+                    BodyRepr::String(_) => Err(serde::de::Error::custom(
+                        "rule body string contains another string".to_string(),
+                    )),
+                }
+            }
+        }
+    }
+}
+
+fn precompute_keywords_lower(keywords: &[String]) -> Vec<String> {
+    keywords
+        .iter()
+        .map(|k| k.to_lowercase())
+        .collect::<Vec<_>>()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -411,10 +464,6 @@ fn app_id_matches(manifest_app_id: &str, cfg: &crate::sync::EdgeInitConfig) -> b
     !expected.is_empty() && !manifest_app_id.is_empty() && expected == manifest_app_id
 }
 
-fn precompute_keywords_lower(keywords: &[String]) -> Vec<String> {
-    keywords.iter().map(|kw| kw.to_ascii_lowercase()).collect()
-}
-
 pub fn effective_sdk_config() -> SdkConfig {
     load().sdk_config
 }
@@ -460,4 +509,30 @@ pub fn tool_risk_class(name: &str) -> String {
             }
         })
         .unwrap_or_else(|| "low".to_string())
+}
+
+/// Look up the Landlock profile (read/write/exec path allowlist) for a tool.
+pub fn landlock_profile(name: &str) -> Option<LandlockProfile> {
+    load()
+        .landlock_profiles
+        .into_iter()
+        .find(|p| p.tool_name == name)
+}
+
+#[cfg(test)]
+mod manifest_parse_debug {
+    use super::*;
+    #[test]
+    fn debug_parse_control_manifest() {
+        let raw = std::fs::read_to_string(
+            concat!(env!("CARGO_MANIFEST_DIR"), "/tests/edge-manifest-debug.json"),
+        )
+        .unwrap();
+        let parsed: Result<EdgeManifestFile, _> = serde_json::from_str(&raw);
+        let parsed = parsed.expect("control-plane edge manifest must parse");
+        assert!(
+            parsed.landlock_profiles.iter().any(|p| !p.exec_paths.is_empty()),
+            "landlock_profiles should carry exec_paths"
+        );
+    }
 }

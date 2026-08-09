@@ -31,6 +31,7 @@ pub const LOCAL_EXEC_TOOLS: &[(&str, &str, &str)] = &[
     ("execute_python", "python", "code"),
     ("execute_code", "python", "code"),
     ("execute_node", "node", "code"),
+    ("exec_cmd", "shell", "command"),
 ];
 
 /// If `tool_name` is a local code-execution tool, returns `(language, code_arg)`.

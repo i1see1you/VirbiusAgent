@@ -69,6 +69,30 @@ impl ExecutionResult {
     }
 }
 
+/// Non-Linux stub for LandlockRules.
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Clone)]
+pub struct LandlockRules {}
+
+#[cfg(not(target_os = "linux"))]
+impl Default for LandlockRules {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
+/// Non-Linux stub for GvisorPoolConfig.
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Clone)]
+pub struct GvisorPoolConfig {}
+
+#[cfg(not(target_os = "linux"))]
+impl Default for GvisorPoolConfig {
+    fn default() -> Self {
+        Self {}
+    }
+}
+
 /// Configuration for executing a tool in a sandbox.
 #[derive(Debug, Clone)]
 pub struct ExecutionRequest {
@@ -283,20 +307,121 @@ pub fn run_unsandboxed(
     }
 }
 
-/// Non-Linux stub: sandbox features are unavailable on macOS/Windows.
+/// Supported sandboxed languages (non-Linux variant).
+///
+/// Mirrors the enum defined in the Linux-gated [`gvisor_pool`] module so that
+/// `run_unsandboxed` works on macOS/Windows for local development.
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Language {
+    Python,
+    Shell,
+    Node,
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Language {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Language::Python => "python",
+            Language::Shell => "shell",
+            Language::Node => "node",
+        }
+    }
+
+    /// The interpreter binary to spawn.
+    pub fn interpreter(&self) -> &str {
+        match self {
+            Language::Python => "python3",
+            Language::Shell => "sh",
+            Language::Node => "node",
+        }
+    }
+
+    /// Parse from string.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "python" | "python3" => Some(Language::Python),
+            "shell" | "sh" | "bash" => Some(Language::Shell),
+            "node" | "nodejs" | "javascript" => Some(Language::Node),
+            _ => None,
+        }
+    }
+}
+
+/// Non-Linux stub: full sandbox features (landlock/gvisor) are unavailable.
 #[cfg(not(target_os = "linux"))]
 pub fn execute(_req: ExecutionRequest) -> Result<ExecutionResult, String> {
     Err("sandbox not available on this platform (Linux only)".to_string())
 }
 
-/// Non-Linux stub for run_unsandboxed.
+/// Non-Linux implementation of unsandboxed execution: spawns the interpreter
+/// with wall-clock timeout. No rlimit — per-process memory/CPU caps are
+/// Linux-only; the caller (proxy) already gates this with
+/// `VIRBIUS_ALLOW_UNSANDBOXED`.
 #[cfg(not(target_os = "linux"))]
 pub fn run_unsandboxed(
-    _language: Language,
-    _code: &str,
-    _timeout_ms: u64,
+    language: Language,
+    code: &str,
+    timeout_ms: u64,
 ) -> Result<ExecutionResult, String> {
-    Err("sandbox not available on this platform (Linux only)".to_string())
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let interpreter = language.interpreter();
+    let flag = match language {
+        Language::Node => "-e",
+        _ => "-c",
+    };
+
+    let mut cmd = Command::new(interpreter);
+    cmd.arg(flag)
+        .arg(code)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("spawn failed: {e}"))?;
+    let timeout = std::time::Duration::from_millis(timeout_ms);
+    let start = std::time::Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut s) = child.stdout.take() {
+                    s.read_to_string(&mut stdout).ok();
+                }
+                if let Some(mut s) = child.stderr.take() {
+                    s.read_to_string(&mut stderr).ok();
+                }
+                return Ok(ExecutionResult {
+                    stdout,
+                    stderr,
+                    exit_code: status.code().unwrap_or(-1),
+                    sandbox_used: SandboxType::None,
+                    degraded: false,
+                    degrade_note: None,
+                    landlock_applied: false,
+                });
+            }
+            Ok(None) => {
+                if start.elapsed() > timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(format!(
+                        "unsandboxed exec timed out after {}ms",
+                        timeout_ms
+                    ));
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(format!("wait failed: {e}")),
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]

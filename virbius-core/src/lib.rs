@@ -14,7 +14,6 @@ pub mod memory_interceptor;
 pub mod precheck;
 pub mod prompt_gateway;
 mod runtime;
-#[cfg(target_os = "linux")]
 pub mod sandbox;
 mod sync;
 pub mod trace;

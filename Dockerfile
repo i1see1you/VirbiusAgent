@@ -15,6 +15,23 @@
 FROM maven:3.9-eclipse-temurin-17 AS java-build
 WORKDIR /build
 
+# Use Aliyun Maven mirror for fast/sane builds in CN. Override with --build-arg
+# MAVEN_MIRROR=central; selection below (mirroring the APT/CRATES switch pattern).
+ARG MAVEN_MIRROR="aliyun"
+RUN if [ "$MAVEN_MIRROR" = "aliyun" ]; then \
+      mkdir -p /root/.m2 && \
+      printf '%s\n' \
+        '<settings>' \
+        '  <mirrors>' \
+        '    <mirror>' \
+        '      <id>aliyun</id>' \
+        '      <mirrorOf>central</mirrorOf>' \
+        '      <url>https://maven.aliyun.com/repository/public</url>' \
+        '    </mirror>' \
+        '  </mirrors>' \
+        '</settings>' > /root/.m2/settings.xml; \
+    fi
+
 # Copy POM files first for dependency cache
 COPY pom.xml .
 COPY virbius-groovy-l3/pom.xml virbius-groovy-l3/
@@ -177,13 +194,14 @@ RUN if [ "$APT_MIRROR" = "cn" ]; then \
     apt-get update && apt-get install -y --no-install-recommends curl python3 nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
+# Run as root: the sandbox engine (gVisor runsc) creates its user/pid namespaces
+# from the container's root namespace; as a non-root user runsc requires
+# newuidmap/newgidmap which cannot reach the target /proc inside a container,
+# so gVisor isolation only works when the proxy runs as root here. The real
+# isolation boundary for untrusted code is the runsc sandbox itself.
+RUN mkdir -p /var/log/virbius
 
-COPY --from=rust-build /build/target/release/virbius-mcp-proxy /usr/local/bin/
-
-RUN mkdir -p /var/log/virbius && chown -R virbius:virbius /app /var/log/virbius
-
-USER virbius
+USER root
 EXPOSE 9090
 
 ENV VIRBIUS_TRANSPORT=tcp://0.0.0.0:9090

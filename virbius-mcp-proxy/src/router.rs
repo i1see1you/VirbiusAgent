@@ -1762,11 +1762,22 @@ async fn execute_in_sandbox(
                 Language::Node => "-e",
                 _ => "-c",
             };
+            // Load the tool's Landlock path allowlist from the edge manifest
+            // (runtime='landlock' rules). If no profile is declared, default to
+            // an empty rule set (Lockshell deny-all exec), which the sandbox
+            // treats as degradation to drop-caps only.
+            let ll = manifest::landlock_profile(tool_name);
+            let landlock_rules = LandlockRules {
+                read_paths: ll.as_ref().map(|p| p.read_paths.clone()).unwrap_or_default(),
+                write_paths: ll.as_ref().map(|p| p.write_paths.clone()).unwrap_or_default(),
+                exec_paths: ll.as_ref().map(|p| p.exec_paths.clone()).unwrap_or_default(),
+                ..LandlockRules::default()
+            };
             let req = ExecutionRequest {
                 sandbox_type: SandboxType::Landlock,
                 program: interpreter,
                 args: vec![flag.to_string(), code],
-                landlock_rules: LandlockRules::default(),
+                landlock_rules,
                 timeout: Duration::from_millis(timeout_ms),
                 gvisor_config: None,
                 gvisor_language: None,
@@ -1836,12 +1847,18 @@ async fn execute_in_sandbox(
                     }
                 })
             } else {
+                let meta = serde_json::json!({
+                    "sandbox_configured": sandbox_type_str,
+                    "sandbox_used": r.sandbox_used.as_str(),
+                    "degraded": false
+                });
                 serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "result": {
                         "content": [{"type": "text", "text": output}],
-                        "isError": is_error
+                        "isError": is_error,
+                        "_meta": meta
                     }
                 })
             }
@@ -1853,16 +1870,109 @@ async fn execute_in_sandbox(
     }
 }
 
-/// Non-Linux stub for local code-execution sandbox.
+/// Non-Linux: unsandboxed execution only (no landlock/gvisor on macOS/Windows).
 #[cfg(not(target_os = "linux"))]
 async fn execute_in_sandbox(
     id: &Value,
-    _tool_name: &str,
-    _args: &Value,
-    _lang: &str,
-    _code_arg: &str,
+    tool_name: &str,
+    args: &Value,
+    lang: &str,
+    code_arg: &str,
 ) -> Value {
-    jsonrpc_error(-32603, id, "sandbox not available on this platform (Linux only)")
+    use virbius_core::manifest;
+    use virbius_core::sandbox::{run_unsandboxed, Language};
+
+    let code = match args.get(code_arg).and_then(|v| v.as_str()) {
+        Some(c) => c.to_string(),
+        None => {
+            return jsonrpc_error(
+                -32602,
+                id,
+                &format!(
+                    "missing '{}' argument for local exec tool '{}'",
+                    code_arg, tool_name
+                ),
+            );
+        }
+    };
+
+    let allow = std::env::var("VIRBIUS_ALLOW_UNSANDBOXED")
+        .map(|v| v != "false" && v != "0")
+        .unwrap_or(true);
+    if !allow {
+        warn!("local exec '{}' denied: unsandboxed disabled", tool_name);
+        return jsonrpc_error(
+            -32603,
+            id,
+            "unsandboxed_local_exec_not_allowed (set VIRBIUS_ALLOW_UNSANDBOXED=true)",
+        );
+    }
+
+    let lang_enum = Language::parse(lang).unwrap_or(Language::Shell);
+    let timeout_ms = manifest::tool_policy(tool_name)
+        .as_ref()
+        .map(|p| p.timeout_ms)
+        .filter(|&t| t > 0)
+        .unwrap_or(30_000);
+
+    let exec_result = match tokio::task::spawn_blocking(move || {
+        run_unsandboxed(lang_enum, &code, timeout_ms)
+    })
+    .await
+    {
+        Ok(inner) => inner,
+        Err(e) => {
+            warn!("local exec '{}' unsandboxed spawn failed: {}", tool_name, e);
+            return jsonrpc_error(-32603, id, &format!("unsandboxed spawn failed: {e}"));
+        }
+    };
+
+    match exec_result {
+        Ok(r) => {
+            let is_error = r.exit_code != 0;
+            let output = if r.stderr.is_empty() {
+                r.stdout.trim().to_string()
+            } else {
+                format!("{}\n{}", r.stdout.trim(), r.stderr.trim())
+                    .trim()
+                    .to_string()
+            };
+            if r.degraded {
+                let meta = serde_json::json!({
+                    "sandbox_used": r.sandbox_used.as_str(),
+                    "degraded": true,
+                    "degrade_note": r.degrade_note
+                });
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": output}],
+                        "isError": is_error,
+                        "_meta": meta
+                    }
+                })
+            } else {
+                let meta = serde_json::json!({
+                    "sandbox_used": r.sandbox_used.as_str(),
+                    "degraded": false
+                });
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{"type": "text", "text": output}],
+                        "isError": is_error,
+                        "_meta": meta
+                    }
+                })
+            }
+        }
+        Err(e) => {
+            warn!("local exec '{}' sandbox failed: {}", tool_name, e);
+            jsonrpc_error(-32603, id, &format!("sandbox exec failed: {}", e))
+        }
+    }
 }
 
 #[cfg(test)]
