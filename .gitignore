@@ -39,6 +39,12 @@ __pycache__/
 data/**/*.log
 data/**
 
+# virbius-demo: re-include its source data (offline manifest, labs, config).
+# Runtime caches under data/edge/{control,cloud} are excluded again in
+# virbius-demo/.gitignore.
+!virbius-demo/data/
+!virbius-demo/data/**
+
 # Build artifacts
 dependency-reduced-pom.xml
 

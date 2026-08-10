@@ -276,8 +276,8 @@ async fn test_initialize_tools_list_and_call() {
     let tools = resp["result"]["tools"].as_array().unwrap();
     assert_eq!(
         tools.len(),
-        7,
-        "4 upstream tools + 3 local exec (execute_python deduped)"
+        8,
+        "4 upstream tools + 4 local exec (execute_python deduped)"
     );
 
     // 3. tools/call — "search" is not high-risk, allowed by fallback policy
@@ -771,8 +771,8 @@ async fn test_multi_upstream_no_conflict() {
     let tools = resp["result"]["tools"].as_array().unwrap();
     assert_eq!(
         tools.len(),
-        8,
-        "should have 8 merged tools (4 upstream + 4 local exec)"
+        9,
+        "should have 9 merged tools (4 upstream + 5 local exec)"
     );
 
     // No conflicts — no prefixing
@@ -876,8 +876,8 @@ async fn test_multi_upstream_name_conflict() {
     let tools = resp["result"]["tools"].as_array().unwrap();
     assert_eq!(
         tools.len(),
-        8,
-        "should have 8 tools (4 upstream + 4 local exec)"
+        9,
+        "should have 9 tools (4 upstream + 5 local exec)"
     );
 
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();

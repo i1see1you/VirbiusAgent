@@ -617,7 +617,17 @@ public class ArtifactService {
             block.put("canary_percent", rule.canaryPercent());
         }
         if (rule.body() != null) {
-            block.put("body", rule.body());
+            // body 在 DB 中可能以 JSON 字符串存储；转为对象，保证对端（virbius-core）
+            // 接收到的是结构化的 body 而非字符串。
+            Object body = rule.body();
+            if (body instanceof String s) {
+                try {
+                    body = mapper.readValue(s, Object.class);
+                } catch (Exception e) {
+                    log.warn("failed to parse rule body for {}: {}", rule.ruleId(), e.getMessage());
+                }
+            }
+            block.put("body", body);
         }
         return block;
     }

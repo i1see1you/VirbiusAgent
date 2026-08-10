@@ -1,6 +1,9 @@
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use virbius_core::{precheck, License, MemoryContext, MemoryInterceptor, MemoryPolicies, ToolCall};
+use virbius_core::{
+    precheck, EdgeInitConfig, EffectiveAction, License, MemoryContext, MemoryInterceptor,
+    MemoryPolicies, ScanContext, ToolCall, VirbiusEdge,
+};
 
 /// Python module for VirbiusAgent MCP integration.
 #[pymodule]
@@ -13,7 +16,98 @@ fn virbius_mcp_python(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     m.add_function(wrap_pyfunction!(intercept_memory_read, m)?)?;
     m.add_function(wrap_pyfunction!(is_memory_write_tool, m)?)?;
     m.add_function(wrap_pyfunction!(is_memory_read_tool, m)?)?;
+    m.add_function(wrap_pyfunction!(configure_rules, m)?)?;
+    m.add_function(wrap_pyfunction!(reload_rules, m)?)?;
+    m.add_function(wrap_pyfunction!(scan_edge, m)?)?;
     Ok(())
+}
+
+/// Configure the edge protection rules from a JSON [`EdgeInitConfig`].
+///
+/// `cfg_json` mirrors `virbius-core`'s `EdgeInitConfig`:
+/// `{"control_base_url":"...","offline_manifest_path":"...","cache_dir":"...",
+///   "tenant_id":"...","app_id":"...","edge_api_key":"...","device_id":"..."}`
+///
+/// When `control_base_url` + `app_id` are set, rules are pulled from the
+/// control plane (cloud or local control) and cached under `cache_dir`.
+/// Otherwise `offline_manifest_path` is used directly.
+///
+/// Returns a dict with `{ "ok": true, "mode": "control"|"cloud"|"offline" }`
+/// and optional `"sync_error"` if a remote pull failed (scan still runs with
+/// the last cached manifest).
+#[pyfunction]
+fn configure_rules(cfg_json: String) -> PyResult<PyObject> {
+    let cfg: EdgeInitConfig = serde_json::from_str(&cfg_json)
+        .map_err(|e| PyValueError::new_err(format!("Invalid EdgeInitConfig JSON: {e}")))?;
+    let mode = if cfg.offline_manifest_path.is_some() {
+        "offline"
+    } else if cfg.control_base_url.as_ref().is_some_and(|u| !u.is_empty()) {
+        // Heuristic: https -> cloud, http -> local control. Cosmetic label only.
+        match cfg.control_base_url.as_deref() {
+            Some(u) if u.starts_with("https") => "cloud",
+            _ => "control",
+        }
+    } else {
+        "offline"
+    };
+    let sync_error = match VirbiusEdge::init(cfg) {
+        Ok(_edge) => None,
+        Err(e) => Some(format!("{:?}", e)),
+    };
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new_bound(py);
+        dict.set_item("ok", true)?;
+        dict.set_item("mode", mode)?;
+        dict.set_item("sync_error", sync_error)?;
+        Ok(dict.into())
+    })
+}
+
+/// Re-pull rules from the configured control plane and reload the edge manifest.
+#[pyfunction]
+fn reload_rules() -> PyResult<()> {
+    VirbiusEdge.reload();
+    Ok(())
+}
+
+/// Run a real end-layer (edge) scan against the loaded VirbiusAgent rules.
+///
+/// Returns a dict with the enforcement outcome:
+/// - `action` / `effective_action`: "allow" | "block" | "review" | "challenge"
+/// - `trace_id`: generated trace id
+/// - `max_risk_score`: risk score of the primary hit
+/// - `rule_id` / `rule_revision` / `reason_code` / `layer`: primary rule when blocked/hit
+#[pyfunction]
+fn scan_edge(content: String, session_id: String) -> PyResult<PyObject> {
+    let ctx = ScanContext {
+        user_id: Some(session_id.clone()),
+        device_id: Some(session_id.clone()),
+        trace_id: None,
+    };
+    let outcome = VirbiusEdge
+        .scan_with(ctx, &content)
+        .map_err(|e| PyValueError::new_err(format!("scan failed: {:?}", e)))?;
+    let action = match outcome.action {
+        EffectiveAction::Block => "block",
+        EffectiveAction::Review => "review",
+        EffectiveAction::Challenge => "challenge",
+        EffectiveAction::Allow => "allow",
+    }
+    .to_string();
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new_bound(py);
+        dict.set_item("action", &action)?;
+        dict.set_item("effective_action", &action)?;
+        dict.set_item("trace_id", &outcome.trace_id)?;
+        dict.set_item("max_risk_score", outcome.max_risk_score)?;
+        if let Some(p) = &outcome.primary {
+            dict.set_item("rule_id", &p.rule_id)?;
+            dict.set_item("rule_revision", p.rule_revision)?;
+            dict.set_item("reason_code", &p.reason_code)?;
+            dict.set_item("layer", p.layer)?;
+        }
+        Ok(dict.into())
+    })
 }
 
 /// Pre-check a tool call against License allowlist and args schema.

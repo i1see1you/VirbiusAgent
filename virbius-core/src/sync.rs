@@ -285,8 +285,17 @@ fn sync_from_control(cfg: &EdgeInitConfig) -> Result<(), String> {
         "{base}/api/v1/edge/tenants/{}/apps/{}/manifest?pool={}",
         cfg.tenant_id, cfg.app_id, selection.pool
     );
-    let manifest_resp = apply_edge_auth(ureq::get(&manifest_url), cfg)
-        .set("If-None-Match", &selection.revision.to_string())
+    // If-None-Match 必须取*本地缓存版本号*（而非服务端最新 selection.revision）。
+    // 用服务端最新版本号会让 control 误以为客户端已是最新而返回 304，
+    // 导致本地缓存永远停在旧版本。仅当本地已有缓存时才发送条件头；
+    // 否则不带条件头，强制 control 返回完整 manifest。
+    let mut manifest_req = apply_edge_auth(ureq::get(&manifest_url), cfg);
+    if let Some(meta) = local_meta.as_ref() {
+        if manifest_file.is_file() {
+            manifest_req = manifest_req.set("If-None-Match", &meta.artifact_revision.to_string());
+        }
+    }
+    let manifest_resp = manifest_req
         .call()
         .map_err(|e| format!("manifest request failed: {e}"))?;
 
