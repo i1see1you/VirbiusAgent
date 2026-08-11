@@ -1,0 +1,104 @@
+{% extends "_base.html" %}
+{% block title %}基础设置{% endblock %}
+{% block body %}
+<h1>⚙️ 基础设置</h1>
+<p class="sub">配置平台接入参数与大模型凭证，保存后写入容器卷持久化，全局生效、即时生效。</p>
+
+<!-- 平台接入 -->
+<div class="panel">
+  <h2 style="margin-top:0">平台接入 <span class="insp-sub">virbius-agent 接入参数</span></h2>
+  <div class="field">
+    <label for="control_url">Control 地址</label>
+    <input type="text" id="control_url" value="{{ conf.VIRBIUS_CONTROL_URL }}" placeholder="http://host.docker.internal:8080">
+    <p class="fnote">virbius-agent 控制平面地址，端层防护从这里拉取规则。</p>
+  </div>
+  <div class="field">
+    <label for="engine_url">Engine 地址</label>
+    <input type="text" id="engine_url" value="{{ conf.VIRBIUS_ENGINE_URL }}" placeholder="http://host.docker.internal:8082">
+    <p class="fnote">virbius-agent 引擎地址，Agent 工具授权链路使用。</p>
+  </div>
+  <div class="field">
+    <label for="license">License</label>
+    <input type="password" id="license" value="{{ conf.VIRBIUS_LICENSE_JWT }}" placeholder="JWT（选填，未配置时走 fail-open 兜底）">
+    <p class="fnote">control 为租户/应用签发的接入凭证，未配置时 demo 仍可用（最小权限兜底）。</p>
+  </div>
+</div>
+
+<!-- 模型配置（联动：下拉选模型 → 显示对应该 provider 的配置） -->
+<div class="panel">
+  <h2 style="margin-top:0">模型配置 <span class="insp-sub">与右上角 target 一致，选模型 → 显示对应配置</span></h2>
+  <label class="target-sel" style="margin-left:0" title="选择目标模型进行配置">
+    <span class="dot">●</span> target:
+    <select id="model-config-select">
+      {% for m in models %}
+      <option value="{{ m.id }}" data-prov="{{ m.provider }}" {{ 'selected' if m.id==current_model else '' }}>{{ m.label }} · {{ m.note }}</option>
+      {% endfor %}
+    </select>
+  </label>
+
+  <div class="prov-form" id="form-deepseek">
+    <div class="field">
+      <label for="deepseek_key">DeepSeek API Key</label>
+      <input type="password" id="deepseek_key" value="{{ conf.DEEPSEEK_API_KEY }}" placeholder="sk-...">
+      <p class="fnote">直连 DeepSeek 使用，明文保存在容器卷中（单用户演示台）。</p>
+    </div>
+  </div>
+
+  <div class="prov-form" id="form-local" hidden>
+    <div class="field">
+      <label for="ollama_url">本地 Ollama 地址</label>
+      <input type="text" id="ollama_url" value="{{ conf.OLLAMA_BASE_URL }}" placeholder="http://localhost:11434/v1">
+      <p class="fnote">本地模型无需 key。使用前请确保对应模型已在本机 Ollama 拉取（不做自动下载）。</p>
+    </div>
+  </div>
+</div>
+
+<div class="row" style="margin-top:6px">
+  <button id="save-btn">💾 保存配置</button>
+  <button class="ghost" id="back-btn">← 返回</button>
+  <span id="save-hint" class="spin" style="align-self:center"></span>
+</div>
+{% endblock %}
+
+{% block script %}
+<script>
+// 根据模型 id 反查其 provider（来自 option 的 data-prov）
+function provForModel(id){
+  const opt = document.querySelector('#model-config-select option[value="'+id+'"]');
+  return opt ? (opt.dataset.prov || 'deepseek') : 'deepseek';
+}
+function showForm(prov){
+  ['deepseek','local'].forEach(p=>{
+    document.getElementById('form-'+p).hidden = p!==prov;
+  });
+  window.__curProv = prov;
+}
+document.addEventListener('DOMContentLoaded', ()=>{
+  const sel = document.getElementById('model-config-select');
+  // URL 指定 provider（未配置跳转带参）：先把下拉框定位到该 provider 的第一个模型，保证一致
+  const provFromUrl = new URLSearchParams(location.search).get('provider');
+  if(provFromUrl && ['deepseek','local'].includes(provFromUrl)){
+    const first = document.querySelector('#model-config-select option[data-prov="'+provFromUrl+'"]');
+    if(first) sel.value = first.value;
+  }
+  showForm(provForModel(sel.value));
+  sel.addEventListener('change', ()=> showForm(provForModel(sel.value)));
+  document.getElementById('back-btn').onclick = ()=> history.back();
+  document.getElementById('save-btn').onclick = async ()=>{
+    const hint = document.getElementById('save-hint');
+    hint.textContent = '保存中…';
+    const body = {
+      control_url: document.getElementById('control_url').value,
+      engine_url: document.getElementById('engine_url').value,
+      license: document.getElementById('license').value,
+      provider: window.__curProv,
+    };
+    if(window.__curProv==='deepseek') body.deepseek_key = document.getElementById('deepseek_key').value;
+    if(window.__curProv==='local') body.ollama_url = document.getElementById('ollama_url').value;
+    const r = await postJSON('/api/settings', body);
+    hint.textContent = r.ok ? '✅ 已保存' : ('❌ '+(r.error||'保存失败'));
+    setTimeout(()=>{ hint.textContent=''; }, 2500);
+  };
+});
+</script>
+{% endblock %}

@@ -1,7 +1,9 @@
 """多提供商 LLM 调用封装。OpenAI 兼容 /chat/completions。
-provider: 'deepseek'(直连) | 'openrouter'(聚合众多国产/国外小模型)。"""
+provider: 'deepseek'(直连) | 'openrouter'(聚合众多国产/国外小模型) | 'local'(Ollama)。
+key / 地址从 settings 动态读取，运行期修改立即生效。"""
 import requests
-import config
+
+from modules import settings
 
 _SESSION = requests.Session()
 # 本地推理专用 session：完全忽略环境代理（避开 Clash SOCKS 劫持 localhost）
@@ -15,15 +17,15 @@ class LLMError(Exception):
 
 def _provider_conf(provider):
     if provider == "openrouter":
-        return (config.OPENROUTER_BASE_URL + "/chat/completions",
-                config.OPENROUTER_API_KEY,
+        return (settings.get("OPENROUTER_BASE_URL") + "/chat/completions",
+                settings.get("OPENROUTER_API_KEY"),
                 {"HTTP-Referer": "http://localhost", "X-Title": "LLM SecRange"})
     if provider == "local":
         # Ollama 本地，无需真实 key
-        return (config.OLLAMA_BASE_URL + "/chat/completions", "ollama", {})
+        return (settings.get("OLLAMA_BASE_URL") + "/chat/completions", "ollama", {})
     # 默认 deepseek 直连
-    return (config.DEEPSEEK_BASE_URL + "/chat/completions",
-            config.DEEPSEEK_API_KEY, {})
+    return (settings.get("DEEPSEEK_BASE_URL") + "/chat/completions",
+            settings.get("DEEPSEEK_API_KEY"), {})
 
 
 def chat(messages, temperature=0.7, max_tokens=1024, model=None,
@@ -36,7 +38,7 @@ def chat(messages, temperature=0.7, max_tokens=1024, model=None,
         timeout = max(timeout, 240)
     headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", **extra}
     payload = {
-        "model": model or config.DEEPSEEK_MODEL,
+        "model": model or settings.get("DEEPSEEK_MODEL"),
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,

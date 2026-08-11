@@ -33,7 +33,7 @@ LABS = [
                 "命中 deny 规则 → enforce 归并出 effective_action=block → 直接返回拦截，模型根本不参与。",
             ]},
             {"title": "3. 在 virbius-control 上如何配置", "content": [
-                "为应用 demo-app 新增一条 deny 规则（见 data/edge/default/demo-app/edge-manifest.json）：",
+                "为应用 demo-app 新增一条 deny 规则（见 demo_data/edge/default/demo-app/edge-manifest.json）：",
                 "· intent_action = deny（意图：拦截）",
                 "· enforce_mode = full（全量生效，非 canary）",
                 "· risk_score = 100（风险分）",
@@ -78,7 +78,7 @@ LABS = [
                 "区别于端层的『拦截』，DLP 是『放行但脱敏』：请求正常处理，但敏感信息不下发到用户侧。",
             ]},
             {"title": "3. 在 virbius-control 上如何配置", "content": [
-                "为应用 demo-app 新增一条 DLP 规则 edge_llm02_secret_dlp（见 data/edge/control/default/demo-app/edge-manifest.json）：",
+                "为应用 demo-app 新增一条 DLP 规则 edge_llm02_secret_dlp（见 demo_data/edge/control/default/demo-app/edge-manifest.json）：",
                 "· intent_action = allow（意图：放行但脱敏）",
                 "· enforce_mode = full（全量生效，非 canary）",
                 "· body.entity_type = custom_regex（自定义正则）",
@@ -148,7 +148,7 @@ LABS = [
                 "因为攻击指令最终进入的是『模型输入』，端层对输入的关键词扫描可以一视同仁地命中。",
             ]},
             {"title": "3. 在 virbius-control 上如何配置", "content": [
-                "复用 LLM01 的 deny 规则（edge_llm01_inj_deny_zh / _en，见 data/edge/control/default/demo-app/edge-manifest.json）：",
+                "复用 LLM01 的 deny 规则（edge_llm01_inj_deny_zh / _en，见 demo_data/edge/control/default/demo-app/edge-manifest.json）：",
                 "· intent_action = deny、enforce_mode = full、rollout_state = full",
                 "· body.list_type = deny",
                 "· body.keywords 含『忽略』『忽略以上所有指令』『system prompt』等注入意图关键词，投毒文档的『忽略你之前的所有规则』命中『忽略』。",

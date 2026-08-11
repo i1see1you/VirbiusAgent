@@ -13,12 +13,14 @@ import logging
 import os
 import subprocess
 
+from modules import settings
+
 _PROXY_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # virbius-demo
 log = logging.getLogger(__name__)
 
-# ---- 从环境读取 demo 侧需要回填的配置（占位符见 .env.example）----
+# ---- 从 运行期设置/环境 读取 demo 侧需要回填的配置（占位符见 .env.example）----
 META = {
-    "license_jwt": os.environ.get("VIRBIUS_LICENSE_JWT", "").strip(),
+    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
     "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
     "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
     "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),

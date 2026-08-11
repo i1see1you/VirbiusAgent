@@ -5,7 +5,7 @@ from flask import Blueprint, render_template, request, jsonify, session
 
 import llm_client
 from modules import conversations, modelsel, inspect_util
-from data.ctf_levels import LEVELS, INPUT_KEYWORDS, get_level
+from demo_data.ctf_levels import LEVELS, INPUT_KEYWORDS, get_level
 
 bp = Blueprint("ctf", __name__, url_prefix="/ctf")
 

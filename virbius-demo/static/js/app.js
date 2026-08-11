@@ -123,3 +123,44 @@ function addMsg(box, cls, text){
   box.scrollTop = box.scrollHeight;
   return m;
 }
+
+// ---------- 配置提示弹窗 + 模型就绪校验（发送前调用） ----------
+function showConfigModal(reason, settingsUrl, provider){
+  const mask = document.createElement('div'); mask.className='modal-mask';
+  const modal = document.createElement('div'); modal.className='modal';
+  modal.innerHTML =
+    '<div class="m-ico">⚙️</div>'+
+    '<h3>需要先完成模型配置</h3>'+
+    '<p>'+(reason||'当前模型尚未配置完成。')+'</p>'+
+    '<div class="mrow">'+
+      '<button class="ghost modal-close">取消</button>'+
+      '<button class="modal-go">去设置</button>'+
+    '</div>';
+  mask.appendChild(modal);
+  document.body.appendChild(mask);
+  const close = ()=>{ mask.remove(); };
+  modal.querySelector('.modal-close').onclick = close;
+  modal.querySelector('.modal-go').onclick = ()=>{
+    close();
+    if(settingsUrl){
+      // 带 provider 跳转，设置页会自动选中当前模型对应的配置表单
+      const sep = settingsUrl.includes('?') ? '&' : '?';
+      location.href = settingsUrl + sep + 'provider=' + encodeURIComponent(provider||'');
+    }
+  };
+  mask.addEventListener('click', e=>{ if(e.target===mask) close(); });
+  return mask;
+}
+
+// 发送前校验当前模型是否可用（DeepSeek/OpenRouter 需 key，本地需 Ollama 可达且模型已装）。
+// 返回 Promise<boolean>：true=可正常发送；false=已弹窗拦截，调用方应中止发送。
+async function ensureModelReady(){
+  try{
+    const r = await fetch('/api/model-status').then(res=>res.json());
+    if(r.ready) return true;
+    showConfigModal(r.reason, r.settings_url, r.provider);
+    return false;
+  }catch(e){
+    return true; // 状态接口异常不阻塞，交由发送链路报错
+  }
+}

@@ -4,7 +4,7 @@
 直接调用真实的 virbius-agent 能力（不再模拟）：
   1. 通过 PyO3 扩展 `virbius_mcp_python`（编译自 virbius-core）执行端层扫描，
      matcher + enforce 均在 virbius-core 内完成，拦截决策完全来自真实引擎。
-  2. 规则来源由 `data/virbius.json` 决定，可切换：
+  2. 规则来源由 `demo_data/virbius.json` 决定，可切换：
        - offline : 直接读本地 edge-manifest.json
        - control : 从本地 virbius-control 的 Edge API 拉取规则
        - cloud   : 从云端 control 拉取规则
@@ -17,14 +17,16 @@ import json
 import os
 from flask import session
 
+from modules import settings
+
 # virbius.json 规则来源配置路径（换 active_mode 即可切换云端/control/离线）
 _CONFIG_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "virbius.json",
+    os.path.dirname(__file__), "..", "demo_data", "virbius.json",
 )
 
 # 本地离线 manifest（仅离线模式 / 展示用）
 _MANIFEST_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "edge", "default", "demo-app",
+    os.path.dirname(__file__), "..", "demo_data", "edge", "default", "demo-app",
     "edge-manifest.json",
 )
 
@@ -57,12 +59,15 @@ def _build_edge_config(mode_cfg):
     result = {
         "tenant_id": mode_cfg.get("tenant_id", "default"),
         "app_id": mode_cfg.get("app_id", "demo-app"),
-        "cache_dir": _absolute_path(mode_cfg.get("cache_dir", "data/edge/default/demo-app")),
+        "cache_dir": _absolute_path(mode_cfg.get("cache_dir", "demo_data/edge/default/demo-app")),
     }
     if mode_cfg.get("offline_manifest_path"):
         result["offline_manifest_path"] = _absolute_path(mode_cfg["offline_manifest_path"])
     if mode_cfg.get("control_base_url"):
         result["control_base_url"] = mode_cfg["control_base_url"]
+    # 运行期设置 / 环境变量里的 control 地址优先，覆盖 virbius.json（compose 注入或设置页配置）
+    if settings.get("VIRBIUS_CONTROL_URL"):
+        result["control_base_url"] = settings.get("VIRBIUS_CONTROL_URL")
     if mode_cfg.get("edge_api_key"):
         result["edge_api_key"] = mode_cfg["edge_api_key"]
     if mode_cfg.get("device_id"):
@@ -102,6 +107,14 @@ def is_enabled():
 
 def set_enabled(value):
     session["virbius_protection"] = bool(value)
+
+
+def reload():
+    """清除端层引擎缓存，使 control 地址等配置变更在下次扫描时生效。"""
+    global _engine, _engine_ready, _engine_error
+    _engine = None
+    _engine_ready = False
+    _engine_error = None
 
 
 def active_mode():

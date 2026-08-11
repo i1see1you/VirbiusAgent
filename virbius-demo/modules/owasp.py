@@ -4,7 +4,7 @@ from flask import Blueprint, render_template, request, jsonify, session
 
 import llm_client
 from modules import conversations, modelsel, inspect_util, protection
-from data.owasp_labs import LABS, get_lab
+from demo_data.owasp_labs import LABS, get_lab
 
 bp = Blueprint("owasp", __name__, url_prefix="/owasp")
 

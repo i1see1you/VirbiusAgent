@@ -104,6 +104,7 @@ const ROLE={thought:'💭 Thought',action:'⚡ Action',observation:'👁 Observa
 
 send.onclick = async ()=>{
   const text=msg.value.trim(); if(!text) return;
+  if(!await ensureModelReady()){ msg.focus(); return; } // key/本地模型未就绪则弹窗拦截
   addMsg(chat,'user',text); msg.value=''; send.disabled=true;
   const wait=addMsg(chat,'sys','Agent 运行中…（多步 ReAct，稍候）');
   document.getElementById('captured').innerHTML='';

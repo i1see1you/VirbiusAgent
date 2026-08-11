@@ -84,6 +84,7 @@ function markWin(extra){
 
 async function doSend(){
   const text = msg.value.trim(); if(!text) return;
+  if(!await ensureModelReady()){ msg.focus(); return; } // key/本地模型未就绪则弹窗拦截
   addMsg(chat,'user',text); msg.value=''; send.disabled=true;
   const wait = addMsg(chat,'sys','模型思考中…');
   try{
