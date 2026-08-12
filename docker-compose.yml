@@ -1,7 +1,7 @@
 # =============================================================================
 #  VirbiusAgent — Docker Compose
 #
-#  Starts the full stack: Redis → virbius-engine → virbius-control → proxy
+#  Starts the full stack: Redis → (virbius-engine ∥ virbius-control) → proxy
 #
 #  Usage:
 #    docker compose build         # Build all images
@@ -12,6 +12,7 @@
 #
 #  To run only core services (no proxy):
 #    docker compose up -d redis virbius-engine virbius-control
+#    docker compose up -d redis virbius-control virbius-engine   # order irrelevant
 # =============================================================================
 
 services:
@@ -41,8 +42,8 @@ services:
       - "8082:8082"
     environment:
       VIRBIUS_REDIS_URL: redis://redis:6379
-      VIRBIUS_CONTROL_BASE_URL: http://virbius-control:8080
       VIRBIUS_DATA_DIR: /data
+      VIRBIUS_INSTANCE_ID: ${HOSTNAME:-engine-1}
       SPRING_PROFILES_ACTIVE: dev
     volumes:
       - engine-data:/data
@@ -76,8 +77,6 @@ services:
       - control-logs:/var/log/virbius
     depends_on:
       redis:
-        condition: service_healthy
-      virbius-engine:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/health"]

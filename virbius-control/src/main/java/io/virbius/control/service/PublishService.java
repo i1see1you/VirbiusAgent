@@ -107,56 +107,10 @@ public class PublishService {
     }
 
     public Map<String, Object> ruleRuntimeSnapshot(String tenantId, String ruleId) {
-        try {
-            RuleRevision rule = store.getCurrentRule(tenantId, ruleId).orElse(null);
-            if (rule == null || !RolloutStateHelper.inExecutionPlane(rule)) {
-                return ruleRuntimeRemove(tenantId, ruleId);
-            }
-            RuleRevision materialized = policyMaterializer.materialize(tenantId, rule);
-            ObjectMapper snakeMapper = new ObjectMapper()
-                    .setPropertyNamingStrategy(com.fasterxml.jackson.databind.PropertyNamingStrategies.SNAKE_CASE);
-            Map<String, Object> ruleMap = snakeMapper.convertValue(buildSingleRuleMap(materialized), Map.class);
-            return reloadNotifier.publishUpsert(tenantId, "runtime-only", ruleMap);
-        } catch (Exception e) {
-            log.warn("rule runtime snapshot error for {}: {}", ruleId, e.getMessage());
-            return Map.of("ok", false, "error", e.getMessage());
-        }
+        return runtimeSnapshot(tenantId);
     }
 
     public Map<String, Object> ruleRuntimeRemove(String tenantId, String ruleId) {
-        try {
-            return reloadNotifier.publishRemove(tenantId, "runtime-only", ruleId);
-        } catch (Exception e) {
-            log.warn("rule runtime remove error for {}: {}", ruleId, e.getMessage());
-            return Map.of("ok", false, "error", e.getMessage());
-        }
-    }
-
-    private Map<String, Object> buildSingleRuleMap(RuleRevision r) {
-        java.util.LinkedHashMap<String, Object> m = new java.util.LinkedHashMap<>();
-        m.put("tenant_id", r.tenantId());
-        m.put("rule_id", r.ruleId());
-        m.put("rule_revision", r.ruleRevision());
-        m.put("layer", r.layer());
-        m.put("runtime", r.runtime());
-        m.put("reason_code", r.reasonCode());
-        m.put("risk_score", r.riskScore());
-        m.put("intent_action", r.intentAction() != null ? r.intentAction() : "deny");
-        m.put("enforce_mode", r.enforceMode());
-        m.put("rollout_state", r.rolloutState() != null ? r.rolloutState() : "dry_run");
-        m.put("is_async", r.isAsync());
-        if (r.asyncActionConfig() != null && !r.asyncActionConfig().isBlank()) {
-            m.put("async_action_config", r.asyncActionConfig());
-        }
-        if (r.exportedCanaryPercent() != null) {
-            m.put("canary_percent", r.exportedCanaryPercent());
-        }
-        if (r.scope() != null && !r.scope().isEmpty()) {
-            m.put("scope", r.scope());
-        }
-        if (r.body() != null) {
-            m.put("body", r.body());
-        }
-        return m;
+        return runtimeSnapshot(tenantId);
     }
 }

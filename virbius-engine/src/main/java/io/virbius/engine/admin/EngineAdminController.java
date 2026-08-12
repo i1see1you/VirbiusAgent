@@ -35,10 +35,10 @@ public class EngineAdminController {
     public Map<String, Object> policyVersion(@RequestParam(defaultValue = "default") String tenant_id) {
         return Map.of(
                 "tenant_id", tenant_id,
-                "policy_version", cache.policyVersion(),
+                "policy_version", cache.policyVersion(tenant_id),
                 "cache_generation", cache.cacheGeneration(),
                 "loaded_at", cache.loadedAt().toString(),
-                "rule_count", cache.ruleCount());
+                "rule_count", cache.rulesForTenant(tenant_id).size());
     }
 
     @PostMapping("/cache/reload")
@@ -48,24 +48,24 @@ public class EngineAdminController {
             @RequestParam(defaultValue = "full") String mode,
             @RequestBody(required = false) CacheReloadRequest body) {
         long start = System.currentTimeMillis();
-        String version = bundle_version != null ? bundle_version : cache.policyVersion();
+        String version = bundle_version != null ? bundle_version : cache.policyVersion(tenant_id);
         List<RuleEntry> rules = body != null && body.rules() != null ? body.rules() : List.of();
         if (!rules.isEmpty()) {
-            cache.replaceAll(version, rules);
+            cache.replaceTenant(tenant_id, version, rules);
         }
-if (body != null && (body.lists() != null || body.redisListIndex() != null || body.cumulatives() != null || body.toolPolicies() != null)) {
-PolicyDataCache.TenantPolicyData data = ScriptRuleRunner.fromBlocks(
-body.lists() != null ? body.lists() : List.of(),
-body.redisListIndex() != null ? body.redisListIndex() : List.of(),
-body.cumulatives() != null ? body.cumulatives() : List.of(),
-body.toolPolicies() != null ? body.toolPolicies() : List.of());
-policyData.replace(tenant_id, data);
-}
+        if (body != null && (body.lists() != null || body.redisListIndex() != null || body.cumulatives() != null || body.toolPolicies() != null)) {
+            PolicyDataCache.TenantPolicyData data = ScriptRuleRunner.fromBlocks(
+                    body.lists() != null ? body.lists() : List.of(),
+                    body.redisListIndex() != null ? body.redisListIndex() : List.of(),
+                    body.cumulatives() != null ? body.cumulatives() : List.of(),
+                    body.toolPolicies() != null ? body.toolPolicies() : List.of());
+            policyData.replace(tenant_id, data);
+        }
         return Map.of(
                 "ok", true,
                 "cache_generation", cache.cacheGeneration(),
-                "policy_version", cache.policyVersion(),
-                "rules_loaded", cache.ruleCount(),
+                "policy_version", cache.policyVersion(tenant_id),
+                "rules_loaded", cache.rulesForTenant(tenant_id).size(),
                 "duration_ms", System.currentTimeMillis() - start,
                 "mode", mode,
                 "tenant_id", tenant_id);

@@ -17,7 +17,7 @@ class DeployRolloutServiceLadderSkipTest {
     @BeforeEach
     void setUp() {
         nodeRegistry = mock(NodeRegistryService.class);
-        service = new DeployRolloutService(null, null, null, null, null, null, null, nodeRegistry, null, null, null);
+        service = new DeployRolloutService(null, null, null, null, null, null, null, nodeRegistry, null, null, null, null);
     }
 
     @Test

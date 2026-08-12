@@ -15,6 +15,7 @@ public class RedisStreamNotifier implements CacheReloadNotifier {
     private static final Logger log = LoggerFactory.getLogger(RedisStreamNotifier.class);
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String STREAM_KEY = "virbius:engine:cache-reload";
+    private static final String SNAPSHOT_KEY_PREFIX = "virbius:engine";
 
     private final JedisPool jedisPool;
 
@@ -28,28 +29,17 @@ public class RedisStreamNotifier implements CacheReloadNotifier {
         return doPublish(tenantId, policyVersion, payload);
     }
 
-    @Override
-    public Map<String, Object> publishUpsert(String tenantId, String policyVersion, Map<String, Object> rule) {
-        Map<String, Object> payload = Map.of("_action", "upsert", "rule", rule);
-        return doPublish(tenantId, policyVersion, payload);
-    }
-
-    @Override
-    public Map<String, Object> publishRemove(String tenantId, String policyVersion, String ruleId) {
-        java.util.LinkedHashMap<String, Object> payload = new java.util.LinkedHashMap<>();
-        payload.put("_action", "remove");
-        payload.put("remove_rule_id", ruleId);
-        return doPublish(tenantId, policyVersion, payload);
-    }
-
     private Map<String, Object> doPublish(String tenantId, String policyVersion, Map<String, Object> payload) {
         try {
+            String payloadJson = JSON.writeValueAsString(payload);
+            String snapshotKey = SNAPSHOT_KEY_PREFIX + ":" + tenantId + ":snapshot";
             StreamEntryID messageId;
             try (var jedis = jedisPool.getResource()) {
+                jedis.set(snapshotKey, payloadJson);
                 messageId = jedis.xadd(STREAM_KEY, StreamEntryID.NEW_ENTRY, Map.of(
                         "tenant_id", tenantId,
                         "policy_version", policyVersion,
-                        "payload", JSON.writeValueAsString(payload)));
+                        "payload", payloadJson));
             }
             log.info("published cache-reload to stream {} messageId={} tenant={} version={}",
                     STREAM_KEY, messageId, tenantId, policyVersion);

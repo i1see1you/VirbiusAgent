@@ -17,8 +17,6 @@ spring:
 
 virbius:
   data-dir: ${VIRBIUS_DATA_DIR:./data}
-  control:
-    base-url: ${VIRBIUS_CONTROL_BASE_URL:http://127.0.0.1:8080}
   redis:
     url: ${VIRBIUS_REDIS_URL:redis://127.0.0.1:6379}
   lists:

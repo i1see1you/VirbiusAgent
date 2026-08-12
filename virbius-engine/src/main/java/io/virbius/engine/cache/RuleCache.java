@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 public class RuleCache {
 
     private final Map<String, RuleEntry> rules = new ConcurrentHashMap<>();
+    private final Map<String, String> tenantVersions = new ConcurrentHashMap<>();
     private final AtomicLong generation = new AtomicLong(0);
     private volatile String policyVersion = "0.0.0";
     private volatile Instant loadedAt = Instant.now();
@@ -21,10 +22,23 @@ public class RuleCache {
 
     public void replaceAll(String policyVersion, List<RuleEntry> entries) {
         rules.clear();
+        tenantVersions.clear();
         for (RuleEntry e : entries) {
             rules.put(key(e.tenantId(), e.ruleId()), e);
         }
         this.policyVersion = policyVersion;
+        this.loadedAt = Instant.now();
+        generation.incrementAndGet();
+    }
+
+    public void replaceTenant(String tenantId, String version, List<RuleEntry> entries) {
+        String prefix = tenantId + ":";
+        rules.keySet().removeIf(k -> k.startsWith(prefix));
+        for (RuleEntry e : entries) {
+            rules.put(key(e.tenantId(), e.ruleId()), e);
+        }
+        tenantVersions.put(tenantId, version);
+        this.policyVersion = version;
         this.loadedAt = Instant.now();
         generation.incrementAndGet();
     }
@@ -59,6 +73,10 @@ public class RuleCache {
 
     public String policyVersion() {
         return policyVersion;
+    }
+
+    public String policyVersion(String tenantId) {
+        return tenantVersions.getOrDefault(tenantId, policyVersion);
     }
 
     public Instant loadedAt() {

@@ -15,6 +15,7 @@ import io.virbius.control.repository.TenantRolloutPolicyRepository;
 import io.virbius.control.service.ArtifactService;
 import io.virbius.control.service.BundleReleaseService;
 import io.virbius.control.service.EngineArtifactPointer;
+import io.virbius.control.service.PublishService;
 import io.virbius.control.service.RedisEngineArtifactStore;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -53,6 +54,7 @@ public class DeployRolloutService {
     private final io.virbius.control.repository.EdgeArtifactMetaRepository edgeMetaRepo;
     private final BundleReleaseService releaseService;
     private final BundleStagingRepository stagingRepo;
+    private final PublishService publishService;
 
     public DeployRolloutService(
             DeployRolloutRepository rolloutRepo,
@@ -65,7 +67,8 @@ public class DeployRolloutService {
             NodeRegistryService nodeRegistryService,
             io.virbius.control.repository.EdgeArtifactMetaRepository edgeMetaRepo,
             BundleReleaseService releaseService,
-            BundleStagingRepository stagingRepo) {
+            BundleStagingRepository stagingRepo,
+            PublishService publishService) {
         this.rolloutRepo = rolloutRepo;
         this.policyRepo = policyRepo;
         this.pointerStore = pointerStore;
@@ -77,6 +80,7 @@ public class DeployRolloutService {
         this.edgeMetaRepo = edgeMetaRepo;
         this.releaseService = releaseService;
         this.stagingRepo = stagingRepo;
+        this.publishService = publishService;
     }
 
     // ---------------------------------------------------------------
@@ -464,6 +468,8 @@ public class DeployRolloutService {
                     engineStore.updatePointer(tenantId, newPtr);
                     engineStore.notifyReload(tenantId, rollout.canaryEngineRevision());
                 }
+                // Refresh the runtime snapshot key so engine restarts converge to the finalized state
+                publishService.runtimeSnapshot(tenantId);
             }
 
             // Promote falco canary → stable
