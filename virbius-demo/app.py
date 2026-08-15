@@ -3,6 +3,7 @@
 模块：Dashboard / OWASP LLM Top10 + 全局 VirbiusAgent 防护开关。
 被渗透的目标模型：可切换（DeepSeek / OpenRouter / 本地 Ollama）。
 """
+import logging
 import socket
 import requests
 from flask import Flask, render_template, request, jsonify
@@ -13,6 +14,13 @@ from modules import settings as cfg_store
 from modules.owasp import bp as owasp_bp
 from modules.agent_range import bp as agent_bp
 from modules.ctf import bp as ctf_bp
+
+# 让 virbius_guard / ctf 等模块的日志输出到终端（默认仅 WARNING，这里放开到 INFO）
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
