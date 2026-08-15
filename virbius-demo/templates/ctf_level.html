@@ -83,7 +83,7 @@ document.getElementById('submit').onclick = async ()=>{
   const r = await postJSON('/ctf/submit/'+LID, {guess});
   const box = document.getElementById('result');
   box.innerHTML = r.correct
-    ? '<div class="win">🎉 正确！本关攻破。' + (LID<8?' <a href="/ctf/level/'+(LID+1)+'">下一关 →</a>':' 你通关了全部 CTF！') + '</div>'
+    ? '<div class="win">🎉 正确！本关攻破。 你通关了全部 CTF！</div>'
     : '<div class="fail">❌ 密码不对，再试试。</div>';
 };
 </script>

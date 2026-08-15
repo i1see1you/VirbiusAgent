@@ -12,12 +12,14 @@ from modules import modelsel, protection
 from modules import settings as cfg_store
 from modules.owasp import bp as owasp_bp
 from modules.agent_range import bp as agent_bp
+from modules.ctf import bp as ctf_bp
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
 app.register_blueprint(owasp_bp)
 app.register_blueprint(agent_bp)
+app.register_blueprint(ctf_bp)
 
 
 @app.context_processor

@@ -4,7 +4,7 @@ import re
 from flask import Blueprint, render_template, request, jsonify, session
 
 import llm_client
-from modules import conversations, modelsel, inspect_util
+from modules import conversations, modelsel, inspect_util, protection, virbius_guard
 from demo_data.ctf_levels import LEVELS, INPUT_KEYWORDS, get_level
 
 bp = Blueprint("ctf", __name__, url_prefix="/ctf")
@@ -98,7 +98,23 @@ def chat(level_id):
     ent = modelsel.current_entry()
     prov, mdl = ent["provider"], ent["model"]
 
-    # 输入守卫（被拦截则不进入会话记忆）
+    # ① VirbiusAgent 提示词防护（云层 /v1/evaluate）：命中即拦截，不发给目标模型
+    if protection.is_enabled():
+        guard = virbius_guard.guard_prompt(user_msg, session_id=f"ctf:{level_id}")
+        if guard.get("blocked"):
+            msg = (
+                f"🛡 VirbiusAgent 防护拦截：检测到提示词攻击意图。\n"
+                f"  动作={guard.get('action')} | 规则={guard.get('rule_id')} | "
+                f"原因={guard.get('reason')} | 风险={guard.get('risk_score')}"
+            )
+            return jsonify({"answer": msg, "blocked": True,
+                            "turns": conversations.count(ctx),
+                            "debug": inspect_util.note(msg)})
+        if guard.get("error"):
+            # engine 不可达时 fail-open 放行，但标注供排查
+            pass
+
+    # ② L5 自带输入关键词守卫（被拦截则不进入会话记忆）
     if "input_block_keywords" in defenses:
         blocked = _input_keyword_guard(user_msg)
         if blocked:
