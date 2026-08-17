@@ -25,6 +25,9 @@ def lab(code):
     public = {k: v for k, v in lab.items()
               if k not in ("system", "poisoned_doc", "flag_equals")}
     public["flag_equals_hint"] = "flag_equals" in lab
+    if lab.get("rate_limit"):
+        from modules import owasp_llm10
+        public.update(owasp_llm10.meter())
     return render_template("owasp_lab.html", lab=public, solved=solved)
 
 
@@ -47,6 +50,18 @@ def chat(code):
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "消息为空"}), 400
+
+    if lab.get("rate_limit"):
+        from modules import owasp_llm10
+        try:
+            payload = owasp_llm10.chat(user_msg)
+        except llm_client.LLMError as e:
+            return jsonify({"error": str(e)}), 502
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
+        if payload.get("auto_solved"):
+            _mark_solved(code)
+        return jsonify(payload)
 
     system, user = _build_messages(lab, user_msg)
     ctx = f"owasp:{code}"
@@ -115,7 +130,12 @@ def chat(code):
 @bp.route("/reset/<code>", methods=["POST"])
 def reset(code):
     conversations.clear(f"owasp:{code}")
-    return jsonify({"ok": True, "turns": 0})
+    extra = {"ok": True, "turns": 0}
+    if code == "LLM10":
+        from modules import owasp_llm10
+        owasp_llm10.rotate_session()
+        extra.update(owasp_llm10.meter())
+    return jsonify(extra)
 
 
 def _looks_like_xss(text):

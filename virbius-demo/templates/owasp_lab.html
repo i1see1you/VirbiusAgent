@@ -13,10 +13,14 @@
 <div class="panel">
   {% if lab.xss %}<p class="note">⚠️ 下方“渲染预览”会真的执行模型返回的 HTML（模拟未转义直出），命中 JS 执行即自动通关。</p>{% endif %}
   <div class="sessbar">
+    {% if lab.rate_limit %}
+    <span class="sess-state">本会话已查询 <b id="tx-ok">{{ lab.tx_ok or 0 }}</b> 次 · 累计 $<b id="tx-cost">{{ '%.2f'|format(lab.tx_cost or 0) }}</b></span>
+    {% else %}
     <span class="sess-state">🟢 会话进行中 · <b id="turns">0</b> 轮记忆</span>
+    {% endif %}
     <button class="ghost sm" id="reset">🗑️ 清空记忆 / 新会话</button>
   </div>
-  <div class="chat" id="chat"><div class="msg sys">开始攻击 👇（多轮对话有记忆）</div></div>
+  <div class="chat" id="chat"><div class="msg sys">{% if lab.rate_limit %}开始刷账单 👇 让助手反复查最新流水。每次成功查询 $0.15。{% else %}开始攻击 👇（多轮对话有记忆）{% endif %}</div></div>
   <div class="row">
     <textarea id="msg" placeholder="输入攻击 payload…（Enter 发送）"></textarea>
     <button id="send">发送</button>
@@ -72,6 +76,7 @@
 <script>
 const CODE = "{{ lab.code }}";
 const IS_XSS = {{ 'true' if lab.xss else 'false' }};
+const IS_RATE = {{ 'true' if lab.rate_limit else 'false' }};
 const chat = document.getElementById('chat');
 const msg = document.getElementById('msg');
 const send = document.getElementById('send');
@@ -82,16 +87,29 @@ function markWin(extra){
     '<div class="win">🎉 攻击成功，本关通过！'+(extra||'')+'</div>';
 }
 
+function setMeter(ok, cost){
+  const o = document.getElementById('tx-ok');
+  const c = document.getElementById('tx-cost');
+  if(o) o.textContent = (ok==null)? '0' : String(ok);
+  if(c) c.textContent = (cost==null)? '0.00' : Number(cost).toFixed(2);
+}
+
 async function doSend(){
   const text = msg.value.trim(); if(!text) return;
-  if(!await ensureModelReady()){ msg.focus(); return; } // key/本地模型未就绪则弹窗拦截
+  if(!await ensureModelReady()){ msg.focus(); return; }
   addMsg(chat,'user',text); msg.value=''; send.disabled=true;
-  const wait = addMsg(chat,'sys','模型思考中…');
+  const wait = addMsg(chat,'sys', IS_RATE ? '查询中…' : '模型思考中…');
   try{
     const r = await postJSON('/owasp/chat/'+CODE, {message:text});
     wait.remove();
     if(r.error){ addMsg(chat,'blocked','错误：'+r.error); }
     else{
+      if(IS_RATE && r.queries && r.queries.length){
+        r.queries.forEach(q=>{
+          addMsg(chat, q.blocked ? 'blocked' : 'sys',
+            'GetUserTransactions #'+q.n+' '+(q.blocked?'blocked':'allow')+'\n'+q.result);
+        });
+      }
       addMsg(chat,'bot',r.answer);
       if(r.protection){
         let pd = '🛡 '+r.protection.note;
@@ -109,24 +127,27 @@ async function doSend(){
         addMsg(chat,'prot',pd);
       }
       if(IS_XSS){
-        // 故意未转义直出，触发探针
         const pv = document.getElementById('preview');
         window.__xss_fired = false;
         pv.innerHTML = r.answer;
         setTimeout(()=>{ if(window.__xss_fired || r.auto_solved){ markWin(' XSS 探针被触发。'); } }, 400);
       }
-      if(r.auto_solved){ markWin(); }
+      if(r.auto_solved){ markWin(IS_RATE ? ' 账单被刷穿。' : ''); }
       if(r.debug) appendInspector(r.debug);
-      if(r.turns!=null) document.getElementById('turns').textContent = r.turns;
+      if(r.turns!=null && document.getElementById('turns')){
+        document.getElementById('turns').textContent = r.turns;
+      }
+      if(IS_RATE) setMeter(r.tx_ok, r.tx_cost);
     }
   }catch(e){ wait.remove(); addMsg(chat,'blocked','网络错误'); }
   send.disabled=false; msg.focus();
 }
 
 document.getElementById('reset').onclick = async ()=>{
-  await postJSON('/owasp/reset/'+CODE, {});
+  const r = await postJSON('/owasp/reset/'+CODE, {});
   chat.innerHTML = '<div class="msg sys">🧹 会话记忆已清空，已开启新会话。</div>';
-  document.getElementById('turns').textContent = '0';
+  if(document.getElementById('turns')) document.getElementById('turns').textContent = '0';
+  if(IS_RATE) setMeter(r.tx_ok||0, r.tx_cost||0);
   document.getElementById('result').innerHTML='';
   const pv=document.getElementById('preview'); if(pv) pv.innerHTML='<i style="color:#888">渲染预览区</i>';
   clearInspector();

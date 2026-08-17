@@ -44,6 +44,38 @@ def new_session() -> str:
     return META["session_id"]
 
 
+LLM10_META = {
+    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
+    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
+    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
+    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
+    "session_id": "llm10-init",
+}
+_llm10_client = None
+
+
+def bind_llm10_session(session_id: str) -> str:
+    """让当前请求用指定 engine session_id。和 Flask cookie 对齐，避免进程级单例把窗口串给所有人。"""
+    global _llm10_client
+    sid = (session_id or "").strip()
+    if not sid:
+        sid = "llm10-" + uuid.uuid4().hex[:12]
+    LLM10_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    LLM10_META["session_id"] = sid
+    if _llm10_client is not None and _llm10_client.meta.get("session_id") != sid:
+        try:
+            _llm10_client.close()
+        except Exception:
+            pass
+        _llm10_client = None
+    return sid
+
+
+def new_llm10_session() -> str:
+    """换一条 llm10 engine session，不和 Agent 页、其他浏览器抢累计窗口。"""
+    return bind_llm10_session("llm10-" + uuid.uuid4().hex[:12])
+
+
 def _file_magic(path: str) -> bytes:
     try:
         with open(path, "rb") as f:
@@ -98,16 +130,42 @@ def _resolve_bin() -> str:
 
 
 def _proxy_command(bin_path: str) -> list[str]:
-    """On Windows, run a Linux ELF through WSL; otherwise spawn the binary directly."""
+    """On Windows, run a Linux ELF through WSL; otherwise spawn the binary directly.
+
+    WSL NAT 的 127.0.0.1 不是 Windows。Windows 的 Popen env 也不会进 Linux 进程，
+    必须写在 `wsl -e env VAR=...` 里。
+    """
     if os.name == "nt" and os.path.isfile(bin_path) and _is_elf(bin_path):
-        return ["wsl", "--cd", _PROXY_DIR, "-e", _to_wsl_path(bin_path)]
+        host = _wsl_windows_host()
+        log.info("mcp-proxy via WSL, host=%s", host)
+        return [
+            "wsl", "--cd", _PROXY_DIR, "-e",
+            "env",
+            "VIRBIUS_UPSTREAM_URL=http://%s:9091" % host,
+            "VIRBIUS_ENGINE_URL=http://%s:8082" % host,
+            _to_wsl_path(bin_path),
+        ]
     return [bin_path]
+
+
+def _wsl_windows_host() -> str:
+    """WSL 默认网关 = 宿主机 vEthernet (WSL)。"""
+    out = subprocess.check_output(
+        ["wsl", "-e", "sh", "-c", "ip route show default | awk '{print $3}'"],
+        text=True,
+        timeout=5,
+    )
+    host = (out or "").strip().split()[0]
+    if not host:
+        raise RuntimeError("wsl default gateway empty")
+    return host
 
 
 class McpProxyClient:
     """Long-lived Rust mcp-proxy subprocess talking JSON-RPC over stdio."""
 
     def __init__(self, bin_path: str, meta: dict):
+        self.meta = meta
         self.proc = subprocess.Popen(
             _proxy_command(bin_path),
             cwd=_PROXY_DIR,
@@ -162,7 +220,10 @@ class McpProxyClient:
         """Call a tool through the proxy. Returns the text result, or a block message."""
         resp = self._send("tools/call", {"name": tool_name, "arguments": args})
         if "error" in resp:
-            return _format_block(tool_name, args, resp["error"])
+            return _format_block(
+                tool_name, args, resp["error"],
+                session_id=(self.meta or {}).get("session_id"),
+            )
         content = resp.get("result", {}).get("content", [])
         if content:
             return content[0].get("text", "")
@@ -192,7 +253,23 @@ def call_tool(tool_name: str, args: dict) -> str:
     return get_client().call_tool(tool_name, args)
 
 
-def _format_block(tool_name: str, args: dict, err: dict) -> str:
+def get_llm10_client() -> McpProxyClient:
+    global _llm10_client
+    LLM10_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    if not LLM10_META["session_id"] or LLM10_META["session_id"] == "llm10-init":
+        new_llm10_session()
+    if _llm10_client is None or _llm10_client.proc.poll() is not None:
+        if _llm10_client is not None:
+            _llm10_client.close()
+        _llm10_client = McpProxyClient(_resolve_bin(), dict(LLM10_META))
+    return _llm10_client
+
+
+def call_tool_llm10(tool_name: str, args: dict) -> str:
+    return get_llm10_client().call_tool(tool_name, args)
+
+
+def _format_block(tool_name: str, args: dict, err: dict, session_id=None) -> str:
     """Proxy JSON-RPC 常把 rule_id 填成 null，再问一次 engine（不带 content）把规则名拿回来。"""
     msg = err.get("message") or "tool blocked"
     data = err.get("data") or {}
@@ -201,7 +278,7 @@ def _format_block(tool_name: str, args: dict, err: dict) -> str:
     if reason and reason != msg:
         parts.append(str(reason))
     rule = data.get("rule_id")
-    peek = None if rule else _peek_evaluate(tool_name, args)
+    peek = None if rule else _peek_evaluate(tool_name, args, session_id=session_id)
     if peek:
         rule = rule or peek.get("rule_id")
         rc = peek.get("reason_code")
@@ -215,13 +292,13 @@ def _format_block(tool_name: str, args: dict, err: dict) -> str:
     return "[blocked] " + " | ".join(parts)
 
 
-def _peek_evaluate(tool_name: str, args: dict):
+def _peek_evaluate(tool_name: str, args: dict, session_id=None):
     engine = (settings.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
     if not engine:
         return None
     payload = {
         "tenant_id": META.get("tenant_id") or "default",
-        "session_id": META.get("session_id") or "demo-session",
+        "session_id": session_id or META.get("session_id") or "demo-session",
         "user_id": META.get("user_id") or "1",
         "tool_name": tool_name,
         "role": "tool_call",

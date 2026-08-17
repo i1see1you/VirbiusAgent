@@ -61,6 +61,9 @@ def set_protection():
         inbox.clear()
         from dvla_agent import mcpproxy_client
         mcpproxy_client.new_session()
+        from modules import owasp_llm10
+        owasp_llm10.rotate_session()
+        conversations.clear("owasp:LLM10")
     return jsonify({"ok": True, "enabled": protection.is_enabled()})
 
 
@@ -201,6 +204,14 @@ def _warmup_exfil_groovy():
                     "exfil groovy warmup %s action=%s rule=%s",
                     i, data.get("effective_action"), data.get("rule_id"),
                 )
+                tx = {
+                    "tenant_id": "default", "session_id": "groovy-warmup-rate",
+                    "user_id": "1", "tool_name": "GetUserTransactions",
+                    "role": "tool_call",
+                    "args_json": json.dumps({"userId": "1"}),
+                    "vars": {"app_id": "demo-app"},
+                }
+                _post(url, tx)
                 if data.get("effective_action") in ("block", "deny"):
                     return
             except Exception as exc:  # noqa: BLE001

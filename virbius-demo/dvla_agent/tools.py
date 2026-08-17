@@ -15,17 +15,20 @@ from dvla_agent import mcp_server, mcpproxy_client
 from modules import protection
 
 
-def _call_proxy(tool_name: str, args: dict) -> str:
+def _call_proxy(tool_name: str, args: dict, llm10: bool = False) -> str:
     """Invoke a tool, honoring the protection master switch.
 
     - switch ON  -> go through the Rust virbius-mcp-proxy (cloud groovy eval).
     - switch OFF -> call the upstream tool directly, bypassing all filtering.
+    - llm10=True -> 使用独立 llm10- session，不和 Agent 页抢累计窗口。
     """
     if not protection.is_enabled():
         result = mcp_server.call_tool(tool_name, args)
         if result.get("success"):
             return result["result"]
         return "[blocked] " + result.get("error", "tool failed")
+    if llm10:
+        return mcpproxy_client.call_tool_llm10(tool_name, args)
     return mcpproxy_client.call_tool(tool_name, args)
 
 
