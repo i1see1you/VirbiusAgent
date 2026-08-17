@@ -1,0 +1,110 @@
+fullnameOverride: virbius
+
+global:
+  imageRegistry: ""
+  imageTag: latest
+  imagePullSecrets: []
+
+ingress:
+  enabled: true
+  className: nginx
+  baseDomain: virbius.example.com
+  tls:
+    enabled: false
+    secretName: ""
+  hosts:
+    range: range.virbius.example.com
+    control: control.virbius.example.com
+    engine: engine.virbius.example.com
+    proxy: proxy.virbius.example.com
+
+mysql:
+  enabled: true
+  image: mysql:8.0
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+redis:
+  enabled: true
+  image: redis:7-alpine
+  persistence:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+kafka:
+  enabled: true
+  image: apache/kafka:3.7.0
+  clusterId: MkUjOEJhQjY1QUY1NDQ2Nk1BODI
+  persistence:
+    size: 10Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+control:
+  replicaCount: 1
+  persistence:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  apiKeyEnabled: false
+
+engine:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  promptLlm:
+    baseUrl: ""
+    model: sileader/qwen3guard:0.6b
+
+proxy:
+  replicaCount: 1
+  upstreamUrl: http://virbius-demo:9091
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+demo:
+  replicaCount: 1
+  agentUseDocker: "0"
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+secrets:
+  existingSecret: ""
+  mysqlRootPassword: ""
+  mysqlPassword: ""
+  licenseMasterKey: ""
+  deepseekApiKey: ""
+  openrouterApiKey: ""
