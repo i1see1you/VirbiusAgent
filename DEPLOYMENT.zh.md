@@ -430,3 +430,67 @@ Agent 是否在 K8s 集群内？
 | **存量 Agent 集群内部署** | ⚠️ 可选 | 方式 1 已覆盖 3 层，按需叠加管层 |
 
 ---
+
+### 8.5 K8s Helm 部署
+
+用一份 Helm Chart 把靶场、端侧、云侧、管侧和 MySQL / Kafka / Redis 装进**已有集群**。不代装 Ingress Controller、Higress、Falco、Ollama。
+
+Chart：`deploy/helm/virbius`。脚本：`deploy/scripts/k8s-build-push.sh`、`deploy/scripts/k8s-deploy.sh`。
+
+#### 前置
+
+- 能 `docker login` 的镜像仓库
+- 集群已装 Ingress Controller（默认 class `nginx`）
+- 本机有 `docker`、`helm`、`kubectl`
+- 本地 values 文件填写密钥（不要提交 Git）
+
+```bash
+cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
+# 编辑 values-prod.yaml：global.imageRegistry、secrets.*、ingress.hosts、imagePullSecrets
+```
+
+#### 一键构建、推送、安装
+
+```bash
+./deploy/scripts/k8s-deploy.sh \
+  --registry registry.example.com/virbius \
+  --tag v0.1.0 \
+  --namespace virbius \
+  --values deploy/helm/virbius/values-prod.yaml
+```
+
+只构建推送镜像：
+
+```bash
+./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v0.1.0
+```
+
+镜像已在仓库、只装 Chart：
+
+```bash
+./deploy/scripts/k8s-deploy.sh --skip-build \
+  --registry registry.example.com/virbius \
+  --tag v0.1.0 \
+  --values deploy/helm/virbius/values-prod.yaml
+```
+
+#### Ingress 四个独立 host（默认）
+
+| 侧 | Host | 健康检查 |
+|----|------|----------|
+| 靶场 | `range.virbius.example.com` | `GET /` |
+| 管侧 | `control.virbius.example.com` | `GET /api/v1/health` |
+| 云侧 | `engine.virbius.example.com` | `GET /admin/health` |
+| 端侧 | `proxy.virbius.example.com` | `GET /health` |
+
+把这四个名字指到 Ingress 的外部 IP。TLS 默认关闭，在 values 里打开 `ingress.tls`。
+
+集群内 DNS：`virbius-control:8080`、`virbius-engine:8082`、`virbius-mcp-proxy:9090`、`virbius-demo:8000`（SSE `:9091`）。
+
+靶场 Agent 关卡仍在 Pod 内用 stdio 拉起 `virbius-mcp-proxy`。Ingress 上的端侧是给集群外 MCP 客户端的 TCP 入口，upstream 默认 `http://virbius-demo:9091`。
+
+Prompt LLM（Ollama）不进集群，在 `engine.promptLlm.baseUrl` 填外部地址；留空时 engine 仍启动，prod 下 prompt 路径 fail-closed。
+
+`helm uninstall virbius -n virbius` **不会**删除 PVC。
+
+---

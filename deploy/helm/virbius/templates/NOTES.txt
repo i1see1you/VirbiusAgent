@@ -1,0 +1,24 @@
+VirbiusAgent Helm release "{{ .Release.Name }}" installed in namespace "{{ .Release.Namespace }}".
+
+Four Ingress hosts (configure DNS / /etc/hosts to your Ingress IP):
+
+  靶场  {{ .Values.ingress.hosts.range }}
+  管侧  {{ .Values.ingress.hosts.control }}
+  云侧  {{ .Values.ingress.hosts.engine }}
+  端侧  {{ .Values.ingress.hosts.proxy }}
+
+Health checks:
+
+  curl -sf http://{{ .Values.ingress.hosts.range }}/
+  curl -sf http://{{ .Values.ingress.hosts.control }}/api/v1/health
+  curl -sf http://{{ .Values.ingress.hosts.engine }}/admin/health
+  curl -sf http://{{ .Values.ingress.hosts.proxy }}/health
+
+Before production use:
+
+  - Set secrets.licenseMasterKey (do not leave the chart default)
+  - Set global.imageRegistry and docker login / imagePullSecrets
+  - Cluster must already have an Ingress Controller (class {{ .Values.ingress.className }})
+
+Demo Agent labs still spawn an in-pod stdio mcp-proxy. Ingress proxy.* is the cluster TCP MCP entry.
+The cluster proxy upstream defaults to http://{{ include "virbius.fullname" . }}-demo:9091.
