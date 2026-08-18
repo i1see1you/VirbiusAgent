@@ -29,7 +29,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void hitWhenJsonReasonMatchesMappedRule() {
-        when(llmClient.completeDetail(anyString()))
+        when(llmClient.completeDetail(anyString(), anyString()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Violent\"}", null));
 
@@ -44,7 +44,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void hitWhenQwen3GuardNativeFormat() {
-        when(llmClient.completeDetail(anyString()))
+        when(llmClient.completeDetail(anyString(), anyString()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "Safety: Unsafe\nCategories: Violent", null));
 
@@ -59,7 +59,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void missWhenReasonDoesNotMapToDraftRule() {
-        when(llmClient.completeDetail(anyString()))
+        when(llmClient.completeDetail(anyString(), anyString()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Jailbreak\"}", null));
 
@@ -73,7 +73,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void missWhenLlmSaysNoHit() {
-        when(llmClient.completeDetail(anyString()))
+        when(llmClient.completeDetail(anyString(), anyString()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"\"}", null));
 
@@ -86,7 +86,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void errorWhenLlmEmpty() {
-        when(llmClient.completeDetail(anyString()))
+        when(llmClient.completeDetail(anyString(), anyString()))
                 .thenReturn(new PromptLlmClient.CompleteResult("", null));
 
         PromptSimulateResponseDto resp = service.simulate(new PromptSimulateRequestDto(

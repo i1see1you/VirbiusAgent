@@ -54,5 +54,8 @@ scripts/test-*.sh
 # Backup files
 *.bak
 
+# LLM fine-tuning workspace (model weights, training data, checkpoints)
+virbius-guard/
+
 # PPT
 ppt/

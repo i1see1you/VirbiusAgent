@@ -34,7 +34,7 @@ virbius:
     engine-allow-path: ${VIRBIUS_ENGINE_AUDIT_ALLOW:/tmp/virbius/engine-audit-allow.jsonl}
   prompt-llm:
     base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
-    model: ${VIRBIUS_PROMPT_LLM_MODEL:sileader/qwen3guard:0.6b}
+    model: ${VIRBIUS_PROMPT_LLM_MODEL:virbiusguard:q4}
     api-path: /v1/chat/completions
     timeout-ms: ${VIRBIUS_PROMPT_LLM_TIMEOUT_MS:30000}
     fail-open: true
@@ -56,6 +56,8 @@ virbius:
       Politically Sensitive Topics: prompt-political
       Copyright Violation: prompt-copyright
       Jailbreak: prompt-jailbreak
+      Agent Tool Misuse: prompt-agent
+      Multi-language Injection: prompt-jailbreak
 
   guard-detect:
     injection-enabled: ${VIRBIUS_INJECTION_DETECT_ENABLED:true}

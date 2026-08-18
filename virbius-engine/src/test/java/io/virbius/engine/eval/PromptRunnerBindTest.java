@@ -50,7 +50,7 @@ class PromptRunnerBindTest {
         List<SignalDto> signals = runner.run("default", ctx);
 
         assertTrue(signals.isEmpty());
-        verify(llmClient, never()).complete(anyString());
+        verify(llmClient, never()).completeDetail(anyString(), anyString());
     }
 
     @Test
@@ -60,8 +60,9 @@ class PromptRunnerBindTest {
                 "Rule_201",
                 Map.of("bind_scope", "tool", "bind_ref", Map.of("tool_names", List.of("read_file"))));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global, toolChat));
-        when(llmClient.complete(anyString()))
-                .thenReturn("{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Jailbreak\"}");
+        when(llmClient.completeDetail(anyString(), anyString()))
+                .thenReturn(new PromptLlmClient.CompleteResult(
+                        "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Jailbreak\"}", null));
 
         MatchContext ctx = MatchContext.forToolCall(
                 "hack me", null, null, null, "sess", Map.of("app_id", "test"), "read_file");
@@ -76,8 +77,9 @@ class PromptRunnerBindTest {
     void triggersRuleByQwen3GuardNativeFormat() {
         RuleEntry global = promptRule("Rule_202", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global));
-        when(llmClient.complete(anyString()))
-                .thenReturn("Safety: Unsafe\nCategories: Violent");
+        when(llmClient.completeDetail(anyString(), anyString()))
+                .thenReturn(new PromptLlmClient.CompleteResult(
+                        "Safety: Unsafe\nCategories: Violent", null));
 
         MatchContext ctx = MatchContext.forToolCall(
                 "kill", null, null, null, "sess", Map.of("app_id", "test"), "read_file");
@@ -92,8 +94,9 @@ class PromptRunnerBindTest {
     void fallsBackToFirstRuleWhenCategoryUnmapped() {
         RuleEntry fallback = promptRule("Rule_999", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(fallback));
-        when(llmClient.complete(anyString()))
-                .thenReturn("{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"UnknownCategory\"}");
+        when(llmClient.completeDetail(anyString(), anyString()))
+                .thenReturn(new PromptLlmClient.CompleteResult(
+                        "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"UnknownCategory\"}", null));
 
         MatchContext ctx = MatchContext.forToolCall(
                 "test", null, null, null, "sess", Map.of("app_id", "test"), "read_file");

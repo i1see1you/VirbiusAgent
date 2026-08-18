@@ -5,7 +5,7 @@ spring:
 virbius:
   prompt-llm:
     base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
-    model: ${VIRBIUS_PROMPT_LLM_MODEL:sileader/qwen3guard:0.6b}
+    model: ${VIRBIUS_PROMPT_LLM_MODEL:virbiusguard:q4}
 
 audit:
   publish:

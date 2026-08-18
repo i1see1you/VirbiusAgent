@@ -32,21 +32,28 @@ public class PromptLlmClient {
         this.restClient = RestClient.builder().requestFactory(factory).build();
     }
 
-    /** @return assistant text; empty on HTTP failure */
-    public String complete(String promptText) {
-        return completeDetail(promptText).content();
-    }
-
-    public CompleteResult completeDetail(String promptText) {
+    /**
+     * Call the LLM with standard OpenAI system/user messages (no manual ChatML).
+     * The serving backend applies its own chat template — engine stays format-agnostic.
+     *
+     * @param systemPrompt system instruction (safety classifier prompt); null/blank skips
+     * @param userContent  the user input to audit
+     */
+    public CompleteResult completeDetail(String systemPrompt, String userContent) {
         String url = props.baseUrl().replaceAll("/+$", "") + props.apiPath();
         ObjectNode body = mapper.createObjectNode();
         body.put("model", props.model());
         body.put("stream", false);
         body.put("temperature", 0);
         ArrayNode messages = body.putArray("messages");
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            ObjectNode sys = messages.addObject();
+            sys.put("role", "system");
+            sys.put("content", systemPrompt);
+        }
         ObjectNode user = messages.addObject();
         user.put("role", "user");
-        user.put("content", promptText);
+        user.put("content", userContent);
 
         try {
             String response =

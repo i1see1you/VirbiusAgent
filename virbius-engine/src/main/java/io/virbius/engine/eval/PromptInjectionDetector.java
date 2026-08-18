@@ -1,7 +1,6 @@
 package io.virbius.engine.eval;
 
 import io.virbius.engine.config.GuardDetectProperties;
-import io.virbius.engine.config.PromptLlmProperties;
 import io.virbius.engine.eval.PromptAuditJsonParser.PromptAuditResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,17 +27,14 @@ public class PromptInjectionDetector {
     private static final Logger log = LoggerFactory.getLogger(PromptInjectionDetector.class);
 
     private final GuardDetectProperties guardProps;
-    private final PromptLlmProperties llmProps;
     private final PromptLlmClient llmClient;
     private final PromptAuditJsonParser auditParser;
 
     public PromptInjectionDetector(
             GuardDetectProperties guardProps,
-            PromptLlmProperties llmProps,
             PromptLlmClient llmClient,
             PromptAuditJsonParser auditParser) {
         this.guardProps = guardProps;
-        this.llmProps = llmProps;
         this.llmClient = llmClient;
         this.auditParser = auditParser;
     }
@@ -57,9 +53,9 @@ public class PromptInjectionDetector {
             return InjectionDetectionResult.clean();
         }
 
-        // LLM-based semantic detection via qwen3guard
-        String prompt = buildInjectionPrompt(text);
-        PromptLlmClient.CompleteResult result = llmClient.completeDetail(prompt);
+        // LLM-based semantic detection via guard model
+        PromptLlmClient.CompleteResult result =
+                llmClient.completeDetail(guardProps.injectionSystemPrompt(), text);
 
         if (result.content() == null || result.content().isBlank()) {
             if (guardProps.failOpen()) {
@@ -76,22 +72,6 @@ public class PromptInjectionDetector {
 
         String reason = audit.reason() != null ? audit.reason() : "llm_injection_detected";
         return new InjectionDetectionResult(true, reason, 30, "llm:" + reason);
-    }
-
-    private String buildInjectionPrompt(String userContent) {
-        // Use the guard-specific injection system prompt instead of the default content safety one
-        return llmProps.imStart()
-                + "system\n"
-                + guardProps.injectionSystemPrompt()
-                + llmProps.imEnd()
-                + "\n"
-                + llmProps.imStart()
-                + "user\n"
-                + userContent
-                + llmProps.imEnd()
-                + "\n"
-                + llmProps.imStart()
-                + "assistant\n";
     }
 
     /**

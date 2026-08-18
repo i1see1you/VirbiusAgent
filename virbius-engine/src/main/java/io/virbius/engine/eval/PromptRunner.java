@@ -89,8 +89,12 @@ public class PromptRunner {
     }
 
     private List<SignalDto> runMatrixLlm(String content, List<RuleEntry> promptRules) {
-        String prompt = PromptMatrixBuilder.buildChatMlPrompt(llmProps, content);
-        String assistant = llmClient.complete(prompt);
+        PromptLlmClient.CompleteResult result =
+                llmClient.completeDetail(llmProps.systemPrompt(), content);
+        String assistant = result.content();
+        if (result.error() != null && !result.error().isBlank()) {
+            log.warn("prompt-llm error: {}", result.error());
+        }
         if (assistant == null || assistant.isBlank()) {
             if (llmProps.failOpen()) {
                 log.warn("prompt-llm empty response; fail-open");

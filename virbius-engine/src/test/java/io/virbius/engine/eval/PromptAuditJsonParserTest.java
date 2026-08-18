@@ -5,22 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.virbius.engine.config.PromptLlmProperties;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-class PromptMatrixBuilderTest {
+// ChatML prompt building was removed — the serving backend now applies its own
+// chat template via standard OpenAI system/user messages. Only parser tests remain.
 
-    @Test
-    void buildsChatMlWithSystemPrompt() {
-        PromptLlmProperties props = new PromptLlmProperties(
-                "http://127.0.0.1:11434", "m", "/v1/chat/completions", 3000, true,
-                "<|im_start|>", "", null, Map.of());
-        String prompt = PromptMatrixBuilder.buildChatMlPrompt(props, "hello");
-        assertTrue(prompt.startsWith("<|im_start|>system\n"));
-        assertTrue(prompt.contains("<|im_start|>user\nhello"));
-        assertTrue(prompt.endsWith("<|im_start|>assistant\n"));
-    }
+class PromptAuditJsonParserTest {
 
     // --- JSON format (generic models following system prompt) ---
 

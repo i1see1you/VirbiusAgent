@@ -30,8 +30,8 @@ public class PromptSimulateService {
             return new PromptSimulateResponseDto(false, false, null, null, null, "content required");
         }
 
-        String prompt = PromptMatrixBuilder.buildChatMlPrompt(llmProps, content);
-        PromptLlmClient.CompleteResult llm = llmClient.completeDetail(prompt);
+        PromptLlmClient.CompleteResult llm =
+                llmClient.completeDetail(llmProps.systemPrompt(), content);
         if (llm.error() != null && !llm.error().isBlank()) {
             return new PromptSimulateResponseDto(
                     false, false, null, null, llm.content(), llm.error());
