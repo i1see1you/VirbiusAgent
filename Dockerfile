@@ -201,6 +201,8 @@ RUN if [ "$APT_MIRROR" = "cn" ]; then \
 # isolation boundary for untrusted code is the runsc sandbox itself.
 RUN mkdir -p /var/log/virbius
 
+COPY --from=rust-build /build/target/release/virbius-mcp-proxy /usr/local/bin/virbius-mcp-proxy
+
 USER root
 EXPOSE 9090
 

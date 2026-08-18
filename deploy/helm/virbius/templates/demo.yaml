@@ -1,0 +1,121 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "virbius.fullname" . }}-demo-data
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: demo
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.demo.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "virbius.fullname" . }}-demo
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: demo
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+    - name: sse
+      port: 9091
+      targetPort: sse
+  selector:
+    {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "demo") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "virbius.fullname" . }}-demo
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: demo
+spec:
+  replicas: {{ .Values.demo.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "demo") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "demo") | nindent 8 }}
+    spec:
+      {{- include "virbius.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "virbius.waitFor" (dict "name" "control" "host" (printf "%s-control" (include "virbius.fullname" .)) "port" 8080) | nindent 8 }}
+        {{- include "virbius.waitFor" (dict "name" "engine" "host" (printf "%s-engine" (include "virbius.fullname" .)) "port" 8082) | nindent 8 }}
+      containers:
+        - name: demo
+          image: {{ include "virbius.image" (dict "root" . "component" "demo") }}
+          ports:
+            - name: http
+              containerPort: 8000
+            - name: sse
+              containerPort: 9091
+          env:
+            - name: PORT
+              value: "8000"
+            - name: VIRBIUS_CONTROL_URL
+              value: http://{{ include "virbius.fullname" . }}-control:8080
+            - name: VIRBIUS_ENGINE_URL
+              value: http://{{ include "virbius.fullname" . }}-engine:8082
+            - name: VIRBIUS_SSE_BIND
+              value: "0.0.0.0"
+            - name: VIRBIUS_MCP_PROXY_BIN
+              value: /usr/local/bin/virbius-mcp-proxy
+            - name: VIRBIUS_CONFIG_DIR
+              value: /data
+            - name: AGENT_USE_DOCKER
+              value: {{ .Values.demo.agentUseDocker | quote }}
+            - name: DEEPSEEK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: deepseek-api-key
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: openrouter-api-key
+            - name: HTTP_PROXY
+              value: ""
+            - name: HTTPS_PROXY
+              value: ""
+            - name: http_proxy
+              value: ""
+            - name: https_proxy
+              value: ""
+            - name: ALL_PROXY
+              value: ""
+            - name: all_proxy
+              value: ""
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.demo.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "virbius.fullname" . }}-demo-data

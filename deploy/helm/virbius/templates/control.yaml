@@ -1,0 +1,128 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "virbius.fullname" . }}-control-data
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.control.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "virbius.fullname" . }}-control
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+  selector:
+    {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "control") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "virbius.fullname" . }}-control
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: control
+spec:
+  replicas: {{ .Values.control.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "control") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "control") | nindent 8 }}
+    spec:
+      {{- include "virbius.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        {{- include "virbius.waitFor" (dict "name" "mysql" "host" (printf "%s-mysql" (include "virbius.fullname" .)) "port" 3306) | nindent 8 }}
+        {{- include "virbius.waitFor" (dict "name" "redis" "host" (printf "%s-redis" (include "virbius.fullname" .)) "port" 6379) | nindent 8 }}
+        {{- include "virbius.waitFor" (dict "name" "kafka" "host" (printf "%s-kafka" (include "virbius.fullname" .)) "port" 9092) | nindent 8 }}
+        {{- include "virbius.waitFor" (dict "name" "engine" "host" (printf "%s-engine" (include "virbius.fullname" .)) "port" 8082) | nindent 8 }}
+      containers:
+        - name: control
+          image: {{ include "virbius.image" (dict "root" . "component" "control") }}
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+            - name: SERVER_PORT
+              value: "8080"
+            - name: VIRBIUS_JDBC_URL
+              value: jdbc:mariadb://{{ include "virbius.fullname" . }}-mysql:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+            - name: VIRBIUS_JDBC_USER
+              value: virbius
+            - name: VIRBIUS_JDBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: mysql-password
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: {{ include "virbius.fullname" . }}-kafka:9092
+            - name: VIRBIUS_REDIS_URL
+              value: redis://{{ include "virbius.fullname" . }}-redis:6379
+            - name: VIRBIUS_ENGINE_URL
+              value: http://{{ include "virbius.fullname" . }}-engine:8082
+            - name: VIRBIUS_LICENSE_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: license-master-key
+            - name: VIRBIUS_SECURITY_API_KEY_ENABLED
+              value: {{ .Values.control.apiKeyEnabled | quote }}
+            - name: VIRBIUS_DATA_DIR
+              value: /data
+            - name: VIRBIUS_LOG_DIR
+              value: /var/log/virbius
+            - name: HTTP_PROXY
+              value: ""
+            - name: HTTPS_PROXY
+              value: ""
+            - name: http_proxy
+              value: ""
+            - name: https_proxy
+              value: ""
+            - name: NO_PROXY
+              value: "*"
+            - name: no_proxy
+              value: "*"
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.control.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: logs
+              mountPath: /var/log/virbius
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "virbius.fullname" . }}-control-data
+        - name: logs
+          emptyDir: {}

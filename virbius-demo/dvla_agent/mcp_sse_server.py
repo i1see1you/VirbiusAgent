@@ -11,6 +11,7 @@
 独立进程运行：python -m dvla_agent.mcp_sse_server [port]
 """
 import json
+import os
 import queue
 import sys
 import threading
@@ -140,8 +141,9 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9091
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    print("dvla mcp SSE server listening on 127.0.0.1:%d" % port, flush=True)
+    host = os.environ.get("VIRBIUS_SSE_BIND", "127.0.0.1").strip() or "127.0.0.1"
+    server = ThreadingHTTPServer((host, port), Handler)
+    print("dvla mcp SSE server listening on %s:%d" % (host, port), flush=True)
     server.serve_forever()
 
 
