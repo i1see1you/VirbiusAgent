@@ -2,13 +2,14 @@
 #  virbiusDemo — Docker Compose (独立部署单元)
 #
 #  virbius-demo is a SEPARATE deployment unit from the virbius-agent platform.
-#  It reaches control/engine over the host's published HTTP ports through
-#  host.docker.internal, so the virbius-agent compose file needs NO shared
-#  network changes.
+#  It joins the existing platform network (virbius-agent_default) and uses
+#  service DNS: virbius-engine:8082 / virbius-control:8080.
+#  Do NOT hairpin those through host.docker.internal — Docker Desktop injects
+#  an IPv6 host.docker.internal that does not reach published host ports.
 #
 #  Prerequisites:
-#    - The virbius-agent platform must be up FIRST (docker compose up -d in the
-#      repo root) so control:8080 and engine:8082 are listening on the host.
+#    - The virbius-agent platform must be up FIRST
+#      (docker compose -p virbius-agent up -d) so the external network exists.
 #
 #  Usage (from virbius-demo/):
 #    docker compose build          # Build the demo image (uses repo-root context)
@@ -45,9 +46,9 @@ services:
       - ./.env
     environment:
       PORT: "8000"
-      # Stable platform entry points over the host's published HTTP ports.
-      VIRBIUS_CONTROL_URL: http://host.docker.internal:8080
-      VIRBIUS_ENGINE_URL: http://host.docker.internal:8082
+      # Same Docker network as the platform; IPv4 service DNS, no IPv6 hairpin.
+      VIRBIUS_CONTROL_URL: http://virbius-control:8080
+      VIRBIUS_ENGINE_URL: http://virbius-engine:8082
       VIRBIUS_UPSTREAM_URL: http://127.0.0.1:9091
       VIRBIUS_MCP_PROXY_BIN: /usr/local/bin/virbius-mcp-proxy
       # Runtime user settings persisted to the config volume (see §4 of the PRD).
@@ -66,18 +67,27 @@ services:
       # Requires Ollama to be installed/serving on the host (localhost:11434).
       OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
     extra_hosts:
-      # Resolve the docker host from inside the container (reaches published ports).
+      # Host Ollama only. Platform traffic uses service DNS on virbius-agent_default.
       - "host.docker.internal:host-gateway"
+    networks:
+      - platform
     volumes:
       # Persist runtime user configuration (keys, platform addresses, etc.),
       # so it survives demo container rebuilds. See PRD §4.
       - demo-config:/data
+      # Proxy timeout / engine_url 改 toml 后免重建镜像。
+      - ./virbius-mcp-proxy.toml:/app/virbius-mcp-proxy.toml:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/"]
       interval: 15s
       timeout: 5s
       retries: 5
     restart: unless-stopped
+
+networks:
+  platform:
+    name: virbius-agent_default
+    external: true
 
 volumes:
   demo-config:

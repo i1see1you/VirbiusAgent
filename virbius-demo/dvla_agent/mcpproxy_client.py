@@ -12,6 +12,8 @@ import json
 import logging
 import os
 import subprocess
+import uuid
+import urllib.request
 
 from modules import settings
 
@@ -29,6 +31,41 @@ META = {
 BIN_HINT = os.environ.get("VIRBIUS_MCP_PROXY_BIN", "").strip()
 
 
+def new_session() -> str:
+    """Rotate engine session_id so leftover risk quota does not block every tool."""
+    global _client
+    META["session_id"] = "demo-" + uuid.uuid4().hex[:12]
+    if _client is not None:
+        try:
+            _client.close()
+        except Exception:
+            pass
+        _client = None
+    return META["session_id"]
+
+
+def _file_magic(path: str) -> bytes:
+    try:
+        with open(path, "rb") as f:
+            return f.read(4)
+    except OSError:
+        return b""
+
+
+def _is_pe(path: str) -> bool:
+    return _file_magic(path)[:2] == b"MZ"
+
+
+def _is_elf(path: str) -> bool:
+    return _file_magic(path) == b"\x7fELF"
+
+
+def _to_wsl_path(path: str) -> str:
+    abs_path = os.path.abspath(path)
+    drive, rest = os.path.splitdrive(abs_path)
+    return "/mnt/" + drive[0].lower() + rest.replace("\\", "/")
+
+
 def _resolve_bin() -> str:
     """Resolve the Rust proxy binary path (env override, else default build output)."""
     if BIN_HINT:
@@ -38,12 +75,33 @@ def _resolve_bin() -> str:
         os.path.normpath(os.path.join(_PROXY_DIR, "..")),
         os.path.normpath(os.path.join(_PROXY_DIR, "..", "virbius-mcp-proxy")),
     ]
+    triples = ("", "x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu", "x86_64-pc-windows-gnullvm")
+    candidates = []
     for root in roots:
-        base = os.path.normpath(os.path.join(root, "target", "debug", "virbius-mcp-proxy"))
-        for cand in (base + ".exe", base):
+        for triple in triples:
+            target = os.path.join(root, "target", triple, "debug") if triple else os.path.join(root, "target", "debug")
+            base = os.path.normpath(os.path.join(target, "virbius-mcp-proxy"))
+            candidates.extend((base + ".exe", base))
+    # Windows: prefer a real PE so we never CreateProcess a Linux ELF.
+    if os.name == "nt":
+        for cand in candidates:
+            if os.path.isfile(cand) and _is_pe(cand):
+                return cand
+        for cand in candidates:
+            if os.path.isfile(cand) and _is_elf(cand):
+                return cand
+    else:
+        for cand in candidates:
             if os.path.isfile(cand):
                 return cand
     return os.path.normpath(os.path.join(roots[0], "target", "debug", "virbius-mcp-proxy"))
+
+
+def _proxy_command(bin_path: str) -> list[str]:
+    """On Windows, run a Linux ELF through WSL; otherwise spawn the binary directly."""
+    if os.name == "nt" and os.path.isfile(bin_path) and _is_elf(bin_path):
+        return ["wsl", "--cd", _PROXY_DIR, "-e", _to_wsl_path(bin_path)]
+    return [bin_path]
 
 
 class McpProxyClient:
@@ -51,7 +109,7 @@ class McpProxyClient:
 
     def __init__(self, bin_path: str, meta: dict):
         self.proc = subprocess.Popen(
-            [bin_path],
+            _proxy_command(bin_path),
             cwd=_PROXY_DIR,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -104,9 +162,7 @@ class McpProxyClient:
         """Call a tool through the proxy. Returns the text result, or a block message."""
         resp = self._send("tools/call", {"name": tool_name, "arguments": args})
         if "error" in resp:
-            err = resp["error"]
-            msg = err.get("message", "tool blocked")
-            return "[blocked] " + msg
+            return _format_block(tool_name, args, resp["error"])
         content = resp.get("result", {}).get("content", [])
         if content:
             return content[0].get("text", "")
@@ -134,3 +190,53 @@ def get_client() -> McpProxyClient:
 
 def call_tool(tool_name: str, args: dict) -> str:
     return get_client().call_tool(tool_name, args)
+
+
+def _format_block(tool_name: str, args: dict, err: dict) -> str:
+    """Proxy JSON-RPC 常把 rule_id 填成 null，再问一次 engine（不带 content）把规则名拿回来。"""
+    msg = err.get("message") or "tool blocked"
+    data = err.get("data") or {}
+    parts = [str(msg)]
+    reason = data.get("reason")
+    if reason and reason != msg:
+        parts.append(str(reason))
+    rule = data.get("rule_id")
+    peek = None if rule else _peek_evaluate(tool_name, args)
+    if peek:
+        rule = rule or peek.get("rule_id")
+        rc = peek.get("reason_code")
+        if rc and str(rc) not in parts:
+            parts.append(str(rc))
+    if rule:
+        parts.append("rule=" + str(rule))
+    risk = data.get("session_risk_score")
+    if risk is not None:
+        parts.append("risk=" + str(risk))
+    return "[blocked] " + " | ".join(parts)
+
+
+def _peek_evaluate(tool_name: str, args: dict):
+    engine = (settings.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
+    if not engine:
+        return None
+    payload = {
+        "tenant_id": META.get("tenant_id") or "default",
+        "session_id": META.get("session_id") or "demo-session",
+        "user_id": META.get("user_id") or "1",
+        "tool_name": tool_name,
+        "role": "tool_call",
+        "args_json": json.dumps(args or {}),
+        "vars": {"app_id": META.get("app_id") or "demo-app"},
+    }
+    req = urllib.request.Request(
+        engine + "/v1/evaluate",
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            return json.load(resp)
+    except Exception as exc:
+        log.warning("peek evaluate failed: %s", exc)
+        return None

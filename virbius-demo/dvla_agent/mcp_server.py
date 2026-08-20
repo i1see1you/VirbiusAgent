@@ -12,6 +12,7 @@ It is reached by the Rust virbius-mcp-proxy through the SSE upstream
 import json
 import sys
 
+from dvla_agent import inbox, notices
 from dvla_agent.transaction_db import TransactionDb
 
 
@@ -30,6 +31,17 @@ def call_tool(tool_name: str, args: dict) -> dict:
             return {"success": True, "result": db.get_user_transactions(args.get("userId", ""))}
         finally:
             db.close()
+
+    if tool_name == "GetBankNotice":
+        topic = args.get("topic") or args.get("input") or "reconcile"
+        return {"success": True, "result": notices.get_notice(str(topic))}
+
+    if tool_name == "SendEmail":
+        to = args.get("to") or ""
+        body = args.get("body") or args.get("input") or ""
+        if not to:
+            return {"success": False, "error": "missing 'to'"}
+        return {"success": True, "result": inbox.send(str(to), str(body))}
 
     return {"success": False, "error": "unknown tool: " + str(tool_name)}
 

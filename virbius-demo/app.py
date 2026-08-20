@@ -5,8 +5,12 @@
 """
 import logging
 import socket
+import json
+import threading
+import time
+import urllib.request
 import requests
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session
 
 import config
 from modules import modelsel, protection
@@ -48,6 +52,15 @@ def set_model():
 def set_protection():
     value = (request.json or {}).get("enabled", False)
     protection.set_enabled(value)
+    # 开防护时清掉关开关时夺到的 flag，避免页面仍显示「已夺取」被当成防护无效。
+    if value:
+        from dvla_agent import inbox
+        from modules import conversations
+        session["agent_pwned"] = {}
+        conversations.clear("agent")
+        inbox.clear()
+        from dvla_agent import mcpproxy_client
+        mcpproxy_client.new_session()
     return jsonify({"ok": True, "enabled": protection.is_enabled()})
 
 
@@ -146,6 +159,57 @@ def _pick_port():
     return port
 
 
+def _warmup_exfil_groovy():
+    """JIT-compile cloud_exfil_chain_deny. Cold Groovy L3 has a 50ms cap and
+    fail-opens; the first real SendEmail would then look like 'protection off'."""
+    log = logging.getLogger("warmup")
+
+    def _post(url, payload):
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            return json.load(resp)
+
+    def run():
+        time.sleep(2)
+        engine = (cfg_store.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
+        if not engine:
+            return
+        url = engine + "/v1/evaluate"
+        sid = "groovy-warmup"
+        notice = {
+            "tenant_id": "default", "session_id": sid, "user_id": "1",
+            "tool_name": "GetBankNotice", "role": "tool_call",
+            "args_json": json.dumps({"topic": "reconcile"}),
+            "vars": {"app_id": "demo-app"},
+        }
+        mail = {
+            "tenant_id": "default", "session_id": sid, "user_id": "1",
+            "tool_name": "SendEmail", "role": "tool_call",
+            "args_json": json.dumps({"to": "recon@clearing-partner.com", "body": "warmup"}),
+            "vars": {"app_id": "demo-app"},
+        }
+        for i in range(4):
+            try:
+                _post(url, notice)
+                data = _post(url, mail)
+                log.info(
+                    "exfil groovy warmup %s action=%s rule=%s",
+                    i, data.get("effective_action"), data.get("rule_id"),
+                )
+                if data.get("effective_action") in ("block", "deny"):
+                    return
+            except Exception as exc:  # noqa: BLE001
+                log.warning("exfil groovy warmup failed: %s", exc)
+            time.sleep(1)
+
+    threading.Thread(target=run, daemon=True, name="groovy-warmup").start()
+
+
 if __name__ == "__main__":
     port = _pick_port()
     print("=" * 60)
@@ -153,4 +217,5 @@ if __name__ == "__main__":
     print(f"  ➜  http://127.0.0.1:{port}")
     print(f"  目标模型: {config.DEEPSEEK_MODEL} @ {config.DEEPSEEK_BASE_URL}")
     print("=" * 60)
+    _warmup_exfil_groovy()
     app.run(host="0.0.0.0", port=port, debug=False)

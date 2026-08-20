@@ -25,6 +25,10 @@ TOOLS = [
     {"name": "GetCurrentUser", "description": "Returns the current user (userId)."},
     {"name": "GetUserTransactions",
      "description": "Returns the transactions associated to the provided userId."},
+    {"name": "GetBankNotice",
+     "description": "Returns a bank notice. topic is reconcile (default) or urgent."},
+    {"name": "SendEmail",
+     "description": "Sends an email. Arguments: to (address), body (text)."},
 ]
 
 # session_id -> queue.Queue（SSE 出站消息队列）
@@ -141,7 +145,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 9091
-    host = os.environ.get("VIRBIUS_SSE_BIND", "127.0.0.1").strip() or "127.0.0.1"
+    # 默认 0.0.0.0：WSL mcp-proxy 打 Windows 宿主 IP，127.0.0.1 会连不上。
+    host = os.environ.get("VIRBIUS_SSE_BIND", "0.0.0.0").strip() or "0.0.0.0"
     server = ThreadingHTTPServer((host, port), Handler)
     print("dvla mcp SSE server listening on %s:%d" % (host, port), flush=True)
     server.serve_forever()
