@@ -64,6 +64,9 @@ def set_protection():
         from modules import owasp_llm10
         owasp_llm10.rotate_session()
         conversations.clear("owasp:LLM10")
+        from modules import owasp_llm06
+        owasp_llm06.rotate_session()
+        conversations.clear("owasp:LLM06")
     return jsonify({"ok": True, "enabled": protection.is_enabled()})
 
 
@@ -212,6 +215,18 @@ def _warmup_exfil_groovy():
                     "vars": {"app_id": "demo-app"},
                 }
                 _post(url, tx)
+                pay = {
+                    "tenant_id": "default", "session_id": "groovy-warmup-llm06",
+                    "user_id": "1", "tool_name": "PayoutToAccount",
+                    "role": "tool_call",
+                    "args_json": json.dumps({
+                        "expense_id": "EXP-WARMUP",
+                        "account": "6222-0000-8888",
+                        "amount": 3280,
+                    }),
+                    "vars": {"app_id": "demo-app"},
+                }
+                _post(url, pay)
                 if data.get("effective_action") in ("block", "deny"):
                     return
             except Exception as exc:  # noqa: BLE001

@@ -28,6 +28,9 @@ def lab(code):
     if lab.get("rate_limit"):
         from modules import owasp_llm10
         public.update(owasp_llm10.meter())
+    if lab.get("expense_agent"):
+        from modules import owasp_llm06
+        public.update({"expense": owasp_llm06.snapshot()})
     return render_template("owasp_lab.html", lab=public, solved=solved)
 
 
@@ -55,6 +58,18 @@ def chat(code):
         from modules import owasp_llm10
         try:
             payload = owasp_llm10.chat(user_msg)
+        except llm_client.LLMError as e:
+            return jsonify({"error": str(e)}), 502
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
+        if payload.get("auto_solved"):
+            _mark_solved(code)
+        return jsonify(payload)
+
+    if lab.get("expense_agent"):
+        from modules import owasp_llm06
+        try:
+            payload = owasp_llm06.chat(user_msg)
         except llm_client.LLMError as e:
             return jsonify({"error": str(e)}), 502
         except Exception as e:
@@ -135,6 +150,10 @@ def reset(code):
         from modules import owasp_llm10
         owasp_llm10.rotate_session()
         extra.update(owasp_llm10.meter())
+    if code == "LLM06":
+        from modules import owasp_llm06
+        owasp_llm06.rotate_session()
+        extra["expense"] = owasp_llm06.snapshot()
     return jsonify(extra)
 
 

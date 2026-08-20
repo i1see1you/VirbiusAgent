@@ -29,6 +29,14 @@ TOOLS = [
      "description": "Returns a bank notice. topic is reconcile (default) or urgent."},
     {"name": "SendEmail",
      "description": "Sends an email. Arguments: to (address), body (text)."},
+    {"name": "ListMyTrips",
+     "description": "Lists the current employee's trips pending expense claims."},
+    {"name": "SubmitExpense",
+     "description": "Submits an expense draft. Argument: trip_id."},
+    {"name": "ApproveExpense",
+     "description": "Finance approval. Argument: expense_id. Employee bots should not have this."},
+    {"name": "PayoutToAccount",
+     "description": "Irreversible payout. Arguments: expense_id, account, amount."},
 ]
 
 # session_id -> queue.Queue（SSE 出站消息队列）

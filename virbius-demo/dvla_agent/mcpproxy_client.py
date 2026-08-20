@@ -11,6 +11,7 @@
 import json
 import logging
 import os
+import re
 import subprocess
 import uuid
 import urllib.request
@@ -74,6 +75,38 @@ def bind_llm10_session(session_id: str) -> str:
 def new_llm10_session() -> str:
     """换一条 llm10 engine session，不和 Agent 页、其他浏览器抢累计窗口。"""
     return bind_llm10_session("llm10-" + uuid.uuid4().hex[:12])
+
+
+LLM06_META = {
+    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
+    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
+    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
+    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
+    "session_id": "llm06-init",
+}
+_llm06_client = None
+
+
+def bind_llm06_session(session_id: str) -> str:
+    """让当前请求用指定 engine session_id。和 Flask cookie 对齐。"""
+    global _llm06_client
+    sid = (session_id or "").strip()
+    if not sid:
+        sid = "llm06-" + uuid.uuid4().hex[:12]
+    LLM06_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    LLM06_META["session_id"] = sid
+    if _llm06_client is not None and _llm06_client.meta.get("session_id") != sid:
+        try:
+            _llm06_client.close()
+        except Exception:
+            pass
+        _llm06_client = None
+    return sid
+
+
+def new_llm06_session() -> str:
+    """换一条 llm06 engine session，不和 Agent / LLM10 抢配额。"""
+    return bind_llm06_session("llm06-" + uuid.uuid4().hex[:12])
 
 
 def _file_magic(path: str) -> bytes:
@@ -148,17 +181,60 @@ def _proxy_command(bin_path: str) -> list[str]:
     return [bin_path]
 
 
+_WSL_HOST_CACHE = None
+
+
 def _wsl_windows_host() -> str:
-    """WSL 默认网关 = 宿主机 vEthernet (WSL)。"""
-    out = subprocess.check_output(
-        ["wsl", "-e", "sh", "-c", "ip route show default | awk '{print $3}'"],
-        text=True,
-        timeout=5,
-    )
-    host = (out or "").strip().split()[0]
+    """WSL NAT 里访问 Windows 要用 vEthernet (WSL) 地址，不是 127.0.0.1。
+
+    不要每次 fork `wsl ip route`：Docker Desktop 卡住或 WSL 冷启动时 5s 就会
+    让页面报 Command timed out。优先读本机网卡，WSL 只作兜底。
+    """
+    global _WSL_HOST_CACHE
+    env = (os.environ.get("VIRBIUS_WSL_WINDOWS_HOST") or "").strip()
+    if env:
+        return env
+    if _WSL_HOST_CACHE:
+        return _WSL_HOST_CACHE
+    host = _windows_vethernet_wsl_ip() or _wsl_default_gateway()
     if not host:
-        raise RuntimeError("wsl default gateway empty")
+        raise RuntimeError("cannot resolve Windows host IP for WSL mcp-proxy")
+    _WSL_HOST_CACHE = host
     return host
+
+
+def _windows_vethernet_wsl_ip() -> str:
+    """Windows 上 vEthernet (WSL*) 的 IPv4 = WSL 默认网关。不进 Linux。
+
+    中文 ipconfig 会在适配器名和 IPv4 之间插空行，不能按空行切块。
+    """
+    try:
+        raw = subprocess.check_output(["ipconfig"], timeout=8)
+    except Exception as exc:
+        log.warning("ipconfig failed: %s", exc)
+        return ""
+    text = raw.decode("gbk", "replace") if os.name == "nt" else raw.decode("utf-8", "replace")
+    idx = text.find("WSL")
+    if idx < 0:
+        return ""
+    for match in re.finditer(r"(\d+\.\d+\.\d+\.\d+)", text[idx:idx + 800]):
+        ip = match.group(1)
+        if not ip.startswith("255.") and not ip.startswith("0."):
+            return ip
+    return ""
+
+
+def _wsl_default_gateway() -> str:
+    try:
+        out = subprocess.check_output(
+            ["wsl", "-e", "sh", "-c", "ip route show default | awk '{print $3}'"],
+            text=True,
+            timeout=20,
+        )
+    except Exception as exc:
+        log.warning("wsl default gateway lookup failed: %s", exc)
+        return ""
+    return (out or "").strip().split()[0] if (out or "").strip() else ""
 
 
 class McpProxyClient:
@@ -267,6 +343,22 @@ def get_llm10_client() -> McpProxyClient:
 
 def call_tool_llm10(tool_name: str, args: dict) -> str:
     return get_llm10_client().call_tool(tool_name, args)
+
+
+def get_llm06_client() -> McpProxyClient:
+    global _llm06_client
+    LLM06_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    if not LLM06_META["session_id"] or LLM06_META["session_id"] == "llm06-init":
+        new_llm06_session()
+    if _llm06_client is None or _llm06_client.proc.poll() is not None:
+        if _llm06_client is not None:
+            _llm06_client.close()
+        _llm06_client = McpProxyClient(_resolve_bin(), dict(LLM06_META))
+    return _llm06_client
+
+
+def call_tool_llm06(tool_name: str, args: dict) -> str:
+    return get_llm06_client().call_tool(tool_name, args)
 
 
 def _format_block(tool_name: str, args: dict, err: dict, session_id=None) -> str:

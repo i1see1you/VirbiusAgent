@@ -225,6 +225,10 @@ code.payload:hover{border-color:var(--neon2);border-left-color:var(--neon2);
 code.payload:active{transform:scale(.995)}
 .pnote{font-size:12.5px;color:var(--dim);margin:10px 2px 0;line-height:1.7}
 
+.idcard{margin:0 0 12px;padding:10px 14px;border-radius:10px;
+  border:1px solid rgba(34,211,238,.28);background:rgba(34,211,238,.06);font-size:13px;color:var(--fg)}
+.idcard b{color:var(--neon2)}
+
 .hintbox{margin-top:12px}
 .hintbox summary{cursor:pointer;color:var(--amber)}
 .hintbox summary:hover{text-shadow:0 0 10px rgba(255,204,102,.4)}

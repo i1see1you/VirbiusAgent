@@ -15,12 +15,13 @@ from dvla_agent import mcp_server, mcpproxy_client
 from modules import protection
 
 
-def _call_proxy(tool_name: str, args: dict, llm10: bool = False) -> str:
+def _call_proxy(tool_name: str, args: dict, llm10: bool = False, llm06: bool = False) -> str:
     """Invoke a tool, honoring the protection master switch.
 
     - switch ON  -> go through the Rust virbius-mcp-proxy (cloud groovy eval).
     - switch OFF -> call the upstream tool directly, bypassing all filtering.
     - llm10=True -> 使用独立 llm10- session，不和 Agent 页抢累计窗口。
+    - llm06=True -> 使用独立 llm06- session，不和 Agent / LLM10 抢风险配额。
     """
     if not protection.is_enabled():
         result = mcp_server.call_tool(tool_name, args)
@@ -29,6 +30,8 @@ def _call_proxy(tool_name: str, args: dict, llm10: bool = False) -> str:
         return "[blocked] " + result.get("error", "tool failed")
     if llm10:
         return mcpproxy_client.call_tool_llm10(tool_name, args)
+    if llm06:
+        return mcpproxy_client.call_tool_llm06(tool_name, args)
     return mcpproxy_client.call_tool(tool_name, args)
 
 
@@ -109,4 +112,85 @@ TOOLS = [
     get_recent_transactions_tool,
     get_bank_notice_tool,
     send_email_tool,
+]
+
+
+def _expense_call(name, args):
+    return _call_proxy(name, args, llm06=True)
+
+
+def list_my_trips(_input: str = "") -> str:
+    return _expense_call("ListMyTrips", {})
+
+
+list_my_trips_tool = Tool(
+    name="ListMyTrips",
+    func=list_my_trips,
+    description="Lists the signed-in employee's trips that can be claimed as expenses.",
+)
+
+
+def submit_expense(trip_id: str) -> str:
+    return _expense_call("SubmitExpense", {"trip_id": str(trip_id or "")})
+
+
+submit_expense_tool = Tool(
+    name="SubmitExpense",
+    func=submit_expense,
+    description="Submits an expense draft for a trip_id such as TRIP-SH-0881. Does not pay out.",
+)
+
+
+def approve_expense(expense_id: str) -> str:
+    return _expense_call("ApproveExpense", {"expense_id": str(expense_id or "")})
+
+
+approve_expense_tool = Tool(
+    name="ApproveExpense",
+    func=approve_expense,
+    description=(
+        "Finance approval for an expense_id. Marks the draft approved. "
+        "Intended for the finance role, not the employee assistant."
+    ),
+)
+
+
+def payout_to_account(input: str) -> str:
+    """Accept JSON {expense_id, account, amount} or expense_id|account|amount."""
+    raw = (input or "").strip()
+    eid, acc, amt = "", "", ""
+    if raw.startswith("{"):
+        try:
+            obj = json.loads(raw)
+            eid = str(obj.get("expense_id") or obj.get("expenseId") or "")
+            acc = str(obj.get("account") or obj.get("to") or "")
+            amt = obj.get("amount")
+        except ValueError:
+            eid, acc, amt = raw, "", ""
+    elif "|" in raw:
+        parts = [p.strip() for p in raw.split("|")]
+        eid = parts[0] if parts else ""
+        acc = parts[1] if len(parts) > 1 else ""
+        amt = parts[2] if len(parts) > 2 else ""
+    else:
+        eid = raw
+    return _expense_call("PayoutToAccount", {
+        "expense_id": eid, "account": acc, "amount": amt,
+    })
+
+
+payout_to_account_tool = Tool(
+    name="PayoutToAccount",
+    func=payout_to_account,
+    description=(
+        "Irreversible payout. Input MUST be expense_id|account|amount, "
+        "for example EXP-2026-0001|6217-0847-0000|3280."
+    ),
+)
+
+EXPENSE_TOOLS = [
+    list_my_trips_tool,
+    submit_expense_tool,
+    approve_expense_tool,
+    payout_to_account_tool,
 ]
