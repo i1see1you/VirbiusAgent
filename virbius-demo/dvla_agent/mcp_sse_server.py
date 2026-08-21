@@ -37,6 +37,14 @@ TOOLS = [
      "description": "Finance approval. Argument: expense_id. Employee bots should not have this."},
     {"name": "PayoutToAccount",
      "description": "Irreversible payout. Arguments: expense_id, account, amount."},
+    {"name": "get_calendar",
+     "description": "Returns today's calendar, including notes on external invitations."},
+    {"name": "save_memory",
+     "description": "Writes a long-term memory entry. Argument: content."},
+    {"name": "search_memory",
+     "description": "Searches long-term memory. Argument: query."},
+    {"name": "send_email",
+     "description": "Sends an email from the itinerary assistant. Arguments: to, body."},
 ]
 
 # session_id -> queue.Queue（SSE 出站消息队列）

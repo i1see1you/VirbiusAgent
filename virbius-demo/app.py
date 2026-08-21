@@ -6,6 +6,8 @@
 import logging
 import socket
 import json
+import os
+import shutil
 import threading
 import time
 import urllib.request
@@ -18,6 +20,7 @@ from modules import settings as cfg_store
 from modules.owasp import bp as owasp_bp
 from modules.agent_range import bp as agent_bp
 from modules.ctf import bp as ctf_bp
+from modules.memory_range import bp as memory_bp
 
 # 让 virbius_guard / ctf 等模块的日志输出到终端（默认仅 WARNING，这里放开到 INFO）
 logging.basicConfig(
@@ -32,6 +35,23 @@ app.secret_key = config.SECRET_KEY
 app.register_blueprint(owasp_bp)
 app.register_blueprint(agent_bp)
 app.register_blueprint(ctf_bp)
+app.register_blueprint(memory_bp)
+
+
+def _install_memory_edge_manifest():
+    """把记忆拦截开关写到 mcp-proxy 默认路径 ./data/edge/default/edge-manifest.json。"""
+    root = os.path.dirname(os.path.abspath(__file__))
+    src = os.path.join(root, "demo_data", "memory_edge_manifest.json")
+    dst_dir = os.path.join(root, "data", "edge", "default")
+    dst = os.path.join(dst_dir, "edge-manifest.json")
+    if not os.path.isfile(src):
+        logging.getLogger("app").warning("memory edge manifest missing: %s", src)
+        return
+    os.makedirs(dst_dir, exist_ok=True)
+    shutil.copyfile(src, dst)
+
+
+_install_memory_edge_manifest()
 
 
 @app.context_processor
@@ -67,6 +87,11 @@ def set_protection():
         from modules import owasp_llm06
         owasp_llm06.rotate_session()
         conversations.clear("owasp:LLM06")
+        from memory_agent import reset_long_term
+        reset_long_term()
+        conversations.clear("memory")
+        session["memory_pwned"] = {}
+        mcpproxy_client.new_mem_session()
     return jsonify({"ok": True, "enabled": protection.is_enabled()})
 
 
@@ -100,6 +125,9 @@ def save_settings():
         return jsonify({"ok": False, "error": str(exc)}), 500
     # control 地址等变更：清除端层引擎缓存，使新地址下次扫描生效
     protection.reload()
+    if "VIRBIUS_LICENSE_JWT" in updates:
+        from dvla_agent import mcpproxy_client
+        mcpproxy_client.drop_all_proxy_clients()
     return jsonify({"ok": True, "conf": cfg_store.all()})
 
 

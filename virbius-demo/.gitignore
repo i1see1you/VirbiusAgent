@@ -32,3 +32,6 @@ test_*.py
 # Misc
 .DS_Store
 *.log
+
+# mcp-proxy 默认 cache_dir 与记忆笔记本运行时文件，不入库
+data/

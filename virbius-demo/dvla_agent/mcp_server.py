@@ -63,6 +63,29 @@ def call_tool(tool_name: str, args: dict) -> dict:
             eid, acc, amt = _split_payout(raw, eid, acc, amt)
         return {"success": True, "result": expense.payout_to_account(str(eid), str(acc), amt)}
 
+    if tool_name == "get_calendar":
+        from memory_agent import calendar
+        return {"success": True, "result": calendar.get_today()}
+
+    if tool_name == "save_memory":
+        from memory_agent import store
+        content = args.get("content") or args.get("text") or args.get("input") or ""
+        title = args.get("title") or ""
+        return {"success": True, "result": store.save_memory(str(content), str(title))}
+
+    if tool_name == "search_memory":
+        from memory_agent import store
+        query = args.get("query") or args.get("input") or args.get("content") or ""
+        return {"success": True, "result": store.search_memory(str(query))}
+
+    if tool_name == "send_email":
+        from memory_agent import mailbox
+        to = args.get("to") or ""
+        body = args.get("body") or args.get("input") or ""
+        if not to:
+            return {"success": False, "error": "missing 'to'"}
+        return {"success": True, "result": mailbox.send(str(to), str(body))}
+
     return {"success": False, "error": "unknown tool: " + str(tool_name)}
 
 

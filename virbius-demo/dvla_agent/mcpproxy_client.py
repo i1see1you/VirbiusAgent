@@ -32,9 +32,39 @@ META = {
 BIN_HINT = os.environ.get("VIRBIUS_MCP_PROXY_BIN", "").strip()
 
 
+def drop_all_proxy_clients() -> None:
+    """Kill stdio mcp-proxy 子进程。换 JWT / 公钥后必须重拉，否则仍用进程里那份旧 pem。"""
+    global _client, _llm10_client, _llm06_client, _mem_client
+    for name in ("_client", "_llm10_client", "_llm06_client", "_mem_client"):
+        client = globals()[name]
+        if client is None:
+            continue
+        try:
+            client.close()
+        except Exception:
+            pass
+        globals()[name] = None
+
+
+def _respawn_if_license_changed(client, meta: dict):
+    """settings 里 JWT 变了但子进程还活着时，验签会变成 InvalidSignature。"""
+    if client is None:
+        return client
+    old = (client.meta or {}).get("license_jwt") or ""
+    new = (meta.get("license_jwt") or "").strip()
+    if old == new:
+        return client
+    try:
+        client.close()
+    except Exception:
+        pass
+    return None
+
+
 def new_session() -> str:
     """Rotate engine session_id so leftover risk quota does not block every tool."""
     global _client
+    META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
     META["session_id"] = "demo-" + uuid.uuid4().hex[:12]
     if _client is not None:
         try:
@@ -109,6 +139,37 @@ def new_llm06_session() -> str:
     return bind_llm06_session("llm06-" + uuid.uuid4().hex[:12])
 
 
+MEM_META = {
+    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
+    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
+    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
+    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
+    "session_id": "mem-init",
+}
+_mem_client = None
+
+
+def bind_mem_session(session_id: str) -> str:
+    """记忆靶场独立 mem- session，不和银行 / LLM06 / LLM10 抢配额。"""
+    global _mem_client
+    sid = (session_id or "").strip()
+    if not sid:
+        sid = "mem-" + uuid.uuid4().hex[:12]
+    MEM_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    MEM_META["session_id"] = sid
+    if _mem_client is not None and _mem_client.meta.get("session_id") != sid:
+        try:
+            _mem_client.close()
+        except Exception:
+            pass
+        _mem_client = None
+    return sid
+
+
+def new_mem_session() -> str:
+    return bind_mem_session("mem-" + uuid.uuid4().hex[:12])
+
+
 def _file_magic(path: str) -> bytes:
     try:
         with open(path, "rb") as f:
@@ -170,12 +231,14 @@ def _proxy_command(bin_path: str) -> list[str]:
     """
     if os.name == "nt" and os.path.isfile(bin_path) and _is_elf(bin_path):
         host = _wsl_windows_host()
+        pem = _to_wsl_path(os.path.join(_PROXY_DIR, "cfg", "license-public.pem"))
         log.info("mcp-proxy via WSL, host=%s", host)
         return [
             "wsl", "--cd", _PROXY_DIR, "-e",
             "env",
             "VIRBIUS_UPSTREAM_URL=http://%s:9091" % host,
             "VIRBIUS_ENGINE_URL=http://%s:8082" % host,
+            "VIRBIUS_LICENSE_PUBLIC_KEY=" + pem,
             _to_wsl_path(bin_path),
         ]
     return [bin_path]
@@ -318,6 +381,8 @@ _client = None
 
 def get_client() -> McpProxyClient:
     global _client
+    META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    _client = _respawn_if_license_changed(_client, META)
     if _client is None or _client.proc.poll() is not None:
         if _client is not None:
             _client.close()
@@ -332,6 +397,7 @@ def call_tool(tool_name: str, args: dict) -> str:
 def get_llm10_client() -> McpProxyClient:
     global _llm10_client
     LLM10_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    _llm10_client = _respawn_if_license_changed(_llm10_client, LLM10_META)
     if not LLM10_META["session_id"] or LLM10_META["session_id"] == "llm10-init":
         new_llm10_session()
     if _llm10_client is None or _llm10_client.proc.poll() is not None:
@@ -348,6 +414,7 @@ def call_tool_llm10(tool_name: str, args: dict) -> str:
 def get_llm06_client() -> McpProxyClient:
     global _llm06_client
     LLM06_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    _llm06_client = _respawn_if_license_changed(_llm06_client, LLM06_META)
     if not LLM06_META["session_id"] or LLM06_META["session_id"] == "llm06-init":
         new_llm06_session()
     if _llm06_client is None or _llm06_client.proc.poll() is not None:
@@ -359,6 +426,23 @@ def get_llm06_client() -> McpProxyClient:
 
 def call_tool_llm06(tool_name: str, args: dict) -> str:
     return get_llm06_client().call_tool(tool_name, args)
+
+
+def get_mem_client() -> McpProxyClient:
+    global _mem_client
+    MEM_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    _mem_client = _respawn_if_license_changed(_mem_client, MEM_META)
+    if not MEM_META["session_id"] or MEM_META["session_id"] == "mem-init":
+        new_mem_session()
+    if _mem_client is None or _mem_client.proc.poll() is not None:
+        if _mem_client is not None:
+            _mem_client.close()
+        _mem_client = McpProxyClient(_resolve_bin(), dict(MEM_META))
+    return _mem_client
+
+
+def call_tool_mem(tool_name: str, args: dict) -> str:
+    return get_mem_client().call_tool(tool_name, args)
 
 
 def _format_block(tool_name: str, args: dict, err: dict, session_id=None) -> str:

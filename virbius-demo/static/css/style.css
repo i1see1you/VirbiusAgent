@@ -302,3 +302,17 @@ table.cat tr:hover td{background:rgba(0,255,174,.03)}
 .modal p{color:var(--dim);font-size:13.5px;line-height:1.7;margin:0 0 18px}
 .modal .mrow{display:flex;gap:10px;justify-content:flex-end}
 .modal button{font-size:13.5px;padding:10px 18px}
+
+/* ASI06 记忆靶场状态面板 */
+.sess-actions{display:flex;gap:8px;flex-wrap:wrap}
+.mem-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:12px 0 16px}
+@media (max-width:900px){.mem-grid{grid-template-columns:1fr}}
+.mem-panel{background:rgba(4,7,13,.55);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-height:120px}
+.mem-panel h3{margin:0 0 8px;font-size:14px;color:var(--neon2)}
+.mem-item{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12.5px;line-height:1.55}
+.mem-item.poison{border-color:rgba(255,43,214,.4);background:rgba(255,43,214,.06)}
+.mem-item.fresh{border-color:rgba(0,255,174,.45);background:rgba(0,255,174,.08)}
+.mem-item.persist{border-color:rgba(34,211,238,.35);background:rgba(34,211,238,.06)}
+.mem-item pre{white-space:pre-wrap;word-break:break-word;margin:6px 0 0;font-size:12px;color:var(--dim)}
+.mem-check{margin:0 0 12px;padding:8px 12px;border-radius:10px;border:1px dashed var(--line);font-size:12.5px;color:var(--dim)}
+.mem-check .kbd{margin:4px 4px 0 0;display:inline-block}
