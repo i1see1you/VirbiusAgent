@@ -35,8 +35,8 @@ BIN_HINT = os.environ.get("VIRBIUS_MCP_PROXY_BIN", "").strip()
 
 def drop_all_proxy_clients() -> None:
     """Kill stdio mcp-proxy 子进程。换 JWT / 公钥后必须重拉，否则仍用进程里那份旧 pem。"""
-    global _client, _llm10_client, _llm06_client, _mem_client, _ops_client
-    for name in ("_client", "_llm10_client", "_llm06_client", "_mem_client", "_ops_client"):
+    global _client, _llm10_client, _llm06_client, _mem_client, _ops_client, _egr_client
+    for name in ("_client", "_llm10_client", "_llm06_client", "_mem_client", "_ops_client", "_egr_client"):
         client = globals()[name]
         if client is None:
             continue
@@ -202,6 +202,37 @@ def new_ops_session() -> str:
     return bind_ops_session("ops-" + uuid.uuid4().hex[:12])
 
 
+EGR_META = {
+    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
+    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
+    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
+    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
+    "session_id": "egr-init",
+}
+_egr_client = None
+
+
+def bind_egr_session(session_id: str) -> str:
+    """外发渠道独立 egr- session，不和银行 / 记忆 / 值班抢 risk quota。"""
+    global _egr_client
+    sid = (session_id or "").strip()
+    if not sid:
+        sid = "egr-" + uuid.uuid4().hex[:12]
+    EGR_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    EGR_META["session_id"] = sid
+    if _egr_client is not None and _egr_client.meta.get("session_id") != sid:
+        try:
+            _egr_client.close()
+        except Exception:
+            pass
+        _egr_client = None
+    return sid
+
+
+def new_egr_session() -> str:
+    return bind_egr_session("egr-" + uuid.uuid4().hex[:12])
+
+
 def _file_magic(path: str) -> bytes:
     try:
         with open(path, "rb") as f:
@@ -271,6 +302,7 @@ def _proxy_command(bin_path: str) -> list[str]:
             "VIRBIUS_UPSTREAM_URL=http://%s:9091" % host,
             "VIRBIUS_ENGINE_URL=http://%s:8082" % host,
             "VIRBIUS_LICENSE_PUBLIC_KEY=" + pem,
+            "VIRBIUS_EGRESS_HOSTS=wiki.internal,mail.internal",
             _to_wsl_path(bin_path),
         ]
     return [bin_path]
@@ -337,6 +369,8 @@ class McpProxyClient:
 
     def __init__(self, bin_path: str, meta: dict):
         self.meta = meta
+        env = os.environ.copy()
+        env.setdefault("VIRBIUS_EGRESS_HOSTS", "wiki.internal,mail.internal")
         self.proc = subprocess.Popen(
             _proxy_command(bin_path),
             cwd=_PROXY_DIR,
@@ -345,6 +379,7 @@ class McpProxyClient:
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
+            env=env,
         )
         self._counter = 0
         self._initialize(meta)
@@ -482,6 +517,23 @@ def get_mem_client() -> McpProxyClient:
 
 def call_tool_mem(tool_name: str, args: dict) -> str:
     return get_mem_client().call_tool(tool_name, args)
+
+
+def get_egr_client() -> McpProxyClient:
+    global _egr_client
+    EGR_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    _egr_client = _respawn_if_license_changed(_egr_client, EGR_META)
+    if not EGR_META["session_id"] or EGR_META["session_id"] == "egr-init":
+        new_egr_session()
+    if _egr_client is None or _egr_client.proc.poll() is not None:
+        if _egr_client is not None:
+            _egr_client.close()
+        _egr_client = McpProxyClient(_resolve_bin(), dict(EGR_META))
+    return _egr_client
+
+
+def call_tool_egr(tool_name: str, args: dict) -> str:
+    return get_egr_client().call_tool(tool_name, args)
 
 
 def get_ops_client() -> McpProxyClient:

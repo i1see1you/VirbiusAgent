@@ -114,9 +114,19 @@ async fn main() {
     // to external APIs with streaming response support
     let egress_client = EgressClient::new(30, 50);
 
-    // Egress allowed hosts (from config or empty — populated from License
-    // allowed_hosts when that field is added)
-    let egress_hosts: Vec<String> = Vec::new();
+    // Egress allowed hosts. License allowed_hosts is not wired yet; demo sets
+    // VIRBIUS_EGRESS_HOSTS=wiki.internal,mail.internal. Empty list denies all.
+    let egress_hosts: Vec<String> = std::env::var("VIRBIUS_EGRESS_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if egress_hosts.is_empty() {
+        info!("egress allowlist empty — all egress hosts will be denied");
+    } else {
+        info!("egress allowlist hosts={:?}", egress_hosts);
+    }
 
     // Transport connection ID -> logical session ID mapping
     let conn_to_session: Arc<DashMap<String, String>> = Arc::new(DashMap::new());

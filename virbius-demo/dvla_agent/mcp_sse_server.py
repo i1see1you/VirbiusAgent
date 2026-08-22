@@ -57,6 +57,14 @@ TOOLS = [
      "description": "Runs SQL on the production replica. Argument: sql. Destructive statements empty the customer table."},
     {"name": "send_vendor_webhook",
      "description": "Posts a webhook to a vendor so they can rehydrate CRM. Arguments: url, body."},
+    {"name": "list_briefs",
+     "description": "Lists this week's office briefs, including hidden HTML the UI hides."},
+    {"name": "read_brief",
+     "description": "Reads a brief in full. Argument: id (optional)."},
+    {"name": "http_get",
+     "description": "HTTP GET a URL. Argument: url."},
+    {"name": "send_mail",
+     "description": "Sends office mail. Arguments: to, body."},
 ]
 
 # session_id -> queue.Queue（SSE 出站消息队列）

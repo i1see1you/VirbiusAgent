@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""幂等写入 Control：工具注册、challenge 规则 publish to full、License 追加 6 名。
+"""幂等写入 Control：4 工具、公司命名名单、send_mail Groovy deny full、License 追加。
 
 失败只记 status，不让 Flask 起不来。禁止 rotate-key。JSON 一律 snake_case。
+http_get 不绑 Groovy，才能测到 sidecar 白名单。
 """
 import base64
 import json
@@ -11,16 +12,21 @@ import urllib.error
 import urllib.request
 
 from modules import settings
-from ops_agent import ALL_TOOLS, HIGH_RISK_TOOLS, SAFE_TOOLS
+from egress_agent import ALL_TOOLS, HIGH_RISK_TOOLS, SAFE_TOOLS
 
-log = logging.getLogger("ops.bootstrap")
+log = logging.getLogger("egress.bootstrap")
 
-RULE_ID = "cloud_ops_irreversible_challenge"
+RULE_ID = "cloud_egress_external_deny"
+LIST_NAME = "company_mail_allow"
+LIST_ENTRIES = ["mail.internal", "wiki.internal"]
 TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 GROOVY = (
     "def decide(ctx) {\n"
-    "    def n = (ctx.var('tool_name') ?: '').toString()\n"
-    "    return n in ['drop_production_table', 'execute_production_sql', 'send_vendor_webhook']\n"
+    "    def to = (ctx.var('args.to') ?: '').toString()\n"
+    "    def at = to.lastIndexOf('@')\n"
+    "    def host = at >= 0 ? to.substring(at + 1).trim() : to.trim()\n"
+    "    return !ctx.listMatch('company_mail_allow', host)"
+    " && !ctx.isInternalHost('https://' + host)\n"
     "}\n"
 )
 
@@ -28,7 +34,8 @@ FALLBACK_ALLOWED = [
     "GetCurrentUser", "GetUserTransactions", "GetBankNotice", "SendEmail",
     "ListMyTrips", "SubmitExpense", "ApproveExpense", "PayoutToAccount",
     "get_calendar", "save_memory", "search_memory", "send_email",
-    "list_briefs", "read_brief", "http_get", "send_mail",
+    "list_incidents", "query_customers", "get_service_health",
+    "drop_production_table", "execute_production_sql", "send_vendor_webhook",
 ]
 
 _STATUS = {"ok": False, "error": "not started", "license_appended": False}
@@ -47,7 +54,7 @@ def tool_upsert_bodies() -> list:
             "sandbox_type": "none",
             "timeout_ms": 5000,
             "fast_path": True,
-            "description": "CloudPeak ops read-only: " + name,
+            "description": "office brief read-only: " + name,
             "approval_mode": "lax",
         })
     for name in HIGH_RISK_TOOLS:
@@ -57,7 +64,7 @@ def tool_upsert_bodies() -> list:
             "sandbox_type": "none",
             "timeout_ms": 8000,
             "fast_path": False,
-            "description": "CloudPeak irreversible ops: " + name,
+            "description": "office egress: " + name,
             "approval_mode": "strict",
         })
     return bodies
@@ -69,18 +76,29 @@ def rule_upsert_body() -> dict:
         "bundle_id": "poc-default",
         "layer": "cloud",
         "runtime": "groovy",
-        "reason_code": "OPS_IRREVERSIBLE_CHALLENGE",
+        "reason_code": "EGRESS_EXTERNAL_DENY",
         "risk_score": 90,
-        "intent_action": "challenge",
+        "intent_action": "deny",
         "scope": {
             "bind_scope": "tool",
             "bind_ref": {
-                "tool_names": list(HIGH_RISK_TOOLS),
+                "tool_names": ["send_mail"],
                 "app_ids": ["demo-app"],
             },
         },
         "body": GROOVY,
     }
+
+
+def list_meta_body() -> dict:
+    return {
+        "dimension": "keyword",
+        "remark": "company domains that office mail may reach",
+    }
+
+
+def list_entries_body() -> dict:
+    return {"values": list(LIST_ENTRIES)}
 
 
 def license_issue_body(existing_tools: list, risk_quota: int = 100) -> dict:
@@ -118,7 +136,6 @@ def _control_base() -> str:
 
 
 def control_ui_url() -> str:
-    """浏览器打开审批队列用，跟设置页 VIRBIUS_CONTROL_URL 同一份。"""
     return _control_base() + "/ui"
 
 
@@ -154,7 +171,7 @@ def _patch_rollout(state: str, canary_percent=None) -> None:
     body = {
         "rollout_state": state,
         "force": True,
-        "comment": "ops demo bootstrap",
+        "comment": "egress demo bootstrap",
     }
     if canary_percent is not None:
         body["canary_percent"] = canary_percent
@@ -185,7 +202,7 @@ def _promote_rule_to_full(current: str) -> None:
         state = "full"
     if state != "full":
         raise RuntimeError("could not promote rule, still " + state)
-    log.info("ops rule promoted to full")
+    log.info("egress rule promoted to full")
 
 
 def _revoke_active_demo_license() -> None:
@@ -205,11 +222,11 @@ def _revoke_active_demo_license() -> None:
         rcode, rpay = _http(
             "POST",
             "/api/v1/admin/tenants/default/licenses/%s/revoke" % lid,
-            {"reason": "ops_bootstrap_append_tools"},
+            {"reason": "egress_bootstrap_append_tools"},
         )
         if rcode >= 400:
             raise RuntimeError("license revoke HTTP %s %s" % (rcode, rpay))
-        log.info("revoked previous demo-app license so a new JWT can append ops tools")
+        log.info("revoked previous demo-app license so a new JWT can append egress tools")
         return
     raise RuntimeError("license issue 409 but no active demo-app license to revoke")
 
@@ -224,6 +241,22 @@ def run() -> dict:
             code, payload = _http("POST", "/api/v1/admin/tenants/default/tools", body)
             if code >= 400:
                 raise RuntimeError("tool upsert %s: HTTP %s %s" % (body["tool_name"], code, payload))
+
+        code, payload = _http(
+            "PUT",
+            "/api/v1/admin/tenants/default/lists/" + LIST_NAME,
+            list_meta_body(),
+        )
+        if code >= 400:
+            raise RuntimeError("list meta HTTP %s %s" % (code, payload))
+        code, payload = _http(
+            "PUT",
+            "/api/v1/admin/tenants/default/lists/%s/entries" % LIST_NAME,
+            list_entries_body(),
+        )
+        if code >= 400:
+            raise RuntimeError("list entries HTTP %s %s" % (code, payload))
+        _http("POST", "/api/v1/admin/tenants/default/lists/push-engine", {})
 
         rule = rule_upsert_body()
         existing_code, existing = _http(
@@ -243,7 +276,7 @@ def run() -> dict:
         if rollout != "full":
             _promote_rule_to_full(rollout)
         else:
-            log.info("ops rule already full, skip rollout")
+            log.info("egress rule already full, skip rollout")
 
         jwt = settings.get("VIRBIUS_LICENSE_JWT")
         claims = decode_jwt_claims(jwt)
@@ -275,12 +308,12 @@ def run() -> dict:
             from dvla_agent import mcpproxy_client
             mcpproxy_client.drop_all_proxy_clients()
             appended = True
-            log.info("ops license appended %d tools (quota=%s)", len(missing), quota)
+            log.info("egress license appended %d tools (quota=%s)", len(missing), quota)
         else:
-            log.info("ops license already contains 6 tool names, skip issue")
+            log.info("egress license already contains 4 tool names, skip issue")
 
         _STATUS = {"ok": True, "error": "", "license_appended": appended}
     except Exception as exc:  # noqa: BLE001
-        log.warning("ops Control bootstrap failed: %s", exc)
+        log.warning("egress Control bootstrap failed: %s", exc)
         _STATUS = {"ok": False, "error": str(exc), "license_appended": False}
     return status()

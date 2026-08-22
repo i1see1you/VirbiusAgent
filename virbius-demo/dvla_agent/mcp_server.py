@@ -93,6 +93,13 @@ def call_tool(tool_name: str, args: dict) -> dict:
         except Exception as exc:  # noqa: BLE001
             return {"success": False, "error": str(exc)}
 
+    from egress_agent.tools import is_egr_tool, dispatch as egr_dispatch
+    if is_egr_tool(tool_name):
+        try:
+            return {"success": True, "result": egr_dispatch(tool_name, args)}
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "error": str(exc)}
+
     return {"success": False, "error": "unknown tool: " + str(tool_name)}
 
 

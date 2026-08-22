@@ -51,6 +51,7 @@ services:
       VIRBIUS_ENGINE_URL: http://virbius-engine:8082
       VIRBIUS_UPSTREAM_URL: http://127.0.0.1:9091
       VIRBIUS_MCP_PROXY_BIN: /usr/local/bin/virbius-mcp-proxy
+      VIRBIUS_EGRESS_HOSTS: wiki.internal,mail.internal
       # Runtime user settings persisted to the config volume (see §4 of the PRD).
       VIRBIUS_CONFIG_DIR: /data
       # Only domestic LLMs are used (DeepSeek etc.), reached directly; no external

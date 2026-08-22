@@ -4,6 +4,7 @@ Player uses prompt injection / SQLi to make the agent leak flags.
 UI & flow follow virbius-demo conventions; tool logic is ported from dvla-test.
 """
 from flask import Blueprint, render_template, request, jsonify, session, current_app
+from typing import Optional
 
 # langchain ReAct agent
 from langchain.agents import ConversationalChatAgent, AgentExecutor
@@ -45,6 +46,7 @@ class LlmClientChat(BaseChatModel):
 
     temperature: float = 0.0
     max_tokens: int = 800
+    capture: Optional[list] = None
 
     @property
     def _llm_type(self) -> str:
@@ -57,6 +59,8 @@ class LlmClientChat(BaseChatModel):
             msgs, temperature=self.temperature, max_tokens=self.max_tokens,
             provider=ent["provider"], model=ent["model"],
         )
+        if self.capture is not None:
+            self.capture.append({"sent": list(msgs), "raw": text})
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
 
 
