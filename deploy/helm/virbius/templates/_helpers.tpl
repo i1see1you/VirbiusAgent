@@ -88,7 +88,7 @@ busybox wait-for TCP. Usage: include "virbius.waitFor" (dict "name" "mysql" "hos
 */}}
 {{- define "virbius.waitFor" -}}
 - name: wait-{{ .name }}
-  image: busybox:1.36
+  image: {{ .root.Values.global.waitImage | default "busybox:1.36" | quote }}
   command:
     - sh
     - -c

@@ -4,11 +4,13 @@ global:
   imageRegistry: ""
   imageTag: latest
   imagePullSecrets: []
+  waitImage: busybox:1.36
 
 ingress:
   enabled: true
   className: nginx
   baseDomain: virbius.example.com
+  annotations: {}
   tls:
     enabled: false
     secretName: ""

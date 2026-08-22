@@ -55,7 +55,7 @@ spec:
             - name: KAFKA_CONTROLLER_QUORUM_VOTERS
               value: 1@localhost:9093
             - name: KAFKA_LOG_DIRS
-              value: /var/lib/kafka
+              value: /var/lib/kafka/data
             - name: KAFKA_LISTENERS
               value: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
             - name: KAFKA_ADVERTISED_LISTENERS
@@ -79,7 +79,7 @@ spec:
               command:
                 - sh
                 - -c
-                - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1
+                - timeout 5 bash -c '</dev/tcp/127.0.0.1/9092'
             initialDelaySeconds: 30
             periodSeconds: 15
             timeoutSeconds: 10
@@ -88,7 +88,7 @@ spec:
               command:
                 - sh
                 - -c
-                - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1
+                - timeout 5 bash -c '</dev/tcp/127.0.0.1/9092'
             initialDelaySeconds: 60
             periodSeconds: 30
             timeoutSeconds: 10

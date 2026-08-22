@@ -45,11 +45,15 @@ spec:
         {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "control") | nindent 8 }}
     spec:
       {{- include "virbius.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        runAsGroup: 999
       initContainers:
-        {{- include "virbius.waitFor" (dict "name" "mysql" "host" (printf "%s-mysql" (include "virbius.fullname" .)) "port" 3306) | nindent 8 }}
-        {{- include "virbius.waitFor" (dict "name" "redis" "host" (printf "%s-redis" (include "virbius.fullname" .)) "port" 6379) | nindent 8 }}
-        {{- include "virbius.waitFor" (dict "name" "kafka" "host" (printf "%s-kafka" (include "virbius.fullname" .)) "port" 9092) | nindent 8 }}
-        {{- include "virbius.waitFor" (dict "name" "engine" "host" (printf "%s-engine" (include "virbius.fullname" .)) "port" 8082) | nindent 8 }}
+        {{- include "virbius.waitFor" (dict "root" . "name" "mysql" "host" (printf "%s-mysql" (include "virbius.fullname" .)) "port" 3306) | nindent 8 }}
+        {{- include "virbius.waitFor" (dict "root" . "name" "redis" "host" (printf "%s-redis" (include "virbius.fullname" .)) "port" 6379) | nindent 8 }}
+        {{- include "virbius.waitFor" (dict "root" . "name" "kafka" "host" (printf "%s-kafka" (include "virbius.fullname" .)) "port" 9092) | nindent 8 }}
+        {{- include "virbius.waitFor" (dict "root" . "name" "engine" "host" (printf "%s-engine" (include "virbius.fullname" .)) "port" 8082) | nindent 8 }}
       containers:
         - name: control
           image: {{ include "virbius.image" (dict "root" . "component" "control") }}
