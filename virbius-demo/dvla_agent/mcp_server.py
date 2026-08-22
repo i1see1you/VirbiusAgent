@@ -86,6 +86,13 @@ def call_tool(tool_name: str, args: dict) -> dict:
             return {"success": False, "error": "missing 'to'"}
         return {"success": True, "result": mailbox.send(str(to), str(body))}
 
+    from ops_agent.tools import is_ops_tool, dispatch as ops_dispatch
+    if is_ops_tool(tool_name):
+        try:
+            return {"success": True, "result": ops_dispatch(tool_name, args)}
+        except Exception as exc:  # noqa: BLE001
+            return {"success": False, "error": str(exc)}
+
     return {"success": False, "error": "unknown tool: " + str(tool_name)}
 
 

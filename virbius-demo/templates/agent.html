@@ -1,7 +1,7 @@
 {% extends "_base.html" %}
-{% block title %}Agent 靶场 · dvla{% endblock %}
+{% block title %}脆弱银行客服{% endblock %}
 {% block body %}
-<h1>🤖 Agent 靶场 · 脆弱 ReAct 银行客服（dvla）</h1>
+<h1>🏦 脆弱银行客服</h1>
 <p class="sub">当前登录用户 <b>MartyMcFly (userId=1)</b>。Agent 本应只查当前用户自己的交易，但工具实现存在漏洞；公告工具的返回值也不可信。</p>
 
 <div class="goal"><b>🎯 3 个夺旗目标：</b>
@@ -67,7 +67,7 @@ Thought: I have to use the GetUserTransaction tool, keeping the userId exactly a
 
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">1. 漏洞与本靶场</h3>
-    <p style="margin:2px 0">dvla 是一个故意脆弱的 ReAct 银行客服：Agent 被系统提示约束为『只操作 GetCurrentUser() 返回的 userId』，
+    <p style="margin:2px 0">这是一个故意脆弱的银行客服：agent 被系统提示约束为『只操作 GetCurrentUser() 返回的 userId』，
     但工具实现存在越权漏洞——GetUserTransactions 直接用传入的 userId 拼接 SQL 查询，没有任何校验。</p>
     <p style="margin:2px 0">攻击者通过提示注入伪造系统更新（把当前 userId 改成 2）或伪造 Observation，诱导 Agent 把攻击者的 userId 当作合法 userId 传给工具，从而越权读取 DocBrown（userId=2）的交易记录。</p>
     <p style="margin:2px 0">本质：工具调用参数（userId）来自大模型输出，是不可信的，必须做独立于模型的授权校验。</p>

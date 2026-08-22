@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import uuid
+import urllib.parse
 import urllib.request
 
 from modules import settings
@@ -34,8 +35,8 @@ BIN_HINT = os.environ.get("VIRBIUS_MCP_PROXY_BIN", "").strip()
 
 def drop_all_proxy_clients() -> None:
     """Kill stdio mcp-proxy 子进程。换 JWT / 公钥后必须重拉，否则仍用进程里那份旧 pem。"""
-    global _client, _llm10_client, _llm06_client, _mem_client
-    for name in ("_client", "_llm10_client", "_llm06_client", "_mem_client"):
+    global _client, _llm10_client, _llm06_client, _mem_client, _ops_client
+    for name in ("_client", "_llm10_client", "_llm06_client", "_mem_client", "_ops_client"):
         client = globals()[name]
         if client is None:
             continue
@@ -168,6 +169,37 @@ def bind_mem_session(session_id: str) -> str:
 
 def new_mem_session() -> str:
     return bind_mem_session("mem-" + uuid.uuid4().hex[:12])
+
+
+OPS_META = {
+    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
+    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
+    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
+    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
+    "session_id": "ops-init",
+}
+_ops_client = None
+
+
+def bind_ops_session(session_id: str) -> str:
+    """值班运维独立 ops- session，不和银行 / 记忆抢 risk quota。"""
+    global _ops_client
+    sid = (session_id or "").strip()
+    if not sid:
+        sid = "ops-" + uuid.uuid4().hex[:12]
+    OPS_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    OPS_META["session_id"] = sid
+    if _ops_client is not None and _ops_client.meta.get("session_id") != sid:
+        try:
+            _ops_client.close()
+        except Exception:
+            pass
+        _ops_client = None
+    return sid
+
+
+def new_ops_session() -> str:
+    return bind_ops_session("ops-" + uuid.uuid4().hex[:12])
 
 
 def _file_magic(path: str) -> bytes:
@@ -355,6 +387,13 @@ class McpProxyClient:
         if "error" in resp:
             raise RuntimeError("mcp-proxy initialize failed: " + str(resp["error"]))
 
+    def call_tool_raw(self, tool_name: str, args: dict, extra_meta: dict | None = None) -> dict:
+        """JSON-RPC tools/call; returns the raw response (additive, unused by bank ReAct)."""
+        params = {"name": tool_name, "arguments": args or {}}
+        if extra_meta:
+            params["_meta"] = extra_meta
+        return self._send("tools/call", params)
+
     def call_tool(self, tool_name: str, args: dict) -> str:
         """Call a tool through the proxy. Returns the text result, or a block message."""
         resp = self._send("tools/call", {"name": tool_name, "arguments": args})
@@ -443,6 +482,76 @@ def get_mem_client() -> McpProxyClient:
 
 def call_tool_mem(tool_name: str, args: dict) -> str:
     return get_mem_client().call_tool(tool_name, args)
+
+
+def get_ops_client() -> McpProxyClient:
+    global _ops_client
+    OPS_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    _ops_client = _respawn_if_license_changed(_ops_client, OPS_META)
+    if not OPS_META["session_id"] or OPS_META["session_id"] == "ops-init":
+        new_ops_session()
+    if _ops_client is None or _ops_client.proc.poll() is not None:
+        if _ops_client is not None:
+            _ops_client.close()
+        _ops_client = McpProxyClient(_resolve_bin(), dict(OPS_META))
+    return _ops_client
+
+
+def parse_challenge(err: dict) -> dict | None:
+    if not isinstance(err, dict):
+        return None
+    code = err.get("code")
+    msg = str(err.get("message") or "")
+    if code != -32011 and "challenge_required" not in msg:
+        return None
+    data = err.get("data") or {}
+    return {
+        "challenge_id": data.get("challenge_id"),
+        "tool_name": data.get("tool_name"),
+        "args_hash": data.get("args_hash"),
+        "rule_id": data.get("rule_id"),
+        "reason": data.get("reason"),
+    }
+
+
+def call_tool_ops(tool_name: str, args: dict, challenge_token: str | None = None) -> dict:
+    """Ops-only structured call. Existing call_tool() still returns a [blocked] string."""
+    extra = {"challenge_token": challenge_token} if challenge_token else None
+    client = get_ops_client()
+    resp = client.call_tool_raw(tool_name, args, extra_meta=extra)
+    if "error" in resp:
+        ch = parse_challenge(resp["error"])
+        if ch:
+            return {"ok": False, "challenge": ch, "error": resp["error"]}
+        return {
+            "ok": False,
+            "blocked": _format_block(
+                tool_name, args, resp["error"],
+                session_id=(client.meta or {}).get("session_id"),
+            ),
+        }
+    content = resp.get("result", {}).get("content", [])
+    if content:
+        return {"ok": True, "text": content[0].get("text", "")}
+    return {"ok": True, "text": str(resp.get("result", ""))}
+
+
+def get_challenge_status(challenge_id: str) -> dict:
+    cid = (challenge_id or "").strip()
+    if not cid:
+        return {"status": "not_found"}
+    engine = (settings.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
+    if not engine:
+        return {"status": "not_found"}
+    url = engine + "/v1/challenge/" + urllib.parse.quote(cid, safe="") + "/status"
+    req = urllib.request.Request(url, method="GET", headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.load(resp)
+            return data if isinstance(data, dict) else {"status": "not_found"}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("challenge status failed: %s", exc)
+        return {"status": "not_found"}
 
 
 def _format_block(tool_name: str, args: dict, err: dict, session_id=None) -> str:

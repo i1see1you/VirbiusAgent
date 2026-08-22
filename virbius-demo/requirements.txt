@@ -1,6 +1,7 @@
 Flask>=3.0
 requests>=2.31
-# Pin <0.3: agent_range.py uses the legacy ConversationalChatAgent / AgentExecutor API,
-# which was removed in langchain 1.x (and deprecated in 0.3.x).
-langchain>=0.1.0,<0.3.0
-langchain-core>=0.1.0,<0.3.0
+# Pin 0.2.x: agent_range.py uses ConversationalChatAgent (removed in 0.3 / 1.x).
+# langgraph 0.2 needs langchain-core 0.2.
+langchain>=0.2.16,<0.3.0
+langchain-core>=0.2.27,<0.3.0
+langgraph>=0.2.19,<0.3.0

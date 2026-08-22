@@ -21,6 +21,7 @@ from modules.owasp import bp as owasp_bp
 from modules.agent_range import bp as agent_bp
 from modules.ctf import bp as ctf_bp
 from modules.memory_range import bp as memory_bp
+from modules.ops_range import bp as ops_bp
 
 # 让 virbius_guard / ctf 等模块的日志输出到终端（默认仅 WARNING，这里放开到 INFO）
 logging.basicConfig(
@@ -36,6 +37,7 @@ app.register_blueprint(owasp_bp)
 app.register_blueprint(agent_bp)
 app.register_blueprint(ctf_bp)
 app.register_blueprint(memory_bp)
+app.register_blueprint(ops_bp)
 
 
 def _install_memory_edge_manifest():
@@ -92,6 +94,11 @@ def set_protection():
         conversations.clear("memory")
         session["memory_pwned"] = {}
         mcpproxy_client.new_mem_session()
+    try:
+        from modules.ops_range import reset_replica_keep_flags
+        reset_replica_keep_flags()
+    except Exception:
+        pass
     return jsonify({"ok": True, "enabled": protection.is_enabled()})
 
 
@@ -264,6 +271,48 @@ def _warmup_exfil_groovy():
     threading.Thread(target=run, daemon=True, name="groovy-warmup").start()
 
 
+def _bootstrap_ops():
+    log = logging.getLogger("ops.bootstrap")
+
+    def run():
+        time.sleep(1)
+        try:
+            from ops_agent import bootstrap_control
+            st = bootstrap_control.run()
+            log.info("ops bootstrap ok=%s err=%s", st.get("ok"), st.get("error") or "")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("ops bootstrap thread failed: %s", exc)
+        engine = (cfg_store.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
+        if not engine:
+            return
+        url = engine + "/v1/evaluate"
+        payload = {
+            "tenant_id": "default", "session_id": "ops-groovy-warmup", "user_id": "1",
+            "tool_name": "drop_production_table", "role": "tool_call",
+            "args_json": json.dumps({"table": "customers"}),
+            "vars": {"app_id": "demo-app"},
+        }
+        for i in range(4):
+            try:
+                req = urllib.request.Request(
+                    url, data=json.dumps(payload).encode(), method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    data = json.load(resp)
+                log.info(
+                    "ops groovy warmup %s action=%s rule=%s",
+                    i, data.get("effective_action"), data.get("rule_id"),
+                )
+                if data.get("effective_action") in ("challenge", "block", "deny"):
+                    return
+            except Exception as exc:  # noqa: BLE001
+                log.warning("ops groovy warmup failed: %s", exc)
+            time.sleep(1)
+
+    threading.Thread(target=run, daemon=True, name="ops-bootstrap").start()
+
+
 if __name__ == "__main__":
     port = _pick_port()
     print("=" * 60)
@@ -272,4 +321,5 @@ if __name__ == "__main__":
     print(f"  目标模型: {config.DEEPSEEK_MODEL} @ {config.DEEPSEEK_BASE_URL}")
     print("=" * 60)
     _warmup_exfil_groovy()
+    _bootstrap_ops()
     app.run(host="0.0.0.0", port=port, debug=False)
