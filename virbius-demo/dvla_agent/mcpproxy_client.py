@@ -35,8 +35,8 @@ BIN_HINT = os.environ.get("VIRBIUS_MCP_PROXY_BIN", "").strip()
 
 def drop_all_proxy_clients() -> None:
     """Kill stdio mcp-proxy 子进程。换 JWT / 公钥后必须重拉，否则仍用进程里那份旧 pem。"""
-    global _client, _llm10_client, _llm06_client, _mem_client, _ops_client, _egr_client
-    for name in ("_client", "_llm10_client", "_llm06_client", "_mem_client", "_ops_client", "_egr_client"):
+    global _client, _llm10_client, _llm06_client, _mem_client, _ops_client, _egr_client, _chain_client
+    for name in ("_client", "_llm10_client", "_llm06_client", "_mem_client", "_ops_client", "_egr_client", "_chain_client"):
         client = globals()[name]
         if client is None:
             continue
@@ -231,6 +231,37 @@ def bind_egr_session(session_id: str) -> str:
 
 def new_egr_session() -> str:
     return bind_egr_session("egr-" + uuid.uuid4().hex[:12])
+
+
+CHAIN_META = {
+    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
+    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
+    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
+    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
+    "session_id": "chain-init",
+}
+_chain_client = None
+
+
+def bind_chain_session(session_id: str) -> str:
+    """文件整理独立 chain- session，不和银行 / 记忆 / 值班 / 外发抢 risk quota。"""
+    global _chain_client
+    sid = (session_id or "").strip()
+    if not sid:
+        sid = "chain-" + uuid.uuid4().hex[:12]
+    CHAIN_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    CHAIN_META["session_id"] = sid
+    if _chain_client is not None and _chain_client.meta.get("session_id") != sid:
+        try:
+            _chain_client.close()
+        except Exception:
+            pass
+        _chain_client = None
+    return sid
+
+
+def new_chain_session() -> str:
+    return bind_chain_session("chain-" + uuid.uuid4().hex[:12])
 
 
 def _file_magic(path: str) -> bytes:
@@ -534,6 +565,23 @@ def get_egr_client() -> McpProxyClient:
 
 def call_tool_egr(tool_name: str, args: dict) -> str:
     return get_egr_client().call_tool(tool_name, args)
+
+
+def get_chain_client() -> McpProxyClient:
+    global _chain_client
+    CHAIN_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
+    _chain_client = _respawn_if_license_changed(_chain_client, CHAIN_META)
+    if not CHAIN_META["session_id"] or CHAIN_META["session_id"] == "chain-init":
+        new_chain_session()
+    if _chain_client is None or _chain_client.proc.poll() is not None:
+        if _chain_client is not None:
+            _chain_client.close()
+        _chain_client = McpProxyClient(_resolve_bin(), dict(CHAIN_META))
+    return _chain_client
+
+
+def call_tool_chain(tool_name: str, args: dict) -> str:
+    return get_chain_client().call_tool(tool_name, args)
 
 
 def get_ops_client() -> McpProxyClient:

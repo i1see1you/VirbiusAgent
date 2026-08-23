@@ -23,6 +23,7 @@ from modules.ctf import bp as ctf_bp
 from modules.memory_range import bp as memory_bp
 from modules.ops_range import bp as ops_bp
 from modules.egress_range import bp as egress_bp
+from modules.chain_range import bp as chain_bp
 
 # 让 virbius_guard / ctf 等模块的日志输出到终端（默认仅 WARNING，这里放开到 INFO）
 logging.basicConfig(
@@ -40,6 +41,7 @@ app.register_blueprint(ctf_bp)
 app.register_blueprint(memory_bp)
 app.register_blueprint(ops_bp)
 app.register_blueprint(egress_bp)
+app.register_blueprint(chain_bp)
 
 
 def _install_memory_edge_manifest():
@@ -101,6 +103,12 @@ def set_protection():
         conversations.clear("egress")
         session["egress_pwned"] = {}
         session["egress_sid"] = mcpproxy_client.new_egr_session()
+        conversations.clear("chain")
+        session["chain_pwned"] = {}
+        session["chain_sid"] = mcpproxy_client.new_chain_session()
+        from chain_agent import store as chain_store
+        chain_store.set_current_rid(session["chain_sid"])
+        chain_store.restore(session["chain_sid"])
     try:
         from modules.ops_range import reset_replica_keep_flags
         reset_replica_keep_flags()
@@ -369,6 +377,48 @@ def _bootstrap_egress():
     threading.Thread(target=run, daemon=True, name="egress-bootstrap").start()
 
 
+def _bootstrap_chain():
+    log = logging.getLogger("chain.bootstrap")
+
+    def run():
+        time.sleep(3)
+        try:
+            from chain_agent import bootstrap_control
+            st = bootstrap_control.run()
+            log.info("chain bootstrap ok=%s err=%s", st.get("ok"), st.get("error") or "")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("chain bootstrap thread failed: %s", exc)
+        engine = (cfg_store.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
+        if not engine:
+            return
+        url = engine + "/v1/evaluate"
+        payload = {
+            "tenant_id": "default", "session_id": "chain-groovy-warmup", "user_id": "1",
+            "tool_name": "delete_file", "role": "tool_call",
+            "args_json": json.dumps({"path": "tmp/cache/warmup.txt"}),
+            "vars": {"app_id": "demo-app"},
+        }
+        for i in range(4):
+            try:
+                req = urllib.request.Request(
+                    url, data=json.dumps(payload).encode(), method="POST",
+                    headers={"Content-Type": "application/json"},
+                )
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    data = json.load(resp)
+                log.info(
+                    "chain groovy warmup %s action=%s rule=%s",
+                    i, data.get("effective_action"), data.get("rule_id"),
+                )
+                if data.get("effective_action") in ("block", "deny", "allow"):
+                    break
+            except Exception as exc:  # noqa: BLE001
+                log.warning("chain groovy warmup failed: %s", exc)
+            time.sleep(1)
+
+    threading.Thread(target=run, daemon=True, name="chain-bootstrap").start()
+
+
 if __name__ == "__main__":
     port = _pick_port()
     print("=" * 60)
@@ -379,4 +429,5 @@ if __name__ == "__main__":
     _warmup_exfil_groovy()
     _bootstrap_ops()
     _bootstrap_egress()
+    _bootstrap_chain()
     app.run(host="0.0.0.0", port=port, debug=False)

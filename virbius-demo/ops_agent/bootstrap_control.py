@@ -29,6 +29,7 @@ FALLBACK_ALLOWED = [
     "ListMyTrips", "SubmitExpense", "ApproveExpense", "PayoutToAccount",
     "get_calendar", "save_memory", "search_memory", "send_email",
     "list_briefs", "read_brief", "http_get", "send_mail",
+    "list_files", "compress_file", "move_file", "delete_file",
 ]
 
 _STATUS = {"ok": False, "error": "not started", "license_appended": False}
