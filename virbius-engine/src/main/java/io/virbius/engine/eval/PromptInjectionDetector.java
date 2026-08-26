@@ -11,10 +11,10 @@ import org.springframework.stereotype.Component;
  *
  * <p>Uses a single-tier strategy:
  * <ol>
- *   <li><b>LLM detection</b>: qwen3guard:0.6b model for semantic injection detection</li>
+ *   <li><b>LLM detection</b>: VirbiusGuard (virbiusguard-v11:q4) model for semantic injection detection</li>
  * </ol>
  *
- * <p>The qwen3guard model provides superior semantic detection compared to regex
+ * <p>The VirbiusGuard model provides superior semantic detection compared to regex
  * pattern matching, covering injection variants, obfuscation, and novel attack
  * patterns that fixed regex rules cannot capture.
  *

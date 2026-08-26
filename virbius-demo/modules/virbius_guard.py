@@ -3,7 +3,7 @@
 
 CTF 里把"用户输入"先发给 virbius-engine 的 `/v1/evaluate` 做提示词安全评估。
 engine 会自动执行两层防护（见 virbius-engine EvaluateOrchestrator）：
-  1. LLM 语义检测（PromptInjectionDetector / PromptRunner）——qwen3guard 判断注入/越狱意图；
+  1. LLM 语义检测（PromptInjectionDetector / PromptRunner）——VirbiusGuard 判断注入/越狱意图；
   2. 运营台 prompt 规则 + category-rule-mapping——命中分类后映射到具体规则，用规则的风险分/动作处置。
 
 本模块只负责"调接口 + 判定是否拦截"，不参与 engine 内部逻辑（硬约束：不改 virbius-engine）。

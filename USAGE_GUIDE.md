@@ -1052,7 +1052,7 @@ VirbiusAgent uses Spring Boot profiles to distinguish three environments: `dev` 
 | Setting | dev | staging | prod |
 |---------|-----|---------|------|
 | **LLM Base URL** | `http://127.0.0.1:11434` (local Ollama) | `${VIRBIUS_PROMPT_LLM_BASE_URL}` (env) | `${VIRBIUS_PROMPT_LLM_BASE_URL}` (env) |
-| **LLM Model** | `virbiusguard:q4` | `${VIRBIUS_PROMPT_LLM_MODEL}` (env) | `${VIRBIUS_PROMPT_LLM_MODEL}` (env) |
+| **LLM Model** | `virbiusguard-v11:q4` | `${VIRBIUS_PROMPT_LLM_MODEL}` (env) | `${VIRBIUS_PROMPT_LLM_MODEL}` (env) |
 | **LLM Timeout** | 30000ms | 30000ms | `${VIRBIUS_PROMPT_LLM_TIMEOUT_MS}` (default 30000ms) |
 | **prompt-llm fail-open** | `true` (allow on LLM unavailable) | `true` | `false` (block on LLM unavailable) |
 | **guard-detect fail-open** | `true` | `true` | `true` (inherited default) |
@@ -1103,10 +1103,11 @@ export VIRBIUS_JDBC_PASSWORD=your_password
 export KAFKA_BOOTSTRAP_SERVERS=kafka-1:9092,kafka-2:9092
 
 # ── LLM ──
-# default prompt-LLM model is `virbiusguard:q4` (VirbiusGuard V4, Q4_K_M);
-# download from ModelScope: https://modelscope.cn/models/i1see1you/VirbiusGuard
+# default prompt-LLM model is `virbiusguard-v11:q4` (VirbiusGuard V11, Q4_K_M);
+# download from HuggingFace: https://huggingface.co/i1see1you/VirbiusGuard
+# or ModelScope: https://modelscope.cn/models/i1see1you/VirbiusGuard
 export VIRBIUS_PROMPT_LLM_BASE_URL=http://llm-host:11434
-export VIRBIUS_PROMPT_LLM_MODEL=virbiusguard:q4
+export VIRBIUS_PROMPT_LLM_MODEL=virbiusguard-v11:q4
 export VIRBIUS_PROMPT_LLM_TIMEOUT_MS=30000
 
 # ── Security ──

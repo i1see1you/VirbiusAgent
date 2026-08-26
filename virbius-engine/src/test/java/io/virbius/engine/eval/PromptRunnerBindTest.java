@@ -2,7 +2,7 @@ package io.virbius.engine.eval;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -50,7 +50,7 @@ class PromptRunnerBindTest {
         List<SignalDto> signals = runner.run("default", ctx);
 
         assertTrue(signals.isEmpty());
-        verify(llmClient, never()).completeDetail(anyString(), anyString());
+        verify(llmClient, never()).completeDetail(any(), any());
     }
 
     @Test
@@ -60,7 +60,7 @@ class PromptRunnerBindTest {
                 "Rule_201",
                 Map.of("bind_scope", "tool", "bind_ref", Map.of("tool_names", List.of("read_file"))));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global, toolChat));
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Jailbreak\"}", null));
 
@@ -77,7 +77,7 @@ class PromptRunnerBindTest {
     void triggersRuleByQwen3GuardNativeFormat() {
         RuleEntry global = promptRule("Rule_202", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global));
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "Safety: Unsafe\nCategories: Violent", null));
 
@@ -94,7 +94,7 @@ class PromptRunnerBindTest {
     void fallsBackToFirstRuleWhenCategoryUnmapped() {
         RuleEntry fallback = promptRule("Rule_999", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(fallback));
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"UnknownCategory\"}", null));
 
@@ -116,7 +116,7 @@ class PromptRunnerBindTest {
     void v11SafeWithNoneReasonDoesNotTrigger() {
         RuleEntry global = promptRule("Rule_202", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global));
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"none\"}", null));
 
@@ -133,7 +133,7 @@ class PromptRunnerBindTest {
         // V11 hard negative: suspicious-looking but safe input
         RuleEntry global = promptRule("Rule_201", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global));
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"none\"}", null));
 
@@ -160,7 +160,7 @@ class PromptRunnerBindTest {
                 new PromptAuditJsonParser(new ObjectMapper()),
                 mock(TenantAwareTaskExecutor.class), mock(AsyncActionHandler.class));
         when(cache.rulesForTenant("default")).thenReturn(List.of(agentRule));
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Agent Tool Misuse\"}", null));
 

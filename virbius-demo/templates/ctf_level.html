@@ -52,7 +52,7 @@
   </div>
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">2. 用到的 VirbiusAgent 能力（本靶场：云层 LLM 语义检测 + 运营台 prompt 规则）</h3>
-    <p style="margin:2px 0">本关启用的是 virbius-engine 的<strong>云层提示词防护</strong>：用户输入先发到引擎 <code>/v1/evaluate</code>，由 LLM（qwen3guard）做语义注入检测，并叠加运营台 prompt 规则与 category-rule-mapping。</p>
+    <p style="margin:2px 0">本关启用的是 virbius-engine 的<strong>云层提示词防护</strong>：用户输入先发到引擎 <code>/v1/evaluate</code>，由 LLM（VirbiusGuard）做语义注入检测，并叠加运营台 prompt 规则与 category-rule-mapping。</p>
     <p style="margin:2px 0">命中后按规则的动作与风险分处置（如 <code>prompt-jailbreak</code> → block），请求不会送达目标模型。这是独立于模型的第二道防线。</p>
   </div>
   <div class="pg-sec">

@@ -1411,7 +1411,7 @@ fn replace_result_text(resp: &mut Value, safe_message: &str) {
 ///
 /// Extracts text from the tool result response and sends it to the Engine's
 /// `/v1/evaluate` endpoint with `role = "output"`. The Engine reuses its
-/// existing rule pipeline (qwen3guard LLM classification + groovy pattern
+/// existing rule pipeline (VirbiusGuard LLM classification + groovy pattern
 /// matching) to classify the content.
 ///
 /// Conditional trigger: only reviews when text length >= `min_text_length`

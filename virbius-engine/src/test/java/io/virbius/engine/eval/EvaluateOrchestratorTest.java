@@ -14,6 +14,7 @@ import static org.mockito.Mockito.when;
 import io.virbius.engine.audit.AuditWriter;
 import io.virbius.engine.cache.PolicyDataCache;
 import io.virbius.engine.challenge.ChallengeService;
+import io.virbius.engine.config.PromptLlmProperties;
 import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
 import io.virbius.engine.eval.StiTaintDetector.TaintResult;
 import io.virbius.engine.eval.TrustViolationDetector.TrustViolationResult;
@@ -41,6 +42,8 @@ class EvaluateOrchestratorTest {
     @Mock private SessionRiskManager sessionRiskManager;
     @Mock private TrustViolationDetector trustViolationDetector;
     @Mock private PolicyDataCache policyDataCache;
+    private final PromptLlmProperties promptLlmProperties =
+            new PromptLlmProperties(null, null, null, 0, false, null, null, null, null);
 
     @Captor private ArgumentCaptor<EvaluateRequestDto> auditReqCaptor;
     @Captor private ArgumentCaptor<EngineDecisionDto> auditDecisionCaptor;
@@ -53,6 +56,7 @@ class EvaluateOrchestratorTest {
                 scriptRuleRunner, promptRunner, auditWriter, policyMerger,
                 challengeService, injectionDetector, taintDetector,
                 sessionRiskManager, trustViolationDetector, policyDataCache,
+                promptLlmProperties,
                 0.5, 0.1, 0.0, 0.0);
     }
 

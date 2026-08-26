@@ -33,7 +33,7 @@ public class MemoryCheckResponseDto {
     private Integer riskScore;
 
     /**
-     * The model used for detection (e.g., "qwen3guard:0.6b").
+     * The model used for detection (e.g., "virbiusguard-v11:q4").
      */
     private String model;
 

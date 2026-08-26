@@ -274,7 +274,7 @@ def decide(ctx) {
 
 **配置注意**: 执行引擎选 **Prompt**
 
-**说明**: 规则脚本无需填写。系统自动将用户输入发送给 qwen3guard LLM 服务进行分类,高风险内容触发挑战。
+**说明**: 规则脚本无需填写。系统自动将用户输入发送给 VirbiusGuard LLM 服务进行分类,高风险内容触发挑战。
 
 ---
 
@@ -412,7 +412,7 @@ def decide(ctx) {
 | Agent-Groovy | 不在 Engine 缓存中 | 只发布到 Agent 端,运营台无法直接验证 |
 | Edge DLP | Engine 不评估 | 在边缘网关层独立执行 |
 | Falco 规则 | Engine 不主动评估 | Falco 通过 Webhook 推送告警 |
-| Prompt LLM | 需要 LLM 服务 | 依赖 qwen3guard 外部服务,如不可用则降级为放行 |
+| Prompt LLM | 需要 LLM 服务 | 依赖 VirbiusGuard 外部服务,如不可用则降级为放行 |
 
 ## 附录: Groovy 脚本参考
 

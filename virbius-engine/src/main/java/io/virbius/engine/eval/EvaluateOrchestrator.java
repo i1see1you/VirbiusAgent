@@ -3,6 +3,7 @@ package io.virbius.engine.eval;
 import io.virbius.engine.audit.AuditWriter;
 import io.virbius.engine.cache.PolicyDataCache;
 import io.virbius.engine.challenge.ChallengeService;
+import io.virbius.engine.config.PromptLlmProperties;
 import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
 import io.virbius.engine.eval.StiTaintDetector.TaintResult;
 import io.virbius.engine.eval.TrustViolationDetector.TrustViolationResult;
@@ -33,6 +34,7 @@ public class EvaluateOrchestrator {
     private final SessionRiskManager sessionRiskManager;
     private final TrustViolationDetector trustViolationDetector;
     private final PolicyDataCache policyDataCache;
+    private final PromptLlmProperties promptLlmProperties;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -53,6 +55,7 @@ public class EvaluateOrchestrator {
             SessionRiskManager sessionRiskManager,
             TrustViolationDetector trustViolationDetector,
             PolicyDataCache policyDataCache,
+            PromptLlmProperties promptLlmProperties,
             @Value("${virbius.session-risk.intent-weight.block:0.5}") double blockWeight,
             @Value("${virbius.session-risk.intent-weight.challenge:0.1}") double challengeWeight,
             @Value("${virbius.session-risk.intent-weight.review:0.0}") double reviewWeight,
@@ -67,6 +70,7 @@ public class EvaluateOrchestrator {
         this.sessionRiskManager = sessionRiskManager;
         this.trustViolationDetector = trustViolationDetector;
         this.policyDataCache = policyDataCache;
+        this.promptLlmProperties = promptLlmProperties;
         this.blockWeight = blockWeight;
         this.challengeWeight = challengeWeight;
         this.reviewWeight = reviewWeight;
@@ -124,7 +128,7 @@ public class EvaluateOrchestrator {
                     "cloud",
                     "cloud",
                     injectionResult.riskDelta(),
-                    injectionResult.matchedPattern(),
+                    "PROMPT_INJECTION",
                     "deny",
                     "full",
                     null,
@@ -357,7 +361,7 @@ public class EvaluateOrchestrator {
                     .allowed(false)
                     .blockReason(result.matchedPattern())
                     .riskScore(result.riskDelta())
-                    .model("qwen3guard:0.6b")
+                    .model(promptLlmProperties.model())
                     .metadata("llm_injection_detected")
                     .build();
         }
@@ -366,7 +370,7 @@ public class EvaluateOrchestrator {
                 .allowed(true)
                 .blockReason(null)
                 .riskScore(0)
-                .model("qwen3guard:0.6b")
+                .model(promptLlmProperties.model())
                 .metadata(null)
                 .build();
     }

@@ -147,17 +147,13 @@ public class PromptRunner {
     }
 
     private static SignalDto toSignal(RuleEntry rule, String auditRaw) {
-        String reason = rule.reasonCode();
-        if (auditRaw != null && !auditRaw.isBlank()) {
-            reason = auditRaw;
-        }
         return new SignalDto(
                 rule.ruleId(),
                 rule.ruleRevision(),
                 "cloud",
                 "cloud",
                 rule.riskScore(),
-                reason,
+                rule.reasonCode(),
                 rule.intentAction(),
                 rule.enforceMode(),
                 rule.canaryPercent() > 0 ? rule.canaryPercent() : null,

@@ -256,7 +256,7 @@ Calls an LLM service to classify user input for safety (detects prompt injection
 
 **Configuration note**: Set Runtime to **Prompt**.
 
-**Note**: No rule script is needed. The system automatically sends user input to the qwen3guard LLM service for classification. High-risk content triggers a challenge.
+**Note**: No rule script is needed. The system automatically sends user input to the VirbiusGuard LLM service for classification. High-risk content triggers a challenge.
 
 ---
 
@@ -394,7 +394,7 @@ When a single request matches multiple rules, the final action is determined by 
 | Agent-Groovy | Not in Engine cache | Only published to Agent side, cannot be verified via Admin Console |
 | Edge DLP | Not evaluated by Engine | Executed independently at the Edge gateway layer |
 | Falco Rule | Not proactively evaluated | Falco pushes alerts via Webhook |
-| Prompt LLM | Requires LLM service | Depends on qwen3guard external service; degrades to allow if unavailable |
+| Prompt LLM | Requires LLM service | Depends on VirbiusGuard external service; degrades to allow if unavailable |
 
 ## Appendix: Groovy Script Reference
 

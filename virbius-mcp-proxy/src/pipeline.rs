@@ -645,7 +645,7 @@ impl SecurityPipeline {
     ///
     /// Sends the tool result text as `content` with `role = "output"`,
     /// allowing the Engine's existing prompt/groovy rule pipeline to
-    /// perform LLM content safety classification (qwen3guard) and
+    /// perform LLM content safety classification (VirbiusGuard) and
     /// deterministic pattern matching.
     ///
     /// Returns the engine's evaluate response, or an error on failure.

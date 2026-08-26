@@ -3,7 +3,7 @@ package io.virbius.engine.eval;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -29,7 +29,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void hitWhenJsonReasonMatchesMappedRule() {
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Violent\"}", null));
 
@@ -44,7 +44,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void hitWhenQwen3GuardNativeFormat() {
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "Safety: Unsafe\nCategories: Violent", null));
 
@@ -59,7 +59,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void missWhenReasonDoesNotMapToDraftRule() {
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Jailbreak\"}", null));
 
@@ -73,7 +73,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void missWhenLlmSaysNoHit() {
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"\"}", null));
 
@@ -86,7 +86,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void errorWhenLlmEmpty() {
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult("", null));
 
         PromptSimulateResponseDto resp = service.simulate(new PromptSimulateRequestDto(
@@ -104,7 +104,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void v11SafeOutputWithNoneReason() {
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"none\"}", null));
 
@@ -117,7 +117,7 @@ class PromptSimulateServiceTest {
 
     @Test
     void v11UnsafeOutputWithAgentToolMisuse() {
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Agent Tool Misuse\"}", null));
 
@@ -134,7 +134,7 @@ class PromptSimulateServiceTest {
     @Test
     void v11SafeHardNegativeNotFlagged() {
         // V11 hard negative: looks suspicious but should be safe
-        when(llmClient.completeDetail(anyString(), anyString()))
+        when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
                         "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"none\"}", null));
 

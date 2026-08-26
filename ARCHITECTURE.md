@@ -821,14 +821,14 @@ LLM generates tool_call -> Tool interception (Groovy L3 + schema + allowlist)
 |------|---------------------|------------------------|
 | Judgment target | prompt + response text | User input prompt only |
 | Judgment goal | Content safety (violence/pornography/violations) | Jailbreak/injection (DAN/ignore previous/role hijacking) |
-| Model | 1B content classification model | qwen3guard:0.6b (reuses same model as STI Taint) |
+| Model | 1B content classification model | VirbiusGuard (virbiusguard-v11:q4, reuses same model as STI Taint) |
 | Hit action | block + audit | block or raise session_risk_score + audit |
 | Rule configuration | NL description (ops console prompt runtime) | Same (reuses existing rule UI) |
 | Relationship with Prompt Gateway | None | Complementary: Gateway prevents, runtime detects |
 
 **Rule configuration**: Reuses existing ops console Cloud layer `prompt` runtime rule CRUD (NL description → trigger conditions). Operators write rules such as "detect DAN jailbreak attempts", "detect ignore previous instructions injection", etc.; the engine uses mlPredict to call the small model for judgment.
 
-**Cost control**: Shares qwen3guard:0.6b small model with STI Taint (local Ollama deployment, single call <200ms). Only triggered on user input, not on tool return values (the latter is covered by STI Taint).
+**Cost control**: Shares VirbiusGuard (virbiusguard-v11:q4) small model with STI Taint (local Ollama deployment, single call <200ms). Only triggered on user input, not on tool return values (the latter is covered by STI Taint).
 
 **Hit strategy**:
 
@@ -922,7 +922,7 @@ pub struct MemoryAuditEvent {
 
 | Detection Item | Mechanism | Hit Action |
 |--------|------|---------|
-| "ignore previous instructions" and other injection markers | qwen3guard small model judgment | Write: block; Read: filter segment |
+| "ignore previous instructions" and other injection markers | VirbiusGuard small model judgment | Write: block; Read: filter segment |
 | Tool return value written to memory verbatim (not summarized) | Rule: content hash matches tool return value | block + prompt Agent to summarize before writing |
 | Memory content exceeds max_memory_entry_size | Rule: size check | block + prompt summarization |
 
@@ -950,7 +950,7 @@ review_tool_output()       ← Content security review (new)
   +-- extract_result_text()        extract text from resp.result.content[].text
   +-- should_review_output()       conditional trigger: text.len() ≥ 512 || risk_score ≥ 50
   +-- pipeline.review_output()    call POST /v1/evaluate { content, role: "output" }
-  |   +-- Engine reuses PromptRunner (qwen3guard) + ScriptRuleRunner (groovy) -> PolicyMerger
+  |   +-- Engine reuses PromptRunner (VirbiusGuard) + ScriptRuleRunner (groovy) -> PolicyMerger
   +-- if deny -> replace_result_text() replace with safety notice
        if engine unavailable -> decide allow or block based on fail_open
 
@@ -967,7 +967,7 @@ Application layer POST /v1/evaluate { content: "<Agent output>", role: "output" 
 |------|------|---------|---------|
 | **PII leakage** | dlp/engine.rs entity recognition (`mask_pii_in_response`) | Each tool output | Desensitize then return + audit |
 | **Credential leakage** | Regex (API key/token/password patterns) + small model assistance | Each tool output | Desensitize then return + audit |
-| **Content safety** | qwen3guard small model (reuses Engine `prompt` runtime) | Output >512 characters or session_risk > 50 | block + audit + raise risk_score |
+| **Content safety** | VirbiusGuard small model (reuses Engine `prompt` runtime) | Output >512 characters or session_risk > 50 | block + audit + raise risk_score |
 | **Policy compliance** | Groovy rule engine (scene-related output constraints) | Each tool output | block or challenge + audit |
 
 **Division of labor with STI Taint**:
@@ -975,7 +975,7 @@ Application layer POST /v1/evaluate { content: "<Agent output>", role: "output" 
 | Detection Layer | Target | Phase | Mechanism |
 |--------|---------|------|------|
 | **STI Taint (§5.4)** | Tool return values | After tool execution, before Agent summarization | Small model determines injection |
-| **Tool result review (this section)** | Tool return values | After PII desensitization + trust tagging | Reuses Engine rule pipeline (qwen3guard + groovy) |
+| **Tool result review (this section)** | Tool return values | After PII desensitization + trust tagging | Reuses Engine rule pipeline (VirbiusGuard + groovy) |
 | **Agent output review (Plan B)** | Agent final response | After Agent summarization, before returning to user | Application layer calls `/v1/evaluate` (⏳ design suggestion/pending application layer integration) |
 
 > Three layers cover the complete review chain from tool results to final output.
@@ -1056,7 +1056,7 @@ min_risk_score = 50
 fail_open = true
 ```
 
-**Cost control**: PII/credential detection uses rules + regex, no LLM call. Content safety detection reuses qwen3guard small model, only triggered on high risk (output >512 characters or session_risk > 50), not on every call.
+**Cost control**: PII/credential detection uses rules + regex, no LLM call. Content safety detection reuses VirbiusGuard small model, only triggered on high risk (output >512 characters or session_risk > 50), not on every call.
 
 
 ---
@@ -1990,7 +1990,7 @@ Implement STI (Suitability, Taint, Integrity) semantic audit in Groovy L3, calli
 | **Taint** | Tool return value length > 2KB or contains injection markers | Yes (LLM) | Check if external injection instructions are present in tool return values |
 | **Integrity** | Parameter type does not match schema or contains Base64/Hex | No (rules) | Validate if parameters have been tampered with |
 
-> **Cost control**: STI LLM calls go through mlPredict using a dedicated small model (qwen3guard:0.6b), not the large model. The small model is locally deployed (Ollama), single call <200ms.
+> **Cost control**: STI LLM calls go through mlPredict using a dedicated small model (VirbiusGuard, virbiusguard-v11:q4), not the large model. The small model is locally deployed (Ollama), single call <200ms.
 
 ### 5.5 Unified Control Plane Delivery
 

@@ -818,14 +818,14 @@ LLM 生成 tool_call -> 工具拦截（Groovy L3 + schema + allowlist）
 |------|---------------------|------------------------|
 | 判定对象 | prompt + response 文本 | 仅用户输入 prompt |
 | 判定目标 | 内容安全（暴力/色情/违规） | 越狱/注入（DAN/ignore previous/角色劫持） |
-| 模型 | 1B 内容分类模型 | qwen3guard:0.6b（复用 STI Taint 同模型） |
+| 模型 | 1B 内容分类模型 | VirbiusGuard (virbiusguard-v11:q4，复用 STI Taint 同模型) |
 | 命中动作 | block + 审计 | block 或提升 session_risk_score + 审计 |
 | 规则配置 | NL 描述（运营台 prompt runtime） | 同（复用现有规则 UI） |
 | 与 Prompt Gateway 关系 | 无 | 互补：Gateway 预防，runtime 检测 |
 
 **规则配置**：复用现有运营台 cloud 层 `prompt` runtime 的规则 CRUD（NL 描述 → 触发条件）。运营人员编写如"检测 DAN 越狱尝试"、"检测 ignore previous instructions 注入"等规则，engine 通过 mlPredict 调用小模型判定。
 
-**成本控制**：与 STI Taint 共享 qwen3guard:0.6b 小模型（本地 Ollama 部署，单次 <200ms）。仅对用户输入触发，不对工具返回值触发（后者由 STI Taint 覆盖）。
+**成本控制**：与 STI Taint 共享 VirbiusGuard (virbiusguard-v11:q4) 小模型（本地 Ollama 部署，单次 <200ms）。仅对用户输入触发，不对工具返回值触发（后者由 STI Taint 覆盖）。
 
 **命中策略**：
 
@@ -918,7 +918,7 @@ pub struct MemoryAuditEvent {
 
 | 检测项 | 机制 | 命中动作 |
 |--------|------|---------|
-| "ignore previous instructions" 等注入标记 | qwen3guard 小模型判定 | 写入：block；读取：过滤片段 |
+| "ignore previous instructions" 等注入标记 | VirbiusGuard 小模型判定 | 写入：block；读取：过滤片段 |
 | 工具返回值原样写入记忆（未摘要） | 规则：内容与工具返回值 hash 匹配 | block + 提示 Agent 摘要后写入 |
 | 记忆内容超过 max_memory_entry_size | 规则：size 检查 | block + 提示摘要 |
 
@@ -946,7 +946,7 @@ review_tool_output()       ← 内容安全审查（新增）
   +-- extract_result_text()        从 resp.result.content[].text 提取文本
   +-- should_review_output()       条件触发：text.len() ≥ 512 || risk_score ≥ 50
   +-- pipeline.review_output()    调用 POST /v1/evaluate { content, role: "output" }
-  |   +-- Engine 复用 PromptRunner (qwen3guard) + ScriptRuleRunner (groovy) -> PolicyMerger
+  |   +-- Engine 复用 PromptRunner (VirbiusGuard) + ScriptRuleRunner (groovy) -> PolicyMerger
   +-- 若 deny -> replace_result_text() 替换为安全提示
       若 engine 不可用 -> 根据 fail_open 决定放行或拦截
 
@@ -963,7 +963,7 @@ Agent 最终响应（方案 B：应用层调用，⏳ 设计建议/待应用层�
 |------|------|---------|---------|
 | **PII 泄露** | dlp/engine.rs 实体识别（`mask_pii_in_response`） | 每次工具输出 | 脱敏后返回 + 审计 |
 | **凭据泄露** | 正则（API key/token/password 模式） + 小模型辅助 | 每次工具输出 | 脱敏后返回 + 审计 |
-| **内容安全** | qwen3guard 小模型（复用 Engine `prompt` runtime） | 输出 >512 字符 或 session_risk > 50 | block + 审计 + 提升 risk_score |
+| **内容安全** | VirbiusGuard 小模型（复用 Engine `prompt` runtime） | 输出 >512 字符 或 session_risk > 50 | block + 审计 + 提升 risk_score |
 | **策略合规** | Groovy 规则引擎（场景相关输出约束） | 每次工具输出 | block 或 challenge + 审计 |
 
 **与 STI Taint 的分工**：
@@ -971,7 +971,7 @@ Agent 最终响应（方案 B：应用层调用，⏳ 设计建议/待应用层�
 | 检测层 | 作用对象 | 阶段 | 机制 |
 |--------|---------|------|------|
 | **STI Taint（§5.4）** | 工具返回值 | 工具执行后、Agent 汇总前 | 小模型判定注入 |
-| **工具结果审查（本节）** | 工具返回值 | PII 脱敏 + 信任标签之后 | 复用 Engine 规则管线（qwen3guard + groovy） |
+| **工具结果审查（本节）** | 工具返回值 | PII 脱敏 + 信任标签之后 | 复用 Engine 规则管线（VirbiusGuard + groovy） |
 | **Agent 输出审查（方案 B）** | Agent 最终响应 | Agent 汇总后、返回用户前 | 应用层调用 `/v1/evaluate`（⏳ 设计建议/待应用层集成） |
 
 > 三层覆盖从工具返回到最终输出的完整审查链路。
@@ -1052,7 +1052,7 @@ min_risk_score = 50
 fail_open = true
 ```
 
-**成本控制**：PII/凭据检测为规则+正则，无 LLM 调用。内容安全检测复用 qwen3guard 小模型，仅高风险触发（输出 >512 字符 或 session_risk > 50），非每次调用。
+**成本控制**：PII/凭据检测为规则+正则，无 LLM 调用。内容安全检测复用 VirbiusGuard 小模型，仅高风险触发（输出 >512 字符 或 session_risk > 50），非每次调用。
 
 
 ---
@@ -1986,7 +1986,7 @@ if (appId != null && appId == "restricted-app") {
 | **Taint** | 工具返回值长度 > 2KB 或含注入标记 | 是(LLM) | 检查工具返回值中是否含外部注入指令 |
 | **Integrity** | 参数类型与 schema 不符或含 Base64/Hex | 否(规则) | 校验参数是否被篡改 |
 
-> **成本控制**：STI 的 LLM 调用通过 mlPredict 走专用小模型(qwen3guard:0.6b)，不走大模型。小模型本地部署(Ollama)，单次调用 <200ms。
+> **成本控制**：STI 的 LLM 调用通过 mlPredict 走专用小模型(VirbiusGuard, virbiusguard-v11:q4)，不走大模型。小模型本地部署(Ollama)，单次调用 <200ms。
 
 ### 5.5 控制面统一下发
 

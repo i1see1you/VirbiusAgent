@@ -79,7 +79,7 @@ engine:
       memory: 1Gi
   promptLlm:
     baseUrl: ""
-    model: sileader/qwen3guard:0.6b
+    model: virbiusguard-v11:q4
 
 proxy:
   replicaCount: 1
