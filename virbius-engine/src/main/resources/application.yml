@@ -34,7 +34,7 @@ virbius:
     engine-allow-path: ${VIRBIUS_ENGINE_AUDIT_ALLOW:/tmp/virbius/engine-audit-allow.jsonl}
   prompt-llm:
     base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
-    model: ${VIRBIUS_PROMPT_LLM_MODEL:virbiusguard:q4}
+    model: ${VIRBIUS_PROMPT_LLM_MODEL:virbiusguard-v11:q4}
     api-path: /v1/chat/completions
     timeout-ms: ${VIRBIUS_PROMPT_LLM_TIMEOUT_MS:30000}
     fail-open: true
@@ -45,7 +45,7 @@ virbius:
       If unsafe or controversial, output strict JSON only with no extra text:
       {"hit_rule": true, "triggered_id": "SYSTEM", "reason": "<specific safety category>"}
       If safe:
-      {"hit_rule": false, "triggered_id": null, "reason": ""}
+      {"hit_rule": false, "triggered_id": null, "reason": "none"}
     category-rule-mapping:
       Violent: prompt-violent
       Non-violent Illegal Acts: prompt-illegal
@@ -57,8 +57,6 @@ virbius:
       Copyright Violation: prompt-copyright
       Jailbreak: prompt-jailbreak
       Agent Tool Misuse: prompt-agent
-      Multi-language Injection: prompt-jailbreak
-
   guard-detect:
     injection-enabled: ${VIRBIUS_INJECTION_DETECT_ENABLED:true}
     taint-enabled: ${VIRBIUS_TAINT_DETECT_ENABLED:true}
@@ -66,6 +64,18 @@ virbius:
     fail-open: true
     taint-min-content-length: 512
     taint-max-content-length: 8192
+    injection-system-prompt: |
+      You are a strict LLM input auditor. Classify the user input for safety.
+      If unsafe or controversial, output strict JSON only with no extra text:
+      {"hit_rule": true, "triggered_id": "SYSTEM", "reason": "<specific safety category>"}
+      If safe:
+      {"hit_rule": false, "triggered_id": null, "reason": "none"}
+    taint-system-prompt: |
+      You are a strict LLM input auditor. Classify the user input for safety.
+      If unsafe or controversial, output strict JSON only with no extra text:
+      {"hit_rule": true, "triggered_id": "SYSTEM", "reason": "<specific safety category>"}
+      If safe:
+      {"hit_rule": false, "triggered_id": null, "reason": "none"}
 
   session-risk:
     enabled: ${VIRBIUS_SESSION_RISK_ENABLED:true}

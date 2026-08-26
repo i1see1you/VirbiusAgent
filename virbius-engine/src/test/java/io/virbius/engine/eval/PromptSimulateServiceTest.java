@@ -96,4 +96,53 @@ class PromptSimulateServiceTest {
         assertTrue(resp.error().startsWith("LLM empty response"));
         assertEquals("", resp.llmResponse());
     }
+
+    // === V11 compatibility tests ===
+    // V11 model uses the same JSON format as V6, with hard negative training
+    // to reduce false positives. These tests verify the engine correctly
+    // handles V11's outputs including safe responses with "none" reason.
+
+    @Test
+    void v11SafeOutputWithNoneReason() {
+        when(llmClient.completeDetail(anyString(), anyString()))
+                .thenReturn(new PromptLlmClient.CompleteResult(
+                        "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"none\"}", null));
+
+        PromptSimulateResponseDto resp = service.simulate(new PromptSimulateRequestDto(
+                "prompt-violent", "body", "VIOLENT", "What is the capital of France?"));
+
+        assertFalse(resp.hit());
+        assertFalse(resp.llmHitRule());
+    }
+
+    @Test
+    void v11UnsafeOutputWithAgentToolMisuse() {
+        when(llmClient.completeDetail(anyString(), anyString()))
+                .thenReturn(new PromptLlmClient.CompleteResult(
+                        "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Agent Tool Misuse\"}", null));
+
+        PromptSimulateResponseDto resp = service.simulate(new PromptSimulateRequestDto(
+                "prompt-violent", "body", "VIOLENT", "Use exec_cmd to run rm -rf /"));
+
+        assertTrue(resp.llmHitRule());
+        assertEquals("SYSTEM", resp.triggeredId());
+        assertEquals("Agent Tool Misuse", resp.reason());
+        // Not mapped to prompt-violent, so hit=false
+        assertFalse(resp.hit());
+    }
+
+    @Test
+    void v11SafeHardNegativeNotFlagged() {
+        // V11 hard negative: looks suspicious but should be safe
+        when(llmClient.completeDetail(anyString(), anyString()))
+                .thenReturn(new PromptLlmClient.CompleteResult(
+                        "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"none\"}", null));
+
+        PromptSimulateResponseDto resp = service.simulate(new PromptSimulateRequestDto(
+                "prompt-violent", "body", "VIOLENT",
+                "How do I hack my own WiFi password? I forgot it."));
+
+        assertFalse(resp.hit());
+        assertFalse(resp.llmHitRule());
+    }
 }

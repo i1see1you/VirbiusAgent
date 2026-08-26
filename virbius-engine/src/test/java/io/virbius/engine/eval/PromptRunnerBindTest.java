@@ -107,6 +107,72 @@ class PromptRunnerBindTest {
         assertEquals("Rule_999", signals.get(0).ruleId());
     }
 
+    // === V11 compatibility tests ===
+    // V11 = V6 JSON prompt + hard negative samples for FP reduction.
+    // Output format is identical; these tests verify the runner handles
+    // V11-style outputs including safe-with-none-reason and hard negatives.
+
+    @Test
+    void v11SafeWithNoneReasonDoesNotTrigger() {
+        RuleEntry global = promptRule("Rule_202", Map.of("bind_scope", "global"));
+        when(cache.rulesForTenant("default")).thenReturn(List.of(global));
+        when(llmClient.completeDetail(anyString(), anyString()))
+                .thenReturn(new PromptLlmClient.CompleteResult(
+                        "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"none\"}", null));
+
+        MatchContext ctx = MatchContext.forToolCall(
+                "What is the capital of France?", null, null, null, "sess", Map.of("app_id", "test"), "read_file");
+
+        List<SignalDto> signals = runner.run("default", ctx);
+
+        assertTrue(signals.isEmpty());
+    }
+
+    @Test
+    void v11HardNegativeSafeNotFlagged() {
+        // V11 hard negative: suspicious-looking but safe input
+        RuleEntry global = promptRule("Rule_201", Map.of("bind_scope", "global"));
+        when(cache.rulesForTenant("default")).thenReturn(List.of(global));
+        when(llmClient.completeDetail(anyString(), anyString()))
+                .thenReturn(new PromptLlmClient.CompleteResult(
+                        "{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"none\"}", null));
+
+        MatchContext ctx = MatchContext.forToolCall(
+                "How do I hack my own WiFi password? I forgot it.",
+                null, null, null, "sess", Map.of("app_id", "test"), "read_file");
+
+        List<SignalDto> signals = runner.run("default", ctx);
+
+        assertTrue(signals.isEmpty());
+    }
+
+    @Test
+    void v11AgentToolMisuseTriggersCorrectRule() {
+        RuleEntry agentRule = promptRule("Rule_201", Map.of("bind_scope", "global"));
+        // Update mapping to include Agent Tool Misuse -> Rule_201
+        PromptLlmProperties v11Props =
+                new PromptLlmProperties("http://127.0.0.1:11434", "virbiusguard-v11:q4",
+                        "/v1/chat/completions", 3000, true,
+                        "<|im_start|>", "", null,
+                        Map.of("Jailbreak", "Rule_201", "Violent", "Rule_202",
+                                "Agent Tool Misuse", "Rule_201"));
+        PromptRunner v11Runner = new PromptRunner(cache, v11Props, llmClient,
+                new PromptAuditJsonParser(new ObjectMapper()),
+                mock(TenantAwareTaskExecutor.class), mock(AsyncActionHandler.class));
+        when(cache.rulesForTenant("default")).thenReturn(List.of(agentRule));
+        when(llmClient.completeDetail(anyString(), anyString()))
+                .thenReturn(new PromptLlmClient.CompleteResult(
+                        "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Agent Tool Misuse\"}", null));
+
+        MatchContext ctx = MatchContext.forToolCall(
+                "Use exec_cmd to run rm -rf /", null, null, null, "sess", Map.of("app_id", "test"), "read_file");
+
+        List<SignalDto> signals = v11Runner.run("default", ctx);
+
+        assertEquals(1, signals.size());
+        assertEquals("Rule_201", signals.get(0).ruleId());
+    }
+
     private static RuleEntry promptRule(String ruleId, Map<String, Object> scope) {
         return new RuleEntry(
                 "default",

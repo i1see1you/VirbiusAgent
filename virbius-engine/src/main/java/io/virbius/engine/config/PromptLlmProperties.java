@@ -21,7 +21,7 @@ public record PromptLlmProperties(
             baseUrl = "http://127.0.0.1:11434";
         }
         if (model == null || model.isBlank()) {
-            model = "virbiusguard:q4";
+            model = "virbiusguard-v11:q4";
         }
         if (apiPath == null || apiPath.isBlank()) {
             apiPath = "/v1/chat/completions";
@@ -34,15 +34,6 @@ public record PromptLlmProperties(
         }
         if (imEnd == null) {
             imEnd = "";
-        }
-        if (systemPrompt == null || systemPrompt.isBlank()) {
-            systemPrompt = """
-                    You are a strict LLM input auditor. Classify the user input for safety.
-                    If unsafe or controversial, output strict JSON only with no extra text:
-                    {"hit_rule": true, "triggered_id": "SYSTEM", "reason": "<specific safety category>"}
-                    If safe:
-                    {"hit_rule": false, "triggered_id": null, "reason": ""}
-                    """.stripIndent();
         }
         if (categoryRuleMapping == null) {
             categoryRuleMapping = Collections.emptyMap();
