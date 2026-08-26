@@ -7,6 +7,10 @@ venv/
 # Secrets — never commit. Copy .env.example -> .env and fill keys.
 .env
 
+# Runtime settings written by the settings page (container volume / demo root).
+# Holds API keys + platform addresses in plaintext; never commit.
+config.json
+
 # Local license public key & mcp-proxy config may embed endpoint/tenant info —
 # regenerate/patch locally, keep out of the repo.
 cfg/license-public.pem
@@ -16,10 +20,10 @@ virbius-mcp-proxy.toml
 agent_sandbox/jail/
 
 # Runtime caches pulled from virbius-control/cloud — regenerated on sync, not tracked
-# Everything under data/edge/ is a sync cache (incl. default/<app>/edge-manifest.json),
+# Everything under demo_data/edge/ is a sync cache (incl. default/<app>/edge-manifest.json),
 # never commit it. Only the source data files (catalog.json, virbius.json, *_labs.py)
-# at the data/ root are tracked.
-data/edge/
+# at the demo_data/ root are tracked.
+demo_data/edge/
 
 # Local-only assets (per decision): screenshots & ad-hoc test scripts stay local
 docs/screenshots/
@@ -28,3 +32,6 @@ test_*.py
 # Misc
 .DS_Store
 *.log
+
+# mcp-proxy 默认 cache_dir 与记忆笔记本运行时文件，不入库
+data/

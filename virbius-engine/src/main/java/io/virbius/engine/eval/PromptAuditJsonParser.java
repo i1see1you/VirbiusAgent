@@ -38,12 +38,16 @@ public final class PromptAuditJsonParser {
 
     private PromptAuditResult tryParseJson(String text) {
         int start = text.indexOf('{');
-        int end = text.lastIndexOf('}');
-        if (start < 0 || end <= start) {
+        if (start < 0) {
+            return null;
+        }
+        String slice = closeTruncatedJson(text.substring(start));
+        int end = slice.lastIndexOf('}');
+        if (end <= 0) {
             return null;
         }
         try {
-            JsonNode node = mapper.readTree(text.substring(start, end + 1));
+            JsonNode node = mapper.readTree(slice.substring(0, end + 1));
             if (!node.has("hit_rule")) {
                 return null;
             }
@@ -57,6 +61,60 @@ public final class PromptAuditJsonParser {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** Q4 GGUF often EOS before the closing quote/brace; close enough to parse. */
+    static String closeTruncatedJson(String json) {
+        StringBuilder sb = new StringBuilder(json.stripTrailing());
+        int quotes = 0;
+        boolean escape = false;
+        for (int i = 0; i < sb.length(); i++) {
+            char c = sb.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (c == '\\') {
+                escape = true;
+                continue;
+            }
+            if (c == '"') {
+                quotes++;
+            }
+        }
+        if (quotes % 2 == 1) {
+            sb.append('"');
+        }
+        int depth = 0;
+        escape = false;
+        boolean inString = false;
+        for (int i = 0; i < sb.length(); i++) {
+            char c = sb.charAt(i);
+            if (escape) {
+                escape = false;
+                continue;
+            }
+            if (inString) {
+                if (c == '\\') {
+                    escape = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+            if (c == '"') {
+                inString = true;
+            } else if (c == '{') {
+                depth++;
+            } else if (c == '}') {
+                depth--;
+            }
+        }
+        while (depth > 0) {
+            sb.append('}');
+            depth--;
+        }
+        return sb.toString();
     }
 
     private static PromptAuditResult tryParseQwen3Guard(String text) {

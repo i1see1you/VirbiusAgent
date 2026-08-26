@@ -35,6 +35,23 @@ class PromptAuditJsonParserTest {
     }
 
     @Test
+    void parsesTruncatedJsonMissingBrace() {
+        PromptAuditJsonParser parser = new PromptAuditJsonParser(new ObjectMapper());
+        var r = parser.parse("{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"\"");
+        assertFalse(r.hitRule());
+    }
+
+    @Test
+    void parsesTruncatedJsonMissingQuoteAndBrace() {
+        PromptAuditJsonParser parser = new PromptAuditJsonParser(new ObjectMapper());
+        var r = parser.parse(
+                "{\"hit_rule\": true, \"triggered_id\": \"SYSTEM\", \"reason\": \"Jailbreak");
+        assertTrue(r.hitRule());
+        assertEquals("SYSTEM", r.triggeredId());
+        assertEquals("Jailbreak", r.reason());
+    }
+
+    @Test
     void parsesJsonEmbeddedInText() {
         PromptAuditJsonParser parser = new PromptAuditJsonParser(new ObjectMapper());
         var r = parser.parse("说明如下：{\"hit_rule\": false, \"triggered_id\": null, \"reason\": \"\"}");

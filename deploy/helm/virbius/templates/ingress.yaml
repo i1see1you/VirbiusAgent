@@ -1,0 +1,66 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "virbius.fullname" . }}
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.hosts.range | quote }}
+        - {{ .Values.ingress.hosts.control | quote }}
+        - {{ .Values.ingress.hosts.engine | quote }}
+        - {{ .Values.ingress.hosts.proxy | quote }}
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.hosts.range | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "virbius.fullname" . }}-demo
+                port:
+                  number: 8000
+    - host: {{ .Values.ingress.hosts.control | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "virbius.fullname" . }}-control
+                port:
+                  number: 8080
+    - host: {{ .Values.ingress.hosts.engine | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "virbius.fullname" . }}-engine
+                port:
+                  number: 8082
+    - host: {{ .Values.ingress.hosts.proxy | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "virbius.fullname" . }}-mcp-proxy
+                port:
+                  number: 9090
+{{- end }}

@@ -57,5 +57,9 @@ scripts/test-*.sh
 # LLM fine-tuning workspace (model weights, training data, checkpoints)
 virbius-guard/
 
+# Local Helm values with secrets (never commit)
+deploy/helm/virbius/values-prod.yaml
+deploy/helm/virbius/values-*.local.yaml
+
 # PPT
 ppt/

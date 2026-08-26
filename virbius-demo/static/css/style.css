@@ -225,6 +225,10 @@ code.payload:hover{border-color:var(--neon2);border-left-color:var(--neon2);
 code.payload:active{transform:scale(.995)}
 .pnote{font-size:12.5px;color:var(--dim);margin:10px 2px 0;line-height:1.7}
 
+.idcard{margin:0 0 12px;padding:10px 14px;border-radius:10px;
+  border:1px solid rgba(34,211,238,.28);background:rgba(34,211,238,.06);font-size:13px;color:var(--fg)}
+.idcard b{color:var(--neon2)}
+
 .hintbox{margin-top:12px}
 .hintbox summary{cursor:pointer;color:var(--amber)}
 .hintbox summary:hover{text-shadow:0 0 10px rgba(255,204,102,.4)}
@@ -267,3 +271,56 @@ table.cat tr:hover td{background:rgba(0,255,174,.03)}
   background:rgba(0,255,174,.05);border:1px solid rgba(0,255,174,.18);border-radius:7px;padding:9px 11px}
 
 /* agent chat reuses .chat / .msg bubble styles from the lab pages */
+
+/* ---------- 基础设置页 ---------- */
+.field{margin:14px 0}
+.field label{display:block;font-size:12.5px;color:var(--neon2);font-weight:700;
+  letter-spacing:.4px;margin-bottom:6px}
+.field input{width:100%;background:rgba(4,7,13,.8);border:1px solid var(--line);
+  color:var(--fg);border-radius:10px;padding:11px 14px;font-size:14px;font-family:inherit;transition:.15s}
+.field input:focus{outline:none;border-color:var(--neon);
+  box-shadow:0 0 0 3px rgba(0,255,174,.12),inset 0 0 14px rgba(0,255,174,.05)}
+.field .fnote{font-size:12px;color:var(--dim);margin:6px 2px 0;line-height:1.6}
+
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 4px}
+.tabs .tab{background:transparent;border:1px solid var(--line);color:var(--dim);
+  padding:8px 16px;font-size:13px;font-weight:600;border-radius:20px;cursor:pointer;
+  box-shadow:none;transition:.18s}
+.tabs .tab:hover{border-color:var(--neon2);color:var(--neon2)}
+.tabs .tab.active{color:#04210f;background:linear-gradient(135deg,var(--neon),#00d49a);
+  border-color:transparent;box-shadow:0 0 16px rgba(0,255,174,.3)}
+.prov-form{border-top:1px dashed var(--line);margin-top:12px;padding-top:6px}
+
+/* ---------- 配置提示弹窗 ---------- */
+.modal-mask{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;
+  background:rgba(2,4,10,.72);backdrop-filter:blur(4px);animation:rise .2s ease}
+.modal{width:min(460px,92vw);background:linear-gradient(160deg,rgba(13,20,34,.98),rgba(8,11,20,.96));
+  border:1px solid rgba(255,204,102,.4);border-radius:16px;padding:24px 26px;
+  box-shadow:0 0 40px rgba(255,204,102,.18),inset 0 0 30px rgba(0,0,0,.4);position:relative}
+.modal .m-ico{font-size:30px;filter:drop-shadow(0 0 10px rgba(255,204,102,.5))}
+.modal h3{margin:8px 0 6px;color:var(--amber);letter-spacing:.5px}
+.modal p{color:var(--dim);font-size:13.5px;line-height:1.7;margin:0 0 18px}
+.modal .mrow{display:flex;gap:10px;justify-content:flex-end}
+.modal button{font-size:13.5px;padding:10px 18px}
+
+/* ASI06 记忆靶场状态面板 */
+.sess-actions{display:flex;gap:8px;flex-wrap:wrap}
+.mem-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:12px 0 16px}
+@media (max-width:900px){.mem-grid{grid-template-columns:1fr}}
+.mem-panel{background:rgba(4,7,13,.55);border:1px solid var(--line);border-radius:12px;padding:12px 14px;min-height:120px}
+.mem-panel h3{margin:0 0 8px;font-size:14px;color:var(--neon2)}
+.mem-item{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin:6px 0;font-size:12.5px;line-height:1.55}
+.mem-item.poison{border-color:rgba(255,43,214,.4);background:rgba(255,43,214,.06)}
+.mem-item.fresh{border-color:rgba(0,255,174,.45);background:rgba(0,255,174,.08)}
+.mem-item.persist{border-color:rgba(34,211,238,.35);background:rgba(34,211,238,.06)}
+.mem-item pre{white-space:pre-wrap;word-break:break-word;margin:6px 0 0;font-size:12px;color:var(--dim)}
+.mem-check{margin:0 0 12px;padding:8px 12px;border-radius:10px;border:1px dashed var(--line);font-size:12.5px;color:var(--dim)}
+.mem-check .kbd{margin:4px 4px 0 0;display:inline-block}
+
+.replica-pill{display:inline-block;margin-left:8px;padding:1px 8px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:.4px}
+.replica-pill.ok{color:var(--neon);border:1px solid rgba(0,255,174,.4);background:rgba(0,255,174,.08)}
+.replica-pill.wiped{color:var(--red);border:1px solid rgba(255,77,109,.45);background:rgba(255,77,109,.1)}
+.challenge-banner{margin:0 0 12px;padding:10px 14px;border-radius:10px;
+  border:1px solid rgba(255,204,102,.45);background:rgba(255,204,102,.08);color:var(--amber);font-size:13px}
+.challenge-banner a{margin:0 6px}
+.challenge-banner button{margin-left:8px}

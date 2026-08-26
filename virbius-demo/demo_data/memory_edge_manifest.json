@@ -1,0 +1,15 @@
+{
+  "tenant_id": "default",
+  "app_id": "demo-app",
+  "rules": [],
+  "dlp_rules": [],
+  "sdk_config": {
+    "memory_interceptor_enabled": true,
+    "memory_detect_injection_on_write": true,
+    "memory_detect_injection_on_read": true,
+    "memory_filter_on_read": true,
+    "memory_max_entry_size": 8192,
+    "memory_read_tool_patterns": ["search_memory", "get_calendar"]
+  },
+  "tool_policies": []
+}

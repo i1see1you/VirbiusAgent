@@ -4,7 +4,7 @@ from flask import Blueprint, render_template, request, jsonify, session
 
 import llm_client
 from modules import conversations, modelsel, inspect_util, protection
-from data.owasp_labs import LABS, get_lab
+from demo_data.owasp_labs import LABS, get_lab
 
 bp = Blueprint("owasp", __name__, url_prefix="/owasp")
 
@@ -25,6 +25,12 @@ def lab(code):
     public = {k: v for k, v in lab.items()
               if k not in ("system", "poisoned_doc", "flag_equals")}
     public["flag_equals_hint"] = "flag_equals" in lab
+    if lab.get("rate_limit"):
+        from modules import owasp_llm10
+        public.update(owasp_llm10.meter())
+    if lab.get("expense_agent"):
+        from modules import owasp_llm06
+        public.update({"expense": owasp_llm06.snapshot()})
     return render_template("owasp_lab.html", lab=public, solved=solved)
 
 
@@ -47,6 +53,30 @@ def chat(code):
     user_msg = (request.json or {}).get("message", "").strip()
     if not user_msg:
         return jsonify({"error": "消息为空"}), 400
+
+    if lab.get("rate_limit"):
+        from modules import owasp_llm10
+        try:
+            payload = owasp_llm10.chat(user_msg)
+        except llm_client.LLMError as e:
+            return jsonify({"error": str(e)}), 502
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
+        if payload.get("auto_solved"):
+            _mark_solved(code)
+        return jsonify(payload)
+
+    if lab.get("expense_agent"):
+        from modules import owasp_llm06
+        try:
+            payload = owasp_llm06.chat(user_msg)
+        except llm_client.LLMError as e:
+            return jsonify({"error": str(e)}), 502
+        except Exception as e:
+            return jsonify({"error": str(e)}), 502
+        if payload.get("auto_solved"):
+            _mark_solved(code)
+        return jsonify(payload)
 
     system, user = _build_messages(lab, user_msg)
     ctx = f"owasp:{code}"
@@ -115,7 +145,16 @@ def chat(code):
 @bp.route("/reset/<code>", methods=["POST"])
 def reset(code):
     conversations.clear(f"owasp:{code}")
-    return jsonify({"ok": True, "turns": 0})
+    extra = {"ok": True, "turns": 0}
+    if code == "LLM10":
+        from modules import owasp_llm10
+        owasp_llm10.rotate_session()
+        extra.update(owasp_llm10.meter())
+    if code == "LLM06":
+        from modules import owasp_llm06
+        owasp_llm06.rotate_session()
+        extra["expense"] = owasp_llm06.snapshot()
+    return jsonify(extra)
 
 
 def _looks_like_xss(text):

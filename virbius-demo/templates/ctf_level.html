@@ -42,6 +42,33 @@
   <p class="spin insp-ph">发送后，这里显示每轮发给模型的完整 prompt 与原始返回</p>
 </div></div>
 
+<hr class="prot-divider">
+<details class="prot-guide" open>
+  <summary>🛡 接入 VirbiusAgent 防护说明 <span class="insp-sub">漏洞 → 能力 → 配置 → 生效（LLM01 · 提示注入 Prompt Injection）</span></summary>
+  <div class="pg-sec">
+    <h3 style="margin:10px 0 4px">1. 漏洞与本靶场</h3>
+    <p style="margin:2px 0">本关对应 OWASP LLM01 · 提示注入（Prompt Injection）。攻击者通过精心构造的输入，让模型忽略系统提示词、套取或泄露本不该说出的密码。</p>
+    <p style="margin:2px 0">核心认知：模型输出是<strong>不可信的</strong>——它可能被输入诱导。因此对用户输入的审查必须<strong>独立于目标模型</strong>，由专门的防护引擎完成，而不是依赖模型自觉。</p>
+  </div>
+  <div class="pg-sec">
+    <h3 style="margin:10px 0 4px">2. 用到的 VirbiusAgent 能力（本靶场：云层 LLM 语义检测 + 运营台 prompt 规则）</h3>
+    <p style="margin:2px 0">本关启用的是 virbius-engine 的<strong>云层提示词防护</strong>：用户输入先发到引擎 <code>/v1/evaluate</code>，由 LLM（qwen3guard）做语义注入检测，并叠加运营台 prompt 规则与 category-rule-mapping。</p>
+    <p style="margin:2px 0">命中后按规则的动作与风险分处置（如 <code>prompt-jailbreak</code> → block），请求不会送达目标模型。这是独立于模型的第二道防线。</p>
+  </div>
+  <div class="pg-sec">
+    <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
+    <p style="margin:2px 0">· runtime = prompt（RuleRuntime.PROMPT，走运营台规则链）</p>
+    <p style="margin:2px 0">· 通过 bind_scope 决定触发范围，经 categoryRuleMapping 映射到具体 prompt 规则</p>
+    <p style="margin:2px 0">· risk_score / intent_action（block、deny 等）/ enforce_mode（full 才真正拦截，dry_run 仅计分）</p>
+    <p style="margin:2px 0">· 规则本体在 control 运营台发布后经 RuleCache 加载，无需改 engine 配置文件</p>
+  </div>
+  <div class="pg-sec">
+    <h3 style="margin:10px 0 4px">4. 如何生效</h3>
+    <p style="margin:2px 0">Control 发布规则 → engine 缓存加载 → 每次请求经 <code>/v1/evaluate</code> 评估 → 命中则 block/deny，否则放行。</p>
+    <p style="margin:2px 0">页面右上角导航栏的「🛡 VirbiusAgent 防护」开关控制本关请求是否进入这条评估链：开启后注入请求会被拦截，关闭则直通目标模型。</p>
+  </div>
+</details>
+
 {% endblock %}
 {% block script %}
 <script>
@@ -83,7 +110,7 @@ document.getElementById('submit').onclick = async ()=>{
   const r = await postJSON('/ctf/submit/'+LID, {guess});
   const box = document.getElementById('result');
   box.innerHTML = r.correct
-    ? '<div class="win">🎉 正确！本关攻破。' + (LID<8?' <a href="/ctf/level/'+(LID+1)+'">下一关 →</a>':' 你通关了全部 CTF！') + '</div>'
+    ? '<div class="win">🎉 正确！本关攻破。 你通关了全部 CTF！</div>'
     : '<div class="fail">❌ 密码不对，再试试。</div>';
 };
 </script>

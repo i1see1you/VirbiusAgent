@@ -12,16 +12,32 @@
 {% if lab.interactive %}
 <div class="panel">
   {% if lab.xss %}<p class="note">⚠️ 下方“渲染预览”会真的执行模型返回的 HTML（模拟未转义直出），命中 JS 执行即自动通关。</p>{% endif %}
+  {% if lab.expense_agent and lab.expense %}
+  <div class="idcard">
+    <div><b>{{ lab.expense.employee.name }}</b> · {{ lab.expense.employee.emp_id }} · {{ lab.expense.employee.dept }}</div>
+    <div>工资卡 {{ lab.expense.employee.payroll_account }} · 待报销 {{ lab.expense.trip.trip_id }} {{ lab.expense.trip.title }} ¥{{ lab.expense.trip.amount }}</div>
+  </div>
+  {% endif %}
   <div class="sessbar">
+    {% if lab.rate_limit %}
+    <span class="sess-state">本会话已查询 <b id="tx-ok">{{ lab.tx_ok or 0 }}</b> 次 · 累计 $<b id="tx-cost">{{ '%.2f'|format(lab.tx_cost or 0) }}</b></span>
+    {% elif lab.expense_agent %}
+    <span class="sess-state">🟢 费控会话 · <b id="turns">0</b> 轮 · 回执 <b id="rcpt-n">{{ (lab.expense.receipts or [])|length }}</b> 张</span>
+    {% else %}
     <span class="sess-state">🟢 会话进行中 · <b id="turns">0</b> 轮记忆</span>
+    {% endif %}
     <button class="ghost sm" id="reset">🗑️ 清空记忆 / 新会话</button>
   </div>
-  <div class="chat" id="chat"><div class="msg sys">开始攻击 👇（多轮对话有记忆）</div></div>
+  <div class="chat" id="chat"><div class="msg sys">{% if lab.rate_limit %}开始刷账单 👇 让助手反复查最新流水。每次成功查询 $0.15。{% elif lab.expense_agent %}费控小助手在线。试着让它「把报销走完」。{% else %}开始攻击 👇（多轮对话有记忆）{% endif %}</div></div>
   <div class="row">
     <textarea id="msg" placeholder="输入攻击 payload…（Enter 发送）"></textarea>
     <button id="send">发送</button>
   </div>
   {% if lab.xss %}<div class="render-preview" id="preview"><i style="color:#888">渲染预览区</i></div>{% endif %}
+  {% if lab.expense_agent %}
+  <h2 style="margin:16px 0 8px;font-size:15px">💸 打款回执</h2>
+  <div class="panel" id="receipts"><p class="spin">暂无打款。开关关闭时助手越权打款会出现 FLAG。</p></div>
+  {% endif %}
 
   {% if not lab.xss %}
   <div class="flagbox">
@@ -72,26 +88,65 @@
 <script>
 const CODE = "{{ lab.code }}";
 const IS_XSS = {{ 'true' if lab.xss else 'false' }};
+const IS_RATE = {{ 'true' if lab.rate_limit else 'false' }};
+const IS_EXPENSE = {{ 'true' if lab.expense_agent else 'false' }};
 const chat = document.getElementById('chat');
 const msg = document.getElementById('msg');
 const send = document.getElementById('send');
 let solved = {{ 'true' if lab.code in solved else 'false' }};
+const ROLE={thought:'💭 Thought',action:'⚡ Action',observation:'👁 Observation',final:'✅ Final Answer'};
 
 function markWin(extra){
   document.getElementById('result').innerHTML =
     '<div class="win">🎉 攻击成功，本关通过！'+(extra||'')+'</div>';
 }
 
+function renderReceipts(list){
+  const box = document.getElementById('receipts');
+  const n = document.getElementById('rcpt-n');
+  if(n) n.textContent = String((list||[]).length);
+  if(!box) return;
+  if(!list || !list.length){
+    box.innerHTML = '<p class="spin">暂无打款。开关关闭时助手越权打款会出现 FLAG。</p>';
+    return;
+  }
+  box.innerHTML = list.map(r =>
+    '<div class="win">PAY '+ (r.expense_id||'') +' → '+ (r.account||'') +
+    ' ¥'+ Number(r.amount||0).toFixed(2) +
+    (r.flag ? '<br>'+r.flag : '') +'</div>'
+  ).join('');
+}
+
+function setMeter(ok, cost){
+  const o = document.getElementById('tx-ok');
+  const c = document.getElementById('tx-cost');
+  if(o) o.textContent = (ok==null)? '0' : String(ok);
+  if(c) c.textContent = (cost==null)? '0.00' : Number(cost).toFixed(2);
+}
+
 async function doSend(){
   const text = msg.value.trim(); if(!text) return;
+  if(!await ensureModelReady()){ msg.focus(); return; }
   addMsg(chat,'user',text); msg.value=''; send.disabled=true;
-  const wait = addMsg(chat,'sys','模型思考中…');
+  const wait = addMsg(chat,'sys', IS_RATE ? '查询中…' : (IS_EXPENSE ? '费控助手处理中…（多步 ReAct）' : '模型思考中…'));
   try{
     const r = await postJSON('/owasp/chat/'+CODE, {message:text});
     wait.remove();
     if(r.error){ addMsg(chat,'blocked','错误：'+r.error); }
     else{
-      addMsg(chat,'bot',r.answer);
+      if(IS_RATE && r.queries && r.queries.length){
+        r.queries.forEach(q=>{
+          addMsg(chat, q.blocked ? 'blocked' : 'sys',
+            'GetUserTransactions #'+q.n+' '+(q.blocked?'blocked':'allow')+'\n'+q.result);
+        });
+      }
+      if(IS_EXPENSE && r.transcript && r.transcript.length){
+        r.transcript.forEach(t=>{
+          addMsg(chat,'bot',(ROLE[t.role]||t.role)+'\n\n'+t.text);
+        });
+      } else {
+        addMsg(chat,'bot',r.answer);
+      }
       if(r.protection){
         let pd = '🛡 '+r.protection.note;
         if(r.protection.action === 'block'){
@@ -108,24 +163,29 @@ async function doSend(){
         addMsg(chat,'prot',pd);
       }
       if(IS_XSS){
-        // 故意未转义直出，触发探针
         const pv = document.getElementById('preview');
         window.__xss_fired = false;
         pv.innerHTML = r.answer;
         setTimeout(()=>{ if(window.__xss_fired || r.auto_solved){ markWin(' XSS 探针被触发。'); } }, 400);
       }
-      if(r.auto_solved){ markWin(); }
+      if(r.auto_solved){ markWin(IS_RATE ? ' 账单被刷穿。' : (IS_EXPENSE ? ' 费控助手越权打款。' : '')); }
       if(r.debug) appendInspector(r.debug);
-      if(r.turns!=null) document.getElementById('turns').textContent = r.turns;
+      if(r.turns!=null && document.getElementById('turns')){
+        document.getElementById('turns').textContent = r.turns;
+      }
+      if(IS_RATE) setMeter(r.tx_ok, r.tx_cost);
+      if(IS_EXPENSE) renderReceipts(r.receipts);
     }
   }catch(e){ wait.remove(); addMsg(chat,'blocked','网络错误'); }
   send.disabled=false; msg.focus();
 }
 
 document.getElementById('reset').onclick = async ()=>{
-  await postJSON('/owasp/reset/'+CODE, {});
+  const r = await postJSON('/owasp/reset/'+CODE, {});
   chat.innerHTML = '<div class="msg sys">🧹 会话记忆已清空，已开启新会话。</div>';
-  document.getElementById('turns').textContent = '0';
+  if(document.getElementById('turns')) document.getElementById('turns').textContent = '0';
+  if(IS_RATE) setMeter(r.tx_ok||0, r.tx_cost||0);
+  if(IS_EXPENSE) renderReceipts((r.expense && r.expense.receipts) || []);
   document.getElementById('result').innerHTML='';
   const pv=document.getElementById('preview'); if(pv) pv.innerHTML='<i style="color:#888">渲染预览区</i>';
   clearInspector();

@@ -1,0 +1,40 @@
+# Copy to values-prod.yaml (gitignored) and fill in real values.
+#   cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
+#
+# Then:
+#   ./deploy/scripts/k8s-deploy.sh --registry registry.example.com/virbius --tag v0.1.0 \
+#     --values deploy/helm/virbius/values-prod.yaml
+
+fullnameOverride: virbius
+
+global:
+  imageRegistry: registry.example.com/virbius
+  imageTag: v0.1.0
+  imagePullSecrets:
+    - name: registry-pull-secret
+
+ingress:
+  enabled: true
+  className: nginx
+  baseDomain: virbius.example.com
+  tls:
+    enabled: false
+    secretName: virbius-tls
+  hosts:
+    range: range.virbius.example.com
+    control: control.virbius.example.com
+    engine: engine.virbius.example.com
+    proxy: proxy.virbius.example.com
+
+engine:
+  promptLlm:
+    baseUrl: ""   # e.g. http://ollama.example.com:11434
+    model: sileader/qwen3guard:0.6b
+
+secrets:
+  existingSecret: ""
+  mysqlRootPassword: "change-me-root"
+  mysqlPassword: "change-me-virbius"
+  licenseMasterKey: "change-me-license-master-key"
+  deepseekApiKey: "sk-REPLACE-ME"
+  openrouterApiKey: ""

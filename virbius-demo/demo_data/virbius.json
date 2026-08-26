@@ -3,8 +3,8 @@
   "active_mode": "control",
   "modes": {
     "offline": {
-      "offline_manifest_path": "data/edge/default/demo-app/edge-manifest.json",
-      "cache_dir": "data/edge/offline/default/demo-app",
+      "offline_manifest_path": "demo_data/edge/default/demo-app/edge-manifest.json",
+      "cache_dir": "demo_data/edge/offline/default/demo-app",
       "tenant_id": "default",
       "app_id": "demo-app"
     },
@@ -14,7 +14,7 @@
       "app_id": "demo-app",
       "edge_api_key": "",
       "device_id": "",
-      "cache_dir": "data/edge/control/default/demo-app"
+      "cache_dir": "demo_data/edge/control/default/demo-app"
     },
     "cloud": {
       "control_base_url": "https://virbius-cloud.example.com",
@@ -22,7 +22,7 @@
       "app_id": "demo-app",
       "edge_api_key": "",
       "device_id": "",
-      "cache_dir": "data/edge/cloud/default/demo-app"
+      "cache_dir": "demo_data/edge/cloud/default/demo-app"
     }
   }
 }

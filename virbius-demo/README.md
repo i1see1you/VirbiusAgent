@@ -119,6 +119,15 @@ cp .env.example .env        # 填入 DEEPSEEK_API_KEY
 docker compose up -d        # 浏览器打开 http://localhost:8000
 ```
 
+> **关于本地小模型（可选）**：demo 的 Docker 容器**不内置** Ollama 模型，而是**复用宿主机上已安装的 Ollama**（方案 B）。容器通过 `host.docker.internal:11434` 访问宿主，compose 里已配好 `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1`。要用「本地·Qwen2.5 0.5B」等本地模型，需先在本机：
+> ```bash
+> ollama serve &              # 确认 Ollama 服务在跑
+> ollama pull qwen2.5:0.5b    # 拉取 demo 需要的模型
+> ```
+> 这样 demo 镜像无需拉取 2GB+ 的 Ollama 镜像，分发更轻；代价是宿主必须自带 Ollama。
+
+> **密钥不进镜像**：`DEEPSEEK_API_KEY` 等敏感配置通过 compose 的 `env_file` 在**运行时注入**，且 `.dockerignore` 已排除 `**/.env`，因此密钥不会被打包进镜像，可安全分发镜像、随时轮换 key。
+
 ### 方式三：手动
 ```bash
 pip install -r requirements.txt
@@ -142,6 +151,7 @@ bash agent_sandbox/build.sh         # 构建沙箱镜像
 | `DEEPSEEK_API_KEY` | DeepSeek API Key（**必填**） | — |
 | `DEEPSEEK_BASE_URL` | API 地址 | `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | 模型 | `deepseek-chat` |
+| `OLLAMA_BASE_URL` | 本地小模型地址（容器内指向宿主 Ollama） | `http://localhost:11434/v1` |
 | `PORT` | Web 端口（固定） | `8000` |
 | `AGENT_USE_DOCKER` | Agent 命令执行是否走 Docker | `0` |
 
@@ -162,11 +172,11 @@ pip install --force-reinstall ../target/wheels/virbius_mcp_python-*.whl
 > 需要 Rust 工具链；`maturin` 可用 `pip install maturin` 安装。若未安装扩展，开启防护时会提示构建说明。
 
 ### 2. 切换规则来源（云端 / 本地 control / 离线）
-编辑 [`data/virbius.json`](data/virbius.json) 的 `active_mode` 即可，无需改代码：
+编辑 [`demo_data/virbius.json`](demo_data/virbius.json) 的 `active_mode` 即可，无需改代码：
 
 | active_mode | 规则来源 |
 |---|---|
-| `offline` | 直接读本地 `data/edge/default/demo-app/edge-manifest.json` |
+| `offline` | 直接读本地 `demo_data/edge/default/demo-app/edge-manifest.json` |
 | `control` | 从本地 virbius-control 的 Edge API 拉取（`control_base_url`）并缓存 |
 | `cloud` | 从云端 control 拉取（`control_base_url` 填云地址） |
 
@@ -186,7 +196,7 @@ llm-sec-range/
 │   ├── owasp.py           #   OWASP Top10 labs
 │   ├── agent_range.py     #   ReAct Agent 循环
 │   └── catalog.py         #   聚合清单
-├── data/                  # 关卡 / 清单数据
+├── demo_data/             # 关卡 / 清单数据
 ├── agent_sandbox/         # Agent 工具沙箱 + Docker 隔离
 ├── templates/ static/     # 前端（暗色 hacker 风）
 └── docker-compose.yml     # 一键容器部署

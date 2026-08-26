@@ -20,7 +20,7 @@ const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_REDIRECTS: usize = 5;
 
 /// Tools that trigger egress proxy behavior.
-const EGRESS_TOOLS: &[&str] = &["curl", "http_request", "fetch", "web_search"];
+const EGRESS_TOOLS: &[&str] = &["curl", "http_request", "fetch", "web_search", "http_get"];
 
 /// Local code-execution tools executed by the proxy itself in a sandbox
 /// (none/landlock/gvisor). These are never forwarded to an upstream.
@@ -371,6 +371,10 @@ mod tests {
             extract_url_from_args("curl", &args).unwrap(),
             "https://api.internal/data"
         );
+        assert_eq!(
+            extract_url_from_args("http_get", &args).unwrap(),
+            "https://api.internal/data"
+        );
     }
 
     #[test]
@@ -394,8 +398,10 @@ mod tests {
         assert!(is_egress_tool("http_request"));
         assert!(is_egress_tool("fetch"));
         assert!(is_egress_tool("web_search"));
+        assert!(is_egress_tool("http_get"));
         assert!(!is_egress_tool("read_file"));
         assert!(!is_egress_tool("execute_python"));
+        assert!(!is_egress_tool("send_mail"));
     }
 
     #[test]

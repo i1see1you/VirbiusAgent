@@ -6,7 +6,7 @@ from flask import Blueprint, render_template
 
 bp = Blueprint("catalog", __name__, url_prefix="/catalog")
 
-_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "catalog.json")
+_PATH = os.path.join(os.path.dirname(__file__), "..", "demo_data", "catalog.json")
 
 
 @bp.route("/")

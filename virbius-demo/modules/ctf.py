@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
 """CTF 提示注入闯关：路由 + 守卫执行链。"""
+import logging
 import re
 from flask import Blueprint, render_template, request, jsonify, session
 
 import llm_client
-from modules import conversations, modelsel, inspect_util
-from data.ctf_levels import LEVELS, INPUT_KEYWORDS, get_level
+from modules import conversations, modelsel, inspect_util, protection, virbius_guard
+from demo_data.ctf_levels import LEVELS, INPUT_KEYWORDS, get_level
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint("ctf", __name__, url_prefix="/ctf")
 
@@ -98,19 +101,40 @@ def chat(level_id):
     ent = modelsel.current_entry()
     prov, mdl = ent["provider"], ent["model"]
 
-    # 输入守卫（被拦截则不进入会话记忆）
+    # ① VirbiusAgent 提示词防护（云层 /v1/evaluate）：命中即拦截，不发给目标模型
+    logger.info("[ctf] level=%s protection_enabled=%s user_input=%r", level_id, protection.is_enabled(), user_msg)
+    if protection.is_enabled():
+        guard = virbius_guard.guard_prompt(user_msg, session_id=f"ctf:{level_id}")
+        logger.info("[ctf] guard result: %s", guard)
+        if guard.get("blocked"):
+            msg = (
+                f"🛡 VirbiusAgent 防护拦截：检测到提示词攻击意图。\n"
+                f"  动作={guard.get('action')} | 规则={guard.get('rule_id')} | "
+                f"原因={guard.get('reason')} | 风险={guard.get('risk_score')}"
+            )
+            return jsonify({"answer": msg, "blocked": True,
+                            "turns": conversations.count(ctx),
+                            "debug": inspect_util.note(msg)})
+        if guard.get("error"):
+            # engine 不可达时 fail-open 放行，但标注供排查
+            logger.warning("[ctf] guard fail-open: %s", guard.get("error"))
+
+    # ② L5 自带输入关键词守卫（被拦截则不进入会话记忆）
     if "input_block_keywords" in defenses:
         blocked = _input_keyword_guard(user_msg)
         if blocked:
+            logger.info("[ctf] level=%s blocked by input_keyword_guard", level_id)
             return jsonify({"answer": blocked, "blocked": True,
                             "turns": conversations.count(ctx),
                             "debug": inspect_util.note(blocked)})
     if "input_llm_guard" in defenses:
         blocked = _input_llm_guard(user_msg, provider=prov, model=mdl)
         if blocked:
+            logger.info("[ctf] level=%s blocked by input_llm_guard", level_id)
             return jsonify({"answer": blocked, "blocked": True,
                             "turns": conversations.count(ctx),
                             "debug": inspect_util.note(blocked)})
+    logger.info("[ctf] level=%s passed all guards, calling target model", level_id)
 
     # 带多轮记忆调模型：system + 历史 + 本轮
     history = conversations.get(ctx)
