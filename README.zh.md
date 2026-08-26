@@ -63,7 +63,7 @@ flowchart TD
 | 高风险人工审批 | engine challenge → 运营台审批 → token 验证放行 |
 | 运营台审计大盘 | session risk + 工具调用 + 告警 + 审批队列 + 决策链路可视化 |
 | Prompt 注入检测 | 单模型语义检测 + 动态风险评分 |
-| **LLM + 传统模型** | 默认基于微调后的Qwen3Guard（可更改为其他模型） LLM 安全分类 + Groovy L3 `mlPredict()` 调用外部 ML 模型 |
+| **LLM + 传统模型** | 默认基于 VirbiusGuard（可更改为其他安全模型）LLM 安全分类 + Groovy L3 `mlPredict()` 调用外部 ML 模型 |
 | STI Taint 污点追踪 | 跨工具追踪不可信输出，阻断数据泄漏 |
 | Hash Chain 审计完整性 | SHA-256 哈希链审计日志防篡改 |
 | 记忆管控 | Agent 写入记忆前的敏感数据脱敏 |
@@ -86,7 +86,9 @@ flowchart TD
 
 > **设计哲学**：规则成本低、速度快、对已知威胁精确匹配；模型成本高但对新型攻击召回能力强。将两者结合,可以在较低成本的同时获得**高性能、精确率和召回率**。这参考了阿里和美团生产安全平台的分层安全架构实践(本人曾在阿里和美团从事安全架构和安全管理工作)。
 
-我们正在以 **GLM5.2** 作为教师模型、**Qwen3Guard** 作为学生模型，通过知识蒸馏覆盖并优化目前 Qwen3Guard 不支持的 Prompt 语义场景（如 Agent 行为安全、多语言混合输入等），逐步扩大 Prompt L1 的检测范围。
+我们以 **GLM5.2** 作为教师模型、**Qwen3Guard** 作为基座学生模型，通过知识蒸馏创建 **VirbiusGuard** —— 覆盖并优化目前 Qwen3Guard 不支持的 Prompt 语义场景（如 Agent 行为安全、多语言混合输入等），逐步扩大 Prompt L1 的检测范围。
+
+> **VirbiusGuard 模型下载**：[HuggingFace](https://huggingface.co/i1see1you/VirbiusGuard) | [ModelScope](https://modelscope.cn/models/i1see1you/VirbiusGuard)
 
 ### 与同类产品对比
 

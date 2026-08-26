@@ -63,7 +63,7 @@ flowchart TD
 | **Human Approval** | High-risk tool approval flow: engine challenge → console approve → token-gated execution |
 | **Audit Dashboard** | Session risk, tool calls, alerts, approval queue, decision trace visualization |
 | **Prompt Injection Detection** | Single-model semantic detection with dynamic risk scoring |
-| **LLM + Traditional Models** | Built-in Qwen3Guard safety classification + Groovy L3 `mlPredict()` for external ML models |
+| **LLM + Traditional Models** | LLM safety classification built on VirbiusGuard (replaceable with other safety models) + Groovy L3 `mlPredict()` for external ML models |
 | **STI Taint Tracking** | Track untrusted outputs across tool chains, prevent data leakage |
 | **Hash Chain Audit** | Tamper-proof audit log with SHA-256 hash chain integrity verification |
 | **Memory Interceptor** | Desensitize sensitive data written to Agent memory |
@@ -86,7 +86,9 @@ Industry security engineering has proven that **the best defense combines determ
 
 > **Design philosophy**: Rules are cheap, fast, and precisely match known threats. Models are expensive but have strong recall for novel attacks. Combining them achieves **high performance, precision and recall** at low cost. This draws on the layered security architecture practices of Alibaba's and Meituan's production security platforms (I previously worked on security architecture and security management at Alibaba and Meituan).
 
-We are using **GLM5.2** as the teacher model and **Qwen3Guard** as the student model, leveraging knowledge distillation to cover and optimize prompt semantic scenarios that Qwen3Guard currently does not support (such as Agent behavioral safety, multilingual mixed inputs, etc.), progressively expanding the detection scope of Prompt L1.
+We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student model, performing knowledge distillation to create **VirbiusGuard** — which covers and optimizes prompt semantic scenarios that Qwen3Guard does not support (such as Agent behavioral safety, multilingual mixed inputs, etc.), progressively expanding the detection scope of Prompt L1.
+
+> **VirbiusGuard model download**: [HuggingFace](https://huggingface.co/i1see1you/VirbiusGuard) | [ModelScope](https://modelscope.cn/models/i1see1you/VirbiusGuard)
 
 ### Comparison with Industry Solutions
 
