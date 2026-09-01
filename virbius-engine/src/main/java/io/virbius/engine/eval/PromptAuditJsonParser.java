@@ -53,10 +53,18 @@ public final class PromptAuditJsonParser {
             }
             boolean hit = node.path("hit_rule").asBoolean(false);
             String triggeredId = node.path("triggered_id").asText(null);
-            if (triggeredId != null && (triggeredId.isBlank() || "null".equalsIgnoreCase(triggeredId))) {
+            if (triggeredId != null
+                    && (triggeredId.isBlank()
+                            || "null".equalsIgnoreCase(triggeredId)
+                            || "none".equalsIgnoreCase(triggeredId))) {
                 triggeredId = null;
             }
             String reason = node.path("reason").asText(null);
+            // VirbiusGuard (V13) format carries the safety category in triggered_id and omits
+            // reason. Normalize so downstream consumers reading reason still get the category.
+            if ((reason == null || reason.isBlank()) && triggeredId != null) {
+                reason = triggeredId;
+            }
             return new PromptAuditResult(hit, triggeredId, reason);
         } catch (Exception e) {
             return null;

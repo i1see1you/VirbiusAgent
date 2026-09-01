@@ -1456,6 +1456,7 @@ async fn review_tool_output(
                 let reason = eval_resp
                     .reason
                     .as_deref()
+                    .filter(|s| !s.is_empty())
                     .unwrap_or("content safety violation");
                 info!(
                     "output review blocked: tool={} session={} rule={:?} reason={}",

@@ -79,7 +79,7 @@ engine:
       memory: 1Gi
   promptLlm:
     baseUrl: ""
-    model: virbiusguard-v11:q4
+    model: virbiusguard
 
 proxy:
   replicaCount: 1

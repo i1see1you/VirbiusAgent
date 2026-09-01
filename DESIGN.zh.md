@@ -249,7 +249,7 @@ virbius-control
 | 云 | Groovy | L3 规则脚本 | 稳定但 declining(Apache) | Python sandbox |
 | 云 | Redis | session + 审计流 | 极稳定 | KeyDB |
 | 云 | Spring Boot | engine/control 框架 | 极稳定 | Quarkus |
-| 云 | VirbiusGuard (virbiusguard-v11:q4) | Prompt 注入 & STI Taint 守卫模型(P1) | 较新 | 任意 guard 模型 |
+| 云 | VirbiusGuard (virbiusguard) | Prompt 注入 & STI Taint 守卫模型(P1) | 较新 | 任意 guard 模型 |
 | 协议 | MCP | 工具调用协议 | 较新(Anthropic, 2024) | 自定义 JSON-RPC |
 
 ### 9.2 风险评估
@@ -764,7 +764,7 @@ LLM 生成 tool_call → 工具拦截（Groovy L3 + schema + allowlist）
 ```java
 public class PromptInjectionDetector {
     private final MlPredictClient mlPredictClient;  // 复用现有 mlPredict 基础设施
-    private final String modelName = "virbiusguard-v11:q4";
+    private final String modelName = "virbiusguard";
     private final long timeoutMs = 200;
 
     /**
@@ -811,7 +811,7 @@ public record DetectionResult(
 
 #### 13.1.5 成本控制
 
-- 与 STI Taint 共享 `VirbiusGuard`（virbiusguard-v11:q4）小模型（本地 Ollama 部署，单次 <200ms）
+- 与 STI Taint 共享 `VirbiusGuard`（virbiusguard）小模型（本地 Ollama 部署，单次 <200ms）
 - 仅对用户输入触发，不对工具返回值触发（后者由 STI Taint 覆盖）
 - 规则缓存：NL 规则编译为 prompt template，缓存复用
 
@@ -844,7 +844,7 @@ public record DetectionResult(
 ```java
 public class StiTaintDetector {
     private final MlPredictClient mlPredictClient;
-    private final String modelName = "virbiusguard-v11:q4";
+    private final String modelName = "virbiusguard";
     private final long timeoutMs = 200;
 
     // 正则预筛：快速匹配已知注入模式
@@ -2577,7 +2577,7 @@ injection_threshold = 0.7         # 注入检测置信度阈值
 #### 13.6.5 成本控制
 
 - PII 脱敏：纯规则（正则 + 实体识别），无 LLM 调用
-- 注入检测：复用 `VirbiusGuard`（virbiusguard-v11:q4）小模型（<200ms），仅在启用时触发
+- 注入检测：复用 `VirbiusGuard`（virbiusguard）小模型（<200ms），仅在启用时触发
 - 读取检测可配置为仅对高风险 session 触发（`session_risk > 50`）
 
 ---

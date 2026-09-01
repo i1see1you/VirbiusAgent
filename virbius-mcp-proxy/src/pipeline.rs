@@ -106,7 +106,7 @@ pub(crate) struct EvaluateResponse {
     pub(crate) effective_action: String,
     #[serde(default)]
     pub(crate) rule_id: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "reason_code")]
     pub(crate) reason: Option<String>,
     #[serde(default)]
     #[allow(dead_code)]
@@ -352,7 +352,10 @@ impl SecurityPipeline {
                     .await;
                     return PipelineResult::Deny {
                         code: VirbiusErrorCode::EngineBlocked,
-                        reason: resp.reason.unwrap_or_else(|| "engine_blocked".to_string()),
+                        reason: resp
+                            .reason
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| "engine_blocked".to_string()),
                         rule_id: resp.rule_id,
                         risk_score: Some(resp.session_risk_score),
                     };
@@ -373,6 +376,7 @@ impl SecurityPipeline {
                         rule_id: resp.rule_id.clone(),
                         reason: resp
                             .reason
+                            .filter(|s| !s.is_empty())
                             .unwrap_or_else(|| "challenge_required".to_string()),
                         risk_score: resp.session_risk_score,
                     };
@@ -708,6 +712,32 @@ mod tests {
     use crate::audit::{AuditBackend, AuditSink};
     use crate::config::FailoverConfig;
     use std::sync::Arc;
+
+    #[test]
+    fn evaluate_response_deserializes_reason_code() {
+        let json = r#"{
+            "effective_action": "block",
+            "rule_id": "PROMPT_INJECTION",
+            "reason_code": "llm:Jailbreak",
+            "session_risk_score": 42
+        }"#;
+        let resp: EvaluateResponse = serde_json::from_str(json).expect("parse");
+        assert_eq!(resp.effective_action, "block");
+        assert_eq!(resp.rule_id.as_deref(), Some("PROMPT_INJECTION"));
+        assert_eq!(resp.reason.as_deref(), Some("llm:Jailbreak"));
+        assert_eq!(resp.session_risk_score, 42);
+    }
+
+    #[test]
+    fn evaluate_response_missing_reason_stays_none() {
+        let json = r#"{
+            "effective_action": "allow",
+            "rule_id": null,
+            "session_risk_score": 0
+        }"#;
+        let resp: EvaluateResponse = serde_json::from_str(json).expect("parse");
+        assert_eq!(resp.reason, None);
+    }
 
     fn make_session() -> Session {
         let meta = serde_json::json!({

@@ -29,7 +29,7 @@ ingress:
 engine:
   promptLlm:
     baseUrl: ""   # e.g. http://ollama.example.com:11434
-    model: virbiusguard-v11:q4
+    model: virbiusguard
 
 secrets:
   existingSecret: ""

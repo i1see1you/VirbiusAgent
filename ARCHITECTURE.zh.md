@@ -818,14 +818,14 @@ LLM 生成 tool_call -> 工具拦截（Groovy L3 + schema + allowlist）
 |------|---------------------|------------------------|
 | 判定对象 | prompt + response 文本 | 仅用户输入 prompt |
 | 判定目标 | 内容安全（暴力/色情/违规） | 越狱/注入（DAN/ignore previous/角色劫持） |
-| 模型 | 1B 内容分类模型 | VirbiusGuard (virbiusguard-v11:q4，复用 STI Taint 同模型) |
+| 模型 | 1B 内容分类模型 | VirbiusGuard (virbiusguard，复用 STI Taint 同模型) |
 | 命中动作 | block + 审计 | block 或提升 session_risk_score + 审计 |
 | 规则配置 | NL 描述（运营台 prompt runtime） | 同（复用现有规则 UI） |
 | 与 Prompt Gateway 关系 | 无 | 互补：Gateway 预防，runtime 检测 |
 
 **规则配置**：复用现有运营台 cloud 层 `prompt` runtime 的规则 CRUD（NL 描述 → 触发条件）。运营人员编写如"检测 DAN 越狱尝试"、"检测 ignore previous instructions 注入"等规则，engine 通过 mlPredict 调用小模型判定。
 
-**成本控制**：与 STI Taint 共享 VirbiusGuard (virbiusguard-v11:q4) 小模型（本地 Ollama 部署，单次 <200ms）。仅对用户输入触发，不对工具返回值触发（后者由 STI Taint 覆盖）。
+**成本控制**：与 STI Taint 共享 VirbiusGuard (virbiusguard) 小模型（本地 Ollama 部署，单次 <200ms）。仅对用户输入触发，不对工具返回值触发（后者由 STI Taint 覆盖）。
 
 **命中策略**：
 
@@ -1986,7 +1986,7 @@ if (appId != null && appId == "restricted-app") {
 | **Taint** | 工具返回值长度 > 2KB 或含注入标记 | 是(LLM) | 检查工具返回值中是否含外部注入指令 |
 | **Integrity** | 参数类型与 schema 不符或含 Base64/Hex | 否(规则) | 校验参数是否被篡改 |
 
-> **成本控制**：STI 的 LLM 调用通过 mlPredict 走专用小模型(VirbiusGuard, virbiusguard-v11:q4)，不走大模型。小模型本地部署(Ollama)，单次调用 <200ms。
+> **成本控制**：STI 的 LLM 调用通过 mlPredict 走专用小模型(VirbiusGuard, virbiusguard)，不走大模型。小模型本地部署(Ollama)，单次调用 <200ms。
 
 ### 5.5 控制面统一下发
 

@@ -34,6 +34,28 @@ class PromptAuditJsonParserTest {
         assertFalse(r.hitRule());
     }
 
+    // --- VirbiusGuard V13 format (category in triggered_id, no reason) ---
+
+    @Test
+    void parsesV13Hit() {
+        PromptAuditJsonParser parser = new PromptAuditJsonParser(new ObjectMapper());
+        var r = parser.parse("""
+                {"hit_rule": true, "triggered_id": "Jailbreak"}
+                """);
+        assertTrue(r.hitRule());
+        assertEquals("Jailbreak", r.triggeredId());
+        assertEquals("Jailbreak", r.reason());
+    }
+
+    @Test
+    void parsesV13Miss() {
+        PromptAuditJsonParser parser = new PromptAuditJsonParser(new ObjectMapper());
+        var r = parser.parse("""
+                {"hit_rule": false, "triggered_id": "none"}
+                """);
+        assertFalse(r.hitRule());
+    }
+
     @Test
     void parsesTruncatedJsonMissingBrace() {
         PromptAuditJsonParser parser = new PromptAuditJsonParser(new ObjectMapper());

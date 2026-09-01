@@ -134,7 +134,7 @@ control / engine / proxy / demo:
   replicaCount: 1
 
 engine.promptLlm.baseUrl: ""   # external Ollama/gateway; empty still starts engine
-engine.promptLlm.model: virbiusguard-v11:q4
+engine.promptLlm.model: virbiusguard
 
 proxy.upstreamUrl: http://virbius-demo:9091
 

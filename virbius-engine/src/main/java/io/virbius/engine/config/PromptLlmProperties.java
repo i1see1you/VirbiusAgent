@@ -21,7 +21,7 @@ public record PromptLlmProperties(
             baseUrl = "http://127.0.0.1:11434";
         }
         if (model == null || model.isBlank()) {
-            model = "virbiusguard-v11:q4";
+            model = "virbiusguard";
         }
         if (apiPath == null || apiPath.isBlank()) {
             apiPath = "/v1/chat/completions";

@@ -821,14 +821,14 @@ LLM generates tool_call -> Tool interception (Groovy L3 + schema + allowlist)
 |------|---------------------|------------------------|
 | Judgment target | prompt + response text | User input prompt only |
 | Judgment goal | Content safety (violence/pornography/violations) | Jailbreak/injection (DAN/ignore previous/role hijacking) |
-| Model | 1B content classification model | VirbiusGuard (virbiusguard-v11:q4, reuses same model as STI Taint) |
+| Model | 1B content classification model | VirbiusGuard (virbiusguard, reuses same model as STI Taint) |
 | Hit action | block + audit | block or raise session_risk_score + audit |
 | Rule configuration | NL description (ops console prompt runtime) | Same (reuses existing rule UI) |
 | Relationship with Prompt Gateway | None | Complementary: Gateway prevents, runtime detects |
 
 **Rule configuration**: Reuses existing ops console Cloud layer `prompt` runtime rule CRUD (NL description → trigger conditions). Operators write rules such as "detect DAN jailbreak attempts", "detect ignore previous instructions injection", etc.; the engine uses mlPredict to call the small model for judgment.
 
-**Cost control**: Shares VirbiusGuard (virbiusguard-v11:q4) small model with STI Taint (local Ollama deployment, single call <200ms). Only triggered on user input, not on tool return values (the latter is covered by STI Taint).
+**Cost control**: Shares VirbiusGuard (virbiusguard) small model with STI Taint (local Ollama deployment, single call <200ms). Only triggered on user input, not on tool return values (the latter is covered by STI Taint).
 
 **Hit strategy**:
 
@@ -1990,7 +1990,7 @@ Implement STI (Suitability, Taint, Integrity) semantic audit in Groovy L3, calli
 | **Taint** | Tool return value length > 2KB or contains injection markers | Yes (LLM) | Check if external injection instructions are present in tool return values |
 | **Integrity** | Parameter type does not match schema or contains Base64/Hex | No (rules) | Validate if parameters have been tampered with |
 
-> **Cost control**: STI LLM calls go through mlPredict using a dedicated small model (VirbiusGuard, virbiusguard-v11:q4), not the large model. The small model is locally deployed (Ollama), single call <200ms.
+> **Cost control**: STI LLM calls go through mlPredict using a dedicated small model (VirbiusGuard, virbiusguard), not the large model. The small model is locally deployed (Ollama), single call <200ms.
 
 ### 5.5 Unified Control Plane Delivery
 

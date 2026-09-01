@@ -249,7 +249,7 @@ Rollout states across layers may be out of sync (e.g., edge layer canary=10%, ga
 | Cloud | Groovy | L3 rule scripts | Stable but declining (Apache) | Python sandbox |
 | Cloud | Redis | Session + audit stream | Very stable | KeyDB |
 | Cloud | Spring Boot | Engine/Control framework | Very stable | Quarkus |
-| Cloud | VirbiusGuard (virbiusguard-v11:q4) | Prompt injection & STI Taint guard model (P1) | Relatively new | Any guard model |
+| Cloud | VirbiusGuard (virbiusguard) | Prompt injection & STI Taint guard model (P1) | Relatively new | Any guard model |
 | Protocol | MCP | Tool call protocol | Relatively new (Anthropic, 2024) | Custom JSON-RPC |
 
 ### 9.2 Risk Assessment
@@ -764,7 +764,7 @@ LLM generates tool_call → tool interception (Groovy L3 + schema + allowlist)
 ```java
 public class PromptInjectionDetector {
     private final MlPredictClient mlPredictClient;  // Reuse existing mlPredict infrastructure
-    private final String modelName = "virbiusguard-v11:q4";
+    private final String modelName = "virbiusguard";
     private final long timeoutMs = 200;
 
     /**
@@ -811,7 +811,7 @@ public record DetectionResult(
 
 #### 13.1.5 Cost Control
 
-- Shares `VirbiusGuard` (virbiusguard-v11:q4) small model with STI Taint (local Ollama deployment, single call <200ms)
+- Shares `VirbiusGuard` (virbiusguard) small model with STI Taint (local Ollama deployment, single call <200ms)
 - Only triggered on user input, not on tool return values (the latter is covered by STI Taint)
 - Rule caching: NL rules compiled into prompt templates, cached for reuse
 
@@ -844,7 +844,7 @@ Detect whether tool return values contain malicious prompt injection instruction
 ```java
 public class StiTaintDetector {
     private final MlPredictClient mlPredictClient;
-    private final String modelName = "virbiusguard-v11:q4";
+    private final String modelName = "virbiusguard";
     private final long timeoutMs = 200;
 
     // Regex pre-screening: quickly match known injection patterns
@@ -2580,7 +2580,7 @@ injection_threshold = 0.7         # injection detection confidence threshold
 #### 13.6.5 Cost Control
 
 - PII desensitization: pure rules (regex + entity recognition), no LLM calls
-- Injection detection: reuses `VirbiusGuard` (virbiusguard-v11:q4) small model (<200ms), only triggered when enabled
+- Injection detection: reuses `VirbiusGuard` (virbiusguard) small model (<200ms), only triggered when enabled
 - Read detection can be configured to trigger only for high-risk sessions (`session_risk > 50`)
 
 ---

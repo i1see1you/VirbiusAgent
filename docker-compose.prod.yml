@@ -12,7 +12,7 @@
 #    docker compose -f docker-compose.prod.yml down
 #
 #  Prerequisites:
-#    - Ollama running on host machine with model virbiusguard-v11:q4
+#    - Ollama running on host machine with model virbiusguard
 #      (download GGUF from HuggingFace: https://huggingface.co/i1see1you/VirbiusGuard
 #       or ModelScope: https://modelscope.cn/models/i1see1you/VirbiusGuard)
 #    - Create a .env file (or export env vars) with required secrets:
@@ -103,7 +103,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       # ── LLM (host Mac Ollama) ──
       VIRBIUS_PROMPT_LLM_BASE_URL: http://host.docker.internal:11434
-      VIRBIUS_PROMPT_LLM_MODEL: virbiusguard-v11:q4
+      VIRBIUS_PROMPT_LLM_MODEL: virbiusguard
       VIRBIUS_PROMPT_LLM_TIMEOUT_MS: "30000"
       # ── Redis (still needed for session risk, cache) ──
       VIRBIUS_REDIS_URL: redis://redis:6379

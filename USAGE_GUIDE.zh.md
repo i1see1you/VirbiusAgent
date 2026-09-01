@@ -1048,7 +1048,7 @@ VirbiusAgent 使用 Spring Boot Profile 体系区分三套环境：`dev`（本�
 | 配置项 | dev | staging | prod |
 |--------|-----|---------|------|
 | **LLM 地址** | `http://127.0.0.1:11434`（本地 Ollama） | `${VIRBIUS_PROMPT_LLM_BASE_URL}`（环境变量） | `${VIRBIUS_PROMPT_LLM_BASE_URL}`（环境变量） |
-| **LLM 模型** | `virbiusguard-v11:q4` | `${VIRBIUS_PROMPT_LLM_MODEL}`（环境变量） | `${VIRBIUS_PROMPT_LLM_MODEL}`（环境变量） |
+| **LLM 模型** | `virbiusguard` | `${VIRBIUS_PROMPT_LLM_MODEL}`（环境变量） | `${VIRBIUS_PROMPT_LLM_MODEL}`（环境变量） |
 | **LLM 超时** | 30000ms | 30000ms | `${VIRBIUS_PROMPT_LLM_TIMEOUT_MS}`（默认 30000ms） |
 | **prompt-llm fail-open** | `true`（LLM 不可用时放行） | `true` | `false`（LLM 不可用时拦截） |
 | **guard-detect fail-open** | `true` | `true` | `true`（继承默认值） |
@@ -1099,12 +1099,12 @@ export VIRBIUS_JDBC_PASSWORD=your_password
 export KAFKA_BOOTSTRAP_SERVERS=kafka-1:9092,kafka-2:9092
 
 # ── LLM ──
-# 默认 prompt-LLM 模型为 `virbiusguard-v11:q4`（VirbiusGuard V11，Q4_K_M）；
+# 默认 prompt-LLM 模型为 `virbiusguard`（VirbiusGuard V13）；
 # 下载地址：
 #   HuggingFace: https://huggingface.co/i1see1you/VirbiusGuard
 #   ModelScope:  https://modelscope.cn/models/i1see1you/VirbiusGuard
 export VIRBIUS_PROMPT_LLM_BASE_URL=http://llm-host:11434
-export VIRBIUS_PROMPT_LLM_MODEL=virbiusguard-v11:q4
+export VIRBIUS_PROMPT_LLM_MODEL=virbiusguard
 export VIRBIUS_PROMPT_LLM_TIMEOUT_MS=30000
 
 # ── 安全 ──

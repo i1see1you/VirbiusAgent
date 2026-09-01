@@ -151,7 +151,7 @@ class PromptRunnerBindTest {
         RuleEntry agentRule = promptRule("Rule_201", Map.of("bind_scope", "global"));
         // Update mapping to include Agent Tool Misuse -> Rule_201
         PromptLlmProperties v11Props =
-                new PromptLlmProperties("http://127.0.0.1:11434", "virbiusguard-v11:q4",
+                new PromptLlmProperties("http://127.0.0.1:11434", "virbiusguard",
                         "/v1/chat/completions", 3000, true,
                         "<|im_start|>", "", null,
                         Map.of("Jailbreak", "Rule_201", "Violent", "Rule_202",

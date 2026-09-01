@@ -8,7 +8,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * <p>Both detectors reuse the same {@link PromptLlmClient} (and thus the same
  * model configured under {@code virbius.prompt-llm}) but with their own system
  * prompt. By default the system prompts are identical to the prompt-llm
- * auditor prompt so that fine-tuned models (e.g. virbiusguard-v11) operate
+ * auditor prompt so that fine-tuned models (e.g. virbiusguard) operate
  * within their training distribution.
  */
 @ConfigurationProperties(prefix = "virbius.guard-detect")

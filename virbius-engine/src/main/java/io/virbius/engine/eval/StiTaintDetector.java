@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  * <p>Uses a cost-optimized two-tier strategy:
  * <ol>
  *   <li><b>Skip</b>: short results from low-risk sessions skip detection entirely</li>
- *   <li><b>LLM detection</b>: VirbiusGuard (virbiusguard-v11:q4) model for semantic injection detection</li>
+ *   <li><b>LLM detection</b>: VirbiusGuard (virbiusguard) model for semantic injection detection</li>
  * </ol>
  *
  * <p>When injection is detected, the result is always <b>block</b> — no sanitize path.

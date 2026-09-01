@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
  *
  * <p>Uses a single-tier strategy:
  * <ol>
- *   <li><b>LLM detection</b>: VirbiusGuard (virbiusguard-v11:q4) model for semantic injection detection</li>
+ *   <li><b>LLM detection</b>: VirbiusGuard (virbiusguard) model for semantic injection detection</li>
  * </ol>
  *
  * <p>The VirbiusGuard model provides superior semantic detection compared to regex
