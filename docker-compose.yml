@@ -1,7 +1,9 @@
 # =============================================================================
 #  VirbiusAgent — Docker Compose
 #
-#  Starts the full stack: Redis → (virbius-engine ∥ virbius-control) → proxy
+#  Starts the full stack: Redis + Kafka + Ollama (VirbiusGuard GGUF) → engine + control (+ proxy)
+#  First start downloads ~484MB from HuggingFace. China:
+#    VIRBIUS_GUARD_GGUF_URL=https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/virbiusguard-v13-q4_k_m.gguf
 #
 #  Usage:
 #    docker compose build         # Build all images
@@ -11,8 +13,7 @@
 #    docker compose down          # Stop all
 #
 #  To run only core services (no proxy):
-#    docker compose up -d redis virbius-engine virbius-control
-#    docker compose up -d redis virbius-control virbius-engine   # order irrelevant
+#    docker compose up -d redis kafka ollama ollama-download ollama-init virbius-engine virbius-control
 # =============================================================================
 
 services:
@@ -31,6 +32,91 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ── Kafka (audit + trace; KRaft, no Zookeeper) ──────────────────────────
+  kafka:
+    image: apache/kafka:3.7.0
+    hostname: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller,broker
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: "3"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      CLUSTER_ID: MkUjOEJhQjY1QUY1NDQ2Nk1BODI
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+    restart: unless-stopped
+
+  # ── Ollama + VirbiusGuard GGUF (prompt LLM) ─────────────────────────────
+  ollama:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.10}
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 15s
+    restart: unless-stopped
+
+  ollama-download:
+    image: ${CURL_IMAGE:-curlimages/curl:8.12.1}
+    user: "0"
+    environment:
+      VIRBIUS_GUARD_GGUF_URL: ${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/virbiusguard-v13-q4_k_m.gguf}
+      VIRBIUS_GUARD_GGUF_PATH: /models/model.gguf
+    volumes:
+      - ollama-import:/models
+      - ./deploy/ollama/download-gguf.sh:/download-gguf.sh:ro
+    entrypoint: ["sh", "-c", "sh /download-gguf.sh && exec sleep infinity"]
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /models/model.gguf"]
+      interval: 10s
+      timeout: 5s
+      retries: 90
+      start_period: 10s
+    restart: unless-stopped
+
+  ollama-init:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.10}
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      VIRBIUS_OLLAMA_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-virbiusguard}
+      VIRBIUS_GUARD_GGUF_PATH: /models/model.gguf
+    volumes:
+      - ollama-import:/models
+      - ./deploy/ollama/import-model.sh:/import-model.sh:ro
+    entrypoint: ["sh", "-c", "sh /import-model.sh && exec sleep infinity"]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama show $$VIRBIUS_OLLAMA_MODEL >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 15s
+      retries: 60
+      start_period: 20s
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-download:
+        condition: service_healthy
+    restart: unless-stopped
+
   # ── virbius-engine (security engine, port 8082) ─────────────────────────
   virbius-engine:
     build:
@@ -45,11 +131,18 @@ services:
       VIRBIUS_DATA_DIR: /data
       VIRBIUS_INSTANCE_ID: ${HOSTNAME:-engine-1}
       SPRING_PROFILES_ACTIVE: dev
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      VIRBIUS_PROMPT_LLM_BASE_URL: http://ollama:11434
+      VIRBIUS_PROMPT_LLM_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-virbiusguard}
     volumes:
       - engine-data:/data
       - engine-logs:/var/log/virbius
     depends_on:
       redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      ollama-init:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8082/admin/health"]
@@ -72,11 +165,14 @@ services:
       VIRBIUS_ENGINE_URL: http://virbius-engine:8082
       VIRBIUS_DATA_DIR: /data
       SPRING_PROFILES_ACTIVE: dev
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     volumes:
       - control-data:/data
       - control-logs:/var/log/virbius
     depends_on:
       redis:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/health"]
@@ -105,12 +201,19 @@ services:
       VIRBIUS_CONTROL_URL: http://virbius-control:8080
       VIRBIUS_ENGINE_URL: http://virbius-engine:8082
       VIRBIUS_REDIS_URL: redis://redis:6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      VIRBIUS_AUDIT_BACKEND: kafka
+      VIRBIUS_AUDIT_KAFKA_BROKERS: kafka:9092
+      VIRBIUS_TRACE_BACKEND: kafka
+      VIRBIUS_TRACE_KAFKA_BROKERS: kafka:9092
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - proxy-logs:/var/log/virbius
     depends_on:
       redis:
+        condition: service_healthy
+      kafka:
         condition: service_healthy
       virbius-engine:
         condition: service_healthy
@@ -130,3 +233,5 @@ volumes:
   control-data:
   control-logs:
   proxy-logs:
+  ollama-data:
+  ollama-import:

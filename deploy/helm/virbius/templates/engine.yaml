@@ -35,6 +35,10 @@ spec:
       initContainers:
         {{- include "virbius.waitFor" (dict "root" . "name" "kafka" "host" (printf "%s-kafka" (include "virbius.fullname" .)) "port" 9092) | nindent 8 }}
         {{- include "virbius.waitFor" (dict "root" . "name" "redis" "host" (printf "%s-redis" (include "virbius.fullname" .)) "port" 6379) | nindent 8 }}
+        {{- if .Values.ollama.enabled }}
+        {{- include "virbius.waitFor" (dict "root" . "name" "ollama" "host" (printf "%s-ollama" (include "virbius.fullname" .)) "port" 11434) | nindent 8 }}
+        {{- include "virbius.waitForOllamaModel" (dict "root" . "host" (printf "%s-ollama" (include "virbius.fullname" .)) "model" .Values.ollama.model) | nindent 8 }}
+        {{- end }}
       containers:
         - name: engine
           image: {{ include "virbius.image" (dict "root" . "component" "engine") }}
@@ -53,9 +57,13 @@ spec:
             - name: VIRBIUS_CONTROL_BASE_URL
               value: http://{{ include "virbius.fullname" . }}-control:8080
             - name: VIRBIUS_PROMPT_LLM_BASE_URL
+              {{- if and .Values.ollama.enabled (not .Values.engine.promptLlm.baseUrl) }}
+              value: http://{{ include "virbius.fullname" . }}-ollama:11434
+              {{- else }}
               value: {{ .Values.engine.promptLlm.baseUrl | quote }}
+              {{- end }}
             - name: VIRBIUS_PROMPT_LLM_MODEL
-              value: {{ .Values.engine.promptLlm.model | quote }}
+              value: {{ .Values.engine.promptLlm.model | default .Values.ollama.model | quote }}
             - name: VIRBIUS_LOG_DIR
               value: /var/log/virbius
             - name: HTTP_PROXY

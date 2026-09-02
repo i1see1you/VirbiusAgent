@@ -1051,7 +1051,7 @@ VirbiusAgent uses Spring Boot profiles to distinguish three environments: `dev` 
 
 | Setting | dev | staging | prod |
 |---------|-----|---------|------|
-| **LLM Base URL** | `http://127.0.0.1:11434` (local Ollama) | `${VIRBIUS_PROMPT_LLM_BASE_URL}` (env) | `${VIRBIUS_PROMPT_LLM_BASE_URL}` (env) |
+| **LLM Base URL** | `http://127.0.0.1:11434` (Compose / Helm Ollama) | `${VIRBIUS_PROMPT_LLM_BASE_URL}` (env) | `${VIRBIUS_PROMPT_LLM_BASE_URL}` (env) |
 | **LLM Model** | `virbiusguard` | `${VIRBIUS_PROMPT_LLM_MODEL}` (env) | `${VIRBIUS_PROMPT_LLM_MODEL}` (env) |
 | **LLM Timeout** | 30000ms | 30000ms | `${VIRBIUS_PROMPT_LLM_TIMEOUT_MS}` (default 30000ms) |
 | **prompt-llm fail-open** | `true` (allow on LLM unavailable) | `true` | `false` (block on LLM unavailable) |
@@ -1103,9 +1103,9 @@ export VIRBIUS_JDBC_PASSWORD=your_password
 export KAFKA_BOOTSTRAP_SERVERS=kafka-1:9092,kafka-2:9092
 
 # ── LLM ──
-# default prompt-LLM model is `virbiusguard` (VirbiusGuard V13);
-# download from HuggingFace: https://huggingface.co/i1see1you/VirbiusGuard
-# or ModelScope: https://modelscope.cn/models/i1see1you/VirbiusGuard
+# Docker Compose / Helm bundle Ollama + VirbiusGuard. In Compose use http://ollama:11434;
+# in Helm leave engine.promptLlm.baseUrl empty. Override only for an external Ollama.
+# China GGUF: set VIRBIUS_GUARD_GGUF_URL or ollama.ggufUrl to the ModelScope resolve URL.
 export VIRBIUS_PROMPT_LLM_BASE_URL=http://llm-host:11434
 export VIRBIUS_PROMPT_LLM_MODEL=virbiusguard
 export VIRBIUS_PROMPT_LLM_TIMEOUT_MS=30000

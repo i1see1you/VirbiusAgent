@@ -9,6 +9,8 @@ spring:
       data-locations: classpath:db/seed.sql
   flyway:
     enabled: false
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 
 virbius:
   security:
@@ -17,21 +19,22 @@ virbius:
 
 audit:
   publish:
-    backend: redis-stream
-    redis:
-      stream-key: virbius:audit:events
+    backend: kafka
+    kafka:
+      topic: virbius-audit-events
   ingest:
     enabled: true
-    backend: redis-stream
-    redis:
-      stream-key: virbius:audit:events
+    backend: kafka
+    kafka:
+      topic: virbius-audit-events
 
 trace:
   ingest:
     enabled: true
-    backend: redis-stream
-    redis:
-      stream-key: virbius:trace:stream
+    backend: kafka
+    kafka:
+      topic: virbius-trace-events
+      group-id: virbius-trace-ingest
 
 logging:
   level:

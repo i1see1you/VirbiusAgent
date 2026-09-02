@@ -433,7 +433,7 @@ Agent 是否在 K8s 集群内？
 
 ### 8.5 K8s Helm 部署
 
-用一份 Helm Chart 把靶场、端侧、云侧、管侧和 MySQL / Kafka / Redis 装进**已有集群**。不代装 Ingress Controller、Higress、Falco、Ollama。
+用一份 Helm Chart 把靶场、端侧、云侧、管侧和 MySQL / Kafka / Redis / Ollama（含 VirbiusGuard 模型导入）装进**已有集群**。不代装 Ingress Controller、Higress、Falco。
 
 Chart：`deploy/helm/virbius`。脚本：`deploy/scripts/k8s-build-push.sh`、`deploy/scripts/k8s-deploy.sh`。
 
@@ -489,7 +489,11 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 
 靶场 Agent 关卡仍在 Pod 内用 stdio 拉起 `virbius-mcp-proxy`。Ingress 上的端侧是给集群外 MCP 客户端的 TCP 入口，upstream 默认 `http://virbius-demo:9091`。
 
-Prompt LLM（Ollama）不进集群，在 `engine.promptLlm.baseUrl` 填外部地址；留空时 engine 仍启动，prod 下 prompt 路径 fail-closed。
+默认启用集群内 Ollama：Job 从 HuggingFace 下载 VirbiusGuard GGUF（约 484MB，PVC 缓存，升级不重复下）并 `ollama create virbiusguard`。`engine.promptLlm.baseUrl` 留空即指向 `http://{release}-ollama:11434`。国内把 `ollama.ggufUrl` 换成 ModelScope：
+
+`https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/virbiusguard-v13-q4_k_m.gguf`
+
+设 `ollama.enabled=false` 则仍用外部 LLM 地址。GPU 默认关；有 NVIDIA 设备时设 `ollama.gpu.enabled=true`。
 
 `helm uninstall virbius -n virbius` **不会**删除 PVC。
 

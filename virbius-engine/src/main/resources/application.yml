@@ -14,6 +14,8 @@ spring:
     name: virbius-engine
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 
 virbius:
   data-dir: ${VIRBIUS_DATA_DIR:./data}
@@ -101,6 +103,9 @@ audit:
     queue-max: 2000
     flush-batch-size: 64
     flush-interval-ms: 100
+    backend: kafka
+    kafka:
+      topic: virbius-audit-events
 
 management:
   endpoints:

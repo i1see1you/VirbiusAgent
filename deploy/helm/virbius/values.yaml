@@ -57,6 +57,28 @@ kafka:
     limits:
       memory: 1Gi
 
+ollama:
+  enabled: true
+  image: ollama/ollama:0.11.10
+  curlImage: curlimages/curl:8.12.1
+  model: virbiusguard
+  # HuggingFace V13 Q4_K_M (~484MB). For China, switch to ModelScope:
+  # https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/virbiusguard-v13-q4_k_m.gguf
+  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/virbiusguard-v13-q4_k_m.gguf
+  persistence:
+    size: 10Gi
+    importSize: 2Gi
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 4Gi
+  gpu:
+    enabled: false
+    count: 1
+    runtimeClassName: nvidia
+
 control:
   replicaCount: 1
   persistence:
@@ -78,6 +100,7 @@ engine:
     limits:
       memory: 1Gi
   promptLlm:
+    # Empty + ollama.enabled uses in-cluster http://{release}-ollama:11434
     baseUrl: ""
     model: virbiusguard
 

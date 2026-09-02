@@ -16,13 +16,12 @@ Ship one Helm chart and a build/push/install script that deploys four Virbius si
 | 云侧 | `virbius-engine` | 8082 |
 | 端侧 | `virbius-mcp-proxy` (TCP) | 9090 |
 | 靶场 | `virbius-demo` | 8000 |
-| Infra | MySQL 8, Kafka 3.7 KRaft, Redis 7 | 3306 / 9092 / 6379 |
+| Infra | MySQL 8, Kafka 3.7 KRaft, Redis 7, Ollama + VirbiusGuard GGUF | 3306 / 9092 / 6379 / 11434 |
 
 ## Non-goals
 
 - Higress, Falco / kernel DaemonSet
 - Changing the demo Agent lab from stdio proxy to cluster TCP proxy
-- Running Ollama inside the cluster
 - Multi-replica HA for MySQL or Kafka
 - Installing an Ingress Controller
 
@@ -133,8 +132,14 @@ mysql / redis / kafka:
 control / engine / proxy / demo:
   replicaCount: 1
 
-engine.promptLlm.baseUrl: ""   # external Ollama/gateway; empty still starts engine
+engine.promptLlm.baseUrl: ""   # empty + ollama.enabled → in-cluster Ollama
 engine.promptLlm.model: virbiusguard
+
+ollama:
+  enabled: true
+  image: ollama/ollama:0.11.10
+  model: virbiusguard
+  ggufUrl: HuggingFace V13 Q4_K_M (override for ModelScope)
 
 proxy.upstreamUrl: http://virbius-demo:9091
 

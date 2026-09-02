@@ -19,6 +19,11 @@ Before production use:
   - Set secrets.licenseMasterKey (do not leave the chart default)
   - Set global.imageRegistry and docker login / imagePullSecrets
   - Cluster must already have an Ingress Controller (class {{ .Values.ingress.className }})
+{{- if .Values.ollama.enabled }}
+  - Ollama is in-cluster; first install downloads VirbiusGuard GGUF (~484MB) then engine waits until model {{ .Values.ollama.model }} is listed
+{{- else }}
+  - Point engine.promptLlm.baseUrl at an external Ollama/gateway
+{{- end }}
 
 Demo Agent labs still spawn an in-pod stdio mcp-proxy. Ingress proxy.* is the cluster TCP MCP entry.
 The cluster proxy upstream defaults to http://{{ include "virbius.fullname" . }}-demo:9091.

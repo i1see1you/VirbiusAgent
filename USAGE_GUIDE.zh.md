@@ -1047,7 +1047,7 @@ VirbiusAgent 使用 Spring Boot Profile 体系区分三套环境：`dev`（本�
 
 | 配置项 | dev | staging | prod |
 |--------|-----|---------|------|
-| **LLM 地址** | `http://127.0.0.1:11434`（本地 Ollama） | `${VIRBIUS_PROMPT_LLM_BASE_URL}`（环境变量） | `${VIRBIUS_PROMPT_LLM_BASE_URL}`（环境变量） |
+| **LLM 地址** | `http://127.0.0.1:11434`（Compose / Helm 内置 Ollama） | `${VIRBIUS_PROMPT_LLM_BASE_URL}`（环境变量） | `${VIRBIUS_PROMPT_LLM_BASE_URL}`（环境变量） |
 | **LLM 模型** | `virbiusguard` | `${VIRBIUS_PROMPT_LLM_MODEL}`（环境变量） | `${VIRBIUS_PROMPT_LLM_MODEL}`（环境变量） |
 | **LLM 超时** | 30000ms | 30000ms | `${VIRBIUS_PROMPT_LLM_TIMEOUT_MS}`（默认 30000ms） |
 | **prompt-llm fail-open** | `true`（LLM 不可用时放行） | `true` | `false`（LLM 不可用时拦截） |
@@ -1099,10 +1099,9 @@ export VIRBIUS_JDBC_PASSWORD=your_password
 export KAFKA_BOOTSTRAP_SERVERS=kafka-1:9092,kafka-2:9092
 
 # ── LLM ──
-# 默认 prompt-LLM 模型为 `virbiusguard`（VirbiusGuard V13）；
-# 下载地址：
-#   HuggingFace: https://huggingface.co/i1see1you/VirbiusGuard
-#   ModelScope:  https://modelscope.cn/models/i1see1you/VirbiusGuard
+# Docker Compose / Helm 已内置 Ollama + VirbiusGuard。Compose 内用 http://ollama:11434；
+# Helm 将 engine.promptLlm.baseUrl 留空即可。仅在自建 Ollama 时改此地址。
+# 国内下载 GGUF：VIRBIUS_GUARD_GGUF_URL 或 ollama.ggufUrl 指向 ModelScope。
 export VIRBIUS_PROMPT_LLM_BASE_URL=http://llm-host:11434
 export VIRBIUS_PROMPT_LLM_MODEL=virbiusguard
 export VIRBIUS_PROMPT_LLM_TIMEOUT_MS=30000

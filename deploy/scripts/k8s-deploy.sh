@@ -13,7 +13,7 @@ Usage: k8s-deploy.sh --registry REGISTRY [options]
   --values         Extra Helm values file (repeatable)
   --skip-build     Do not build or push images
   --apt-mirror     Forwarded to k8s-build-push.sh
-  --timeout        kubectl wait timeout (default: 180s)
+  --timeout        kubectl wait timeout (default: 15m; first install downloads VirbiusGuard GGUF)
 
 Requires docker (unless --skip-build), helm, and kubectl.
 Run `docker login` against the registry before building.
@@ -27,7 +27,7 @@ NAMESPACE="virbius"
 RELEASE="virbius"
 SKIP_BUILD=0
 APT_MIRROR=""
-TIMEOUT="180s"
+TIMEOUT="15m"
 VALUES_FILES=()
 
 while [[ $# -gt 0 ]]; do

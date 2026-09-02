@@ -48,24 +48,19 @@ async fn main() {
         cfg.proxy.session_ttl_secs,
     )));
 
-    // Create audit sink (Redis or Kafka)
+    // Create audit sink (Kafka only; Redis Stream has been removed)
     let audit_backend = if cfg.audit_use_kafka() {
         info!("audit backend: kafka (topic={})", cfg.audit.kafka_topic);
         AuditBackend::Kafka {
             brokers: cfg.audit.kafka_brokers.clone(),
             topic: cfg.audit.kafka_topic.clone(),
         }
-    } else if !cfg.audit.redis_url.is_empty() {
-        info!("audit backend: redis ({})", cfg.audit.redis_url);
-        AuditBackend::Redis {
-            url: cfg.audit.redis_url.clone(),
-        }
     } else {
         AuditBackend::Disabled
     };
     let audit = Arc::new(AuditSink::new(audit_backend, cfg.audit.sample_rate));
 
-    // Create trace collector (Redis or Kafka)
+    // Create trace collector (Kafka only)
     let trace_backend = if cfg.trace_use_kafka() {
         info!("trace backend: kafka (topic={})", cfg.trace.kafka_topic);
         TraceBackend::Kafka {
@@ -73,13 +68,7 @@ async fn main() {
             topic: cfg.trace.kafka_topic.clone(),
         }
     } else {
-        let trace_redis = cfg.trace_redis_url().to_string();
-        if !trace_redis.is_empty() {
-            info!("trace backend: redis ({})", trace_redis);
-            TraceBackend::Redis { url: trace_redis }
-        } else {
-            TraceBackend::Disabled
-        }
+        TraceBackend::Disabled
     };
     let trace_collector = Arc::new(TraceCollector::new(trace_backend));
     if trace_collector.enabled() {

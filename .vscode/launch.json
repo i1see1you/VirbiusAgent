@@ -1,0 +1,59 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "Virbius Engine (MySQL/Redis/Kafka/Ollama)",
+      "request": "launch",
+      "mainClass": "io.virbius.engine.VirbiusEngineApplication",
+      "projectName": "virbius-engine",
+      "cwd": "${workspaceFolder}/virbius-engine",
+      "console": "integratedTerminal",
+      "preLaunchTask": "infra: mysql redis kafka ollama",
+      "env": {
+        "SPRING_PROFILES_ACTIVE": "prod",
+        "VIRBIUS_REDIS_URL": "redis://127.0.0.1:6379",
+        "KAFKA_BOOTSTRAP_SERVERS": "127.0.0.1:9092",
+        "VIRBIUS_PROMPT_LLM_BASE_URL": "http://127.0.0.1:11434",
+        "VIRBIUS_PROMPT_LLM_MODEL": "virbiusguard",
+        "VIRBIUS_PROMPT_LLM_TIMEOUT_MS": "30000",
+        "VIRBIUS_DATA_DIR": "${workspaceFolder}/virbius-engine/data",
+        "VIRBIUS_LOG_DIR": "${workspaceFolder}/virbius-engine/data/logs"
+      }
+    },
+    {
+      "type": "java",
+      "name": "Virbius Control (MySQL/Redis/Kafka/Ollama)",
+      "request": "launch",
+      "mainClass": "io.virbius.control.VirbiusControlApplication",
+      "projectName": "virbius-control",
+      "cwd": "${workspaceFolder}/virbius-control",
+      "console": "integratedTerminal",
+      "preLaunchTask": "infra: mysql redis kafka ollama",
+      "env": {
+        "SPRING_PROFILES_ACTIVE": "prod",
+        "VIRBIUS_JDBC_URL": "jdbc:mariadb://127.0.0.1:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC",
+        "VIRBIUS_JDBC_USER": "virbius",
+        "VIRBIUS_JDBC_PASSWORD": "virbius",
+        "VIRBIUS_REDIS_URL": "redis://127.0.0.1:6379",
+        "KAFKA_BOOTSTRAP_SERVERS": "127.0.0.1:9092",
+        "VIRBIUS_ENGINE_URL": "http://127.0.0.1:8082",
+        "VIRBIUS_LICENSE_MASTER_KEY": "local-dev-license-master-key",
+        "VIRBIUS_SECURITY_API_KEY_ENABLED": "false",
+        "VIRBIUS_DATA_DIR": "${workspaceFolder}/virbius-control/data",
+        "VIRBIUS_LOG_DIR": "${workspaceFolder}/virbius-control/data/logs"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Virbius: Control + Engine (MySQL/Redis/Kafka/Ollama)",
+      "configurations": [
+        "Virbius Engine (MySQL/Redis/Kafka/Ollama)",
+        "Virbius Control (MySQL/Redis/Kafka/Ollama)"
+      ],
+      "stopAll": true,
+      "preLaunchTask": "infra: mysql redis kafka ollama"
+    }
+  ]
+}

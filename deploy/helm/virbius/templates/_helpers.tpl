@@ -84,7 +84,7 @@ imagePullSecrets:
 {{- end }}
 
 {{/*
-busybox wait-for TCP. Usage: include "virbius.waitFor" (dict "name" "mysql" "host" "virbius-mysql" "port" 3306)
+busybox wait-for TCP. Usage: include "virbius.waitFor" (dict "root" . "name" "mysql" "host" "virbius-mysql" "port" 3306)
 */}}
 {{- define "virbius.waitFor" -}}
 - name: wait-{{ .name }}
@@ -93,4 +93,17 @@ busybox wait-for TCP. Usage: include "virbius.waitFor" (dict "name" "mysql" "hos
     - sh
     - -c
     - until nc -z {{ .host }} {{ .port }}; do echo waiting for {{ .name }}; sleep 2; done
+{{- end }}
+
+{{/*
+Wait until Ollama has registered the guard model.
+Usage: include "virbius.waitForOllamaModel" (dict "root" . "host" "virbius-ollama" "model" "virbiusguard")
+*/}}
+{{- define "virbius.waitForOllamaModel" -}}
+- name: wait-ollama-model
+  image: {{ .root.Values.global.waitImage | default "busybox:1.36" | quote }}
+  command:
+    - sh
+    - -c
+    - until wget -q -O - http://{{ .host }}:11434/api/tags | grep -q {{ .model }}; do echo waiting for ollama model {{ .model }}; sleep 5; done
 {{- end }}

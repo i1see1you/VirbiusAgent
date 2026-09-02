@@ -28,8 +28,15 @@ ingress:
 
 engine:
   promptLlm:
-    baseUrl: ""   # e.g. http://ollama.example.com:11434
+    baseUrl: ""   # empty + ollama.enabled → in-cluster Ollama
     model: virbiusguard
+
+ollama:
+  enabled: true
+  # China: set ggufUrl to the ModelScope resolve URL for virbiusguard-v13-q4_k_m.gguf
+  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/virbiusguard-v13-q4_k_m.gguf
+  gpu:
+    enabled: false
 
 secrets:
   existingSecret: ""
