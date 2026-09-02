@@ -2,6 +2,9 @@
 # Advertised Kafka listener is localhost so Spring Boot on the host can connect.
 # First start downloads VirbiusGuard GGUF (~484MB) and imports it into Ollama.
 #
+# Host ports avoid common local daemons (Homebrew Redis :6379 with AUTH, host Ollama :11434):
+#   MySQL 3306  Redis 16379  Kafka 9092  Ollama 11435
+#
 #   docker compose -p virbius-infra -f docker-compose.infra.yml up -d --wait
 #   docker compose -p virbius-infra -f docker-compose.infra.yml down
 services:
@@ -27,7 +30,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "16379:6379"
     volumes:
       - infra-redis-data:/data
     healthcheck:
@@ -68,7 +71,7 @@ services:
   ollama:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.10}
     ports:
-      - "11434:11434"
+      - "11435:11434"
     environment:
       OLLAMA_HOST: 0.0.0.0:11434
     volumes:
