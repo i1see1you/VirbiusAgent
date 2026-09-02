@@ -23,6 +23,8 @@ ingress:
 mysql:
   enabled: true
   image: mysql:8.0
+  # Required when enabled=false (external MySQL).
+  jdbcUrl: ""
   persistence:
     size: 10Gi
   resources:
@@ -35,6 +37,8 @@ mysql:
 redis:
   enabled: true
   image: redis:7-alpine
+  # Required when enabled=false (external Redis), e.g. redis://redis.example:6379
+  url: ""
   persistence:
     size: 5Gi
   resources:
@@ -47,6 +51,8 @@ redis:
 kafka:
   enabled: true
   image: apache/kafka:3.7.0
+  # Required when enabled=false (external Kafka), e.g. kafka.example:9092
+  bootstrapServers: ""
   clusterId: MkUjOEJhQjY1QUY1NDQ2Nk1BODI
   persistence:
     size: 10Gi
@@ -93,6 +99,8 @@ control:
 
 engine:
   replicaCount: 1
+  grpc:
+    port: 50051
   resources:
     requests:
       cpu: 200m

@@ -84,6 +84,52 @@ imagePullSecrets:
 {{- end }}
 
 {{/*
+In-cluster Kafka bootstrap, or kafka.bootstrapServers when kafka.enabled=false.
+*/}}
+{{- define "virbius.kafkaBootstrap" -}}
+{{- if .Values.kafka.enabled -}}
+{{ include "virbius.fullname" . }}-kafka:9092
+{{- else -}}
+{{- required "kafka.enabled is false; set kafka.bootstrapServers" .Values.kafka.bootstrapServers -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+In-cluster Redis URL, or redis.url when redis.enabled=false.
+*/}}
+{{- define "virbius.redisUrl" -}}
+{{- if .Values.redis.enabled -}}
+redis://{{ include "virbius.fullname" . }}-redis:6379
+{{- else -}}
+{{- required "redis.enabled is false; set redis.url" .Values.redis.url -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+In-cluster MySQL JDBC URL, or mysql.jdbcUrl when mysql.enabled=false.
+*/}}
+{{- define "virbius.jdbcUrl" -}}
+{{- if .Values.mysql.enabled -}}
+jdbc:mariadb://{{ include "virbius.fullname" . }}-mysql:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+{{- else -}}
+{{- required "mysql.enabled is false; set mysql.jdbcUrl" .Values.mysql.jdbcUrl -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Prompt LLM base URL: in-cluster Ollama, or engine.promptLlm.baseUrl.
+*/}}
+{{- define "virbius.promptLlmBaseUrl" -}}
+{{- if and .Values.ollama.enabled (not .Values.engine.promptLlm.baseUrl) -}}
+http://{{ include "virbius.fullname" . }}-ollama:11434
+{{- else if .Values.engine.promptLlm.baseUrl -}}
+{{ .Values.engine.promptLlm.baseUrl }}
+{{- else -}}
+{{- fail "ollama.enabled is false; set engine.promptLlm.baseUrl to an external LLM" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 busybox wait-for TCP. Usage: include "virbius.waitFor" (dict "root" . "name" "mysql" "host" "virbius-mysql" "port" 3306)
 */}}
 {{- define "virbius.waitFor" -}}

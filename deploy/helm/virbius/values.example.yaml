@@ -28,8 +28,22 @@ ingress:
 
 engine:
   promptLlm:
-    baseUrl: ""   # empty + ollama.enabled → in-cluster Ollama
+    baseUrl: ""   # empty + ollama.enabled → in-cluster Ollama; required if ollama.enabled=false
     model: virbiusguard
+  grpc:
+    port: 50051
+
+mysql:
+  enabled: true
+  # jdbcUrl: jdbc:mariadb://mysql.example:3306/virbius?...   # required if enabled=false
+
+redis:
+  enabled: true
+  # url: redis://redis.example:6379   # required if enabled=false
+
+kafka:
+  enabled: true
+  # bootstrapServers: kafka.example:9092   # required if enabled=false
 
 ollama:
   enabled: true

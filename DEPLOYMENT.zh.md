@@ -485,7 +485,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 
 把这四个名字指到 Ingress 的外部 IP。TLS 默认关闭，在 values 里打开 `ingress.tls`。
 
-集群内 DNS：`virbius-control:8080`、`virbius-engine:8082`、`virbius-mcp-proxy:9090`、`virbius-demo:8000`（SSE `:9091`）。
+集群内 DNS：`virbius-control:8080`、`virbius-engine:8082`（gRPC `:50051`）、`virbius-mcp-proxy:9090`、`virbius-demo:8000`（SSE `:9091`）。
 
 靶场 Agent 关卡仍在 Pod 内用 stdio 拉起 `virbius-mcp-proxy`。Ingress 上的端侧是给集群外 MCP 客户端的 TCP 入口，upstream 默认 `http://virbius-demo:9091`。
 
@@ -493,7 +493,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 
 `https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/virbiusguard-v13-q4_k_m.gguf`
 
-设 `ollama.enabled=false` 则仍用外部 LLM 地址。GPU 默认关；有 NVIDIA 设备时设 `ollama.gpu.enabled=true`。
+设 `ollama.enabled=false` 时必须填写 `engine.promptLlm.baseUrl`，否则 `helm` 会直接失败。关掉集群内 MySQL / Kafka / Redis 时分别填 `mysql.jdbcUrl`、`kafka.bootstrapServers`、`redis.url`，engine/control 不会再死等集群内 Service。GPU 默认关；有 NVIDIA 设备时设 `ollama.gpu.enabled=true`。
 
 `helm uninstall virbius -n virbius` **不会**删除 PVC。
 

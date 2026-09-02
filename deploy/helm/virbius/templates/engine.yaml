@@ -11,6 +11,9 @@ spec:
     - name: http
       port: 8082
       targetPort: http
+    - name: grpc
+      port: {{ .Values.engine.grpc.port | default 50051 }}
+      targetPort: grpc
   selector:
     {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "engine") | nindent 4 }}
 ---
@@ -32,36 +35,42 @@ spec:
         {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "engine") | nindent 8 }}
     spec:
       {{- include "virbius.imagePullSecrets" . | nindent 6 }}
+      {{- if or .Values.kafka.enabled .Values.redis.enabled .Values.ollama.enabled }}
       initContainers:
+        {{- if .Values.kafka.enabled }}
         {{- include "virbius.waitFor" (dict "root" . "name" "kafka" "host" (printf "%s-kafka" (include "virbius.fullname" .)) "port" 9092) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.redis.enabled }}
         {{- include "virbius.waitFor" (dict "root" . "name" "redis" "host" (printf "%s-redis" (include "virbius.fullname" .)) "port" 6379) | nindent 8 }}
+        {{- end }}
         {{- if .Values.ollama.enabled }}
         {{- include "virbius.waitFor" (dict "root" . "name" "ollama" "host" (printf "%s-ollama" (include "virbius.fullname" .)) "port" 11434) | nindent 8 }}
-        {{- include "virbius.waitForOllamaModel" (dict "root" . "host" (printf "%s-ollama" (include "virbius.fullname" .)) "model" .Values.ollama.model) | nindent 8 }}
+        {{- include "virbius.waitForOllamaModel" (dict "root" . "host" (printf "%s-ollama" (include "virbius.fullname" .)) "model" (.Values.engine.promptLlm.model | default .Values.ollama.model)) | nindent 8 }}
         {{- end }}
+      {{- end }}
       containers:
         - name: engine
           image: {{ include "virbius.image" (dict "root" . "component" "engine") }}
           ports:
             - name: http
               containerPort: 8082
+            - name: grpc
+              containerPort: {{ .Values.engine.grpc.port | default 50051 }}
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: prod
             - name: SERVER_PORT
               value: "8082"
+            - name: VIRBIUS_GRPC_PORT
+              value: {{ .Values.engine.grpc.port | default 50051 | quote }}
             - name: KAFKA_BOOTSTRAP_SERVERS
-              value: {{ include "virbius.fullname" . }}-kafka:9092
+              value: {{ include "virbius.kafkaBootstrap" . | quote }}
             - name: VIRBIUS_REDIS_URL
-              value: redis://{{ include "virbius.fullname" . }}-redis:6379
+              value: {{ include "virbius.redisUrl" . | quote }}
             - name: VIRBIUS_CONTROL_BASE_URL
               value: http://{{ include "virbius.fullname" . }}-control:8080
             - name: VIRBIUS_PROMPT_LLM_BASE_URL
-              {{- if and .Values.ollama.enabled (not .Values.engine.promptLlm.baseUrl) }}
-              value: http://{{ include "virbius.fullname" . }}-ollama:11434
-              {{- else }}
-              value: {{ .Values.engine.promptLlm.baseUrl | quote }}
-              {{- end }}
+              value: {{ include "virbius.promptLlmBaseUrl" . | quote }}
             - name: VIRBIUS_PROMPT_LLM_MODEL
               value: {{ .Values.engine.promptLlm.model | default .Values.ollama.model | quote }}
             - name: VIRBIUS_LOG_DIR

@@ -49,7 +49,7 @@ spec:
             - name: VIRBIUS_ENGINE_URL
               value: http://{{ include "virbius.fullname" . }}-engine:8082
             - name: VIRBIUS_REDIS_URL
-              value: redis://{{ include "virbius.fullname" . }}-redis:6379
+              value: {{ include "virbius.redisUrl" . | quote }}
             - name: VIRBIUS_UPSTREAM_URL
               value: {{ .Values.proxy.upstreamUrl | quote }}
             - name: VIRBIUS_LOG_DIR

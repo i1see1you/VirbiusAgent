@@ -20,10 +20,11 @@ Before production use:
   - Set global.imageRegistry and docker login / imagePullSecrets
   - Cluster must already have an Ingress Controller (class {{ .Values.ingress.className }})
 {{- if .Values.ollama.enabled }}
-  - Ollama is in-cluster; first install downloads VirbiusGuard GGUF (~484MB) then engine waits until model {{ .Values.ollama.model }} is listed
+  - Ollama is in-cluster; first install downloads VirbiusGuard GGUF (~484MB) then engine waits until model {{ .Values.engine.promptLlm.model | default .Values.ollama.model }} is listed
 {{- else }}
-  - Point engine.promptLlm.baseUrl at an external Ollama/gateway
+  - engine.promptLlm.baseUrl must point at an external Ollama/gateway
 {{- end }}
+  - In-cluster gRPC evaluate is {{ include "virbius.fullname" . }}-engine:{{ .Values.engine.grpc.port | default 50051 }}
 
 Demo Agent labs still spawn an in-pod stdio mcp-proxy. Ingress proxy.* is the cluster TCP MCP entry.
 The cluster proxy upstream defaults to http://{{ include "virbius.fullname" . }}-demo:9091.
