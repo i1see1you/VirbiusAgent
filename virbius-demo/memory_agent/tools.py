@@ -9,7 +9,7 @@ import json
 
 from langchain.agents import Tool
 
-from dvla_agent import mcp_server, mcpproxy_client
+from dvla_agent import mcpproxy_client
 from modules import protection
 
 
@@ -20,12 +20,18 @@ class _FlexTool(Tool):
         return (tool_input,), {}
 
 
+def _direct(name, args):
+    from mcp_runtime.sse import call_fastmcp
+    from memory_agent.mcp import mcp
+    result = call_fastmcp(mcp, name, args)
+    if result.get("success"):
+        return result["result"]
+    return "[blocked] " + result.get("error", "tool failed")
+
+
 def _call(name, args):
     if not protection.is_enabled():
-        result = mcp_server.call_tool(name, args)
-        if result.get("success"):
-            return result["result"]
-        return "[blocked] " + result.get("error", "tool failed")
+        return _direct(name, args)
     return mcpproxy_client.call_tool_mem(name, args)
 
 

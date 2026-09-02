@@ -4,7 +4,7 @@ import json
 
 from langchain.agents import Tool
 
-from dvla_agent import mcp_server, mcpproxy_client
+from dvla_agent import mcpproxy_client
 from egress_agent import ALL_TOOLS
 from modules import protection
 
@@ -16,10 +16,10 @@ class _FlexTool(Tool):
 
 def _call(name, args):
     if not protection.is_enabled():
-        result = mcp_server.call_tool(name, args)
-        if result.get("success"):
-            return result["result"]
-        return "[blocked] " + result.get("error", "tool failed")
+        try:
+            return dispatch(name, args)
+        except Exception as exc:  # noqa: BLE001
+            return "[blocked] " + str(exc)
     return mcpproxy_client.call_tool_egr(name, args)
 
 

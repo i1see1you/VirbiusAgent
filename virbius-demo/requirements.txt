@@ -4,4 +4,5 @@ requests>=2.31
 # langgraph 0.2 needs langchain-core 0.2.
 langchain>=0.2.16,<0.3.0
 langchain-core>=0.2.27,<0.3.0
-langgraph>=0.2.19,<0.3.0
+# 1.x 才有 mcp.server.fastmcp.FastMCP；2.x 已拆走。SSE 握手仍用薄适配层对齐 Rust proxy。
+mcp>=1.28.0,<2

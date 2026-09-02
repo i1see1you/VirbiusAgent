@@ -7,7 +7,6 @@ import logging
 import socket
 import json
 import os
-import shutil
 import threading
 import time
 import urllib.request
@@ -45,16 +44,24 @@ app.register_blueprint(chain_bp)
 
 
 def _install_memory_edge_manifest():
-    """把记忆拦截开关写到 mcp-proxy 默认路径 ./data/edge/default/edge-manifest.json。"""
+    """把记忆拦截开关写到 mcp-proxy 的 ./data/edge/{tenant}/edge-manifest.json。"""
     root = os.path.dirname(os.path.abspath(__file__))
     src = os.path.join(root, "demo_data", "memory_edge_manifest.json")
-    dst_dir = os.path.join(root, "data", "edge", "default")
-    dst = os.path.join(dst_dir, "edge-manifest.json")
     if not os.path.isfile(src):
         logging.getLogger("app").warning("memory edge manifest missing: %s", src)
         return
-    os.makedirs(dst_dir, exist_ok=True)
-    shutil.copyfile(src, dst)
+    with open(src, encoding="utf-8") as f:
+        data = json.load(f)
+    for tenant, app in (("default", "demo-app"), ("memory", "memory-app")):
+        payload = dict(data)
+        payload["tenant_id"] = tenant
+        payload["app_id"] = app
+        dst_dir = os.path.join(root, "data", "edge", tenant)
+        os.makedirs(dst_dir, exist_ok=True)
+        dst = os.path.join(dst_dir, "edge-manifest.json")
+        with open(dst, "w", encoding="utf-8") as out:
+            json.dump(payload, out, ensure_ascii=False, indent=2)
+            out.write("\n")
 
 
 _install_memory_edge_manifest()
@@ -120,20 +127,23 @@ def set_protection():
 # ---------- 基础设置页 ----------
 @app.route("/settings/")
 def settings_page():
-    return render_template("settings.html", conf=cfg_store.all())
+    from mcp_runtime.labs import LABS
+    return render_template(
+        "settings.html",
+        conf=cfg_store.all(),
+        license_labs=LABS,
+        licenses=cfg_store.license_statuses(),
+    )
 
 
 @app.route("/api/settings", methods=["POST"])
 def save_settings():
     body = request.json or {}
     updates = {}
-    # 平台接入（始终提交）
     for src, dst in [("control_url", "VIRBIUS_CONTROL_URL"),
-                     ("engine_url", "VIRBIUS_ENGINE_URL"),
-                     ("license", "VIRBIUS_LICENSE_JWT")]:
+                     ("engine_url", "VIRBIUS_ENGINE_URL")]:
         if src in body:
             updates[dst] = (body.get(src) or "").strip()
-    # 模型配置（联动：仅提交当前 provider 的表单）
     provider = body.get("provider")
     if provider == "deepseek" and "deepseek_key" in body:
         updates["DEEPSEEK_API_KEY"] = (body.get("deepseek_key") or "").strip()
@@ -142,15 +152,44 @@ def save_settings():
     elif provider == "local" and "ollama_url" in body:
         updates["OLLAMA_BASE_URL"] = (body.get("ollama_url") or "").strip()
     try:
-        cfg_store.save(updates)
+        if updates:
+            cfg_store.save(updates)
     except RuntimeError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
-    # control 地址等变更：清除端层引擎缓存，使新地址下次扫描生效
     protection.reload()
-    if "VIRBIUS_LICENSE_JWT" in updates:
-        from dvla_agent import mcpproxy_client
-        mcpproxy_client.drop_all_proxy_clients()
-    return jsonify({"ok": True, "conf": cfg_store.all()})
+    lab_id = (body.get("lab") or "").strip()
+    if lab_id and "license" in body:
+        jwt = (body.get("license") or "").strip()
+        if jwt:
+            from mcp_runtime.bootstrap import fetch_and_store_pem
+            from mcp_runtime.labs import get as get_lab
+            from mcp_runtime.proxy_client import drop_lab
+            lab = get_lab(lab_id)
+            pem_path = ""
+            try:
+                pem_path = fetch_and_store_pem(lab)
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger("app").warning("fetch pem lab=%s: %s", lab_id, exc)
+            cfg_store.save_license(lab_id, jwt, pem_path)
+            drop_lab(lab_id)
+    return jsonify({"ok": True, "conf": cfg_store.all(), "licenses": cfg_store.license_statuses()})
+
+
+@app.route("/api/settings/reissue", methods=["POST"])
+def reissue_license():
+    lab_id = ((request.json or {}).get("lab") or "").strip()
+    if not lab_id:
+        return jsonify({"ok": False, "error": "missing lab"}), 400
+    from mcp_runtime.bootstrap import run_lab
+    try:
+        st = run_lab(lab_id)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify({
+        "ok": bool(st.get("ok")),
+        "error": st.get("error") or "",
+        "licenses": cfg_store.license_statuses(),
+    })
 
 
 # ---------- 运行时 key 校验（触发聊天前检查） ----------
@@ -215,156 +254,72 @@ def _pick_port():
     return port
 
 
-def _warmup_exfil_groovy():
-    """JIT-compile cloud_exfil_chain_deny. Cold Groovy L3 has a 50ms cap and
-    fail-opens; the first real SendEmail would then look like 'protection off'."""
+def _eval_post(url, payload):
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        return json.load(resp)
+
+
+def _warmup_lab(lab, tool_name, args, want=("block", "deny", "challenge")):
     log = logging.getLogger("warmup")
-
-    def _post(url, payload):
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload).encode(),
-            method="POST",
-            headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return json.load(resp)
-
-    def run():
-        time.sleep(2)
-        engine = (cfg_store.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
-        if not engine:
-            return
-        url = engine + "/v1/evaluate"
-        sid = "groovy-warmup"
-        notice = {
-            "tenant_id": "default", "session_id": sid, "user_id": "1",
-            "tool_name": "GetBankNotice", "role": "tool_call",
-            "args_json": json.dumps({"topic": "reconcile"}),
-            "vars": {"app_id": "demo-app"},
-        }
-        mail = {
-            "tenant_id": "default", "session_id": sid, "user_id": "1",
-            "tool_name": "SendEmail", "role": "tool_call",
-            "args_json": json.dumps({"to": "recon@clearing-partner.com", "body": "warmup"}),
-            "vars": {"app_id": "demo-app"},
-        }
-        for i in range(4):
-            try:
-                _post(url, notice)
-                data = _post(url, mail)
-                log.info(
-                    "exfil groovy warmup %s action=%s rule=%s",
-                    i, data.get("effective_action"), data.get("rule_id"),
-                )
-                tx = {
-                    "tenant_id": "default", "session_id": "groovy-warmup-rate",
-                    "user_id": "1", "tool_name": "GetUserTransactions",
-                    "role": "tool_call",
-                    "args_json": json.dumps({"userId": "1"}),
-                    "vars": {"app_id": "demo-app"},
-                }
-                _post(url, tx)
-                pay = {
-                    "tenant_id": "default", "session_id": "groovy-warmup-llm06",
-                    "user_id": "1", "tool_name": "PayoutToAccount",
-                    "role": "tool_call",
-                    "args_json": json.dumps({
-                        "expense_id": "EXP-WARMUP",
-                        "account": "6222-0000-8888",
-                        "amount": 3280,
-                    }),
-                    "vars": {"app_id": "demo-app"},
-                }
-                _post(url, pay)
-                if data.get("effective_action") in ("block", "deny"):
-                    return
-            except Exception as exc:  # noqa: BLE001
-                log.warning("exfil groovy warmup failed: %s", exc)
-            time.sleep(1)
-
-    threading.Thread(target=run, daemon=True, name="groovy-warmup").start()
+    engine = (cfg_store.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
+    if not engine:
+        return
+    url = engine + "/v1/evaluate"
+    payload = {
+        "tenant_id": lab.tenant_id,
+        "session_id": lab.session_prefix + "warmup",
+        "user_id": lab.user_id,
+        "tool_name": tool_name,
+        "role": "tool_call",
+        "args_json": json.dumps(args),
+        "vars": {"app_id": lab.app_id},
+    }
+    for i in range(4):
+        try:
+            data = _eval_post(url, payload)
+            log.info(
+                "%s groovy warmup %s action=%s rule=%s",
+                lab.id, i, data.get("effective_action"), data.get("rule_id"),
+            )
+            if data.get("effective_action") in want:
+                return
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s groovy warmup failed: %s", lab.id, exc)
+        time.sleep(1)
 
 
-def _bootstrap_ops():
-    log = logging.getLogger("ops.bootstrap")
+def _bootstrap_labs():
+    log = logging.getLogger("bootstrap")
 
     def run():
         time.sleep(1)
-        try:
-            from ops_agent import bootstrap_control
-            st = bootstrap_control.run()
-            log.info("ops bootstrap ok=%s err=%s", st.get("ok"), st.get("error") or "")
-        except Exception as exc:  # noqa: BLE001
-            log.warning("ops bootstrap thread failed: %s", exc)
-        engine = (cfg_store.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
-        if not engine:
-            return
-        url = engine + "/v1/evaluate"
-        payload = {
-            "tenant_id": "default", "session_id": "ops-groovy-warmup", "user_id": "1",
-            "tool_name": "drop_production_table", "role": "tool_call",
-            "args_json": json.dumps({"table": "customers"}),
-            "vars": {"app_id": "demo-app"},
-        }
-        for i in range(4):
+        from mcp_runtime.bootstrap import run_lab
+        from mcp_runtime.labs import get as get_lab
+        for lab_id in ("bank", "llm10", "llm06", "memory", "ops", "egress", "chain"):
             try:
-                req = urllib.request.Request(
-                    url, data=json.dumps(payload).encode(), method="POST",
-                    headers={"Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    data = json.load(resp)
-                log.info(
-                    "ops groovy warmup %s action=%s rule=%s",
-                    i, data.get("effective_action"), data.get("rule_id"),
-                )
-                if data.get("effective_action") in ("challenge", "block", "deny"):
-                    return
+                st = run_lab(lab_id)
+                log.info("lab %s ok=%s err=%s", lab_id, st.get("ok"), st.get("error") or "")
             except Exception as exc:  # noqa: BLE001
-                log.warning("ops groovy warmup failed: %s", exc)
-            time.sleep(1)
-
-    threading.Thread(target=run, daemon=True, name="ops-bootstrap").start()
-
-
-def _bootstrap_egress():
-    log = logging.getLogger("egress.bootstrap")
-
-    def run():
-        time.sleep(2)
-        try:
-            from egress_agent import bootstrap_control
-            st = bootstrap_control.run()
-            log.info("egress bootstrap ok=%s err=%s", st.get("ok"), st.get("error") or "")
-        except Exception as exc:  # noqa: BLE001
-            log.warning("egress bootstrap thread failed: %s", exc)
-        engine = (cfg_store.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
-        if engine:
-            url = engine + "/v1/evaluate"
-            payload = {
-                "tenant_id": "default", "session_id": "egr-groovy-warmup", "user_id": "1",
-                "tool_name": "send_mail", "role": "tool_call",
-                "args_json": json.dumps({"to": "leak@evil.com", "body": "warmup"}),
-                "vars": {"app_id": "demo-app"},
-            }
-            for i in range(4):
-                try:
-                    req = urllib.request.Request(
-                        url, data=json.dumps(payload).encode(), method="POST",
-                        headers={"Content-Type": "application/json"},
-                    )
-                    with urllib.request.urlopen(req, timeout=20) as resp:
-                        data = json.load(resp)
-                    log.info(
-                        "egress groovy warmup %s action=%s rule=%s",
-                        i, data.get("effective_action"), data.get("rule_id"),
-                    )
-                    if data.get("effective_action") in ("block", "deny"):
-                        break
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("egress groovy warmup failed: %s", exc)
-                time.sleep(1)
+                log.warning("lab %s bootstrap failed: %s", lab_id, exc)
+        bank = get_lab("bank")
+        _warmup_lab(bank, "GetBankNotice", {"topic": "reconcile"}, want=("allow", "block", "deny"))
+        _warmup_lab(bank, "SendEmail", {"to": "recon@clearing-partner.com", "body": "warmup"})
+        _warmup_lab(get_lab("ops"), "drop_production_table", {"table": "customers"})
+        _warmup_lab(get_lab("egress"), "send_mail", {"to": "leak@evil.com", "body": "warmup"})
+        _warmup_lab(
+            get_lab("chain"), "delete_file", {"path": "tmp/cache/warmup.txt"},
+            want=("allow", "block", "deny"),
+        )
+        _warmup_lab(
+            get_lab("llm06"), "PayoutToAccount",
+            {"expense_id": "EXP-WARMUP", "account": "6222-0000-8888", "amount": 3280},
+        )
         try:
             from dvla_agent import mcpproxy_client
             out = mcpproxy_client.call_tool_egr(
@@ -374,49 +329,7 @@ def _bootstrap_egress():
         except Exception as exc:  # noqa: BLE001
             log.warning("egress sidecar warmup failed: %s", exc)
 
-    threading.Thread(target=run, daemon=True, name="egress-bootstrap").start()
-
-
-def _bootstrap_chain():
-    log = logging.getLogger("chain.bootstrap")
-
-    def run():
-        time.sleep(3)
-        try:
-            from chain_agent import bootstrap_control
-            st = bootstrap_control.run()
-            log.info("chain bootstrap ok=%s err=%s", st.get("ok"), st.get("error") or "")
-        except Exception as exc:  # noqa: BLE001
-            log.warning("chain bootstrap thread failed: %s", exc)
-        engine = (cfg_store.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
-        if not engine:
-            return
-        url = engine + "/v1/evaluate"
-        payload = {
-            "tenant_id": "default", "session_id": "chain-groovy-warmup", "user_id": "1",
-            "tool_name": "delete_file", "role": "tool_call",
-            "args_json": json.dumps({"path": "tmp/cache/warmup.txt"}),
-            "vars": {"app_id": "demo-app"},
-        }
-        for i in range(4):
-            try:
-                req = urllib.request.Request(
-                    url, data=json.dumps(payload).encode(), method="POST",
-                    headers={"Content-Type": "application/json"},
-                )
-                with urllib.request.urlopen(req, timeout=20) as resp:
-                    data = json.load(resp)
-                log.info(
-                    "chain groovy warmup %s action=%s rule=%s",
-                    i, data.get("effective_action"), data.get("rule_id"),
-                )
-                if data.get("effective_action") in ("block", "deny", "allow"):
-                    break
-            except Exception as exc:  # noqa: BLE001
-                log.warning("chain groovy warmup failed: %s", exc)
-            time.sleep(1)
-
-    threading.Thread(target=run, daemon=True, name="chain-bootstrap").start()
+    threading.Thread(target=run, daemon=True, name="lab-bootstrap").start()
 
 
 if __name__ == "__main__":
@@ -426,8 +339,5 @@ if __name__ == "__main__":
     print(f"  ➜  http://127.0.0.1:{port}")
     print(f"  目标模型: {config.DEEPSEEK_MODEL} @ {config.DEEPSEEK_BASE_URL}")
     print("=" * 60)
-    _warmup_exfil_groovy()
-    _bootstrap_ops()
-    _bootstrap_egress()
-    _bootstrap_chain()
+    _bootstrap_labs()
     app.run(host="0.0.0.0", port=port, debug=False)

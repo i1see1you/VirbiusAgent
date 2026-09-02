@@ -5,14 +5,22 @@ The tools are now executed as an MCP server through the Rust virbius-mcp-proxy
 (see virbius-mcp-proxy/ in the repo). The demo talks to the Rust proxy over
 stdio JSON-RPC via dvla_agent/mcpproxy_client.py. The proxy runs the cloud
 engine (/v1/evaluate) groovy authorization (越权) check before forwarding to
-the SSE upstream dvla_agent/mcp_sse_server.py, which executes the real tools.
+the per-lab FastMCP SSE upstream (mcp_runtime.serve).
 """
 import json
 
 from langchain.agents import Tool
 
-from dvla_agent import mcp_server, mcpproxy_client
+from dvla_agent import mcpproxy_client
 from modules import protection
+
+
+def _direct(lab_mcp, tool_name: str, args: dict) -> str:
+    from mcp_runtime.sse import call_fastmcp
+    result = call_fastmcp(lab_mcp, tool_name, args)
+    if result.get("success"):
+        return result["result"]
+    return "[blocked] " + result.get("error", "tool failed")
 
 
 def _call_proxy(tool_name: str, args: dict, llm10: bool = False, llm06: bool = False) -> str:
@@ -24,10 +32,14 @@ def _call_proxy(tool_name: str, args: dict, llm10: bool = False, llm06: bool = F
     - llm06=True -> 使用独立 llm06- session，不和 Agent / LLM10 抢风险配额。
     """
     if not protection.is_enabled():
-        result = mcp_server.call_tool(tool_name, args)
-        if result.get("success"):
-            return result["result"]
-        return "[blocked] " + result.get("error", "tool failed")
+        if llm10:
+            from owasp_agent.llm10.mcp import mcp as llm10_mcp
+            return _direct(llm10_mcp, tool_name, args)
+        if llm06:
+            from owasp_agent.llm06.mcp import mcp as llm06_mcp
+            return _direct(llm06_mcp, tool_name, args)
+        from dvla_agent.mcp import mcp as bank_mcp
+        return _direct(bank_mcp, tool_name, args)
     if llm10:
         return mcpproxy_client.call_tool_llm10(tool_name, args)
     if llm06:

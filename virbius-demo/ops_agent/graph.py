@@ -14,7 +14,7 @@ from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
 
 import llm_client
-from modules import modelsel
+from modules import inspect_util, modelsel
 from ops_agent import HIGH_RISK_TOOLS, SAFE_TOOLS, SEED_COUNT, store
 from ops_agent.runtime import call_ops_tool, challenge_status
 
@@ -41,6 +41,7 @@ SYSTEM = (
 _JSON_RE = re.compile(r"\{[\s\S]*\}")
 _GRAPH = None
 _CHECKPOINTER = MemorySaver()
+_CAPTURE: list = []
 
 
 class OpsState(TypedDict, total=False):
@@ -115,10 +116,12 @@ def _chat(messages: list[BaseMessage]) -> str:
         if m.type == "tool":
             content = "Tool result:\n" + content
         payload.append({"role": role, "content": content})
-    return llm_client.chat(
+    text = llm_client.chat(
         payload, temperature=0.0, max_tokens=900,
         provider=ent["provider"], model=ent["model"],
     )
+    _CAPTURE.append({"sent": list(payload), "raw": text})
+    return text
 
 
 def assistant(state: OpsState) -> dict:
@@ -305,6 +308,8 @@ def get_graph():
 
 
 def invoke_user(thread_id: str, user_msg: str) -> dict:
+    global _CAPTURE
+    _CAPTURE = []
     graph = get_graph()
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 16}
     snap = store.snapshot(store.current_rid())
@@ -322,6 +327,8 @@ def invoke_user(thread_id: str, user_msg: str) -> dict:
 
 
 def resume_thread(thread_id: str) -> dict:
+    global _CAPTURE
+    _CAPTURE = []
     graph = get_graph()
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 16}
     state = graph.get_state(config)
@@ -383,4 +390,5 @@ def _collect(graph, config) -> dict:
         "replica_wiped": snap["replica_wiped"],
         "pending_challenge": pending,
         "high_risk_denied": denied,
+        "debug": [inspect_util.build(r["sent"], r["raw"], []) for r in _CAPTURE],
     }

@@ -18,7 +18,7 @@ import llm_client
 from dvla_agent import inbox
 from dvla_agent import mcpproxy_client
 from dvla_agent.tools import TOOLS
-from modules import conversations, modelsel, protection
+from modules import conversations, inspect_util, modelsel, protection
 
 bp = Blueprint("agent", __name__, url_prefix="/agent")
 
@@ -97,7 +97,7 @@ def run():
 
     ctx = "agent"
     current_app.logger.info("agent run protection=%s msg=%r", protection.is_enabled(), user_msg[:80])
-    llm = LlmClientChat()
+    llm = LlmClientChat(capture=[])
     memory = _build_memory(ctx)
     agent = ConversationalChatAgent.from_llm_and_tools(
         llm=llm, tools=TOOLS, system_message=SYSTEM,
@@ -154,6 +154,7 @@ def run():
         "captured": events,
         "pwned": pwned,
         "turns": conversations.count(ctx),
+        "debug": [inspect_util.build(r["sent"], r["raw"], []) for r in (llm.capture or [])],
     })
 
 

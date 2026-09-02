@@ -1,704 +1,90 @@
 # -*- coding: utf-8 -*-
-"""Rust virbius-mcp-proxy 的 demo 侧 stdio 客户端。
-
-复用 Rust 版 mcp-proxy（非 Python 重复实现）：demo 的 LangChain 工具通过本客户端
-拉起 Rust 二进制，用 stdio 先发 `initialize`（带 `_meta`：license/tenant/app_id/user_id）
-建立会话，再用 `tools/call` 触发云端 engine（/v1/evaluate）越权评估与工具执行。
-
-- engine 云端规则拒绝时，Rust proxy 返回 JSON-RPC error，本客户端原样回传为拦截文本。
-- 未配置 license 时走 Rust proxy 的 minimum_privilege 兜底（fail-open），demo 仍可用。
-"""
-import json
-import logging
-import os
-import re
-import subprocess
-import uuid
-import urllib.parse
-import urllib.request
-
-from modules import settings
-
-_PROXY_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # virbius-demo
-log = logging.getLogger(__name__)
-
-# ---- 从 运行期设置/环境 读取 demo 侧需要回填的配置（占位符见 .env.example）----
-META = {
-    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
-    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
-    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
-    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
-    "session_id": "demo-session",
-}
-BIN_HINT = os.environ.get("VIRBIUS_MCP_PROXY_BIN", "").strip()
-
-
-def drop_all_proxy_clients() -> None:
-    """Kill stdio mcp-proxy 子进程。换 JWT / 公钥后必须重拉，否则仍用进程里那份旧 pem。"""
-    global _client, _llm10_client, _llm06_client, _mem_client, _ops_client, _egr_client, _chain_client
-    for name in ("_client", "_llm10_client", "_llm06_client", "_mem_client", "_ops_client", "_egr_client", "_chain_client"):
-        client = globals()[name]
-        if client is None:
-            continue
-        try:
-            client.close()
-        except Exception:
-            pass
-        globals()[name] = None
-
-
-def _respawn_if_license_changed(client, meta: dict):
-    """settings 里 JWT 变了但子进程还活着时，验签会变成 InvalidSignature。"""
-    if client is None:
-        return client
-    old = (client.meta or {}).get("license_jwt") or ""
-    new = (meta.get("license_jwt") or "").strip()
-    if old == new:
-        return client
-    try:
-        client.close()
-    except Exception:
-        pass
-    return None
+"""兼容入口：按关卡转调 mcp_runtime.proxy_client。"""
+from mcp_runtime.proxy_client import (  # noqa: F401
+    McpProxyClient,
+    call_tool_ops,
+    drop_all_proxy_clients,
+    drop_lab,
+    get_challenge_status,
+    get_client,
+    parse_challenge,
+)
+from mcp_runtime.proxy_client import bind_session as _bind
+from mcp_runtime.proxy_client import call_tool as _call
+from mcp_runtime.proxy_client import new_session as _new
 
 
 def new_session() -> str:
-    """Rotate engine session_id so leftover risk quota does not block every tool."""
-    global _client
-    META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    META["session_id"] = "demo-" + uuid.uuid4().hex[:12]
-    if _client is not None:
-        try:
-            _client.close()
-        except Exception:
-            pass
-        _client = None
-    return META["session_id"]
-
-
-LLM10_META = {
-    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
-    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
-    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
-    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
-    "session_id": "llm10-init",
-}
-_llm10_client = None
+    return _new("bank")
 
 
 def bind_llm10_session(session_id: str) -> str:
-    """让当前请求用指定 engine session_id。和 Flask cookie 对齐，避免进程级单例把窗口串给所有人。"""
-    global _llm10_client
-    sid = (session_id or "").strip()
-    if not sid:
-        sid = "llm10-" + uuid.uuid4().hex[:12]
-    LLM10_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    LLM10_META["session_id"] = sid
-    if _llm10_client is not None and _llm10_client.meta.get("session_id") != sid:
-        try:
-            _llm10_client.close()
-        except Exception:
-            pass
-        _llm10_client = None
-    return sid
+    return _bind("llm10", session_id)
 
 
 def new_llm10_session() -> str:
-    """换一条 llm10 engine session，不和 Agent 页、其他浏览器抢累计窗口。"""
-    return bind_llm10_session("llm10-" + uuid.uuid4().hex[:12])
-
-
-LLM06_META = {
-    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
-    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
-    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
-    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
-    "session_id": "llm06-init",
-}
-_llm06_client = None
+    return _new("llm10")
 
 
 def bind_llm06_session(session_id: str) -> str:
-    """让当前请求用指定 engine session_id。和 Flask cookie 对齐。"""
-    global _llm06_client
-    sid = (session_id or "").strip()
-    if not sid:
-        sid = "llm06-" + uuid.uuid4().hex[:12]
-    LLM06_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    LLM06_META["session_id"] = sid
-    if _llm06_client is not None and _llm06_client.meta.get("session_id") != sid:
-        try:
-            _llm06_client.close()
-        except Exception:
-            pass
-        _llm06_client = None
-    return sid
+    return _bind("llm06", session_id)
 
 
 def new_llm06_session() -> str:
-    """换一条 llm06 engine session，不和 Agent / LLM10 抢配额。"""
-    return bind_llm06_session("llm06-" + uuid.uuid4().hex[:12])
-
-
-MEM_META = {
-    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
-    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
-    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
-    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
-    "session_id": "mem-init",
-}
-_mem_client = None
+    return _new("llm06")
 
 
 def bind_mem_session(session_id: str) -> str:
-    """记忆靶场独立 mem- session，不和银行 / LLM06 / LLM10 抢配额。"""
-    global _mem_client
-    sid = (session_id or "").strip()
-    if not sid:
-        sid = "mem-" + uuid.uuid4().hex[:12]
-    MEM_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    MEM_META["session_id"] = sid
-    if _mem_client is not None and _mem_client.meta.get("session_id") != sid:
-        try:
-            _mem_client.close()
-        except Exception:
-            pass
-        _mem_client = None
-    return sid
+    return _bind("memory", session_id)
 
 
 def new_mem_session() -> str:
-    return bind_mem_session("mem-" + uuid.uuid4().hex[:12])
-
-
-OPS_META = {
-    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
-    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
-    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
-    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
-    "session_id": "ops-init",
-}
-_ops_client = None
+    return _new("memory")
 
 
 def bind_ops_session(session_id: str) -> str:
-    """值班运维独立 ops- session，不和银行 / 记忆抢 risk quota。"""
-    global _ops_client
-    sid = (session_id or "").strip()
-    if not sid:
-        sid = "ops-" + uuid.uuid4().hex[:12]
-    OPS_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    OPS_META["session_id"] = sid
-    if _ops_client is not None and _ops_client.meta.get("session_id") != sid:
-        try:
-            _ops_client.close()
-        except Exception:
-            pass
-        _ops_client = None
-    return sid
+    return _bind("ops", session_id)
 
 
 def new_ops_session() -> str:
-    return bind_ops_session("ops-" + uuid.uuid4().hex[:12])
-
-
-EGR_META = {
-    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
-    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
-    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
-    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
-    "session_id": "egr-init",
-}
-_egr_client = None
+    return _new("ops")
 
 
 def bind_egr_session(session_id: str) -> str:
-    """外发渠道独立 egr- session，不和银行 / 记忆 / 值班抢 risk quota。"""
-    global _egr_client
-    sid = (session_id or "").strip()
-    if not sid:
-        sid = "egr-" + uuid.uuid4().hex[:12]
-    EGR_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    EGR_META["session_id"] = sid
-    if _egr_client is not None and _egr_client.meta.get("session_id") != sid:
-        try:
-            _egr_client.close()
-        except Exception:
-            pass
-        _egr_client = None
-    return sid
+    return _bind("egress", session_id)
 
 
 def new_egr_session() -> str:
-    return bind_egr_session("egr-" + uuid.uuid4().hex[:12])
-
-
-CHAIN_META = {
-    "license_jwt": settings.get("VIRBIUS_LICENSE_JWT").strip(),
-    "tenant_id": os.environ.get("VIRBIUS_TENANT_ID", "default").strip(),
-    "app_id": os.environ.get("VIRBIUS_APP_ID", "demo-app").strip(),
-    "user_id": os.environ.get("VIRBIUS_SESSION_USER_ID", "1").strip(),
-    "session_id": "chain-init",
-}
-_chain_client = None
+    return _new("egress")
 
 
 def bind_chain_session(session_id: str) -> str:
-    """文件整理独立 chain- session，不和银行 / 记忆 / 值班 / 外发抢 risk quota。"""
-    global _chain_client
-    sid = (session_id or "").strip()
-    if not sid:
-        sid = "chain-" + uuid.uuid4().hex[:12]
-    CHAIN_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    CHAIN_META["session_id"] = sid
-    if _chain_client is not None and _chain_client.meta.get("session_id") != sid:
-        try:
-            _chain_client.close()
-        except Exception:
-            pass
-        _chain_client = None
-    return sid
+    return _bind("chain", session_id)
 
 
 def new_chain_session() -> str:
-    return bind_chain_session("chain-" + uuid.uuid4().hex[:12])
-
-
-def _file_magic(path: str) -> bytes:
-    try:
-        with open(path, "rb") as f:
-            return f.read(4)
-    except OSError:
-        return b""
-
-
-def _is_pe(path: str) -> bool:
-    return _file_magic(path)[:2] == b"MZ"
-
-
-def _is_elf(path: str) -> bool:
-    return _file_magic(path) == b"\x7fELF"
-
-
-def _to_wsl_path(path: str) -> str:
-    abs_path = os.path.abspath(path)
-    drive, rest = os.path.splitdrive(abs_path)
-    return "/mnt/" + drive[0].lower() + rest.replace("\\", "/")
-
-
-def _resolve_bin() -> str:
-    """Resolve the Rust proxy binary path (env override, else default build output)."""
-    if BIN_HINT:
-        return BIN_HINT
-    # Workspace root (VirbiusAgent) and crate-local target dirs
-    roots = [
-        os.path.normpath(os.path.join(_PROXY_DIR, "..")),
-        os.path.normpath(os.path.join(_PROXY_DIR, "..", "virbius-mcp-proxy")),
-    ]
-    triples = ("", "x86_64-pc-windows-msvc", "x86_64-pc-windows-gnu", "x86_64-pc-windows-gnullvm")
-    candidates = []
-    for root in roots:
-        for triple in triples:
-            target = os.path.join(root, "target", triple, "debug") if triple else os.path.join(root, "target", "debug")
-            base = os.path.normpath(os.path.join(target, "virbius-mcp-proxy"))
-            candidates.extend((base + ".exe", base))
-    # Windows: prefer a real PE so we never CreateProcess a Linux ELF.
-    if os.name == "nt":
-        for cand in candidates:
-            if os.path.isfile(cand) and _is_pe(cand):
-                return cand
-        for cand in candidates:
-            if os.path.isfile(cand) and _is_elf(cand):
-                return cand
-    else:
-        for cand in candidates:
-            if os.path.isfile(cand):
-                return cand
-    return os.path.normpath(os.path.join(roots[0], "target", "debug", "virbius-mcp-proxy"))
-
-
-def _proxy_command(bin_path: str) -> list[str]:
-    """On Windows, run a Linux ELF through WSL; otherwise spawn the binary directly.
-
-    WSL NAT 的 127.0.0.1 不是 Windows。Windows 的 Popen env 也不会进 Linux 进程，
-    必须写在 `wsl -e env VAR=...` 里。
-    """
-    if os.name == "nt" and os.path.isfile(bin_path) and _is_elf(bin_path):
-        host = _wsl_windows_host()
-        pem = _to_wsl_path(os.path.join(_PROXY_DIR, "cfg", "license-public.pem"))
-        log.info("mcp-proxy via WSL, host=%s", host)
-        return [
-            "wsl", "--cd", _PROXY_DIR, "-e",
-            "env",
-            "VIRBIUS_UPSTREAM_URL=http://%s:9091" % host,
-            "VIRBIUS_ENGINE_URL=http://%s:8082" % host,
-            "VIRBIUS_LICENSE_PUBLIC_KEY=" + pem,
-            "VIRBIUS_EGRESS_HOSTS=wiki.internal,mail.internal",
-            _to_wsl_path(bin_path),
-        ]
-    return [bin_path]
-
-
-_WSL_HOST_CACHE = None
-
-
-def _wsl_windows_host() -> str:
-    """WSL NAT 里访问 Windows 要用 vEthernet (WSL) 地址，不是 127.0.0.1。
-
-    不要每次 fork `wsl ip route`：Docker Desktop 卡住或 WSL 冷启动时 5s 就会
-    让页面报 Command timed out。优先读本机网卡，WSL 只作兜底。
-    """
-    global _WSL_HOST_CACHE
-    env = (os.environ.get("VIRBIUS_WSL_WINDOWS_HOST") or "").strip()
-    if env:
-        return env
-    if _WSL_HOST_CACHE:
-        return _WSL_HOST_CACHE
-    host = _windows_vethernet_wsl_ip() or _wsl_default_gateway()
-    if not host:
-        raise RuntimeError("cannot resolve Windows host IP for WSL mcp-proxy")
-    _WSL_HOST_CACHE = host
-    return host
-
-
-def _windows_vethernet_wsl_ip() -> str:
-    """Windows 上 vEthernet (WSL*) 的 IPv4 = WSL 默认网关。不进 Linux。
-
-    中文 ipconfig 会在适配器名和 IPv4 之间插空行，不能按空行切块。
-    """
-    try:
-        raw = subprocess.check_output(["ipconfig"], timeout=8)
-    except Exception as exc:
-        log.warning("ipconfig failed: %s", exc)
-        return ""
-    text = raw.decode("gbk", "replace") if os.name == "nt" else raw.decode("utf-8", "replace")
-    idx = text.find("WSL")
-    if idx < 0:
-        return ""
-    for match in re.finditer(r"(\d+\.\d+\.\d+\.\d+)", text[idx:idx + 800]):
-        ip = match.group(1)
-        if not ip.startswith("255.") and not ip.startswith("0."):
-            return ip
-    return ""
-
-
-def _wsl_default_gateway() -> str:
-    try:
-        out = subprocess.check_output(
-            ["wsl", "-e", "sh", "-c", "ip route show default | awk '{print $3}'"],
-            text=True,
-            timeout=20,
-        )
-    except Exception as exc:
-        log.warning("wsl default gateway lookup failed: %s", exc)
-        return ""
-    return (out or "").strip().split()[0] if (out or "").strip() else ""
-
-
-class McpProxyClient:
-    """Long-lived Rust mcp-proxy subprocess talking JSON-RPC over stdio."""
-
-    def __init__(self, bin_path: str, meta: dict):
-        self.meta = meta
-        env = os.environ.copy()
-        env.setdefault("VIRBIUS_EGRESS_HOSTS", "wiki.internal,mail.internal")
-        self.proc = subprocess.Popen(
-            _proxy_command(bin_path),
-            cwd=_PROXY_DIR,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            env=env,
-        )
-        self._counter = 0
-        self._initialize(meta)
-
-    def _next_id(self) -> int:
-        self._counter += 1
-        return self._counter
-
-    def _send(self, method: str, params: dict) -> dict:
-        req = {
-            "jsonrpc": "2.0",
-            "id": self._next_id(),
-            "method": method,
-            "params": params,
-        }
-        self.proc.stdin.write(json.dumps(req) + "\n")
-        self.proc.stdin.flush()
-        # The Rust proxy prints tracing logs to stdout, which would pollute the
-        # JSON-RPC stream. Skip any non-JSON line until we get a full response.
-        while True:
-            line = self.proc.stdout.readline()
-            if not line:
-                stderr = (self.proc.stderr.read() or "").strip() or "no output"
-                raise RuntimeError("mcp-proxy exited: " + stderr)
-            s = line.strip()
-            if s.startswith("{") and s.endswith("}"):
-                try:
-                    return json.loads(s)
-                except ValueError as exc:
-                    raise RuntimeError("mcp-proxy invalid response: " + s) from exc
-
-    def _initialize(self, meta: dict) -> None:
-        params = {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "dvla-demo", "version": "0.1.0"},
-            "_meta": meta,
-        }
-        resp = self._send("initialize", params)
-        if "error" in resp:
-            raise RuntimeError("mcp-proxy initialize failed: " + str(resp["error"]))
-
-    def call_tool_raw(self, tool_name: str, args: dict, extra_meta: dict | None = None) -> dict:
-        """JSON-RPC tools/call; returns the raw response (additive, unused by bank ReAct)."""
-        params = {"name": tool_name, "arguments": args or {}}
-        if extra_meta:
-            params["_meta"] = extra_meta
-        return self._send("tools/call", params)
-
-    def call_tool(self, tool_name: str, args: dict) -> str:
-        """Call a tool through the proxy. Returns the text result, or a block message."""
-        resp = self._send("tools/call", {"name": tool_name, "arguments": args})
-        if "error" in resp:
-            return _format_block(
-                tool_name, args, resp["error"],
-                session_id=(self.meta or {}).get("session_id"),
-            )
-        content = resp.get("result", {}).get("content", [])
-        if content:
-            return content[0].get("text", "")
-        return str(resp.get("result", ""))
-
-    def close(self) -> None:
-        try:
-            self.proc.stdin.close()
-        finally:
-            self.proc.terminate()
-
-
-# 进程级单例：demo 多轮对话复用同一 Rust proxy 会话
-_client = None
-
-
-def get_client() -> McpProxyClient:
-    global _client
-    META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    _client = _respawn_if_license_changed(_client, META)
-    if _client is None or _client.proc.poll() is not None:
-        if _client is not None:
-            _client.close()
-        _client = McpProxyClient(_resolve_bin(), META)
-    return _client
+    return _new("chain")
 
 
 def call_tool(tool_name: str, args: dict) -> str:
-    return get_client().call_tool(tool_name, args)
-
-
-def get_llm10_client() -> McpProxyClient:
-    global _llm10_client
-    LLM10_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    _llm10_client = _respawn_if_license_changed(_llm10_client, LLM10_META)
-    if not LLM10_META["session_id"] or LLM10_META["session_id"] == "llm10-init":
-        new_llm10_session()
-    if _llm10_client is None or _llm10_client.proc.poll() is not None:
-        if _llm10_client is not None:
-            _llm10_client.close()
-        _llm10_client = McpProxyClient(_resolve_bin(), dict(LLM10_META))
-    return _llm10_client
+    return _call("bank", tool_name, args)
 
 
 def call_tool_llm10(tool_name: str, args: dict) -> str:
-    return get_llm10_client().call_tool(tool_name, args)
-
-
-def get_llm06_client() -> McpProxyClient:
-    global _llm06_client
-    LLM06_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    _llm06_client = _respawn_if_license_changed(_llm06_client, LLM06_META)
-    if not LLM06_META["session_id"] or LLM06_META["session_id"] == "llm06-init":
-        new_llm06_session()
-    if _llm06_client is None or _llm06_client.proc.poll() is not None:
-        if _llm06_client is not None:
-            _llm06_client.close()
-        _llm06_client = McpProxyClient(_resolve_bin(), dict(LLM06_META))
-    return _llm06_client
+    return _call("llm10", tool_name, args)
 
 
 def call_tool_llm06(tool_name: str, args: dict) -> str:
-    return get_llm06_client().call_tool(tool_name, args)
-
-
-def get_mem_client() -> McpProxyClient:
-    global _mem_client
-    MEM_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    _mem_client = _respawn_if_license_changed(_mem_client, MEM_META)
-    if not MEM_META["session_id"] or MEM_META["session_id"] == "mem-init":
-        new_mem_session()
-    if _mem_client is None or _mem_client.proc.poll() is not None:
-        if _mem_client is not None:
-            _mem_client.close()
-        _mem_client = McpProxyClient(_resolve_bin(), dict(MEM_META))
-    return _mem_client
+    return _call("llm06", tool_name, args)
 
 
 def call_tool_mem(tool_name: str, args: dict) -> str:
-    return get_mem_client().call_tool(tool_name, args)
-
-
-def get_egr_client() -> McpProxyClient:
-    global _egr_client
-    EGR_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    _egr_client = _respawn_if_license_changed(_egr_client, EGR_META)
-    if not EGR_META["session_id"] or EGR_META["session_id"] == "egr-init":
-        new_egr_session()
-    if _egr_client is None or _egr_client.proc.poll() is not None:
-        if _egr_client is not None:
-            _egr_client.close()
-        _egr_client = McpProxyClient(_resolve_bin(), dict(EGR_META))
-    return _egr_client
+    return _call("memory", tool_name, args)
 
 
 def call_tool_egr(tool_name: str, args: dict) -> str:
-    return get_egr_client().call_tool(tool_name, args)
-
-
-def get_chain_client() -> McpProxyClient:
-    global _chain_client
-    CHAIN_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    _chain_client = _respawn_if_license_changed(_chain_client, CHAIN_META)
-    if not CHAIN_META["session_id"] or CHAIN_META["session_id"] == "chain-init":
-        new_chain_session()
-    if _chain_client is None or _chain_client.proc.poll() is not None:
-        if _chain_client is not None:
-            _chain_client.close()
-        _chain_client = McpProxyClient(_resolve_bin(), dict(CHAIN_META))
-    return _chain_client
+    return _call("egress", tool_name, args)
 
 
 def call_tool_chain(tool_name: str, args: dict) -> str:
-    return get_chain_client().call_tool(tool_name, args)
-
-
-def get_ops_client() -> McpProxyClient:
-    global _ops_client
-    OPS_META["license_jwt"] = settings.get("VIRBIUS_LICENSE_JWT").strip()
-    _ops_client = _respawn_if_license_changed(_ops_client, OPS_META)
-    if not OPS_META["session_id"] or OPS_META["session_id"] == "ops-init":
-        new_ops_session()
-    if _ops_client is None or _ops_client.proc.poll() is not None:
-        if _ops_client is not None:
-            _ops_client.close()
-        _ops_client = McpProxyClient(_resolve_bin(), dict(OPS_META))
-    return _ops_client
-
-
-def parse_challenge(err: dict) -> dict | None:
-    if not isinstance(err, dict):
-        return None
-    code = err.get("code")
-    msg = str(err.get("message") or "")
-    if code != -32011 and "challenge_required" not in msg:
-        return None
-    data = err.get("data") or {}
-    return {
-        "challenge_id": data.get("challenge_id"),
-        "tool_name": data.get("tool_name"),
-        "args_hash": data.get("args_hash"),
-        "rule_id": data.get("rule_id"),
-        "reason": data.get("reason"),
-    }
-
-
-def call_tool_ops(tool_name: str, args: dict, challenge_token: str | None = None) -> dict:
-    """Ops-only structured call. Existing call_tool() still returns a [blocked] string."""
-    extra = {"challenge_token": challenge_token} if challenge_token else None
-    client = get_ops_client()
-    resp = client.call_tool_raw(tool_name, args, extra_meta=extra)
-    if "error" in resp:
-        ch = parse_challenge(resp["error"])
-        if ch:
-            return {"ok": False, "challenge": ch, "error": resp["error"]}
-        return {
-            "ok": False,
-            "blocked": _format_block(
-                tool_name, args, resp["error"],
-                session_id=(client.meta or {}).get("session_id"),
-            ),
-        }
-    content = resp.get("result", {}).get("content", [])
-    if content:
-        return {"ok": True, "text": content[0].get("text", "")}
-    return {"ok": True, "text": str(resp.get("result", ""))}
-
-
-def get_challenge_status(challenge_id: str) -> dict:
-    cid = (challenge_id or "").strip()
-    if not cid:
-        return {"status": "not_found"}
-    engine = (settings.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
-    if not engine:
-        return {"status": "not_found"}
-    url = engine + "/v1/challenge/" + urllib.parse.quote(cid, safe="") + "/status"
-    req = urllib.request.Request(url, method="GET", headers={"Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            data = json.load(resp)
-            return data if isinstance(data, dict) else {"status": "not_found"}
-    except Exception as exc:  # noqa: BLE001
-        log.warning("challenge status failed: %s", exc)
-        return {"status": "not_found"}
-
-
-def _format_block(tool_name: str, args: dict, err: dict, session_id=None) -> str:
-    """Proxy JSON-RPC 常把 rule_id 填成 null，再问一次 engine（不带 content）把规则名拿回来。"""
-    msg = err.get("message") or "tool blocked"
-    data = err.get("data") or {}
-    parts = [str(msg)]
-    reason = data.get("reason")
-    if reason and reason != msg:
-        parts.append(str(reason))
-    rule = data.get("rule_id")
-    peek = None if rule else _peek_evaluate(tool_name, args, session_id=session_id)
-    if peek:
-        rule = rule or peek.get("rule_id")
-        rc = peek.get("reason_code")
-        if rc and str(rc) not in parts:
-            parts.append(str(rc))
-    if rule:
-        parts.append("rule=" + str(rule))
-    risk = data.get("session_risk_score")
-    if risk is not None:
-        parts.append("risk=" + str(risk))
-    return "[blocked] " + " | ".join(parts)
-
-
-def _peek_evaluate(tool_name: str, args: dict, session_id=None):
-    engine = (settings.get("VIRBIUS_ENGINE_URL") or "").rstrip("/")
-    if not engine:
-        return None
-    payload = {
-        "tenant_id": META.get("tenant_id") or "default",
-        "session_id": session_id or META.get("session_id") or "demo-session",
-        "user_id": META.get("user_id") or "1",
-        "tool_name": tool_name,
-        "role": "tool_call",
-        "args_json": json.dumps(args or {}),
-        "vars": {"app_id": META.get("app_id") or "demo-app"},
-    }
-    req = urllib.request.Request(
-        engine + "/v1/evaluate",
-        data=json.dumps(payload).encode(),
-        method="POST",
-        headers={"Content-Type": "application/json"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return json.load(resp)
-    except Exception as exc:
-        log.warning("peek evaluate failed: %s", exc)
-        return None
+    return _call("chain", tool_name, args)

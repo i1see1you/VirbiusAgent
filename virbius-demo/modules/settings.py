@@ -25,7 +25,6 @@ _overrides = {}
 _DEFAULTS = {
     "VIRBIUS_CONTROL_URL": "http://localhost:8080",
     "VIRBIUS_ENGINE_URL": "http://localhost:8082",
-    "VIRBIUS_LICENSE_JWT": "",
     "DEEPSEEK_API_KEY": "sk-REPLACE-ME",
     "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
     "DEEPSEEK_MODEL": "deepseek-chat",
@@ -55,6 +54,66 @@ def get(key: str) -> str:
 def all() -> dict:
     """返回当前生效的完整配置（含默认/环境变量兜底）。"""
     return {k: get(k) for k in _DEFAULTS}
+
+
+def config_dir() -> str:
+    return _CONFIG_DIR
+
+
+def get_license(lab_id: str) -> dict:
+    """本关 JWT / pem。旧的 VIRBIUS_LICENSE_JWT 并集票忽略。"""
+    rec = (_overrides.get("licenses") or {}).get(lab_id) or {}
+    if not isinstance(rec, dict):
+        rec = {}
+    return {
+        "jwt": str(rec.get("jwt") or "").strip(),
+        "pem_path": str(rec.get("pem_path") or "").strip(),
+    }
+
+
+def save_license(lab_id: str, jwt: str, pem_path: str = "") -> None:
+    licenses = dict(_overrides.get("licenses") or {})
+    prev = dict(licenses.get(lab_id) or {}) if isinstance(licenses.get(lab_id), dict) else {}
+    if jwt:
+        prev["jwt"] = jwt
+    if pem_path:
+        prev["pem_path"] = pem_path
+    licenses[lab_id] = prev
+    save({"licenses": licenses})
+
+
+def license_statuses() -> dict:
+    """设置页级联用：每关签发状态。"""
+    import base64
+    from mcp_runtime.labs import LABS
+
+    def claims(jwt: str) -> dict:
+        token = (jwt or "").strip()
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+        pad = "=" * ((4 - len(parts[1]) % 4) % 4)
+        try:
+            raw = base64.urlsafe_b64decode(parts[1] + pad)
+            data = json.loads(raw.decode("utf-8"))
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    out = {}
+    for lab in LABS:
+        rec = get_license(lab.id)
+        c = claims(rec.get("jwt") or "")
+        tools = c.get("allowed_tools") or []
+        out[lab.id] = {
+            "label": lab.label,
+            "tenant_id": lab.tenant_id,
+            "app_id": lab.app_id,
+            "jwt": rec.get("jwt") or "",
+            "issued": bool(rec.get("jwt")),
+            "tool_count": len(tools) if isinstance(tools, list) else 0,
+        }
+    return out
 
 
 def save(updates: dict) -> None:

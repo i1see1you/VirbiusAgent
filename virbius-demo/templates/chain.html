@@ -84,7 +84,7 @@
 
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
-    <p style="margin:2px 0">本靶场启动时已经写好。下面按运营台字段说明，方便对照。</p>
+    <p style="margin:2px 0">启动已写入租户 chain。下面按运营台字段说明，方便对照。</p>
     <p style="margin:2px 0">先登记工具（名字用小写加下划线）：</p>
     <p style="margin:2px 0">· list_files / compress_file：risk_class = low，approval_mode = lax</p>
     <p style="margin:2px 0">· move_file / delete_file：risk_class = high，approval_mode = strict，fast_path = false</p>
@@ -93,7 +93,7 @@
     <p style="margin:2px 0">· runtime = groovy</p>
     <p style="margin:2px 0">· intent_action = deny（直接拦住，不是等人批）</p>
     <p style="margin:2px 0">· bind_scope = tool（按工具名绑定，不要绑成整份服务）</p>
-    <p style="margin:2px 0">· tool_names = ["delete_file"]，app_ids = ["demo-app"]</p>
+    <p style="margin:2px 0">· tool_names = ["delete_file"]，app_ids = ["chain-app"]（租户 chain）</p>
     <p style="margin:2px 0">· rollout_state = full（必须推到全量；停在试运行等于没配）</p>
     <p style="margin:2px 0">· Groovy：当前要删的 path，等于本会话某次 move_file 的 dest，且那次 src 在文件柜，才 return true。不要写死文件名，不要写死临时区目录，不要 listMatch</p>
     <p style="margin:2px 0">· License 的 allowed_tools 要包含这 4 个工具名，少一个端上会先拦</p>
