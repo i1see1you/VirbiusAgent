@@ -104,9 +104,9 @@ public class JdbcListMetaRepository implements ListMetaRepository {
     public List<AccessListEntry> listEntries(String tenantId, String listName) {
         return jdbc.query(
                 """
-                SELECT value, remark, created_at, expires_at
+                SELECT `value`, remark, created_at, expires_at
                 FROM tb_access_list_entry WHERE tenant_id = ? AND list_name = ?
-                ORDER BY value
+                ORDER BY `value`
                 """,
                 ENTRY_MAPPER,
                 tenantId,
@@ -128,10 +128,10 @@ public class JdbcListMetaRepository implements ListMetaRepository {
     public boolean addEntry(String tenantId, String listName, String value, String remark, Instant expiresAt) {
         int n = jdbc.update(
                 """
-                INSERT INTO tb_access_list_entry (tenant_id, list_name, value, remark, expires_at)
+                INSERT INTO tb_access_list_entry (tenant_id, list_name, `value`, remark, expires_at)
                 SELECT ?, ?, ?, ?, ? FROM (SELECT 1) AS _one
                 WHERE NOT EXISTS (
-                  SELECT 1 FROM tb_access_list_entry WHERE tenant_id=? AND list_name=? AND value=?
+                  SELECT 1 FROM tb_access_list_entry WHERE tenant_id=? AND list_name=? AND `value`=?
                 )
                 """,
                 tenantId,
@@ -148,7 +148,7 @@ public class JdbcListMetaRepository implements ListMetaRepository {
     @Override
     public boolean removeEntry(String tenantId, String listName, String value) {
         return jdbc.update(
-                        "DELETE FROM tb_access_list_entry WHERE tenant_id = ? AND list_name = ? AND value = ?",
+                        "DELETE FROM tb_access_list_entry WHERE tenant_id = ? AND list_name = ? AND `value` = ?",
                         tenantId,
                         listName,
                         value)
@@ -158,7 +158,7 @@ public class JdbcListMetaRepository implements ListMetaRepository {
     private void insertEntry(String tenantId, String listName, String value, String remark, Instant expiresAt) {
         jdbc.update(
                 """
-                INSERT INTO tb_access_list_entry (tenant_id, list_name, value, remark, expires_at)
+                INSERT INTO tb_access_list_entry (tenant_id, list_name, `value`, remark, expires_at)
                 VALUES (?,?,?,?,?)
                 """,
                 tenantId,

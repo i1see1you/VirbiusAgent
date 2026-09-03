@@ -89,11 +89,11 @@ CREATE TABLE IF NOT EXISTS tb_access_list_meta (
 CREATE TABLE IF NOT EXISTS tb_access_list_entry (
     tenant_id    VARCHAR(64) NOT NULL,
     list_name    VARCHAR(128) NOT NULL,
-    value        VARCHAR(512) NOT NULL,
+    `value`      VARCHAR(512) NOT NULL,
     remark       VARCHAR(512),
     expires_at   TIMESTAMP,
     created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (tenant_id, list_name, value)
+    PRIMARY KEY (tenant_id, list_name, `value`)
 );
 
 CREATE INDEX IF NOT EXISTS idx_tb_access_list_entry_tenant
@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS tb_edge_artifact_meta (
 CREATE TABLE IF NOT EXISTS tb_tenant_api_credential (
     credential_id   VARCHAR(36)  NOT NULL,
     tenant_id       VARCHAR(64)  NOT NULL,
-    role            VARCHAR(32)  NOT NULL,
+    `role`          VARCHAR(32)  NOT NULL,
     key_hash        VARCHAR(64)  NOT NULL,
     key_prefix      VARCHAR(16)  NOT NULL,
     label           VARCHAR(128),
@@ -266,7 +266,7 @@ CREATE TABLE IF NOT EXISTS tb_tenant_api_credential (
     last_used_at    TIMESTAMP,
     PRIMARY KEY (credential_id),
     UNIQUE (key_hash),
-    CHECK (role IN ('tenant_viewer', 'tenant_admin', 'platform_admin')),
+    CHECK (`role` IN ('tenant_viewer', 'tenant_admin', 'platform_admin')),
     CHECK (status IN ('active', 'revoked'))
 );
 
@@ -323,7 +323,7 @@ CREATE TABLE IF NOT EXISTS tb_gateway_artifact_meta (
     scene_registry_sha256  VARCHAR(64)  NOT NULL,
     published_at           TIMESTAMP    NOT NULL,
     publish_id             VARCHAR(36),
-    trigger                VARCHAR(32),
+    `trigger`              VARCHAR(32),
     storage                VARCHAR(16)  NOT NULL DEFAULT 'redis'
 );
 
