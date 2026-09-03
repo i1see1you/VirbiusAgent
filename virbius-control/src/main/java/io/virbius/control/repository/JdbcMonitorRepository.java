@@ -102,7 +102,7 @@ public class JdbcMonitorRepository implements MonitorRepository {
                 : " e.effective_at >= datetime('now', ?)";
         String sql = """
                 SELECT e.rule_id, e.rule_revision, e.rollout_state, e.canary_percent,
-                       e.trigger, e.operator, e.effective_at
+                       e.`trigger`, e.operator, e.effective_at
                 FROM tb_rule_rollout_event e
                 WHERE e.tenant_id = ? AND""" + timeExpr + """
                 ORDER BY e.effective_at DESC

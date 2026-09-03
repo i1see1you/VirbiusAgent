@@ -110,7 +110,7 @@ In-cluster MySQL JDBC URL, or mysql.jdbcUrl when mysql.enabled=false.
 */}}
 {{- define "virbius.jdbcUrl" -}}
 {{- if .Values.mysql.enabled -}}
-jdbc:mariadb://{{ include "virbius.fullname" . }}-mysql:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+jdbc:mariadb://{{ include "virbius.fullname" . }}-mysql:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&sessionVariables=sql_mode='ALLOW_INVALID_DATES,NO_ENGINE_SUBSTITUTION'
 {{- else -}}
 {{- required "mysql.enabled is false; set mysql.jdbcUrl" .Values.mysql.jdbcUrl -}}
 {{- end -}}

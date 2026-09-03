@@ -1,10 +1,10 @@
 fullnameOverride: virbius
 
 global:
-  imageRegistry: ""
+  imageRegistry: "hb.grainmind.cn/library"
   imageTag: latest
   imagePullSecrets: []
-  waitImage: busybox:1.36
+  waitImage: hb.grainmind.cn/library/busybox:1.36
 
 ingress:
   enabled: true
@@ -22,7 +22,7 @@ ingress:
 
 mysql:
   enabled: true
-  image: mysql:8.0
+  image: hb.grainmind.cn/library/mysql:8.0
   # Required when enabled=false (external MySQL).
   jdbcUrl: ""
   persistence:
@@ -36,7 +36,7 @@ mysql:
 
 redis:
   enabled: true
-  image: redis:7-alpine
+  image: hb.grainmind.cn/library/redis:7-alpine
   # Required when enabled=false (external Redis), e.g. redis://redis.example:6379
   url: ""
   persistence:
@@ -50,7 +50,7 @@ redis:
 
 kafka:
   enabled: true
-  image: apache/kafka:3.7.0
+  image: hb.grainmind.cn/library/kafka:3.7.0
   # Required when enabled=false (external Kafka), e.g. kafka.example:9092
   bootstrapServers: ""
   clusterId: MkUjOEJhQjY1QUY1NDQ2Nk1BODI
@@ -65,7 +65,7 @@ kafka:
 
 ollama:
   enabled: true
-  image: ollama/ollama:0.11.10
+  image: hb.grainmind.cn/library/ollama:0.11.10
   curlImage: curlimages/curl:8.12.1
   model: virbiusguard
   # HuggingFace V13 Q4_K_M (~484MB). For China, switch to ModelScope:

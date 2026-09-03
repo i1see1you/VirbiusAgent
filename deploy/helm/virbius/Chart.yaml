@@ -2,5 +2,5 @@ apiVersion: v2
 name: virbius
 description: VirbiusAgent full stack (range, edge, cloud, control) plus MySQL, Kafka, Redis, Ollama
 type: application
-version: 0.1.8
+version: 0.1.16
 appVersion: "0.1.0"

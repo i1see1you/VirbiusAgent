@@ -153,7 +153,7 @@ CREATE TABLE IF NOT EXISTS tb_rule_rollout_event (
     rule_revision    INTEGER NOT NULL,
     rollout_state    VARCHAR(16) NOT NULL,
     canary_percent   INTEGER,
-    trigger          VARCHAR(32) NOT NULL,
+    `trigger`          VARCHAR(32) NOT NULL,
     operator         VARCHAR(64),
     effective_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

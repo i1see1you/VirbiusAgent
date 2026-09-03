@@ -159,7 +159,7 @@ public class RolloutDashboardService {
     public List<Map<String, Object>> timeline(String tenantId, String ruleId) {
         return jdbc.query(
                 """
-                SELECT rule_revision, rollout_state, canary_percent, trigger, operator, effective_at
+                SELECT rule_revision, rollout_state, canary_percent, `trigger`, operator, effective_at
                 FROM tb_rule_rollout_event
                 WHERE tenant_id = ? AND rule_id = ?
                 ORDER BY effective_at DESC LIMIT 50
