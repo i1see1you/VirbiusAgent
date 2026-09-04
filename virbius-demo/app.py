@@ -133,6 +133,7 @@ def settings_page():
         conf=cfg_store.all(),
         license_labs=LABS,
         licenses=cfg_store.license_statuses(),
+        control_profiles=cfg_store.control_profiles(),
     )
 
 
@@ -140,10 +141,14 @@ def settings_page():
 def save_settings():
     body = request.json or {}
     updates = {}
-    for src, dst in [("control_url", "VIRBIUS_CONTROL_URL"),
-                     ("engine_url", "VIRBIUS_ENGINE_URL")]:
-        if src in body:
-            updates[dst] = (body.get(src) or "").strip()
+    control_changed = False
+    if "control_url" in body:
+        new_c = (body.get("control_url") or "").strip().rstrip("/")
+        old_c = (cfg_store.get("VIRBIUS_CONTROL_URL") or "").rstrip("/")
+        control_changed = new_c != old_c
+        updates["VIRBIUS_CONTROL_URL"] = new_c
+    if "engine_url" in body:
+        updates["VIRBIUS_ENGINE_URL"] = (body.get("engine_url") or "").strip()
     provider = body.get("provider")
     if provider == "deepseek" and "deepseek_key" in body:
         updates["DEEPSEEK_API_KEY"] = (body.get("deepseek_key") or "").strip()
@@ -154,11 +159,15 @@ def save_settings():
     try:
         if updates:
             cfg_store.save(updates)
+            if control_changed:
+                from mcp_runtime.proxy_client import drop_all_proxy_clients
+                drop_all_proxy_clients()
     except RuntimeError as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
     protection.reload()
     lab_id = (body.get("lab") or "").strip()
-    if lab_id and "license" in body:
+    # 切 Control 时不要把上一套环境输入框里的 JWT 写进新环境
+    if lab_id and "license" in body and not control_changed:
         jwt = (body.get("license") or "").strip()
         if jwt:
             from mcp_runtime.bootstrap import fetch_and_store_pem
@@ -172,7 +181,50 @@ def save_settings():
                 logging.getLogger("app").warning("fetch pem lab=%s: %s", lab_id, exc)
             cfg_store.save_license(lab_id, jwt, pem_path)
             drop_lab(lab_id)
-    return jsonify({"ok": True, "conf": cfg_store.all(), "licenses": cfg_store.license_statuses()})
+    return jsonify({
+        "ok": True,
+        "conf": cfg_store.all(),
+        "licenses": cfg_store.license_statuses(),
+        "control_profiles": cfg_store.control_profiles(),
+        "switched": control_changed,
+    })
+
+
+@app.route("/api/settings/profile", methods=["POST"])
+def save_control_profile():
+    body = request.json or {}
+    action = (body.get("action") or "upsert").strip()
+    try:
+        if action == "delete":
+            cfg_store.delete_profile(body.get("control_url") or "")
+            from mcp_runtime.proxy_client import drop_all_proxy_clients
+            drop_all_proxy_clients()
+        elif action == "activate":
+            cfg_store.apply_control_urls(body.get("control_url") or "", body.get("engine_url"))
+            from mcp_runtime.proxy_client import drop_all_proxy_clients
+            drop_all_proxy_clients()
+        else:
+            old = (cfg_store.get("VIRBIUS_CONTROL_URL") or "").rstrip("/")
+            cfg_store.upsert_profile(
+                body.get("control_url") or "",
+                engine_url=body.get("engine_url") or "",
+                label=body.get("label") or "",
+                activate=bool(body.get("activate", True)),
+                previous_url=body.get("previous_url") or "",
+            )
+            new = (cfg_store.get("VIRBIUS_CONTROL_URL") or "").rstrip("/")
+            if new != old:
+                from mcp_runtime.proxy_client import drop_all_proxy_clients
+                drop_all_proxy_clients()
+    except RuntimeError as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 400
+    protection.reload()
+    return jsonify({
+        "ok": True,
+        "conf": cfg_store.all(),
+        "licenses": cfg_store.license_statuses(),
+        "control_profiles": cfg_store.control_profiles(),
+    })
 
 
 @app.route("/api/settings/reissue", methods=["POST"])
@@ -189,6 +241,7 @@ def reissue_license():
         "ok": bool(st.get("ok")),
         "error": st.get("error") or "",
         "licenses": cfg_store.license_statuses(),
+        "control_profiles": cfg_store.control_profiles(),
     })
 
 

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import urllib.error
 import urllib.request
@@ -151,9 +150,7 @@ def _revoke_active_app_license(lab) -> None:
 
 
 def write_pem(tenant_id: str, pem_text: str) -> str:
-    folder = os.path.join(settings.config_dir(), "licenses")
-    os.makedirs(folder, exist_ok=True)
-    path = os.path.join(folder, tenant_id + ".pem")
+    path = settings.license_pem_path(tenant_id)
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         f.write((pem_text or "").strip() + "\n")
     return path
@@ -170,7 +167,7 @@ def fetch_and_store_pem(lab) -> str:
     pem = (data.get("public_key_pem") or data.get("publicKeyPem") or "").strip()
     if not pem:
         raise RuntimeError("public-key empty for tenant " + lab.tenant_id)
-    path = os.path.join(settings.config_dir(), "licenses", lab.tenant_id + ".pem")
+    path = settings.license_pem_path(lab.tenant_id)
     old = ""
     try:
         with open(path, encoding="utf-8") as f:

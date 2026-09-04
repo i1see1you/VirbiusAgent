@@ -289,6 +289,8 @@ table.cat tr:hover td{background:rgba(0,255,174,.03)}
 .tabs .tab:hover{border-color:var(--neon2);color:var(--neon2)}
 .tabs .tab.active{color:#04210f;background:linear-gradient(135deg,var(--neon),#00d49a);
   border-color:transparent;box-shadow:0 0 16px rgba(0,255,174,.3)}
+.tabs .tab .on{font-size:11px;margin-left:6px;opacity:.85}
+.tabs .tab-add{min-width:42px;padding:8px 12px}
 .prov-form{border-top:1px dashed var(--line);margin-top:12px;padding-top:6px}
 
 /* ---------- 配置提示弹窗 ---------- */
