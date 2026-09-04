@@ -1,6 +1,7 @@
 package io.virbius.control.service;
 
 import io.virbius.control.common.exception.BusinessException;
+import io.virbius.control.config.SqlDialectConfig;
 import io.virbius.control.domain.RuleRevision;
 import io.virbius.control.domain.RolloutStateHelper;
 import io.virbius.control.domain.TenantRolloutPolicy;
@@ -28,16 +29,19 @@ public class PromotionGateService {
     private final RolloutMetricsRepository metricsRepository;
     private final JdbcTemplate jdbc;
     private final ObjectMapper mapper;
+    private final SqlDialectConfig dialect;
 
     public PromotionGateService(
             TenantRolloutPolicyRepository policyRepository,
             RolloutMetricsRepository metricsRepository,
             JdbcTemplate jdbc,
-            ObjectMapper mapper) {
+            ObjectMapper mapper,
+            SqlDialectConfig dialect) {
         this.policyRepository = policyRepository;
         this.metricsRepository = metricsRepository;
         this.jdbc = jdbc;
         this.mapper = mapper;
+        this.dialect = dialect;
     }
 
     public Map<String, Object> evaluate(
@@ -154,31 +158,26 @@ public class PromotionGateService {
         String layer = rule.layer() != null ? rule.layer() : "cloud";
         coverage.put("layer", layer);
 
+        String timeExpr24h = dialect.isMysql()
+                ? "intercepted_at >= NOW() - INTERVAL 24 HOUR"
+                : "intercepted_at >= datetime('now', '-24 hours')";
+
         Long audit24h = jdbc.queryForObject(
-                """
-                SELECT COUNT(*) FROM tb_audit_events
-                WHERE tenant_id = ? AND rule_id = ?
-                  AND intercepted_at >= datetime('now', '-24 hours')
-                """,
+                "SELECT COUNT(*) FROM tb_audit_events " +
+                "WHERE tenant_id = ? AND rule_id = ? AND " + timeExpr24h,
                 Long.class,
                 tenantId,
                 rule.ruleId());
         long events = audit24h != null ? audit24h : 0L;
         coverage.put("audit_events_24h", events);
 
-        Double lagP95 = jdbc.queryForObject(
-                """
-                SELECT COALESCE(
-                  (SELECT MAX(
-                     (julianday(created_at) - julianday(intercepted_at)) * 24 * 60
-                   ) FROM tb_audit_events
-                   WHERE tenant_id = ? AND rule_id = ?
-                     AND intercepted_at >= datetime('now', '-24 hours')),
-                  0)
-                """,
-                Double.class,
-                tenantId,
-                rule.ruleId());
+        String lagExpr = dialect.isMysql()
+                ? "COALESCE((SELECT MAX(TIMESTAMPDIFF(SECOND, intercepted_at, created_at) / 60.0) " +
+                  "FROM tb_audit_events WHERE tenant_id = ? AND rule_id = ? AND " + timeExpr24h + "), 0)"
+                : "COALESCE((SELECT MAX((julianday(created_at) - julianday(intercepted_at)) * 24 * 60) " +
+                  "FROM tb_audit_events WHERE tenant_id = ? AND rule_id = ? AND " + timeExpr24h + "), 0)";
+
+        Double lagP95 = jdbc.queryForObject(lagExpr, Double.class, tenantId, rule.ruleId());
         coverage.put("ingest_lag_p95_minutes", lagP95 != null ? lagP95 : 0.0);
 
         int minEvents = "edge".equalsIgnoreCase(layer)

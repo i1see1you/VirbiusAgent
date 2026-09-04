@@ -1,5 +1,6 @@
 package io.virbius.control.service;
 
+import io.virbius.control.config.SqlDialectConfig;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -10,19 +11,38 @@ import org.springframework.stereotype.Service;
 public class RolloutDashboardService {
 
     private final JdbcTemplate jdbc;
+    private final SqlDialectConfig dialect;
 
-    public RolloutDashboardService(JdbcTemplate jdbc) {
+    public RolloutDashboardService(JdbcTemplate jdbc, SqlDialectConfig dialect) {
         this.jdbc = jdbc;
+        this.dialect = dialect;
+    }
+
+    private String timeAgo(String interval) {
+        return dialect.isMysql()
+                ? "NOW() - INTERVAL " + interval.replace("-", "").replace(" hours", " HOUR").replace(" hours", " HOUR").replace(" day", " DAY").replace(" days", " DAY")
+                : "datetime('now', '-" + interval.replace("- ", "") + "')";
+    }
+
+    private String strftimeMin(String col) {
+        return dialect.isMysql()
+                ? "DATE_FORMAT(" + col + ", '%Y-%m-%d %H:%M:00')"
+                : "strftime('%Y-%m-%d %H:%M:00', " + col + ")";
     }
 
     public Map<String, Object> metrics(String tenantId, String ruleId, int hours) {
+        String timeExpr = dialect.isMysql()
+                ? "minute_bucket >= NOW() - INTERVAL ? HOUR"
+                : "minute_bucket >= datetime('now', ?)";
+        Object timeParam = dialect.isMysql() ? hours : "-" + hours + " hours";
+
         List<Map<String, Object>> series = jdbc.query(
                 """
                 SELECT minute_bucket, rollout_state, canary_percent,
                        cnt_review, cnt_block, cnt_challenge, cnt_allow, cnt_total_requests
                 FROM tb_rule_metrics_1m
                 WHERE tenant_id = ? AND rule_id = ?
-                  AND minute_bucket >= datetime('now', ?)
+                  AND """ + timeExpr + """
                 ORDER BY minute_bucket
                 """,
                 (rs, i) -> {
@@ -37,22 +57,22 @@ public class RolloutDashboardService {
                 },
                 tenantId,
                 ruleId,
-                "-" + hours + " hours");
+                timeParam);
+
+        String timeExpr2h = dialect.isMysql()
+                ? "intercepted_at >= NOW() - INTERVAL 2 HOUR"
+                : "intercepted_at >= datetime('now', '-2 hours')";
 
         List<Map<String, Object>> series1m = jdbc.query(
-                """
-                SELECT strftime('%Y-%m-%d %H:%M:00', intercepted_at) AS bucket,
-                       SUM(CASE WHEN effective_action = 'review'  THEN 1 ELSE 0 END) AS review,
-                       SUM(CASE WHEN effective_action = 'block'   THEN 1 ELSE 0 END) AS block,
-                       SUM(CASE WHEN effective_action = 'challenge' THEN 1 ELSE 0 END) AS challenge,
-                       SUM(CASE WHEN effective_action = 'allow'   THEN 1 ELSE 0 END) AS allow,
-                       COUNT(*) AS total_requests
-                FROM tb_audit_events
-                WHERE tenant_id = ? AND rule_id = ?
-                  AND intercepted_at >= datetime('now', '-2 hours')
-                GROUP BY bucket
-                ORDER BY bucket
-                """,
+                "SELECT " + strftimeMin("intercepted_at") + " AS bucket, " +
+                "SUM(CASE WHEN effective_action = 'review'  THEN 1 ELSE 0 END) AS review, " +
+                "SUM(CASE WHEN effective_action = 'block'   THEN 1 ELSE 0 END) AS block, " +
+                "SUM(CASE WHEN effective_action = 'challenge' THEN 1 ELSE 0 END) AS challenge, " +
+                "SUM(CASE WHEN effective_action = 'allow'   THEN 1 ELSE 0 END) AS allow, " +
+                "COUNT(*) AS total_requests " +
+                "FROM tb_audit_events " +
+                "WHERE tenant_id = ? AND rule_id = ? AND " + timeExpr2h + " " +
+                "GROUP BY bucket ORDER BY bucket",
                 (rs, i) -> {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("bucket", rs.getString("bucket"));
@@ -252,6 +272,11 @@ public class RolloutDashboardService {
     }
 
     public Map<String, Object> aggregateMetrics(String tenantId, int hours) {
+        String timeExpr = dialect.isMysql()
+                ? "minute_bucket >= NOW() - INTERVAL ? HOUR"
+                : "minute_bucket >= datetime('now', ?)";
+        Object timeParam = dialect.isMysql() ? hours : "-" + hours + " hours";
+
         List<Map<String, Object>> series = jdbc.query(
                 """
                 SELECT minute_bucket,
@@ -262,7 +287,7 @@ public class RolloutDashboardService {
                        SUM(cnt_total_requests) AS cnt_total_requests
                 FROM tb_rule_metrics_1m
                 WHERE tenant_id = ?
-                  AND minute_bucket >= datetime('now', ?)
+                  AND """ + timeExpr + """
                 GROUP BY minute_bucket
                 ORDER BY minute_bucket
                 """,
@@ -277,22 +302,22 @@ public class RolloutDashboardService {
                     return row;
                 },
                 tenantId,
-                "-" + hours + " hours");
+                timeParam);
+
+        String timeExpr2h = dialect.isMysql()
+                ? "intercepted_at >= NOW() - INTERVAL 2 HOUR"
+                : "intercepted_at >= datetime('now', '-2 hours')";
 
         List<Map<String, Object>> series1m = jdbc.query(
-                """
-                SELECT strftime('%Y-%m-%d %H:%M:00', intercepted_at) AS bucket,
-                       SUM(CASE WHEN effective_action = 'review'  THEN 1 ELSE 0 END) AS review,
-                       SUM(CASE WHEN effective_action = 'block'   THEN 1 ELSE 0 END) AS block,
-                       SUM(CASE WHEN effective_action = 'challenge' THEN 1 ELSE 0 END) AS challenge,
-                       SUM(CASE WHEN effective_action = 'allow'   THEN 1 ELSE 0 END) AS allow,
-                       COUNT(*) AS total_requests
-                FROM tb_audit_events
-                WHERE tenant_id = ?
-                  AND intercepted_at >= datetime('now', '-2 hours')
-                GROUP BY bucket
-                ORDER BY bucket
-                """,
+                "SELECT " + strftimeMin("intercepted_at") + " AS bucket, " +
+                "SUM(CASE WHEN effective_action = 'review'  THEN 1 ELSE 0 END) AS review, " +
+                "SUM(CASE WHEN effective_action = 'block'   THEN 1 ELSE 0 END) AS block, " +
+                "SUM(CASE WHEN effective_action = 'challenge' THEN 1 ELSE 0 END) AS challenge, " +
+                "SUM(CASE WHEN effective_action = 'allow'   THEN 1 ELSE 0 END) AS allow, " +
+                "COUNT(*) AS total_requests " +
+                "FROM tb_audit_events " +
+                "WHERE tenant_id = ? AND " + timeExpr2h + " " +
+                "GROUP BY bucket ORDER BY bucket",
                 (rs, i) -> {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("bucket", rs.getString("bucket"));
@@ -332,26 +357,28 @@ public class RolloutDashboardService {
     }
 
     public Map<String, Object> ingestHealth(String tenantId, String layer, int hours) {
+        String timeExprEvents = dialect.isMysql()
+                ? "intercepted_at >= NOW() - INTERVAL ? HOUR"
+                : "intercepted_at >= datetime('now', ?)";
+        String timeExprStats = dialect.isMysql()
+                ? "hour_bucket >= NOW() - INTERVAL ? HOUR"
+                : "hour_bucket >= datetime('now', ?)";
+        Object timeParam = dialect.isMysql() ? hours : "-" + hours + " hours";
+
         Long events = jdbc.queryForObject(
-                """
-                SELECT COUNT(*) FROM tb_audit_events
-                WHERE tenant_id = ? AND layer = ?
-                  AND intercepted_at >= datetime('now', ?)
-                """,
+                "SELECT COUNT(*) FROM tb_audit_events " +
+                "WHERE tenant_id = ? AND layer = ? AND " + timeExprEvents,
                 Long.class,
                 tenantId,
                 layer,
-                "-" + hours + " hours");
+                timeParam);
         Long total = jdbc.queryForObject(
-                """
-                SELECT COALESCE(SUM(cnt_total), 0) FROM tb_tenant_request_stats_1h
-                WHERE tenant_id = ? AND layer = ?
-                  AND hour_bucket >= datetime('now', ?)
-                """,
+                "SELECT COALESCE(SUM(cnt_total), 0) FROM tb_tenant_request_stats_1h " +
+                "WHERE tenant_id = ? AND layer = ? AND " + timeExprStats,
                 Long.class,
                 tenantId,
                 layer,
-                "-" + hours + " hours");
+                timeParam);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("layer", layer);
         out.put("audit_events", events != null ? events : 0L);
