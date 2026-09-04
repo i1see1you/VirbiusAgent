@@ -1,70 +1,100 @@
 <template>
-  <div class="v-layout">
-    <aside class="v-sidebar" :class="{ collapsed: session.sidebarCollapsed }">
-      <div class="v-sidebar-head">
-        <span class="v-sidebar-title">{{ t('nav.title') }}</span>
-        <button class="v-sidebar-toggle" @click="session.toggleSidebar"
-          :title="session.sidebarCollapsed ? t('nav.expand') : t('nav.collapse')">
-          {{ session.sidebarCollapsed ? '▶' : '◀' }}
-        </button>
-      </div>
-      <nav class="v-sidebar-nav">
-        <button v-for="n in topItems" :key="n.to" class="v-nav-item"
-          :class="{ active: isActive(n.to) }" @click="go(n.to)">
-          <span class="v-nav-icon" v-html="icons[n.name]"></span>
-          <span class="v-nav-label">{{ t(n.label) }}</span>
-        </button>
-
-        <div class="v-nav-group" :class="{ expanded: rulesExpanded }">
-          <button class="v-nav-item v-nav-group-head"
-            :class="{ active: isActive('/rules') }" @click="onRulesHead">
-            <span class="v-nav-icon" v-html="icons.rules"></span>
-            <span class="v-nav-label">{{ t('nav.rules') }}</span>
-            <span class="v-nav-chevron">▼</span>
+  <el-config-provider :locale="epLocale">
+    <div class="v-layout">
+      <aside class="v-sidebar" :class="{ collapsed: session.sidebarCollapsed }">
+        <div class="v-sidebar-head">
+          <span class="v-sidebar-title">{{ t('nav.title') }}</span>
+          <button class="v-sidebar-toggle" @click="session.toggleSidebar"
+            :title="session.sidebarCollapsed ? t('nav.expand') : t('nav.collapse')">
+            {{ session.sidebarCollapsed ? '▶' : '◀' }}
           </button>
-          <div class="v-nav-sublist">
-            <button v-for="l in layers" :key="l.key" class="v-nav-sub"
-              :class="{ active: isActive('/rules') && rules.currentLayer === l.key }"
-              @click="selectLayer(l.key)">
-              <span class="v-nav-label">{{ t(l.label) }}</span>
+        </div>
+        <nav class="v-sidebar-nav">
+          <div class="v-nav-section">
+            <div class="v-nav-section-label">{{ t('nav.group-ops') }}</div>
+            <button v-for="n in opsItems" :key="n.to" class="v-nav-item"
+              :class="{ active: isActive(n.to) }" :title="t(n.label)" @click="go(n.to)">
+              <span class="v-nav-icon" v-html="icons[n.name]"></span>
+              <span class="v-nav-label">{{ t(n.label) }}</span>
             </button>
           </div>
+
+          <div class="v-nav-section">
+            <div class="v-nav-section-label">{{ t('nav.group-policy') }}</div>
+            <div class="v-nav-group" :class="{ expanded: rulesExpanded }">
+              <button class="v-nav-item v-nav-group-head"
+                :class="{
+                  active: rulesOnPage && !rulesChildrenVisible,
+                  'in-section': rulesOnPage && rulesChildrenVisible
+                }"
+                :title="t('nav.rules')" @click="onRulesHead">
+                <span class="v-nav-icon" v-html="icons.rules"></span>
+                <span class="v-nav-label">{{ t('nav.rules') }}</span>
+                <span class="v-nav-chevron">▼</span>
+              </button>
+              <div class="v-nav-sublist">
+                <button v-for="l in layers" :key="l.key" class="v-nav-sub"
+                  :class="{ active: isActive('/rules') && rules.currentLayer === l.key }"
+                  :title="t(l.label)"
+                  @click="selectLayer(l.key)">
+                  <span class="v-nav-label">{{ t(l.label) }}</span>
+                </button>
+              </div>
+            </div>
+            <button v-for="n in policyItems" :key="n.to" class="v-nav-item"
+              :class="{ active: isActive(n.to) }" :title="t(n.label)" @click="go(n.to)">
+              <span class="v-nav-icon" v-html="icons[n.name]"></span>
+              <span class="v-nav-label">{{ t(n.label) }}</span>
+            </button>
+          </div>
+
+          <div class="v-nav-section">
+            <div class="v-nav-section-label">{{ t('nav.group-assets') }}</div>
+            <button v-for="n in assetItems" :key="n.to" class="v-nav-item"
+              :class="{ active: isActive(n.to) }" :title="t(n.label)" @click="go(n.to)">
+              <span class="v-nav-icon" v-html="icons[n.name]"></span>
+              <span class="v-nav-label">{{ t(n.label) }}</span>
+            </button>
+          </div>
+
+          <div class="v-nav-section">
+            <div class="v-nav-section-label">{{ t('nav.group-platform') }}</div>
+            <button v-for="n in platformItems" :key="n.to" class="v-nav-item"
+              :class="{ active: isActive(n.to) }" :title="t(n.label)" @click="go(n.to)">
+              <span class="v-nav-icon" v-html="icons[n.name]"></span>
+              <span class="v-nav-label">{{ t(n.label) }}</span>
+            </button>
+          </div>
+        </nav>
+      </aside>
+
+      <div class="v-main">
+        <header class="v-topbar">
+          <label class="topbar-field">
+            <span>{{ t('topbar.tenant') }}</span>
+            <el-select :model-value="tenantModel" filterable @change="onTenantChange">
+              <el-option v-for="tn in tenants" :key="tn.id"
+                :label="tn.id + ' · ' + (tn.name || '')" :value="tn.id" />
+            </el-select>
+          </label>
+          <el-button size="small" @click="toggleLang">{{ locale === 'zh' ? t('topbar.lang-zh') : t('topbar.lang-en') }}</el-button>
+        </header>
+
+        <div class="v-scroll">
+          <router-view :key="routeKey" />
         </div>
-
-        <button v-for="n in bottomItems" :key="n.to" class="v-nav-item"
-          :class="{ active: isActive(n.to) }" @click="go(n.to)">
-          <span class="v-nav-icon" v-html="icons[n.name]"></span>
-          <span class="v-nav-label">{{ t(n.label) }}</span>
-        </button>
-      </nav>
-    </aside>
-
-    <div class="v-main">
-      <header class="v-topbar">
-        <label class="topbar-field">
-          <span>{{ t('topbar.tenant') }}</span>
-          <el-select :model-value="tenantModel" filterable @change="onTenantChange">
-            <el-option v-for="t in tenants" :key="t.id"
-              :label="t.id + ' · ' + (t.name || '')" :value="t.id" />
-          </el-select>
-        </label>
-        <el-button size="small" @click="toggleLang">{{ t('topbar.lang') }}</el-button>
-      </header>
-
-      <div class="v-scroll">
-        <router-view :key="routeKey" />
       </div>
-
-      <el-alert v-if="feedback.logMsg" :type="alertType" :title="feedback.logMsg" closable show-icon @close="feedback.clear()" style="margin:0 20px 16px;flex-shrink:0" />
     </div>
-  </div>
+  </el-config-provider>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useI18n } from 'vue-i18n';
-import { ElMessageBox } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import zhCn from 'element-plus/es/locale/lang/zh-cn';
+import en from 'element-plus/es/locale/lang/en';
 import { useSessionStore } from '@/stores/session';
 import { useRulesStore, type LayerKey } from '@/stores/rules';
 import { useFeedbackStore } from '@/stores/feedback';
@@ -77,6 +107,8 @@ const route = useRoute();
 const session = useSessionStore();
 const rules = useRulesStore();
 const feedback = useFeedbackStore();
+
+const epLocale = computed(() => (locale.value === 'zh' ? zhCn : en));
 
 const icons: Record<string, string> = {
   tenants: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="2.5"/><path d="M2 17c0-3 2-5 5-5s5 2 5 5"/><circle cx="14" cy="7" r="2.5"/><path d="M11 17c0-3 2-5 4-5s4 2 4 5"/></svg>',
@@ -92,19 +124,23 @@ const icons: Record<string, string> = {
   trace: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/><path d="M6 6l8 3M16 11l-6 4"/></svg>'
 };
 
-const topItems = [
-  { to: '/tenants', name: 'tenants', label: 'nav.tenants' },
+const opsItems = [
+  { to: '/challenge', name: 'challenge', label: 'nav.challenge' },
+  { to: '/monitor', name: 'monitor', label: 'nav.monitor' },
+  { to: '/trace', name: 'trace', label: 'nav.trace' },
+  { to: '/audit-center', name: 'audit-center', label: 'nav.audit-center' }
+];
+const policyItems = [
+  { to: '/rollout', name: 'rollout', label: 'nav.rollout' }
+];
+const assetItems = [
   { to: '/lists', name: 'lists', label: 'nav.lists' },
   { to: '/cumulatives', name: 'cumulatives', label: 'nav.cumulatives' },
   { to: '/tools', name: 'tools', label: 'nav.tools' },
   { to: '/license', name: 'license', label: 'nav.license' }
 ];
-const bottomItems = [
-  { to: '/rollout', name: 'rollout', label: 'nav.rollout' },
-  { to: '/audit-center', name: 'audit-center', label: 'nav.audit-center' },
-  { to: '/monitor', name: 'monitor', label: 'nav.monitor' },
-  { to: '/challenge', name: 'challenge', label: 'nav.challenge' },
-  { to: '/trace', name: 'trace', label: 'nav.trace' }
+const platformItems = [
+  { to: '/tenants', name: 'tenants', label: 'nav.tenants' }
 ];
 const layers: { key: LayerKey; label: string }[] = [
   { key: 'cloud', label: 'nav.cloud' },
@@ -116,12 +152,21 @@ const layers: { key: LayerKey; label: string }[] = [
 const rulesExpanded = ref(true);
 const tenants = ref<{ id: string; name: string }[]>([]);
 const tenantModel = computed(() => session.tenant);
+const rulesOnPage = computed(() => route.path === '/rules');
+const rulesChildrenVisible = computed(() => rulesExpanded.value && !session.sidebarCollapsed);
 
-const alertType = computed(() => {
-  const m: Record<string, any> = { ok: 'success', err: 'error', warn: 'warning', info: 'info' };
-  return m[feedback.logLevel] || 'info';
-});
 const routeKey = computed(() => route.path + ':' + session.tenant + ':' + rules.currentLayer);
+
+watch(() => feedback.logMsg, (msg) => {
+  if (!msg) return;
+  if (feedback.logLevel !== 'err') {
+    const typeMap: Record<string, 'success' | 'warning' | 'info'> = {
+      ok: 'success', warn: 'warning', info: 'info'
+    };
+    ElMessage({ message: msg, type: typeMap[feedback.logLevel] || 'info', duration: 3000, showClose: true });
+  }
+  feedback.clear();
+});
 
 function isActive(to: string) { return route.path === to; }
 

@@ -1,7 +1,11 @@
 <template>
   <div class="v-card">
     <h2 class="v-card-title">{{ t('challenge.title') }}</h2>
-    <p class="v-hint" v-html="t('challenge.desc')"></p>
+    <p class="v-hint">{{ t('challenge.desc-short') }}</p>
+    <details class="v-hint-more">
+      <summary>{{ t('common.learn-more') }}</summary>
+      <p class="v-hint" v-html="t('challenge.desc')"></p>
+    </details>
 
     <div class="v-row">
       <el-button @click="load">{{ t('challenge.btn-refresh') }}</el-button>
@@ -10,7 +14,7 @@
     <el-tabs v-model="activeTab">
       <el-tab-pane :name="'pending'">
         <template #label>{{ t('challenge.tab-pending') }} <el-badge :value="pending.length" :hidden="!pending.length" /></template>
-        <el-table :data="paginatedPending" size="small" border stripe>
+        <el-table :data="paginatedPending" size="small" border stripe :empty-text="t('challenge.empty')">
           <el-table-column :label="t('challenge.header-id')" show-overflow-tooltip>
             <template #default="{ row }"><code>{{ row.challenge_id }}</code></template>
           </el-table-column>
@@ -39,8 +43,8 @@
             <template #default="{ row }">
               <template v-if="isExpired(row.expires_at)"><span style="color:#94a3b8">{{ t('challenge.expired') }}</span></template>
               <template v-else>
-                <el-button size="small" type="success" @click="approve(row.challenge_id)">{{ t('challenge.btn-approve') }}</el-button>
-                <el-button size="small" type="danger" @click="reject(row.challenge_id)">{{ t('challenge.btn-reject') }}</el-button>
+                <el-button size="small" type="success" @click="openDialog('approve', row.challenge_id)">{{ t('challenge.btn-approve') }}</el-button>
+                <el-button size="small" type="danger" @click="openDialog('reject', row.challenge_id)">{{ t('challenge.btn-reject') }}</el-button>
               </template>
             </template>
           </el-table-column>
@@ -52,7 +56,7 @@
 
       <el-tab-pane :name="'approved'">
         <template #label>{{ t('challenge.tab-approved') }} <el-badge :value="approved.length" :hidden="!approved.length" type="success" /></template>
-        <el-table :data="paginatedApproved" size="small" border stripe>
+        <el-table :data="paginatedApproved" size="small" border stripe :empty-text="t('common.no-data')">
           <el-table-column :label="t('challenge.header-id')" show-overflow-tooltip>
             <template #default="{ row }"><code>{{ row.challenge_id }}</code></template>
           </el-table-column>
@@ -79,6 +83,23 @@
           @current-change="scrollTop" />
       </el-tab-pane>
     </el-tabs>
+
+    <el-dialog v-model="dialogVisible" :title="dialogMode === 'approve' ? t('challenge.dialog-approve') : t('challenge.dialog-reject')" width="480px">
+      <div class="v-row" style="margin-bottom:8px">
+        <label>{{ dialogMode === 'approve' ? t('challenge.approver') : t('challenge.rejector') }}
+          <el-input v-model="dialogActor" style="width:240px" />
+        </label>
+      </div>
+      <div class="v-row">
+        <label>{{ dialogMode === 'approve' ? t('challenge.comment') : t('challenge.reason') }}
+          <el-input v-model="dialogNote" type="textarea" :rows="3" style="width:360px" />
+        </label>
+      </div>
+      <template #footer>
+        <el-button @click="dialogVisible = false">{{ t('common.cancel') }}</el-button>
+        <el-button :type="dialogMode === 'approve' ? 'success' : 'danger'" @click="submitDialog">{{ t('common.confirm') }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template><script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
@@ -98,6 +119,11 @@ const totalApproved = ref(0);
 const activeTab = ref('pending');
 const pending = ref<any[]>([]);
 const approved = ref<any[]>([]);
+const dialogVisible = ref(false);
+const dialogMode = ref<'approve' | 'reject'>('approve');
+const dialogId = ref('');
+const dialogActor = ref('operator');
+const dialogNote = ref('');
 
 function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
 const paginatedPending = computed(() => pending.value.slice((pagePending.value - 1) * size.value, pagePending.value * size.value));
@@ -123,27 +149,36 @@ async function load() {
   } catch (e: any) { ElMessage.error(e.message); }
 }
 
-async function approve(id: string) {
-  const approvedBy = window.prompt('Approver name:', 'operator');
-  if (approvedBy === null) return;
-  const comment = window.prompt('Approval comment (optional):', '') || '';
+function openDialog(mode: 'approve' | 'reject', id: string) {
+  dialogMode.value = mode;
+  dialogId.value = id;
+  dialogActor.value = 'operator';
+  dialogNote.value = '';
+  dialogVisible.value = true;
+}
+
+async function submitDialog() {
+  if (dialogMode.value === 'approve') await approve(dialogId.value, dialogActor.value, dialogNote.value);
+  else await reject(dialogId.value, dialogActor.value, dialogNote.value);
+}
+
+async function approve(id: string, approvedBy: string, comment: string) {
   try {
-    const res = await rawJson<any>(`/api/v1/challenges/${id}/approve`, { method: 'POST', body: JSON.stringify({ approved_by: approvedBy, comment }) });
+    const res = await rawJson<any>(`/api/v1/challenges/${id}/approve`, { method: 'POST', body: JSON.stringify({ approved_by: approvedBy || 'operator', comment }) });
     if (res && res.token) {
       ElMessage.success(`Challenge approved! Token: ${res.token} (expires in 10 minutes)`);
+      dialogVisible.value = false;
       load();
     } else { ElMessage.error('Approve failed: ' + (res?.message || res?.status || 'unknown')); }
   } catch (e: any) { ElMessage.error('Approve error: ' + e.message); }
 }
 
-async function reject(id: string) {
-  const rejectedBy = window.prompt('Rejector name:', 'operator');
-  if (rejectedBy === null) return;
-  const reason = window.prompt('Rejection reason:', '');
-  if (!reason) { ElMessage.warning('Rejection reason is required'); return; }
+async function reject(id: string, rejectedBy: string, reason: string) {
+  if (!reason) { ElMessage.warning(t('challenge.reason-required')); return; }
   try {
-    await rawJson(`/api/v1/challenges/${id}/reject`, { method: 'POST', body: JSON.stringify({ rejected_by: rejectedBy, reason }) });
+    await rawJson(`/api/v1/challenges/${id}/reject`, { method: 'POST', body: JSON.stringify({ rejected_by: rejectedBy || 'operator', reason }) });
     ElMessage.success('Challenge rejected');
+    dialogVisible.value = false;
     load();
   } catch (e: any) { ElMessage.error('Reject error: ' + e.message); }
 }

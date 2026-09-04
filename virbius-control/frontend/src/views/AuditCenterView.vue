@@ -1,7 +1,11 @@
 <template>
   <div class="v-card">
     <h2 class="v-card-title">{{ t('ac.title') }}</h2>
-    <p class="v-hint" v-html="t('ac.desc')"></p>
+    <p class="v-hint">{{ t('ac.desc-short') }}</p>
+    <details class="v-hint-more">
+      <summary>{{ t('common.learn-more') }}</summary>
+      <p class="v-hint" v-html="t('ac.desc')"></p>
+    </details>
 
     <div class="v-row">
       <label>trace_id
@@ -15,7 +19,7 @@
 
     <div class="v-section">
       <h3 v-html="t('ac.tb-audit-title', [dbCount])"></h3>
-      <el-table :data="paginatedEvents" size="small" border stripe>
+      <el-table :data="paginatedEvents" size="small" border stripe :empty-text="t('ac.empty')">
         <el-table-column :label="t('rollout.header-time')" width="170">
           <template #default="{ row }">{{ fmtTime(row.intercepted_at) }}</template>
         </el-table-column>

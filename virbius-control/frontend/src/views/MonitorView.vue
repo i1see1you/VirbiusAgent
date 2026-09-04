@@ -1,7 +1,11 @@
 <template>
   <div class="v-card">
     <h2 class="v-card-title">{{ t('monitor.title') }}</h2>
-    <p class="v-hint" v-html="t('hint.monitor')"></p>
+    <p class="v-hint">{{ t('monitor.desc-short') }}</p>
+    <details class="v-hint-more">
+      <summary>{{ t('common.learn-more') }}</summary>
+      <p class="v-hint" v-html="t('hint.monitor')"></p>
+    </details>
 
     <div class="v-row">
       <el-button v-for="h in [24, 168, 720]" :key="h" :type="hours === h ? 'primary' : 'default'" size="small" @click="setHours(h)">{{ t('monitor.time-' + (h === 24 ? '24h' : h === 168 ? '7d' : '30d')) }}</el-button>
@@ -16,19 +20,19 @@
       <div class="kpi-card"><div class="label">{{ t('monitor.kpi-active-rules') }}</div><div class="value">{{ activeRules }}</div></div>
     </div>
 
-    <div class="v-section"><h3>{{ t('monitor.overall-traffic') }}</h3><div class="chart-wrap"><Bar v-if="trafficData" :data="trafficData" :options="stackedOpts" /></div></div>
-    <div class="v-section"><h3>{{ t('monitor.overall-block-rate') }}</h3><div class="chart-wrap"><Line v-if="blockRateData" :data="blockRateData" :options="blockRateOpts" /></div></div>
+    <div class="v-section"><h3>{{ t('monitor.overall-traffic') }}</h3><div class="chart-wrap"><Bar v-if="trafficData" :data="trafficData" :options="stackedOpts" /><p v-else class="v-empty-hint">{{ t('monitor.empty-chart') }}</p></div></div>
+    <div class="v-section"><h3>{{ t('monitor.overall-block-rate') }}</h3><div class="chart-wrap"><Line v-if="blockRateData" :data="blockRateData" :options="blockRateOpts" /><p v-else class="v-empty-hint">{{ t('monitor.empty-chart') }}</p></div></div>
     <div class="v-section">
       <h3>{{ t('monitor.rule-block-rate') }}</h3>
       <el-select v-model="selectedRule" style="width:240px;margin-bottom:8px">
         <el-option value="" :label="t('monitor.select-rule')" />
         <el-option v-for="r in allRules" :key="r" :value="r" :label="r" />
       </el-select>
-      <div class="chart-wrap"><Line v-if="ruleChartData" :data="ruleChartData" :options="ruleOpts" /></div>
+      <div class="chart-wrap"><Line v-if="ruleChartData" :data="ruleChartData" :options="ruleOpts" /><p v-else class="v-empty-hint">{{ t('monitor.empty-chart') }}</p></div>
     </div>
     <div class="v-section">
       <h3>{{ t('monitor.rule-ranking') }}</h3>
-      <el-table :data="ranking" size="small" border stripe>
+      <el-table :data="ranking" size="small" border stripe :empty-text="t('monitor.empty-table')">
         <el-table-column :label="t('monitor.ranking-header-rule')" prop="rule_id" />
         <el-table-column :label="t('monitor.ranking-header-hits')"><template #default="{ row }">{{ fmtNum(row.total_hits) }}</template></el-table-column>
         <el-table-column :label="t('monitor.ranking-header-block')"><template #default="{ row }">{{ fmtNum(row.block) }}</template></el-table-column>
@@ -42,16 +46,16 @@
     <div class="v-section">
       <h3>{{ t('monitor.scene-traffic') }}</h3>
       <div class="chart-wrap" style="max-width:320px;margin:0 auto 12px"><Doughnut v-if="sceneData" :data="sceneData" :options="doughnutOpts" /></div>
-      <el-table :data="scenes" size="small" border stripe>
+      <el-table :data="scenes" size="small" border stripe :empty-text="t('monitor.empty-table')">
         <el-table-column :label="t('monitor.scene-header-scene')" prop="scene" />
         <el-table-column :label="t('monitor.scene-header-layer')" prop="layer" />
         <el-table-column :label="t('monitor.scene-header-requests')"><template #default="{ row }">{{ fmtNum(row.total_requests) }}</template></el-table-column>
       </el-table>
     </div>
-    <div class="v-section"><h3>{{ t('monitor.degradation-title') }}</h3><div class="chart-wrap"><Line v-if="degData" :data="degData" :options="degOpts" /></div></div>
+    <div class="v-section"><h3>{{ t('monitor.degradation-title') }}</h3><div class="chart-wrap"><Line v-if="degData" :data="degData" :options="degOpts" /><p v-else class="v-empty-hint">{{ t('monitor.empty-chart') }}</p></div></div>
     <div class="v-section">
       <h3>{{ t('monitor.event-timeline') }}</h3>
-      <el-table :data="events" size="small" border stripe>
+      <el-table :data="events" size="small" border stripe :empty-text="t('monitor.empty-table')">
         <el-table-column :label="t('monitor.event-header-time')"><template #default="{ row }">{{ fmtTime(row.effective_at) }}</template></el-table-column>
         <el-table-column :label="t('monitor.event-header-rule')" prop="rule_id" />
         <el-table-column :label="t('monitor.event-header-state')" prop="rollout_state" width="100" />

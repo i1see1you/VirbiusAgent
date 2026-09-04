@@ -1,7 +1,14 @@
 <template>
   <div class="v-card">
     <h2 class="v-card-title">{{ t('rollout.title') }}</h2>
-    <p class="v-hint" v-html="t('rollout.desc')"></p>
+    <p class="v-hint">{{ t('rollout.desc-short') }}</p>
+    <details class="v-hint-more">
+      <summary>{{ t('common.learn-more') }}</summary>
+      <p class="v-hint" v-html="t('rollout.desc')"></p>
+    </details>
+
+    <el-tabs v-model="rolloutTab">
+      <el-tab-pane :label="t('rollout.tab-canary')" name="canary">
 
     <!-- Machine canary deploy -->
     <div class="v-section">
@@ -17,8 +24,8 @@
         <el-button :disabled="!!active" @click="openVersionModal('cloud', t('dr.prepare-engine'))">{{ t('rollout.btn-prepare-engine') }}</el-button>
         <el-button :disabled="!!active" @click="openVersionModal('gateway', t('dr.prepare-gateway'))">{{ t('rollout.btn-prepare-gateway') }}</el-button>
         <el-button :disabled="!!active" @click="openVersionModal('edge', t('dr.prepare-edge'))">{{ t('rollout.btn-prepare-edge') }}</el-button>
-        <el-button :disabled="!!active" style="background:#9333ea;color:#fff;border-color:#9333ea" @click="openVersionModal('falco', t('dr.prepare-falco'))">{{ t('rollout.btn-prepare-falco') }}</el-button>
-        <el-button :disabled="!!active" style="background:#6366f1;color:#fff;border-color:#6366f1" @click="openVersionModal('', t('dr.prepare-all'))">{{ t('rollout.btn-prepare-all') }}</el-button>
+        <el-button :disabled="!!active" @click="openVersionModal('falco', t('dr.prepare-falco'))">{{ t('rollout.btn-prepare-falco') }}</el-button>
+        <el-button :disabled="!!active" type="primary" @click="openVersionModal('', t('dr.prepare-all'))">{{ t('rollout.btn-prepare-all') }}</el-button>
         <el-button :disabled="!canUpgrade" @click="drUpgrade">{{ t('rollout.btn-upgrade') }}</el-button>
         <el-button :disabled="!canPause" @click="drPause">{{ t('rollout.btn-pause') }}</el-button>
         <el-button :disabled="!canRollback" type="danger" @click="drRollback">{{ t('rollout.btn-rollback') }}</el-button>
@@ -70,7 +77,7 @@
       <div v-else class="v-hint">{{ t('rollout.no-active-deploy') }}</div>
 
       <h4 style="font-size:13px;margin:12px 0 6px">{{ t('rollout.history') }}</h4>
-      <el-table :data="history" size="small" border stripe>
+      <el-table :data="history" size="small" border stripe :empty-text="t('rollout.empty-history')">
         <el-table-column :label="t('rollout.header-id')" prop="deploy_id" />
         <el-table-column :label="t('rollout.header-bundle')" prop="bundle_id" />
         <el-table-column :label="t('rollout.header-status')"><template #default="{ row }"><el-tag size="small">{{ row.state }}</el-tag></template></el-table-column>
@@ -79,6 +86,9 @@
         <el-table-column :label="t('rollout.header-operator')" prop="operator" />
       </el-table>
     </div>
+      </el-tab-pane>
+
+      <el-tab-pane :label="t('rollout.tab-rule')" name="rule">
 
     <!-- Deploy status bar -->
     <div class="v-section">
@@ -141,12 +151,12 @@
     <div class="v-section">
       <h3>{{ t('rollout.hourly-metrics') }}</h3>
       <div class="big-kpi-card"><div class="label">{{ t('rollout.block-rate-24h') }}</div><div class="value" :class="rateCls">{{ fmtPct(roTotals.block_rate) }}</div></div>
-      <div class="chart-wrap"><Line v-if="combinedData" :data="combinedData" :options="combinedOpts" /></div>
+      <div class="chart-wrap"><Line v-if="combinedData" :data="combinedData" :options="combinedOpts" /><p v-else class="v-empty-hint">{{ t('rollout.empty-chart') }}</p></div>
     </div>
 
     <div class="v-section">
       <h3>{{ t('rollout.timeline') }}</h3>
-      <el-table :data="timeline" size="small" border stripe>
+      <el-table :data="timeline" size="small" border stripe :empty-text="t('rollout.empty-history')">
         <el-table-column :label="t('rollout.header-time')"><template #default="{ row }">{{ fmtTime(row.effective_at) }}</template></el-table-column>
         <el-table-column :label="t('rollout.header-status')"><template #default="{ row }"><el-tag size="small">{{ row.rollout_state }}</el-tag></template></el-table-column>
         <el-table-column :label="t('rollout.header-canary')"><template #default="{ row }">{{ row.canary_percent ?? '-' }}</template></el-table-column>
@@ -160,8 +170,8 @@
       <h3>{{ t('rollout.upgrade-title') }}</h3>
       <div class="v-row" style="flex-wrap:wrap;align-items:center;gap:8px">
         <el-button v-if="canRoApply" type="primary" @click="roApply">{{ t('rollout.btn-next') }}</el-button>
-        <el-checkbox v-model="roForce">{{ t('rollout.force-bypass') }}</el-checkbox>
-        <el-input v-model="roForceComment" :placeholder="t('rollout.placeholder-force')" style="width:260px" />
+        <el-checkbox v-model="roForce" style="color:#92400e">{{ t('rollout.force-bypass') }}</el-checkbox>
+        <el-input v-if="roForce" v-model="roForceComment" :placeholder="t('rollout.placeholder-force')" style="width:260px" />
       </div>
       <p class="v-hint">{{ roHint }}</p>
     </div>
@@ -180,7 +190,7 @@
 
     <div class="v-section">
       <h3>{{ t('rollout.audit-samples') }}</h3>
-      <el-table :data="samples" size="small" border stripe>
+      <el-table :data="samples" size="small" border stripe :empty-text="t('common.no-data')">
         <el-table-column :label="t('rollout.header-time')"><template #default="{ row }">{{ fmtTime(row.intercepted_at) }}</template></el-table-column>
         <el-table-column label="trace_id"><template #default="{ row }"><el-button v-if="row.trace_id" link type="primary" @click="openTrace(row.trace_id)"><code>{{ row.trace_id }}</code></el-button></template></el-table-column>
         <el-table-column :label="t('rollout.header-action')" prop="effective_action" />
@@ -189,6 +199,8 @@
         <el-table-column :label="t('rollout.header-rollout')"><template #default="{ row }">{{ stateLabel(row.rollout_state, row.canary_percent) }}</template></el-table-column>
       </el-table>
     </div>
+      </el-tab-pane>
+    </el-tabs>
 
     <el-dialog v-model="versionModalVisible" :title="t('dr.version-modal-title')" width="520px">
       <p class="v-hint">{{ t('dr.version-modal-desc') }}</p>
@@ -239,6 +251,7 @@ const feedback = useFeedbackStore();
 const session = useSessionStore();
 
 const FLOW_STEPS = ['draft', 'dry_run', 'canary', 'full'];
+const rolloutTab = ref('canary');
 const active = ref<any>(null);
 const history = ref<any[]>([]);
 const drDescription = ref('');

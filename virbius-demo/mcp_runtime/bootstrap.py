@@ -170,7 +170,19 @@ def fetch_and_store_pem(lab) -> str:
     pem = (data.get("public_key_pem") or data.get("publicKeyPem") or "").strip()
     if not pem:
         raise RuntimeError("public-key empty for tenant " + lab.tenant_id)
-    return write_pem(lab.tenant_id, pem)
+    path = os.path.join(settings.config_dir(), "licenses", lab.tenant_id + ".pem")
+    old = ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            old = f.read().strip()
+    except OSError:
+        old = ""
+    written = write_pem(lab.tenant_id, pem)
+    if old != pem:
+        from mcp_runtime import proxy_client
+        proxy_client.drop_lab(lab.id)
+        log.info("lab %s public key refreshed", lab.id)
+    return written
 
 
 def _issue_license(lab, allowed_tools: list) -> bool:
@@ -182,7 +194,7 @@ def _issue_license(lab, allowed_tools: list) -> bool:
     app_ok = (claims.get("app_id") or "") == lab.app_id
     have_all = all(n in current for n in allowed_tools)
     if jwt and tenant_ok and app_ok and have_all:
-        pem_path = rec.get("pem_path") or fetch_and_store_pem(lab)
+        pem_path = fetch_and_store_pem(lab)
         if pem_path != rec.get("pem_path"):
             settings.save_license(lab.id, jwt, pem_path)
         log.info("lab %s license already has %d tools, skip issue", lab.id, len(allowed_tools))

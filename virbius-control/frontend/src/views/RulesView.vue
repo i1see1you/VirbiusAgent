@@ -1,14 +1,29 @@
 <template>
   <div class="v-card">
     <h2 class="v-card-title">{{ t('rules.title') }}</h2>
-    <p class="v-hint" v-html="t('hint.rules')"></p>
+    <p class="v-hint">{{ t('rules.desc-short') }}</p>
+    <details class="v-hint-more">
+      <summary>{{ t('common.learn-more') }}</summary>
+      <p class="v-hint" v-html="t('hint.rules')"></p>
+    </details>
 
     <div class="v-row">
       <span class="v-hint" style="margin:0" v-html="t('rules.current-layer', [rules.currentLayer])"></span>
+      <el-input v-model="filterQ" :placeholder="t('rules.filter-id')" clearable style="width:220px" />
+      <el-select popper-class="rules-select-popper" v-model="filterState" clearable :placeholder="t('rules.filter-state')" style="width:140px">
+        <el-option value="draft" label="draft" />
+        <el-option value="dry_run" label="dry_run" />
+        <el-option value="canary" label="canary" />
+        <el-option value="full" label="full" />
+        <el-option value="disabled" label="disabled" />
+      </el-select>
       <el-button type="primary" @click="openNew">{{ t('rules.btn-new') }}</el-button>
     </div>
 
-    <el-table :data="paginatedRules" size="small" border stripe @row-click="onRowClick">
+    <p class="v-empty-hint" style="margin:0 0 8px">{{ t('rules.click-to-edit') }}</p>
+
+    <el-table ref="tableRef" :data="paginatedRules" size="small" border stripe highlight-current-row
+      @row-click="onRowClick" :empty-text="t('rules.empty')">
       <el-table-column :label="t('rules.header-id')" prop="rule_id" />
       <el-table-column :label="t('rules.header-runtime')" prop="runtime" width="90" />
       <el-table-column :label="t('rules.header-bind')" width="140">
@@ -31,20 +46,24 @@
       <el-table-column :label="t('rules.header-reason')" prop="reason_code" />
     </el-table>
 
-    <el-pagination v-if="total > size" small background layout="prev, pager, next"
-      v-model:current-page="page" :page-size="size" :total="total"
+    <el-pagination v-if="filteredRules.length > size" small background layout="prev, pager, next"
+      v-model:current-page="page" :page-size="size" :total="filteredRules.length"
       @current-change="scrollTop" />
 
-    <div v-if="editorVisible" class="v-card" style="margin-top:16px;background:#f8fafc">
-      <h3 style="font-size:15px;margin:0 0 8px">
-        {{ isNew ? t('rules.edit-title-new') : t('rules.edit-title-edit') }}
-        <span v-if="!isNew" style="margin-left:6px">{{ selectedRuleId }}</span>
-      </h3>
+    <Teleport to="body">
+      <Transition name="rules-slide">
+        <div v-if="editorVisible" class="rules-mask" @click.self="requestClose">
+          <aside class="rules-panel" @click.stop>
+            <header class="rules-panel-head">
+              <h2>{{ drawerTitle }}</h2>
+              <button type="button" class="rules-panel-close" @click="requestClose">{{ t('common.close') }}</button>
+            </header>
+            <div class="rules-panel-body">
 
       <div v-if="isNew" class="v-row">
         <label>rule_id <el-input v-model="form.rule_id" style="width:200px" /></label>
         <label>runtime
-          <el-select v-model="form.runtime" style="width:140px" @change="onRuntimeChange">
+          <el-select popper-class="rules-select-popper" v-model="form.runtime" style="width:140px" @change="onRuntimeChange">
             <el-option v-for="rt in layerRuntimes" :key="rt" :value="rt" :label="rt" />
           </el-select>
         </label>
@@ -56,7 +75,7 @@
           <el-input-number v-model="form.risk" :min="0" :max="100" :disabled="isReadOnly || isDlp" style="width:100px" />
         </label>
         <label>{{ t('rules.label-intent') }}
-          <el-select v-model="form.intent" :disabled="isReadOnly || isAsync || isDlp" style="width:120px">
+          <el-select popper-class="rules-select-popper" v-model="form.intent" :disabled="isReadOnly || isAsync || isDlp" style="width:120px">
             <el-option value="deny" label="deny" />
             <el-option value="allow" label="allow" />
             <el-option value="challenge" label="challenge" />
@@ -69,7 +88,7 @@
       <div v-if="form.is_async" class="v-card" style="padding:12px;background:#fff;border:1px dashed #cbd5e1;margin:8px 0">
         <div class="v-row">
           <label>{{ t('rules.action-type') }}
-            <el-select v-model="asyncCfg.type" style="width:150px">
+            <el-select popper-class="rules-select-popper" v-model="asyncCfg.type" style="width:150px">
               <el-option value="redis_stream" label="Redis Stream" />
               <el-option value="webhook" label="Webhook" />
             </el-select>
@@ -88,7 +107,7 @@
 
       <div v-if="showBindScope" class="v-row">
         <label>bind_scope
-          <el-select v-model="form.bind_scope" :disabled="isReadOnly" style="width:200px" @change="onBindScopeChange">
+          <el-select popper-class="rules-select-popper" v-model="form.bind_scope" :disabled="isReadOnly" style="width:200px" @change="onBindScopeChange">
             <el-option v-for="o in bindScopeOptions" :key="o.value" :value="o.value" :label="o.label" />
           </el-select>
         </label>
@@ -102,7 +121,7 @@
 
       <div v-if="isScript" class="v-row">
         <label>{{ t('rules.editor-mode') }}
-          <el-select v-model="form.editor_mode" :disabled="isReadOnly" style="width:160px" @change="onEditorModeChange">
+          <el-select popper-class="rules-select-popper" v-model="form.editor_mode" :disabled="isReadOnly" style="width:160px" @change="onEditorModeChange">
             <el-option value="simple" :label="t('rules.editor-simple')" />
             <el-option value="advanced" :label="t('rules.editor-advanced')" />
           </el-select>
@@ -120,21 +139,21 @@
         <div v-for="(leaf, i) in conditionLeaves" :key="i" class="v-row" style="background:#fff;padding:6px;border-radius:4px">
           <template v-if="leaf.type === 'list_match'">
             <span>{{ t('rules.cond-list') }}</span>
-            <el-select v-model="leaf.list_name" size="small" style="width:160px">
+            <el-select popper-class="rules-select-popper" v-model="leaf.list_name" size="small" style="width:160px">
               <el-option v-for="n in listCatalog" :key="n" :value="n" :label="n" />
             </el-select>
             <span>{{ t('rules.cond-match') }}</span>
-            <el-select v-model="leaf.value_source" size="small" style="width:140px">
+            <el-select popper-class="rules-select-popper" v-model="leaf.value_source" size="small" style="width:140px">
               <el-option value="content" label="content" />
               <el-option v-for="v in varOptions" :key="v" :value="v" :label="v" />
             </el-select>
           </template>
           <template v-else>
             <span>{{ t('rules.cond-cum') }}</span>
-            <el-select v-model="leaf.cumulative_name" size="small" style="width:160px">
+            <el-select popper-class="rules-select-popper" v-model="leaf.cumulative_name" size="small" style="width:160px">
               <el-option v-for="n in cumNames" :key="n" :value="n" :label="n" />
             </el-select>
-            <el-select v-model="leaf.compare" size="small" style="width:80px">
+            <el-select popper-class="rules-select-popper" v-model="leaf.compare" size="small" style="width:80px">
               <el-option value="gte" label="≥" /><el-option value="gt" label=">" />
               <el-option value="lte" label="≤" /><el-option value="lt" label="<" /><el-option value="eq" label="=" />
             </el-select>
@@ -151,7 +170,7 @@
       <div v-if="isEdgeDsl && form.editor_mode === 'simple'" style="margin-bottom:8px">
         <div class="v-row">
           <label>{{ t('edge.list-type') }}
-            <el-select v-model="edgeBody.list_type" style="width:180px">
+            <el-select popper-class="rules-select-popper" v-model="edgeBody.list_type" style="width:180px">
               <el-option value="deny" :label="t('edge.list-type.deny')" />
               <el-option value="allow" :label="t('edge.list-type.allow')" />
             </el-select>
@@ -164,7 +183,7 @@
       <div v-if="isDlp && form.editor_mode === 'simple'" style="margin-bottom:8px">
         <div class="v-row">
           <label>{{ t('dlp.entity-type') }}
-            <el-select v-model="dlpBody.entity_type" style="width:180px">
+            <el-select popper-class="rules-select-popper" v-model="dlpBody.entity_type" style="width:180px">
               <el-option value="phone_cn" :label="t('dlp.phone-cn')" />
               <el-option value="idcard_cn" :label="t('dlp.idcard-cn')" />
               <el-option value="email" :label="t('dlp.email')" />
@@ -189,6 +208,7 @@
           :completion-sources="completionSources"
           :lint-fn="lintFn"
           :read-only="isReadOnly"
+          max-height="360px"
           @save="onSaveShortcut"
         />
         <div class="v-row" style="margin-top:4px">
@@ -218,13 +238,17 @@
         :bundle-id="session.bundleId"
       />
 
-      <div class="v-row" style="margin-top:8px">
-        <el-button v-if="(!editMeta && isNew) || (editMeta && editMeta.rollout_state !== 'disabled' && !inExecutionPlane(editMeta.rollout_state))" type="primary" :loading="saving" @click="saveWithDiff">{{ isNew ? t('rules.btn-create') : t('rules.btn-save') }}</el-button>
-        <el-button v-if="!isNew && editMeta?.rollout_state === 'draft'" @click="activate">{{ t('rules.btn-activate') }}</el-button>
-        <el-button v-if="!isNew && editMeta && editMeta.rollout_state !== 'disabled'" type="danger" @click="disable">{{ t('rules.btn-disable') }}</el-button>
-        <el-button v-if="!isNew && editMeta?.rollout_state === 'disabled'" @click="recover">{{ t('rules.btn-enable') }}</el-button>
-      </div>
-    </div>
+            </div>
+            <footer class="rules-panel-foot">
+              <el-button v-if="(!editMeta && isNew) || (editMeta && editMeta.rollout_state !== 'disabled' && !inExecutionPlane(editMeta.rollout_state))" type="primary" :loading="saving" @click="saveWithDiff">{{ isNew ? t('rules.btn-create') : t('rules.btn-save') }}</el-button>
+              <el-button v-if="!isNew && editMeta?.rollout_state === 'draft'" @click="activate">{{ t('rules.btn-activate') }}</el-button>
+              <el-button v-if="!isNew && editMeta && editMeta.rollout_state !== 'disabled'" type="danger" @click="disable">{{ t('rules.btn-disable') }}</el-button>
+              <el-button v-if="!isNew && editMeta?.rollout_state === 'disabled'" @click="recover">{{ t('rules.btn-enable') }}</el-button>
+            </footer>
+          </aside>
+        </div>
+      </Transition>
+    </Teleport>
 
     <DiffConfirm ref="diffConfirmRef" :old-text="previousBody" :new-text="form.body"
       @confirm="doSave" @cancel="cancelSave" />
@@ -232,7 +256,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch, shallowRef } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted, watch, shallowRef, nextTick } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessageBox } from 'element-plus';
 import { useFeedbackStore } from '@/stores/feedback';
@@ -258,10 +282,30 @@ const page = ref(1);
 const size = ref(50);
 const total = ref(0);
 const ruleList = ref<any[]>([]);
-const paginatedRules = computed(() => ruleList.value.slice((page.value - 1) * size.value, page.value * size.value));
+const filterQ = ref('');
+const filterState = ref('');
+const filteredRules = computed(() => {
+  const q = filterQ.value.trim().toLowerCase();
+  const st = filterState.value;
+  return ruleList.value.filter((r: any) => {
+    if (st && (r.rollout_state || 'draft') !== st) return false;
+    if (!q) return true;
+    const id = String(r.rule_id || '').toLowerCase();
+    const reason = String(r.reason_code || '').toLowerCase();
+    return id.includes(q) || reason.includes(q);
+  });
+});
+const paginatedRules = computed(() => filteredRules.value.slice((page.value - 1) * size.value, page.value * size.value));
+const tableRef = ref();
 const editorVisible = ref(false);
 const isNew = ref(false);
 const selectedRuleId = ref<string | null>(null);
+const drawerTitle = computed(() => {
+  if (isNew.value) return t('rules.edit-title-new');
+  return selectedRuleId.value
+    ? `${t('rules.edit-title-edit')}  ${selectedRuleId.value}`
+    : t('rules.edit-title-edit');
+});
 const editMeta = ref<any>(null);
 const saving = ref(false);
 const listCatalog = ref<string[]>([]);
@@ -342,6 +386,32 @@ const lintFn = computed<((view: EditorView) => Diagnostic[]) | null>(() => {
   };
 });
 
+function syncTableHighlight() {
+  const row = selectedRuleId.value
+    ? ruleList.value.find((r: any) => r.rule_id === selectedRuleId.value)
+    : undefined;
+  tableRef.value?.setCurrentRow(row);
+}
+
+function closeDrawer() {
+  editorVisible.value = false;
+  rules.resetDirty();
+}
+
+function requestClose() {
+  if (!rules.ruleFormDirty) {
+    closeDrawer();
+    return;
+  }
+  ElMessageBox.confirm(t('rules.confirm-unsaved'), { type: 'warning', zIndex: 4300 })
+    .then(() => closeDrawer())
+    .catch(() => {});
+}
+
+function onEsc(e: KeyboardEvent) {
+  if (e.key === 'Escape') requestClose();
+}
+
 function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
 function statusCls(st: string) { return ruleStatusTagClass(st); }
 function effectiveLayer(): string {
@@ -387,7 +457,7 @@ async function loadRules() {
 
 async function onRowClick(row: any) {
   if (rules.ruleFormDirty) {
-    try { await ElMessageBox.confirm(t('rules.confirm-unsaved'), { type: 'warning' }); }
+    try { await ElMessageBox.confirm(t('rules.confirm-unsaved'), { type: 'warning', zIndex: 4300 }); }
     catch { return; }
   }
   await selectRule(row.rule_id);
@@ -406,7 +476,7 @@ function resetEditor() {
 
 function openNew() {
   if (rules.ruleFormDirty) {
-    ElMessageBox.confirm(t('rules.confirm-unsaved'), { type: 'warning' }).then(doOpenNew).catch(() => {});
+    ElMessageBox.confirm(t('rules.confirm-unsaved'), { type: 'warning', zIndex: 4300 }).then(doOpenNew).catch(() => {});
   } else doOpenNew();
 }
 function doOpenNew() {
@@ -660,6 +730,85 @@ async function recover() {
 }
 
 onMounted(async () => { await loadListsAndCums(); await loadRules(); });
-watch(() => rules.currentLayer, () => { editorVisible.value = false; rules.resetDirty(); loadRules(); });
-watch(() => session.tenant, async () => { await loadListsAndCums(); await loadRules(); });
+onUnmounted(() => window.removeEventListener('keydown', onEsc));
+watch(() => rules.currentLayer, () => { rules.resetDirty(); editorVisible.value = false; loadRules(); });
+watch(() => session.tenant, async () => { editorVisible.value = false; await loadListsAndCums(); await loadRules(); });
+watch([filterQ, filterState], () => { page.value = 1; });
+watch([selectedRuleId, editorVisible], () => { nextTick(syncTableHighlight); });
+watch(editorVisible, (open) => {
+  if (open) {
+    window.addEventListener('keydown', onEsc);
+    nextTick(() => scriptEditorRef.value?.refresh?.());
+  } else {
+    window.removeEventListener('keydown', onEsc);
+  }
+});
 </script>
+
+<style scoped>
+.rules-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(15, 23, 42, 0.35);
+}
+.rules-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 640px;
+  max-width: 100%;
+  height: 100%;
+  background: #fff;
+  box-shadow: -8px 0 24px rgba(15, 23, 42, 0.16);
+  display: flex;
+  flex-direction: column;
+}
+.rules-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid var(--v-border);
+}
+.rules-panel-head h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #0f172a;
+}
+.rules-panel-close {
+  border: none;
+  background: transparent;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 6px;
+}
+.rules-panel-close:hover { color: #0f172a; }
+.rules-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px 20px;
+}
+.rules-panel-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  border-top: 1px solid var(--v-border);
+  padding: 10px 16px;
+}
+.rules-slide-enter-active,
+.rules-slide-leave-active { transition: opacity 0.2s ease; }
+.rules-slide-enter-active .rules-panel,
+.rules-slide-leave-active .rules-panel { transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1); }
+.rules-slide-enter-from,
+.rules-slide-leave-to { opacity: 0; }
+.rules-slide-enter-from .rules-panel,
+.rules-slide-leave-to .rules-panel { transform: translateX(100%); }
+</style>
+<style>
+.rules-select-popper { z-index: 4100 !important; }
+</style>

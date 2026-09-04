@@ -2,6 +2,7 @@
 """按关卡拉起 virbius-mcp-proxy：各自 JWT、租户、公钥、SSE 端口。"""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -22,16 +23,28 @@ _clients: dict = {}
 _meta: dict = {}
 
 
+def _pem_fp(path: str) -> str:
+    if not path or not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()[:16]
+    except OSError:
+        return ""
+
+
 def _lab_meta(lab: Lab) -> dict:
     rec = settings.get_license(lab.id)
     slot = _meta.get(lab.id)
     sid = (slot or {}).get("session_id") or (lab.session_prefix + "init")
+    pem = rec.get("pem_path") or ""
     return {
         "license_jwt": rec.get("jwt") or "",
         "tenant_id": lab.tenant_id,
         "app_id": lab.app_id,
         "user_id": lab.user_id,
         "session_id": sid,
+        "pem_fp": _pem_fp(pem),
     }
 
 
@@ -56,7 +69,9 @@ def _respawn_if_license_changed(lab_id: str, meta: dict):
         return
     old = (client.meta or {}).get("license_jwt") or ""
     new = (meta.get("license_jwt") or "").strip()
-    if old == new:
+    old_pem = (client.meta or {}).get("pem_fp") or ""
+    new_pem = (meta.get("pem_fp") or "")
+    if old == new and old_pem == new_pem:
         return
     drop_lab(lab_id)
 

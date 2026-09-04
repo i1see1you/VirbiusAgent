@@ -1,7 +1,11 @@
 <template>
   <div class="v-card">
     <h2 class="v-card-title">{{ t('trace.title') }}</h2>
-    <p class="v-hint" v-html="t('trace.desc')"></p>
+    <p class="v-hint">{{ t('trace.desc-short') }}</p>
+    <details class="v-hint-more">
+      <summary>{{ t('common.learn-more') }}</summary>
+      <p class="v-hint" v-html="t('trace.desc')"></p>
+    </details>
 
     <div class="v-row">
       <el-input v-model="toolName" :placeholder="t('trace.placeholder-tool')" style="width:160px" />
@@ -21,10 +25,9 @@
       </el-select>
       <el-input-number v-model="limit" :min="1" :max="500" style="width:120px" />
       <el-button type="primary" @click="search">{{ t('trace.btn-search') }}</el-button>
-      <el-button @click="search">{{ t('trace.btn-refresh') }}</el-button>
     </div>
 
-    <el-table :data="paginatedResults" size="small" border stripe style="margin-bottom:24px" @row-click="onRowClick">
+    <el-table :data="paginatedResults" size="small" border stripe style="margin-bottom:24px" @row-click="onRowClick" :empty-text="t('trace.empty')">
       <el-table-column :label="t('trace.header-trace-id')" prop="trace_id" show-overflow-tooltip>
         <template #default="{ row }">{{ row.trace_id || '-' }}</template>
       </el-table-column>
