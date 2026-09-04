@@ -68,7 +68,7 @@ public class JdbcRolloutMetricsRepository implements RolloutMetricsRepository {
                 "  WHERE tenant_id = ? AND rule_id = ? AND rollout_state = 'dry_run' " +
                 "    AND minute_bucket >= " + timeFrom + " AND minute_bucket < " + timeTo +
                 "  GROUP BY day" +
-                ")",
+                ") AS t",
                 Double.class,
                 tenantId,
                 ruleId);
