@@ -37,14 +37,12 @@ public class RolloutDashboardService {
         Object timeParam = dialect.isMysql() ? hours : "-" + hours + " hours";
 
         List<Map<String, Object>> series = jdbc.query(
-                """
-                SELECT minute_bucket, rollout_state, canary_percent,
-                       cnt_review, cnt_block, cnt_challenge, cnt_allow, cnt_total_requests
-                FROM tb_rule_metrics_1m
-                WHERE tenant_id = ? AND rule_id = ?
-                  AND """ + timeExpr + """
-                ORDER BY minute_bucket
-                """,
+                "SELECT minute_bucket, rollout_state, canary_percent,\n"
+                + "       cnt_review, cnt_block, cnt_challenge, cnt_allow, cnt_total_requests\n"
+                + "FROM tb_rule_metrics_1m\n"
+                + "WHERE tenant_id = ? AND rule_id = ?\n"
+                + "  AND " + timeExpr + "\n"
+                + "ORDER BY minute_bucket",
                 (rs, i) -> {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("bucket", rs.getString("minute_bucket"));
@@ -278,19 +276,17 @@ public class RolloutDashboardService {
         Object timeParam = dialect.isMysql() ? hours : "-" + hours + " hours";
 
         List<Map<String, Object>> series = jdbc.query(
-                """
-                SELECT minute_bucket,
-                       SUM(cnt_review) AS cnt_review,
-                       SUM(cnt_block) AS cnt_block,
-                       SUM(cnt_challenge) AS cnt_challenge,
-                       SUM(cnt_allow) AS cnt_allow,
-                       SUM(cnt_total_requests) AS cnt_total_requests
-                FROM tb_rule_metrics_1m
-                WHERE tenant_id = ?
-                  AND """ + timeExpr + """
-                GROUP BY minute_bucket
-                ORDER BY minute_bucket
-                """,
+                "SELECT minute_bucket,\n"
+                + "       SUM(cnt_review) AS cnt_review,\n"
+                + "       SUM(cnt_block) AS cnt_block,\n"
+                + "       SUM(cnt_challenge) AS cnt_challenge,\n"
+                + "       SUM(cnt_allow) AS cnt_allow,\n"
+                + "       SUM(cnt_total_requests) AS cnt_total_requests\n"
+                + "FROM tb_rule_metrics_1m\n"
+                + "WHERE tenant_id = ?\n"
+                + "  AND " + timeExpr + "\n"
+                + "GROUP BY minute_bucket\n"
+                + "ORDER BY minute_bucket",
                 (rs, i) -> {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("bucket", rs.getString("minute_bucket"));
