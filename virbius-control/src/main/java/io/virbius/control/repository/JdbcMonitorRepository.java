@@ -19,23 +19,22 @@ public class JdbcMonitorRepository implements MonitorRepository {
     @Override
     public List<RuleRankingRow> findRuleRanking(String tenantId, int hours, int limit) {
         String timeExpr = dialect.isMysql()
-                ? "minute_bucket >= NOW() - INTERVAL ? HOUR "
-                : "minute_bucket >= datetime('now', ?) ";
-        String sql = """
-                SELECT rule_id,
-                       SUM(cnt_review + cnt_block + cnt_challenge) AS total_hits,
-                       SUM(cnt_block) AS cnt_block,
-                       SUM(cnt_review) AS cnt_review,
-                       SUM(cnt_challenge) AS captcha,
-                       SUM(cnt_allow) AS cnt_allow,
-                       SUM(cnt_total_requests) AS cnt_total_requests,
-                       SUM(cnt_degraded) AS cnt_degraded
-                FROM tb_rule_metrics_1m
-                WHERE tenant_id = ? AND """ + timeExpr + """
-                GROUP BY rule_id
-                ORDER BY total_hits DESC
-                LIMIT ?
-                """;
+                ? "minute_bucket >= NOW() - INTERVAL ? HOUR"
+                : "minute_bucket >= datetime('now', ?)";
+        String sql =
+                "SELECT rule_id,\n"
+                + "       SUM(cnt_review + cnt_block + cnt_challenge) AS total_hits,\n"
+                + "       SUM(cnt_block) AS cnt_block,\n"
+                + "       SUM(cnt_review) AS cnt_review,\n"
+                + "       SUM(cnt_challenge) AS captcha,\n"
+                + "       SUM(cnt_allow) AS cnt_allow,\n"
+                + "       SUM(cnt_total_requests) AS cnt_total_requests,\n"
+                + "       SUM(cnt_degraded) AS cnt_degraded\n"
+                + "FROM tb_rule_metrics_1m\n"
+                + "WHERE tenant_id = ? AND " + timeExpr + "\n"
+                + "GROUP BY rule_id\n"
+                + "ORDER BY total_hits DESC\n"
+                + "LIMIT ?";
         return jdbc.query(sql,
                 (rs, i) -> new RuleRankingRow(
                         rs.getString("rule_id"),
@@ -54,15 +53,14 @@ public class JdbcMonitorRepository implements MonitorRepository {
     @Override
     public List<SceneTrafficRow> findSceneTraffic(String tenantId, int hours) {
         String timeExpr = dialect.isMysql()
-                ? "hour_bucket >= NOW() - INTERVAL ? HOUR "
-                : "hour_bucket >= datetime('now', ?) ";
-        String sql = """
-                SELECT scene, layer, SUM(cnt_total) AS total_requests
-                FROM tb_tenant_request_stats_1h
-                WHERE tenant_id = ? AND """ + timeExpr + """
-                GROUP BY scene, layer
-                ORDER BY total_requests DESC
-                """;
+                ? "hour_bucket >= NOW() - INTERVAL ? HOUR"
+                : "hour_bucket >= datetime('now', ?)";
+        String sql =
+                "SELECT scene, layer, SUM(cnt_total) AS total_requests\n"
+                + "FROM tb_tenant_request_stats_1h\n"
+                + "WHERE tenant_id = ? AND " + timeExpr + "\n"
+                + "GROUP BY scene, layer\n"
+                + "ORDER BY total_requests DESC";
         return jdbc.query(sql,
                 (rs, i) -> new SceneTrafficRow(
                         rs.getString("scene"),
@@ -75,17 +73,16 @@ public class JdbcMonitorRepository implements MonitorRepository {
     @Override
     public List<DegradationRow> findDegradation(String tenantId, int hours) {
         String timeExpr = dialect.isMysql()
-                ? "minute_bucket >= NOW() - INTERVAL ? HOUR "
-                : "minute_bucket >= datetime('now', ?) ";
-        String sql = """
-                SELECT minute_bucket,
-                       SUM(cnt_degraded) AS cnt_degraded,
-                       SUM(cnt_total_requests) AS cnt_total_requests
-                FROM tb_rule_metrics_1m
-                WHERE tenant_id = ? AND """ + timeExpr + """
-                GROUP BY minute_bucket
-                ORDER BY minute_bucket
-                """;
+                ? "minute_bucket >= NOW() - INTERVAL ? HOUR"
+                : "minute_bucket >= datetime('now', ?)";
+        String sql =
+                "SELECT minute_bucket,\n"
+                + "       SUM(cnt_degraded) AS cnt_degraded,\n"
+                + "       SUM(cnt_total_requests) AS cnt_total_requests\n"
+                + "FROM tb_rule_metrics_1m\n"
+                + "WHERE tenant_id = ? AND " + timeExpr + "\n"
+                + "GROUP BY minute_bucket\n"
+                + "ORDER BY minute_bucket";
         return jdbc.query(sql,
                 (rs, i) -> new DegradationRow(
                         rs.getString("minute_bucket"),
@@ -98,16 +95,15 @@ public class JdbcMonitorRepository implements MonitorRepository {
     @Override
     public List<EventTimelineRow> findEventTimeline(String tenantId, int hours, int limit) {
         String timeExpr = dialect.isMysql()
-                ? "e.effective_at >= NOW() - INTERVAL ? HOUR "
-                : "e.effective_at >= datetime('now', ?) ";
-        String sql = """
-                SELECT e.rule_id, e.rule_revision, e.rollout_state, e.canary_percent,
-                       e.`trigger`, e.operator, e.effective_at
-                FROM tb_rule_rollout_event e
-                WHERE e.tenant_id = ? AND """ + timeExpr + """
-                ORDER BY e.effective_at DESC
-                LIMIT ?
-                """;
+                ? "e.effective_at >= NOW() - INTERVAL ? HOUR"
+                : "e.effective_at >= datetime('now', ?)";
+        String sql =
+                "SELECT e.rule_id, e.rule_revision, e.rollout_state, e.canary_percent,\n"
+                + "       e.`trigger`, e.operator, e.effective_at\n"
+                + "FROM tb_rule_rollout_event e\n"
+                + "WHERE e.tenant_id = ? AND " + timeExpr + "\n"
+                + "ORDER BY e.effective_at DESC\n"
+                + "LIMIT ?";
         return jdbc.query(sql,
                 (rs, i) -> new EventTimelineRow(
                         rs.getString("rule_id"),
