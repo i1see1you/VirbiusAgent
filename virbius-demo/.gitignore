@@ -32,6 +32,9 @@ licenses/
 docs/screenshots/
 test_*.py
 
+# Local IDE debug configs (root .gitignore only covers /.vscode/)
+.vscode/
+
 # Misc
 .DS_Store
 *.log
