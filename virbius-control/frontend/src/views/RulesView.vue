@@ -11,11 +11,11 @@
       <span class="v-hint" style="margin:0" v-html="t('rules.current-layer', [rules.currentLayer])"></span>
       <el-input v-model="filterQ" :placeholder="t('rules.filter-id')" clearable style="width:220px" />
       <el-select popper-class="rules-select-popper" v-model="filterState" clearable :placeholder="t('rules.filter-state')" style="width:140px">
-        <el-option value="draft" label="draft" />
-        <el-option value="dry_run" label="dry_run" />
-        <el-option value="canary" label="canary" />
-        <el-option value="full" label="full" />
-        <el-option value="disabled" label="disabled" />
+        <el-option value="draft" :label="t('ro-state.draft')" />
+        <el-option value="dry_run" :label="t('ro-state.dry_run')" />
+        <el-option value="canary" :label="t('ro-state.canary')" />
+        <el-option value="full" :label="t('ro-state.full')" />
+        <el-option value="disabled" :label="t('ro-state.disabled')" />
       </el-select>
       <el-button type="primary" @click="openNew">{{ t('rules.btn-new') }}</el-button>
     </div>
@@ -25,23 +25,25 @@
     <el-table ref="tableRef" :data="paginatedRules" size="small" border stripe highlight-current-row
       @row-click="onRowClick" :empty-text="t('rules.empty')">
       <el-table-column :label="t('rules.header-id')" prop="rule_id" />
-      <el-table-column :label="t('rules.header-runtime')" prop="runtime" width="90" />
+      <el-table-column :label="t('rules.header-runtime')" width="90">
+        <template #default="{ row }">{{ runtimeLabel(row.runtime) }}</template>
+      </el-table-column>
       <el-table-column :label="t('rules.header-bind')" width="140">
-        <template #default="{ row }"><code>{{ formatBindScope(row.scope) }}</code></template>
+        <template #default="{ row }">{{ bindLabel(row.scope) }}</template>
       </el-table-column>
       <el-table-column :label="t('rules.header-rollout')" width="90">
-        <template #default="{ row }"><span class="v-tag" :class="statusCls(row.rollout_state)">{{ row.rollout_state || 'draft' }}</span></template>
+        <template #default="{ row }"><span class="v-tag" :class="statusCls(row.rollout_state)">{{ stateLabel(row.rollout_state) }}</span></template>
       </el-table-column>
       <el-table-column :label="t('rules.header-rev')" prop="current_revision" width="60" />
       <el-table-column :label="t('rules.header-risk')" prop="risk_score" width="60" />
       <el-table-column :label="t('rules.header-intent')" width="80">
-        <template #default="{ row }">{{ row.intent_action || 'deny' }}</template>
+        <template #default="{ row }">{{ intentLabel(row.intent_action) }}</template>
       </el-table-column>
       <el-table-column :label="t('rules.header-enforce')" width="100">
-        <template #default="{ row }">{{ row.enforce_mode }}{{ row.canary_percent ? '@' + row.canary_percent + '%' : '' }}</template>
+        <template #default="{ row }">{{ stateLabel(row.enforce_mode) }}{{ row.canary_percent ? '@' + row.canary_percent + '%' : '' }}</template>
       </el-table-column>
       <el-table-column :label="t('rules.header-async')" width="70">
-        <template #default="{ row }">{{ row.is_async ? 'async' : '-' }}</template>
+        <template #default="{ row }">{{ row.is_async ? t('rules.async-yes') : '-' }}</template>
       </el-table-column>
       <el-table-column :label="t('rules.header-reason')" prop="reason_code" />
     </el-table>
@@ -64,7 +66,7 @@
         <label>{{ t('rules.label-id') }} <el-input v-model="form.rule_id" style="width:200px" /></label>
         <label>{{ t('rules.label-runtime') }}
           <el-select popper-class="rules-select-popper" v-model="form.runtime" style="width:140px" @change="onRuntimeChange">
-            <el-option v-for="rt in layerRuntimes" :key="rt" :value="rt" :label="rt" />
+            <el-option v-for="rt in layerRuntimes" :key="rt" :value="rt" :label="runtimeLabel(rt)" />
           </el-select>
         </label>
       </div>
@@ -263,7 +265,7 @@ import { useFeedbackStore } from '@/stores/feedback';
 import { useRulesStore, LAYER_RUNTIMES } from '@/stores/rules';
 import { useSessionStore } from '@/stores/session';
 import { admin } from '@/api/client';
-import { field, formatBindScope, ruleStatusTagClass, inExecutionPlane } from '@/utils/format';
+import { field, ruleStatusTagClass, inExecutionPlane } from '@/utils/format';
 import ScriptEditor from '@/components/ScriptEditor.vue';
 import AsyncPreview from '@/components/AsyncPreview.vue';
 import DiffConfirm from '@/components/DiffConfirm.vue';
@@ -414,6 +416,41 @@ function onEsc(e: KeyboardEvent) {
 
 function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
 function statusCls(st: string) { return ruleStatusTagClass(st); }
+function loc(key: string, fallback: string): string {
+  const s = String(t(key));
+  return s === key ? fallback : s;
+}
+function runtimeLabel(rt: string): string {
+  return loc('rules.runtime-' + rt, rt || '-');
+}
+function intentLabel(v: string): string {
+  const intent = v || 'deny';
+  return loc('rules.intent-' + intent, intent);
+}
+function stateLabel(st: string): string {
+  const s = st || 'draft';
+  return loc('ro-state.' + s, s);
+}
+function bindLabel(scope: any): string {
+  const s = scope || {};
+  const bs = field(s, 'bind_scope', 'bindScope') || 'global';
+  const kind = loc('rules.bind-' + bs, bs);
+  const ref = field(s, 'bind_ref', 'bindRef') || {};
+  if (bs === 'tool') {
+    const toolsArr = field(ref, 'tool_names', 'toolNames');
+    const idsArr = field(ref, 'app_ids', 'appIds');
+    const tools = Array.isArray(toolsArr) ? toolsArr.join(', ') : '';
+    const ids = Array.isArray(idsArr) ? idsArr.join(', ') : '';
+    if (tools || ids) return kind + (tools ? ': ' + tools : '') + (ids ? ' [' + ids + ']' : '');
+    return kind;
+  }
+  if (bs === 'service') {
+    const idsArr = field(ref, 'app_ids', 'appIds');
+    const ids = Array.isArray(idsArr) ? idsArr.join(', ') : '';
+    return ids ? kind + ': ' + ids : kind;
+  }
+  return kind;
+}
 function effectiveLayer(): string {
   if (rules.currentLayer === 'kernel') return form.runtime === 'falco' ? 'falco' : 'sandbox';
   return rules.currentLayer;
