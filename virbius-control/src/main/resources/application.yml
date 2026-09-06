@@ -23,6 +23,16 @@ spring:
       missing-topics-fatal: false
 
 virbius:
+  security:
+    api-key:
+      enabled: ${VIRBIUS_API_KEY_ENABLED:false}
+    operator-jwt:
+      enabled: ${VIRBIUS_OPERATOR_JWT_ENABLED:false}
+      jwks-url: ${VIRBIUS_AUTH_JWKS_URL:http://127.0.0.1:8082/.well-known/jwks.json}
+      issuer: ${VIRBIUS_AUTH_ISSUER:http://127.0.0.1:8082}
+      audience: virbius-control
+      login-url: ${VIRBIUS_AUTH_LOGIN_URL:http://127.0.0.1:8082/login}
+      token-url: ${VIRBIUS_AUTH_TOKEN_URL:http://127.0.0.1:8082/oauth/token}
   data-dir: ${VIRBIUS_DATA_DIR:./data}
   redis:
     url: ${VIRBIUS_REDIS_URL:redis://127.0.0.1:6379}

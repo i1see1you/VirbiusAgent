@@ -78,6 +78,7 @@
             </el-select>
           </label>
           <el-button size="small" @click="toggleLang">{{ locale === 'zh' ? t('topbar.lang-zh') : t('topbar.lang-en') }}</el-button>
+          <el-button size="small" @click="logout">{{ t('topbar.logout') }}</el-button>
         </header>
 
         <div class="v-scroll">
@@ -223,6 +224,11 @@ function toggleLang() {
   const next = locale.value === 'zh' ? 'en' : 'zh';
   locale.value = next;
   session.setLocale(next as any);
+}
+
+async function logout() {
+  await fetch('/ui/logout', { method: 'POST', credentials: 'same-origin' });
+  window.location.href = '/ui/';
 }
 
 onMounted(loadTenants);

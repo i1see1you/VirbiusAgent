@@ -1,0 +1,18 @@
+spring:
+  datasource:
+    url: jdbc:sqlite:${java.io.tmpdir}/virbius-auth-test.db
+    driver-class-name: org.sqlite.JDBC
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+  flyway:
+    enabled: false
+
+virbius:
+  auth:
+    return-uris:
+      - http://127.0.0.1:8080/ui/callback
+    bootstrap:
+      username: test-admin
+      password: test-pass

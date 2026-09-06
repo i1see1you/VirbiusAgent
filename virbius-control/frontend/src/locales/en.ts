@@ -27,6 +27,7 @@ export default {
   'topbar.lang-zh': '中文',
   'topbar.lang-en': 'English',
   'topbar.bundle-ver-placeholder': 'Version (auto-increment if empty)',
+  'topbar.logout': 'Log out',
 
   'common.yes': 'Yes',
   'common.no': 'No',
