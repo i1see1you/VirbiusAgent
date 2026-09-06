@@ -14,6 +14,7 @@
     <module>virbius-control</module>
     <module>virbius-engine</module>
     <module>virbius-compiler</module>
+    <module>virbius-auth</module>
   </modules>
   <properties>
     <java.version>17</java.version>

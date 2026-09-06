@@ -1,0 +1,25 @@
+server:
+  port: ${SERVER_PORT:8082}
+
+spring:
+  application:
+    name: virbius-auth
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+virbius:
+  data-dir: ${VIRBIUS_AUTH_DATA_DIR:./data}
+  auth:
+    issuer: ${VIRBIUS_AUTH_ISSUER:http://127.0.0.1:8082}
+    audience: virbius-control
+    return-uris:
+      - ${VIRBIUS_AUTH_RETURN_URI:http://127.0.0.1:8080/ui/callback}
+    bootstrap:
+      username: ${VIRBIUS_AUTH_BOOTSTRAP_USERNAME:}
+      password: ${VIRBIUS_AUTH_BOOTSTRAP_PASSWORD:}

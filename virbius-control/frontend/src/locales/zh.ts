@@ -27,6 +27,7 @@ export default {
   'topbar.lang-zh': '中文',
   'topbar.lang-en': 'English',
   'topbar.bundle-ver-placeholder': '版本号，留空自动递增',
+  'topbar.logout': '退出',
 
   'common.yes': '是',
   'common.no': '否',

@@ -16,6 +16,8 @@ virbius:
   security:
     api-key:
       enabled: false
+    operator-jwt:
+      enabled: false
 
 audit:
   publish:
