@@ -61,8 +61,8 @@
             <div class="rules-panel-body">
 
       <div v-if="isNew" class="v-row">
-        <label>rule_id <el-input v-model="form.rule_id" style="width:200px" /></label>
-        <label>runtime
+        <label>{{ t('rules.label-id') }} <el-input v-model="form.rule_id" style="width:200px" /></label>
+        <label>{{ t('rules.label-runtime') }}
           <el-select popper-class="rules-select-popper" v-model="form.runtime" style="width:140px" @change="onRuntimeChange">
             <el-option v-for="rt in layerRuntimes" :key="rt" :value="rt" :label="rt" />
           </el-select>
@@ -76,10 +76,10 @@
         </label>
         <label>{{ t('rules.label-intent') }}
           <el-select popper-class="rules-select-popper" v-model="form.intent" :disabled="isReadOnly || isAsync || isDlp" style="width:120px">
-            <el-option value="deny" label="deny" />
-            <el-option value="allow" label="allow" />
-            <el-option value="challenge" label="challenge" />
-            <el-option value="review" label="review" />
+            <el-option value="deny" :label="t('rules.intent-deny')" />
+            <el-option value="allow" :label="t('rules.intent-allow')" />
+            <el-option value="challenge" :label="t('rules.intent-challenge')" />
+            <el-option value="review" :label="t('rules.intent-review')" />
           </el-select>
         </label>
         <el-checkbox v-if="showAsync" v-model="form.is_async" :disabled="isReadOnly" @change="onAsyncChange">{{ t('rules.label-async') }}</el-checkbox>
@@ -106,16 +106,16 @@
       </div>
 
       <div v-if="showBindScope" class="v-row">
-        <label>bind_scope
+        <label>{{ t('rules.label-bind-scope') }}
           <el-select popper-class="rules-select-popper" v-model="form.bind_scope" :disabled="isReadOnly" style="width:200px" @change="onBindScopeChange">
             <el-option v-for="o in bindScopeOptions" :key="o.value" :value="o.value" :label="o.label" />
           </el-select>
         </label>
-        <label v-if="showToolNames">tool_names <el-input v-model="form.bind_tools" :disabled="isReadOnly" style="width:200px" /></label>
+        <label v-if="showToolNames">{{ t('rules.label-tool-names') }} <el-input v-model="form.bind_tools" :disabled="isReadOnly" style="width:200px" /></label>
       </div>
       <div v-if="showBindScope" class="v-row">
-        <label v-if="showToolNames">mcp_servers <el-input v-model="form.bind_mcp_servers" :disabled="isReadOnly" style="width:200px" /></label>
-        <label v-if="showAppIds">app_ids <el-input v-model="form.bind_app_ids" :disabled="isReadOnly" style="width:240px" /></label>
+        <label v-if="showToolNames">{{ t('rules.label-mcp-servers') }} <el-input v-model="form.bind_mcp_servers" :disabled="isReadOnly" style="width:200px" /></label>
+        <label v-if="showAppIds">{{ t('rules.label-app-ids') }} <el-input v-model="form.bind_app_ids" :disabled="isReadOnly" style="width:240px" /></label>
       </div>
       <p v-if="showBindScope" class="v-hint" v-html="t('gw.scope-hint')"></p>
 
