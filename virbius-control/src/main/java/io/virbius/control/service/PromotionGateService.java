@@ -172,9 +172,9 @@ public class PromotionGateService {
         coverage.put("audit_events_24h", events);
 
         String lagExpr = dialect.isMysql()
-                ? "COALESCE((SELECT MAX(TIMESTAMPDIFF(SECOND, intercepted_at, created_at) / 60.0) " +
+                ? "SELECT COALESCE((SELECT MAX(TIMESTAMPDIFF(SECOND, intercepted_at, created_at) / 60.0) " +
                   "FROM tb_audit_events WHERE tenant_id = ? AND rule_id = ? AND " + timeExpr24h + "), 0)"
-                : "COALESCE((SELECT MAX((julianday(created_at) - julianday(intercepted_at)) * 24 * 60) " +
+                : "SELECT COALESCE((SELECT MAX((julianday(created_at) - julianday(intercepted_at)) * 24 * 60) " +
                   "FROM tb_audit_events WHERE tenant_id = ? AND rule_id = ? AND " + timeExpr24h + "), 0)";
 
         Double lagP95 = jdbc.queryForObject(lagExpr, Double.class, tenantId, rule.ruleId());
