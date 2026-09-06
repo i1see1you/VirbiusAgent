@@ -96,17 +96,6 @@
         <div v-if="i < g.steps.length - 1" style="text-align:center;color:#cbd5e1">↓</div>
       </div>
     </div>
-
-    <div class="v-section">
-      <h3>{{ t('trace.ingest-title') }}</h3>
-      <div class="kpi-grid">
-        <div class="kpi-card"><div class="label">启用</div><div class="value">{{ ingest.enabled ? '✅ 是' : '❌ 否' }}</div></div>
-        <div class="kpi-card"><div class="label">Redis</div><div class="value">{{ ingest.redis_ok ? '✅ 已连接' : '❌ 未连接' }}</div></div>
-        <div class="kpi-card"><div class="label">Stream</div><div class="value" style="font-size:13px">{{ ingest.stream_key || '-' }}</div></div>
-        <div class="kpi-card"><div class="label">记录数</div><div class="value">{{ ingest.stream_length ?? '-' }}</div></div>
-        <div class="kpi-card"><div class="label">最近轮询</div><div class="value" style="font-size:12px">{{ ingest.last_poll_at ? fmtTime(ingest.last_poll_at) : '-' }}</div></div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -135,7 +124,6 @@ function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
 const paginatedResults = computed(() => results.value.slice((page.value - 1) * size.value, page.value * size.value));
 const timeline = ref<any[]>([]);
 const timelineSession = ref('');
-const ingest = ref<any>({});
 
 const groupedTimeline = computed(() => {
   const m: Record<string, any[]> = {};
@@ -170,10 +158,6 @@ async function onRowClick(row: any) {
   } catch (e: any) { feedback.log(e.message, 'err'); }
 }
 
-async function loadIngest() {
-  try { ingest.value = await admin<any>('/trace/ingest-status') || {}; } catch { /* ignore */ }
-}
-
-onMounted(() => { search(); loadIngest(); });
-watch(() => session.tenant, () => { search(); loadIngest(); });
+onMounted(() => { search(); });
+watch(() => session.tenant, () => { search(); });
 </script>
