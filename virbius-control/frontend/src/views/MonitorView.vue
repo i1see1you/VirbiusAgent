@@ -138,17 +138,6 @@
       <el-tab-pane name="ops" :label="t('monitor.tab-ops')" lazy>
         <div class="monitor-grid monitor-grid-single">
           <section class="monitor-panel">
-            <h3>{{ t('monitor.event-timeline') }}</h3>
-            <el-table :data="events" size="small" border stripe max-height="280" :empty-text="t('monitor.empty-table')">
-              <el-table-column :label="t('monitor.event-header-time')" width="128"><template #default="{ row }">{{ fmtTime(row.effective_at) }}</template></el-table-column>
-              <el-table-column :label="t('monitor.event-header-rule')" prop="rule_id" show-overflow-tooltip />
-              <el-table-column :label="t('monitor.event-header-state')" prop="rollout_state" width="88" />
-              <el-table-column :label="t('monitor.event-header-rev')" prop="rule_revision" width="56" />
-              <el-table-column :label="t('monitor.event-header-trigger')" prop="trigger" width="80" />
-              <el-table-column :label="t('monitor.event-header-operator')" width="80"><template #default="{ row }">{{ row.operator || '-' }}</template></el-table-column>
-            </el-table>
-          </section>
-          <section class="monitor-panel">
             <h3>{{ t('monitor.ingest-health') }}</h3>
             <dl v-if="ingest && ingest.enabled !== undefined" class="ingest-grid">
               <div>
@@ -173,6 +162,17 @@
               </div>
             </dl>
             <span v-else class="v-hint">{{ t('monitor.no-data') }}</span>
+          </section>
+          <section class="monitor-panel">
+            <h3>{{ t('monitor.event-timeline') }}</h3>
+            <el-table :data="events" size="small" border stripe max-height="280" :empty-text="t('monitor.empty-table')">
+              <el-table-column :label="t('monitor.event-header-time')" width="128"><template #default="{ row }">{{ fmtTime(row.effective_at) }}</template></el-table-column>
+              <el-table-column :label="t('monitor.event-header-rule')" prop="rule_id" show-overflow-tooltip />
+              <el-table-column :label="t('monitor.event-header-state')" prop="rollout_state" width="88" />
+              <el-table-column :label="t('monitor.event-header-rev')" prop="rule_revision" width="56" />
+              <el-table-column :label="t('monitor.event-header-trigger')" prop="trigger" width="80" />
+              <el-table-column :label="t('monitor.event-header-operator')" width="80"><template #default="{ row }">{{ row.operator || '-' }}</template></el-table-column>
+            </el-table>
           </section>
         </div>
       </el-tab-pane>
