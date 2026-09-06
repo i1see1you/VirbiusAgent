@@ -21,6 +21,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -227,25 +228,26 @@ public class DeployRolloutService {
 
         switch (from) {
             case PENDING:
-                DeployRolloutStateHelper.validateTransition(fromState, DeployRolloutState.CANARY.value());
-                int firstStep = ladder.isEmpty() ? 5 : ladder.get(0);
-                toState = DeployRolloutState.CANARY.value();
-                toPercent = firstStep;
-                break;
             case CANARY:
-                int next = computeNextEffectiveStep(tenantId, ladder, rollout.canaryPercent());
+                int current = from == DeployRolloutState.PENDING ? 0 : rollout.canaryPercent();
+                int next = computeNextEffectiveStep(tenantId, ladder, current);
                 if (next == 0) {
-                    throw new BusinessException("Already at the end of the canary ladder, execute fullRelease or deployEdge");
+                    if (from == DeployRolloutState.PENDING) {
+                        next = ladder.isEmpty() ? 5 : ladder.get(0);
+                    } else {
+                        throw new BusinessException("Already at the end of the canary ladder, execute fullRelease or deployEdge");
+                    }
                 }
                 if (next >= 100) {
+                    DeployRolloutStateHelper.validateTransition(fromState, DeployRolloutState.FULL.value());
                     toState = DeployRolloutState.FULL.value();
                     toPercent = 100;
-                    // Promote falco canary → full when reaching full rollout
                     if (rollout.canaryFalcoRevision() != null && rollout.canaryFalcoRevision() > 0
                             && rollout.canaryFalcoRevision() != rollout.stableFalcoRevision()) {
                         artifactWriter.promoteFalcoToStable(tenantId, rollout.canaryFalcoRevision());
                     }
                 } else {
+                    DeployRolloutStateHelper.validateTransition(fromState, DeployRolloutState.CANARY.value());
                     toState = DeployRolloutState.CANARY.value();
                     toPercent = next;
                 }
@@ -550,6 +552,74 @@ public class DeployRolloutService {
     // ---------------------------------------------------------------
     // Ladder step skip helpers
     // ---------------------------------------------------------------
+
+    /**
+     * Read-only preview of what {@link #upgrade} would do next. Uses the same skip algorithm;
+     * does not mutate state.
+     */
+    public Map<String, Object> previewNextUpgrade(DeployRollout rollout) {
+        Map<String, Object> preview = new LinkedHashMap<>();
+        List<Integer> ladder = rollout.canaryLadder() != null ? rollout.canaryLadder() : List.of();
+        DeployRolloutState from;
+        try {
+            from = DeployRolloutState.parse(rollout.state());
+        } catch (IllegalArgumentException ex) {
+            fillPreview(preview, 0, 0, null, List.of());
+            return preview;
+        }
+        int current = rollout.canaryPercent();
+        switch (from) {
+            case PENDING -> {
+                int nominal = ladder.isEmpty() ? 5 : ladder.get(0);
+                int effective = computeNextEffectiveStep(rollout.tenantId(), ladder, 0);
+                if (effective == 0) {
+                    effective = nominal;
+                }
+                String state = effective >= 100
+                        ? DeployRolloutState.FULL.value()
+                        : DeployRolloutState.CANARY.value();
+                fillPreview(preview, nominal, effective, state, skippedSteps(ladder, 0, effective));
+            }
+            case CANARY -> {
+                int nominal = DeployRolloutStateHelper.nextLadderStep(ladder, current);
+                int effective = computeNextEffectiveStep(rollout.tenantId(), ladder, current);
+                String state = effective <= 0 ? null
+                        : (effective >= 100
+                                ? DeployRolloutState.FULL.value()
+                                : DeployRolloutState.CANARY.value());
+                fillPreview(preview, nominal, effective, state, skippedSteps(ladder, current, effective));
+            }
+            case PAUSED -> fillPreview(
+                    preview, current, current, DeployRolloutState.CANARY.value(), List.of());
+            default -> fillPreview(preview, 0, 0, null, List.of());
+        }
+        return preview;
+    }
+
+    private static void fillPreview(
+            Map<String, Object> preview,
+            int nominal,
+            int effective,
+            String state,
+            List<Integer> skipped) {
+        preview.put("nominal_next_percent", nominal);
+        preview.put("effective_next_percent", effective);
+        preview.put("effective_next_state", state);
+        preview.put("skipped_steps", skipped);
+    }
+
+    static List<Integer> skippedSteps(List<Integer> ladder, int currentPercent, int effectivePercent) {
+        if (ladder == null || effectivePercent <= 0) {
+            return List.of();
+        }
+        List<Integer> skipped = new ArrayList<>();
+        for (Integer step : ladder) {
+            if (step != null && step > currentPercent && step < effectivePercent) {
+                skipped.add(step);
+            }
+        }
+        return skipped;
+    }
 
     /**
      * Find the next ladder step that actually moves at least one new live node into the canary

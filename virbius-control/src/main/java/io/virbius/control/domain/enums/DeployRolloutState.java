@@ -5,6 +5,7 @@ package io.virbius.control.domain.enums;
  *
  * <pre>
  *   pending → canary(5/20/50) ⇄ paused → ... → full(100) → edge_done → finalized
+ *   pending may skip empty ladder steps and jump to full when no live node would enter canary
  *      └── rollback ──▶ rolled_back (terminal)
  * </pre>
  */

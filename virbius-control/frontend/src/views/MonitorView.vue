@@ -3,7 +3,7 @@
     <header class="monitor-head">
       <div class="monitor-head-copy">
         <h2 class="v-card-title">{{ t('monitor.title') }}</h2>
-        <p class="v-hint">{{ t('monitor.desc-short') }}</p>
+        <p class="v-hint">{{ t('monitor.scope-tenant', [tenantLabel]) }} · {{ t('monitor.desc-short') }}</p>
         <details class="v-hint-more">
           <summary>{{ t('common.learn-more') }}</summary>
           <p class="v-hint" v-html="t('hint.monitor')"></p>
@@ -14,15 +14,16 @@
           <el-button v-for="h in [24, 168, 720]" :key="h" :type="hours === h ? 'primary' : 'default'" size="small" @click="setHours(h)">{{ t('monitor.time-' + (h === 24 ? '24h' : h === 168 ? '7d' : '30d')) }}</el-button>
         </el-button-group>
         <el-button size="small" @click="exportDash">{{ t('monitor.btn-export') }}</el-button>
+        <span v-if="lastRefreshAt" class="v-hint" style="margin:0">{{ t('monitor.last-refresh', [fmtTime(lastRefreshAt)]) }}</span>
       </div>
     </header>
 
     <div class="kpi-grid monitor-kpis">
-      <div class="kpi-card"><div class="label">{{ t('monitor.kpi-total-requests') }}</div><div class="value">{{ fmtNum(totals.total_requests) }}</div></div>
+      <div class="kpi-card"><div class="label">{{ t('monitor.kpi-total-requests') }}</div><div class="value">{{ hasSamples ? fmtNum(totalReq) : '—' }}</div></div>
       <div class="kpi-card"><div class="label">{{ t('monitor.kpi-block-rate') }}</div><div class="value">{{ fmtPct(blockRate) }}</div></div>
       <div class="kpi-card"><div class="label">{{ t('monitor.kpi-review-rate') }}</div><div class="value">{{ fmtPct(reviewRate) }}</div></div>
       <div class="kpi-card"><div class="label">{{ t('monitor.kpi-degraded-rate') }}</div><div class="value">{{ fmtPct(degRate) }}</div></div>
-      <div class="kpi-card"><div class="label">{{ t('monitor.kpi-active-rules') }}</div><div class="value">{{ activeRules }}</div></div>
+      <div class="kpi-card"><div class="label">{{ t('monitor.kpi-active-rules') }}</div><div class="value">{{ hasSamples ? activeRules : '—' }}</div></div>
     </div>
 
     <el-tabs v-model="activeTab" class="monitor-tabs">
@@ -64,7 +65,7 @@
             </div>
             <div class="chart-wrap">
               <Line v-if="activeTab === 'rules' && ruleChartData" :data="ruleChartData" :options="ruleOpts" />
-              <p v-else class="v-empty-hint">{{ t('monitor.empty-chart') }}</p>
+              <p v-else class="v-empty-hint">{{ selectedRule ? t('monitor.empty-rule') : t('monitor.empty-chart') }}</p>
             </div>
           </section>
           <section class="monitor-panel">
@@ -182,20 +183,25 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { ElMessage } from 'element-plus';
 import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Legend, Filler } from 'chart.js';
 import { Bar, Line } from 'vue-chartjs';
 import { useFeedbackStore } from '@/stores/feedback';
 import { useSessionStore } from '@/stores/session';
-import { admin } from '@/api/client';
-import { fmtTime, parseUtc } from '@/utils/format';
+import { admin, adminRoot } from '@/api/client';
+import { field, fmtTime, parseUtc } from '@/utils/format';
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Legend, Filler);
+
+const HOURS = [24, 168, 720] as const;
 
 const { t } = useI18n();
 const feedback = useFeedbackStore();
 const session = useSessionStore();
+const route = useRoute();
+const router = useRouter();
 
 const hours = ref(24);
 const activeTab = ref('trends');
@@ -205,64 +211,152 @@ const scenes = ref<any[]>([]);
 const deg = ref<any>(null);
 const events = ref<any[]>([]);
 const ingest = ref<any>(null);
-const allRules = ref<string[]>([]);
+const ingestFailed = ref(false);
 const selectedRule = ref('');
+const ruleSeries = ref<any[]>([]);
+const tenantName = ref('');
+const lastRefreshAt = ref<string | null>(null);
 let timer: any = null;
+let syncingQuery = false;
+
+const tenantLabel = computed(() =>
+  tenantName.value ? t('monitor.tenant-named', [tenantName.value, session.tenant]) : session.tenant);
 
 const totals = computed(() => metrics.value?.totals || {});
-const totalReq = computed(() => totals.value.total_requests || 0);
-const blockRate = computed(() => totalReq.value > 0 ? (totals.value.block || 0) / totalReq.value : 0);
-const reviewRate = computed(() => totalReq.value > 0 ? (totals.value.review || 0) / totalReq.value : 0);
-const degRate = computed(() => totalReq.value > 0 ? (totals.value.cnt_degraded || 0) / totalReq.value : 0);
-const activeRules = computed(() => new Set((metrics.value?.series || []).filter((s: any) => (s.total_requests || 0) > 0).map((s: any) => s.rule_id)).size);
+const totalReq = computed(() => Number(totals.value.total_requests || 0));
+const hasSamples = computed(() => totalReq.value > 0 || ranking.value.some((r: any) => (r.total_requests || r.total_hits || 0) > 0));
+const blockRate = computed(() => hasSamples.value && totalReq.value > 0 ? (totals.value.block || 0) / totalReq.value : null);
+const reviewRate = computed(() => hasSamples.value && totalReq.value > 0 ? (totals.value.review || 0) / totalReq.value : null);
+const degRate = computed(() => {
+  const s = deg.value?.series || [];
+  const tot = s.reduce((a: number, x: any) => a + (x.total_requests || 0), 0);
+  const d = s.reduce((a: number, x: any) => a + (x.degraded || 0), 0);
+  return tot > 0 ? d / tot : null;
+});
+const activeRules = computed(() => ranking.value.filter((r: any) => (r.total_hits || 0) > 0).length);
+const allRules = computed(() => ranking.value.map((r: any) => r.rule_id).filter(Boolean));
 
-function fmtPct(v: any) { return (v == null || isNaN(v)) ? '-' : (v * 100).toFixed(2) + '%'; }
-function fmtNum(n: any) { if (n == null) return '0'; if (n >= 1e8) return (n / 1e8).toFixed(1) + '亿'; if (n >= 1e4) return (n / 1e4).toFixed(1) + '万'; return n.toLocaleString(); }
+const emptyKind = computed(() => {
+  if (ingestFailed.value) return 'ingest-fail';
+  if (ingest.value && ingest.value.enabled === false) return 'ingest-off';
+  const ev24 = Number(ingest.value?.db_events_24h || 0);
+  const hasRollup = (metrics.value?.series || []).length > 0;
+  const hasRaw = (metrics.value?.series_1m || []).length > 0 || ranking.value.length > 0;
+  if (ev24 > 0 && !hasRollup && !hasRaw) return 'aggregating';
+  if (ev24 === 0 && !hasRollup && !hasRaw) return 'no-events';
+  return 'no-traffic';
+});
+const emptyChartText = computed(() => emptyText(emptyKind.value));
+const emptyTableText = computed(() => emptyKind.value === 'no-events' || emptyKind.value === 'ingest-fail' || emptyKind.value === 'ingest-off'
+  ? emptyText(emptyKind.value) : t('monitor.empty-table'));
+
+const ingestTone = computed(() => {
+  if (ingestFailed.value || (ingest.value && ingest.value.enabled === false)) return 'err';
+  if (ingest.value && Number(ingest.value.db_events_24h || 0) === 0) return 'warn';
+  return 'ok';
+});
+
+function emptyText(kind: string) {
+  if (kind === 'ingest-fail') return t('monitor.empty-ingest-fail');
+  if (kind === 'ingest-off') return t('monitor.empty-ingest-off');
+  if (kind === 'aggregating') return t('monitor.empty-aggregating');
+  if (kind === 'no-events') return t('monitor.empty-no-events', [tenantLabel.value]);
+  return t('monitor.empty-chart');
+}
+
+function fmtPct(v: any) {
+  if (v == null || isNaN(v)) return '—';
+  return (v * 100).toFixed(2) + '%';
+}
+function fmtNum(n: any) {
+  if (n == null) return '0';
+  if (n >= 1e8) return (n / 1e8).toFixed(1) + '亿';
+  if (n >= 1e4) return (n / 1e4).toFixed(1) + '万';
+  return n.toLocaleString();
+}
+
+function pointRadius(n: number) {
+  return n < 4 ? 6 : n < 12 ? 3 : 1;
+}
+function lineSeries(series: any[], values: Array<number | null>) {
+  const labels = bucketLabels(series);
+  if (series.length === 1) {
+    return { labels: ['', labels[0], ''], values: [null, values[0], null] };
+  }
+  return { labels, values };
+}
+function downsample(series: any[], h: number) {
+  if (!series.length || h <= 24) return series;
+  const map = new Map<string, any>();
+  for (const p of series) {
+    const d = parseUtc(p.bucket);
+    if (!d) continue;
+    const hour = new Date(d);
+    hour.setMinutes(0, 0, 0);
+    const key = hour.toISOString();
+    const cur = map.get(key) || { bucket: key, review: 0, block: 0, challenge: 0, allow: 0, total_requests: 0 };
+    cur.review += p.review || 0;
+    cur.block += p.block || 0;
+    cur.challenge += p.challenge || 0;
+    cur.allow += p.allow || 0;
+    cur.total_requests += p.total_requests || 0;
+    map.set(key, cur);
+  }
+  return [...map.values()];
+}
+function overallSeries() {
+  const s = metrics.value?.series || [];
+  const s1 = metrics.value?.series_1m || [];
+  return downsample(s.length ? s : s1, hours.value);
+}
 
 const tickFont = { size: 10 };
 const legendOpts: any = { legend: { position: 'top', labels: { boxWidth: 8, padding: 4, font: tickFont } } };
 function bucketLabels(series: any[]) {
-  return series.map(p => { const d = parseUtc(p.bucket); return d ? d.toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''; });
-}
-function filterRecent(series: any[], ms: number) {
-  const cutoff = Date.now() - ms;
-  return series.filter(p => { const d = parseUtc(p.bucket); return d && d.getTime() < cutoff; });
+  return series.map(p => {
+    const d = parseUtc(p.bucket);
+    return d ? d.toLocaleString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+  });
 }
 
 const trafficData = computed(() => {
-  const s = filterRecent(metrics.value?.series || [], 60000);
+  const s = overallSeries();
   if (!s.length) return null;
-  return { labels: bucketLabels(s), datasets: [
-    { label: 'allow', data: s.map(p => p.allow || 0), backgroundColor: 'rgba(34,197,94,0.7)', borderColor: '#22c55e', borderWidth: 1 },
-    { label: 'review', data: s.map(p => p.review || 0), backgroundColor: 'rgba(251,191,36,0.7)', borderColor: '#fbbf24', borderWidth: 1 },
-    { label: 'block', data: s.map(p => p.block || 0), backgroundColor: 'rgba(239,68,68,0.7)', borderColor: '#ef4444', borderWidth: 1 },
-    { label: 'challenge', data: s.map(p => p.challenge || 0), backgroundColor: 'rgba(168,85,247,0.7)', borderColor: '#a855f7', borderWidth: 1 }
-  ]};
+  return {
+    labels: bucketLabels(s),
+    datasets: [
+      { label: t('monitor.series-allow'), data: s.map(p => p.allow || 0), backgroundColor: 'rgba(34,197,94,0.7)', borderColor: '#22c55e', borderWidth: 1 },
+      { label: t('monitor.series-review'), data: s.map(p => p.review || 0), backgroundColor: 'rgba(251,191,36,0.7)', borderColor: '#fbbf24', borderWidth: 1 },
+      { label: t('monitor.series-block'), data: s.map(p => p.block || 0), backgroundColor: 'rgba(239,68,68,0.7)', borderColor: '#ef4444', borderWidth: 1 },
+      { label: t('monitor.series-challenge'), data: s.map(p => p.challenge || 0), backgroundColor: 'rgba(168,85,247,0.7)', borderColor: '#a855f7', borderWidth: 1 }
+    ]
+  };
 });
 const stackedOpts: any = { responsive: true, maintainAspectRatio: false, scales: { x: { stacked: true, ticks: { maxTicksLimit: 5, font: tickFont, maxRotation: 0 } }, y: { stacked: true, beginAtZero: true, ticks: { font: tickFont } } }, plugins: legendOpts, interaction: { mode: 'index', intersect: false } };
 
 const blockRateData = computed(() => {
-  const s = filterRecent(metrics.value?.series || [], 60000);
+  const s = overallSeries();
   if (!s.length) return null;
-  return { labels: bucketLabels(s), datasets: [{ label: t('monitor.overall-block-rate'), data: s.map(p => p.total_requests > 0 ? (p.block || 0) / p.total_requests : 0), borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', fill: true, tension: 0.3, pointRadius: 0 }] };
+  const line = lineSeries(s, s.map(p => p.total_requests > 0 ? (p.block || 0) / p.total_requests : 0));
+  return { labels: line.labels, datasets: [{ label: t('monitor.overall-block-rate'), data: line.values, borderColor: '#ef4444', backgroundColor: 'rgba(239,68,68,0.1)', fill: true, tension: 0.3, spanGaps: true, clip: false, pointRadius: pointRadius(s.length), pointHoverRadius: 8, pointBackgroundColor: '#ef4444' }] };
 });
-const blockRateOpts: any = { responsive: true, maintainAspectRatio: false, scales: { x: { ticks: { maxTicksLimit: 5, font: tickFont, maxRotation: 0 } }, y: { beginAtZero: true, max: 1, ticks: { callback: (v: any) => fmtPct(v), font: tickFont } } }, plugins: { tooltip: { callbacks: { label: (c: any) => fmtPct(c.parsed.y) } }, ...legendOpts }, interaction: { mode: 'index', intersect: false } };
+const blockRateOpts: any = { responsive: true, maintainAspectRatio: false, layout: { padding: { top: 12 } }, scales: { x: { ticks: { maxTicksLimit: 5, font: tickFont, maxRotation: 0 } }, y: { beginAtZero: true, grace: '12%', ticks: { callback: (v: any) => fmtPct(v), font: tickFont } } }, plugins: { tooltip: { callbacks: { label: (c: any) => fmtPct(c.parsed.y) } }, ...legendOpts }, interaction: { mode: 'index', intersect: false } };
 
 const ruleChartData = computed(() => {
-  const series = metrics.value?.series || [];
-  const ruleMap: Record<string, any[]> = {};
-  series.forEach((s: any) => (ruleMap[s.rule_id] ||= []).push(s));
-  allRules.value = Object.keys(ruleMap).sort();
-  const sel = selectedRule.value || allRules.value[0];
-  if (!sel) return null;
-  const rs = filterRecent(ruleMap[sel] || [], 60000).sort((a, b) => (parseUtc(a.bucket)?.getTime() ?? 0) - (parseUtc(b.bucket)?.getTime() ?? 0));
+  const rs = ruleSeries.value;
   if (!rs.length) return null;
-  return { labels: bucketLabels(rs), datasets: [
-    { label: t('monitor.rule-block-rate'), data: rs.map(p => p.total_requests > 0 ? (p.block || 0) / p.total_requests : 0), yAxisID: 'y', borderColor: '#ef4444', tension: 0.3, pointRadius: 0 },
-    { label: t('monitor.kpi-total-requests'), data: rs.map(p => p.total_requests || 0), yAxisID: 'y1', borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.3, pointRadius: 0 }
-  ]};
+  const rates = lineSeries(rs, rs.map(p => p.total_requests > 0 ? (p.block || 0) / p.total_requests : 0));
+  const reqs = lineSeries(rs, rs.map(p => p.total_requests || 0));
+  const r = pointRadius(rs.length);
+  return {
+    labels: rates.labels,
+    datasets: [
+      { label: t('monitor.rule-block-rate'), data: rates.values, yAxisID: 'y', borderColor: '#ef4444', tension: 0.3, spanGaps: true, clip: false, pointRadius: r, pointHoverRadius: 8, pointBackgroundColor: '#ef4444' },
+      { label: t('monitor.kpi-total-requests'), data: reqs.values, yAxisID: 'y1', borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.3, spanGaps: true, clip: false, pointRadius: r, pointHoverRadius: 8, pointBackgroundColor: '#3b82f6' }
+    ]
+  };
 });
-const ruleOpts: any = { responsive: true, maintainAspectRatio: false, scales: { x: { ticks: { maxTicksLimit: 5, font: tickFont, maxRotation: 0 } }, y: { beginAtZero: true, max: 1, position: 'left', ticks: { callback: (v: any) => fmtPct(v), font: tickFont } }, y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, ticks: { font: tickFont } } }, plugins: { tooltip: { callbacks: { label: (c: any) => c.datasetIndex === 0 ? fmtPct(c.parsed.y) : String(c.parsed.y) } }, ...legendOpts }, interaction: { mode: 'index', intersect: false } };
+const ruleOpts: any = { responsive: true, maintainAspectRatio: false, layout: { padding: { top: 12 } }, scales: { x: { ticks: { maxTicksLimit: 5, font: tickFont, maxRotation: 0 } }, y: { beginAtZero: true, grace: '12%', position: 'left', ticks: { callback: (v: any) => fmtPct(v), font: tickFont } }, y1: { beginAtZero: true, grace: '12%', position: 'right', grid: { drawOnChartArea: false }, ticks: { font: tickFont } } }, plugins: { tooltip: { callbacks: { label: (c: any) => c.datasetIndex === 0 ? fmtPct(c.parsed.y) : String(c.parsed.y) } }, ...legendOpts }, interaction: { mode: 'index', intersect: false } };
 
 const SCENE_COLORS = ['#0369A1', '#0EA5E9', '#22C55E', '#F59E0B', '#EF4444', '#A855F7', '#06B6D4', '#14B8A6'];
 const sceneStats = computed(() => {
@@ -271,7 +365,8 @@ const sceneStats = computed(() => {
   const byScene: Record<string, number> = {};
   const layers = new Set<string>();
   rows.forEach((r) => {
-    byScene[r.scene] = (byScene[r.scene] || 0) + (r.total_requests || 0);
+    const sceneName = r.scene || t('monitor.scene-unset');
+    byScene[sceneName] = (byScene[sceneName] || 0) + (r.total_requests || 0);
     if (r.layer) layers.add(String(r.layer));
   });
   const ranked = Object.entries(byScene)
@@ -283,11 +378,15 @@ const sceneStats = computed(() => {
       color: SCENE_COLORS[i % SCENE_COLORS.length]
     }));
   const colorByScene = Object.fromEntries(ranked.map((r) => [r.scene, r.color]));
-  const detail = rows.map((r) => ({
-    ...r,
-    share: total > 0 ? (r.total_requests || 0) / total : 0,
-    color: colorByScene[r.scene] || SCENE_COLORS[0]
-  }));
+  const detail = rows.map((r) => {
+    const sceneName = r.scene || t('monitor.scene-unset');
+    return {
+      ...r,
+      scene: sceneName,
+      share: total > 0 ? (r.total_requests || 0) / total : 0,
+      color: colorByScene[sceneName] || SCENE_COLORS[0]
+    };
+  });
   return { total, sceneCount: ranked.length, layerCount: layers.size, topShare: ranked[0]?.share || 0, ranked, detail };
 });
 const sceneChartH = computed(() => Math.min(320, Math.max(180, sceneStats.value.ranked.length * 36 + 28)));
@@ -323,12 +422,39 @@ const sceneBarOpts: any = {
 const degData = computed(() => {
   const s = deg.value?.series || [];
   if (!s.length) return null;
-  return { labels: s.map((x: any) => fmtTime(x.bucket)), datasets: [{ label: t('monitor.degradation-title'), data: s.map((x: any) => x.degraded_rate || 0), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', fill: true, tension: 0.3, pointRadius: 0 }] };
+  return { labels: s.map((x: any) => fmtTime(x.bucket)), datasets: [{ label: t('monitor.degradation-title'), data: s.map((x: any) => x.degraded_rate || 0), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.1)', fill: true, tension: 0.3, pointRadius: pointRadius(s.length) }] };
 });
 const degOpts: any = { responsive: true, maintainAspectRatio: false, scales: { x: { ticks: { maxTicksLimit: 5, font: tickFont, maxRotation: 0 } }, y: { beginAtZero: true, ticks: { callback: (v: any) => fmtPct(v), font: tickFont } } }, plugins: { tooltip: { callbacks: { label: (c: any) => fmtPct(c.parsed.y) } }, ...legendOpts }, interaction: { mode: 'index', intersect: false } };
 
+function applyQuery() {
+  const qh = Number(route.query.hours);
+  if ((HOURS as readonly number[]).includes(qh) && qh !== hours.value) hours.value = qh;
+  const qt = String(route.query.tenant || '').trim();
+  if (qt && qt !== session.tenant) session.setTenant(qt);
+}
+
+function syncQuery() {
+  if (syncingQuery) return;
+  const nextTenant = session.tenant;
+  const nextHours = String(hours.value);
+  if (route.query.tenant === nextTenant && route.query.hours === nextHours) return;
+  syncingQuery = true;
+  router.replace({ query: { ...route.query, tenant: nextTenant, hours: nextHours } }).finally(() => { syncingQuery = false; });
+}
+
+async function resolveTenantName() {
+  try {
+    const data = await adminRoot<any[]>('/tenants');
+    const row = (data || []).find((x: any) => (field(x, 'tenant_id', 'tenantId') || '') === session.tenant);
+    tenantName.value = field(row, 'name') || '';
+  } catch {
+    tenantName.value = '';
+  }
+}
+
 async function load() {
   if (!session.tenant) return;
+  await resolveTenantName();
   try {
     const [m, rk, st, dg, ev, ih] = await Promise.all([
       admin<any>('/deploy-rollout/metrics?hours=' + hours.value).catch(() => null),
@@ -336,7 +462,7 @@ async function load() {
       admin<any>('/monitor/scene-traffic?hours=' + hours.value).catch(() => null),
       admin<any>('/monitor/degradation?hours=' + hours.value).catch(() => null),
       admin<any>('/monitor/event-timeline?hours=' + (hours.value > 48 ? hours.value : 48) + '&limit=20').catch(() => null),
-      admin<any>('/audit/ingest-status').catch(() => null)
+      admin<any>('/audit/ingest-status').then(x => { ingestFailed.value = false; return x; }).catch(() => { ingestFailed.value = true; return null; })
     ]);
     metrics.value = m;
     ranking.value = rk?.ranking || [];
@@ -344,10 +470,33 @@ async function load() {
     deg.value = dg;
     events.value = ev?.events || [];
     ingest.value = ih;
+    lastRefreshAt.value = new Date().toISOString();
+    if (allRules.value.length && !allRules.value.includes(selectedRule.value)) {
+      selectedRule.value = allRules.value[0];
+    }
+    await loadRuleSeries();
   } catch (e: any) { feedback.log(e.message, 'err'); }
 }
 
-function setHours(h: number) { hours.value = h; load(); }
+async function loadRuleSeries() {
+  const id = selectedRule.value || allRules.value[0];
+  if (!id) { ruleSeries.value = []; return; }
+  const m = await admin<any>('/rules/' + encodeURIComponent(id) + '/metrics?hours=' + hours.value).catch(() => null);
+  const s = (m?.series || []).length ? m.series : (m?.series_1m || []);
+  ruleSeries.value = downsample(s, hours.value);
+}
+
+function setHours(h: number) { hours.value = h; syncQuery(); load(); }
+
+function downloadText(filename: string, text: string) {
+  const blob = new Blob([text], { type: 'application/json;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 async function exportDash() {
   try {
@@ -358,17 +507,36 @@ async function exportDash() {
       admin<any>('/monitor/degradation?hours=' + hours.value).catch(() => null),
       admin<any>('/monitor/event-timeline?hours=48&limit=20').catch(() => null)
     ]);
-    const dump = JSON.stringify({ exportedAt: new Date().toISOString(), metrics: m, ranking: rk, sceneTraffic: st, degradation: dg, events: ev }, null, 2);
-    await navigator.clipboard.writeText(dump);
+    const dump = JSON.stringify({
+      exportedAt: new Date().toISOString(),
+      tenant: session.tenant,
+      hours: hours.value,
+      metrics: m,
+      ranking: rk,
+      sceneTraffic: st,
+      degradation: dg,
+      events: ev
+    }, null, 2);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    downloadText(`monitor-${session.tenant}-${hours.value}h-${stamp}.json`, dump);
     ElMessage.success(t('monitor.export-success'));
   } catch (e: any) { ElMessage.error(t('monitor.export-fail', [e.message])); }
 }
 
-onMounted(() => { load(); timer = setInterval(load, 30000); });
-onUnmounted(() => { if (timer) clearInterval(timer); });
-watch(() => session.tenant, load);
+onMounted(() => {
+  applyQuery();
+  syncQuery();
+  load();
+  timer = setInterval(load, 30000);
+});
+onUnmounted(() => { if (timer) { clearInterval(timer); timer = null; } });
+watch(() => session.tenant, () => { syncQuery(); load(); });
+watch(selectedRule, loadRuleSeries);
 watch(activeTab, () => { nextTick(() => window.dispatchEvent(new Event('resize'))); });
-
+watch(() => [route.query.tenant, route.query.hours], () => {
+  if (syncingQuery) return;
+  applyQuery();
+});
 </script>
 
 <style scoped>

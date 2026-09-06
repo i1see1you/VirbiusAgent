@@ -17,6 +17,8 @@ public record TenantRolloutPolicy(
         double edgeAuditSampleRateAllow,
         int maxConcurrentRollouts) {
 
+    public static final int DEFAULT_MAX_CONCURRENT_ROLLOUTS = 20;
+
     public static TenantRolloutPolicy defaults(String tenantId) {
         return new TenantRolloutPolicy(
                 tenantId,
@@ -31,6 +33,6 @@ public record TenantRolloutPolicy(
                 true,
                 3.0,
                 0.1,
-                10);
+                DEFAULT_MAX_CONCURRENT_ROLLOUTS);
     }
 }

@@ -10,7 +10,7 @@ export const useFeedbackStore = defineStore('feedback', () => {
     const msg = typeof x === 'string' ? x : JSON.stringify(x, null, 2);
     logMsg.value = msg;
     logLevel.value = level || 'info';
-    if (level === 'err') ElMessage.error(msg);
+    if (level === 'err') ElMessage.error({ message: msg, zIndex: 5200 });
   }
 
   function clear() {

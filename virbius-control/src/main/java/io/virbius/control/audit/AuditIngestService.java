@@ -50,20 +50,21 @@ public class AuditIngestService {
                     """,
                     tenantId);
         }
-        String timeExpr;
+        String timePred;
         Object timeArg;
         if (dialect.isMysql()) {
-            timeExpr = "DATE_SUB(NOW(), INTERVAL ? HOUR)";
+            timePred = "intercepted_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)";
             timeArg = hours;
         } else if (dialect.isPostgresql()) {
-            timeExpr = "NOW() - INTERVAL '?' HOUR";
+            timePred = "intercepted_at >= NOW() - INTERVAL '1 hour' * ?";
             timeArg = hours;
         } else {
-            timeExpr = "datetime('now', ?)";
+            timePred = "datetime(replace(substr(replace(intercepted_at, 'T', ' '), 1, 19), 'Z', ''))"
+                    + " >= datetime('now', ?)";
             timeArg = "-" + hours + " hours";
         }
         return jdbcCount(
-                "SELECT COUNT(*) FROM tb_audit_events WHERE tenant_id = ? AND intercepted_at >= " + timeExpr,
+                "SELECT COUNT(*) FROM tb_audit_events WHERE tenant_id = ? AND " + timePred,
                 tenantId,
                 timeArg);
     }

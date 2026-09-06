@@ -250,6 +250,7 @@ public class DeployRolloutController {
             return ApiResult.ok(Map.of("active", false));
         }
         Map<String, Object> m = toMap(rollout);
+        m.putAll(deployRolloutService.previewNextUpgrade(rollout));
         m.put("events", rolloutRepo.listEvents(rollout.deployId()).stream()
                 .map(this::toEventMap).toList());
         m.put("cloud_nodes", nodeRegistryService.listNodes("cloud", tenantId));
@@ -282,6 +283,7 @@ public class DeployRolloutController {
                 .filter(r -> r.tenantId().equals(tenantId))
                 .orElseThrow(() -> new BusinessException("Deployment not found: " + deployId));
         Map<String, Object> m = toMap(rollout);
+        m.putAll(deployRolloutService.previewNextUpgrade(rollout));
         m.put("events", rolloutRepo.listEvents(deployId).stream()
                 .map(this::toEventMap).toList());
         m.put("cloud_nodes", nodeRegistryService.listNodes("cloud", tenantId));

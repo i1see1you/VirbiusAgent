@@ -163,7 +163,7 @@ watch(() => feedback.logMsg, (msg) => {
     const typeMap: Record<string, 'success' | 'warning' | 'info'> = {
       ok: 'success', warn: 'warning', info: 'info'
     };
-    ElMessage({ message: msg, type: typeMap[feedback.logLevel] || 'info', duration: 3000, showClose: true });
+    ElMessage({ message: msg, type: typeMap[feedback.logLevel] || 'info', duration: 3000, showClose: true, zIndex: 5200 });
   }
   feedback.clear();
 });

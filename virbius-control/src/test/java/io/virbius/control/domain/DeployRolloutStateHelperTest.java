@@ -50,8 +50,8 @@ class DeployRolloutStateHelperTest {
     }
 
     @Test
-    void pendingToFullNotAllowed() {
-        assertThrows(IllegalArgumentException.class, () ->
+    void pendingToFull() {
+        assertDoesNotThrow(() ->
                 DeployRolloutStateHelper.validateTransition("pending", "full"));
     }
 

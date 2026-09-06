@@ -133,7 +133,7 @@ CREATE TABLE IF NOT EXISTS tb_tenant_rollout_policy (
     allow_force                 INTEGER NOT NULL DEFAULT 1,
     rollback_block_spike_ratio  REAL NOT NULL DEFAULT 3.0,
     edge_audit_sample_rate_allow REAL NOT NULL DEFAULT 0.1,
-    max_concurrent_rollouts     INTEGER NOT NULL DEFAULT 10,
+    max_concurrent_rollouts     INTEGER NOT NULL DEFAULT 20,
     updated_at                  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

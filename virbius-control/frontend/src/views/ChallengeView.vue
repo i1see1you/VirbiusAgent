@@ -166,7 +166,7 @@ async function approve(id: string, approvedBy: string, comment: string) {
   try {
     const res = await rawJson<any>(`/api/v1/challenges/${id}/approve`, { method: 'POST', body: JSON.stringify({ approved_by: approvedBy || 'operator', comment }) });
     if (res && res.token) {
-      ElMessage.success(`Challenge approved! Token: ${res.token} (expires in 10 minutes)`);
+      ElMessage.success(t('challenge.approved-token', [res.token]));
       dialogVisible.value = false;
       load();
     } else { ElMessage.error('Approve failed: ' + (res?.message || res?.status || 'unknown')); }

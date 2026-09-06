@@ -10,13 +10,18 @@
     <div class="v-row">
       <span class="v-hint" style="margin:0" v-html="t('rules.current-layer', [rules.currentLayer])"></span>
       <el-input v-model="filterQ" :placeholder="t('rules.filter-id')" clearable style="width:220px" />
-      <el-select popper-class="rules-select-popper" v-model="filterState" clearable :placeholder="t('rules.filter-state')" style="width:140px">
-        <el-option value="draft" :label="t('ro-state.draft')" />
-        <el-option value="dry_run" :label="t('ro-state.dry_run')" />
-        <el-option value="canary" :label="t('ro-state.canary')" />
-        <el-option value="full" :label="t('ro-state.full')" />
-        <el-option value="disabled" :label="t('ro-state.disabled')" />
-      </el-select>
+      <div class="rules-field">
+        <span class="rules-field-label" id="rules-filter-state-label">{{ t('rules.filter-state-label') }}</span>
+        <el-select popper-class="rules-select-popper" v-model="filterState" clearable
+          :placeholder="t('rules.filter-state')" style="width:140px"
+          :aria-labelledby="'rules-filter-state-label'">
+          <el-option value="draft" :label="t('ro-state.draft')" />
+          <el-option value="dry_run" :label="t('ro-state.dry_run')" />
+          <el-option value="canary" :label="t('ro-state.canary')" />
+          <el-option value="full" :label="t('ro-state.full')" />
+          <el-option value="disabled" :label="t('ro-state.disabled')" />
+        </el-select>
+      </div>
       <el-button type="primary" @click="openNew">{{ t('rules.btn-new') }}</el-button>
     </div>
 
@@ -63,27 +68,38 @@
             <div class="rules-panel-body">
 
       <div v-if="isNew" class="v-row">
-        <label>{{ t('rules.label-id') }} <el-input v-model="form.rule_id" style="width:200px" /></label>
-        <label>{{ t('rules.label-runtime') }}
-          <el-select popper-class="rules-select-popper" v-model="form.runtime" style="width:140px" @change="onRuntimeChange">
+        <div class="rules-field">
+          <label class="rules-field-label" for="rules-field-id">{{ t('rules.label-id') }}</label>
+          <el-input id="rules-field-id" v-model="form.rule_id" style="width:200px" />
+        </div>
+        <div class="rules-field">
+          <span class="rules-field-label" id="rules-field-runtime-label">{{ t('rules.label-runtime') }}</span>
+          <el-select popper-class="rules-select-popper" v-model="form.runtime" style="width:140px" @change="onRuntimeChange"
+            :aria-labelledby="'rules-field-runtime-label'">
             <el-option v-for="rt in layerRuntimes" :key="rt" :value="rt" :label="runtimeLabel(rt)" />
           </el-select>
-        </label>
+        </div>
       </div>
 
       <div class="v-row">
-        <label>{{ t('rules.label-reason') }} <el-input v-model="form.reason" :disabled="isReadOnly" style="width:200px" /></label>
-        <label>{{ t('rules.label-risk') }}
+        <div class="rules-field">
+          <label class="rules-field-label" for="rules-field-reason">{{ t('rules.label-reason') }}</label>
+          <el-input id="rules-field-reason" v-model="form.reason" :disabled="isReadOnly" style="width:200px" />
+        </div>
+        <div class="rules-field">
+          <span class="rules-field-label">{{ t('rules.label-risk') }}</span>
           <el-input-number v-model="form.risk" :min="0" :max="100" :disabled="isReadOnly || isDlp" style="width:100px" />
-        </label>
-        <label>{{ t('rules.label-intent') }}
-          <el-select popper-class="rules-select-popper" v-model="form.intent" :disabled="isReadOnly || isAsync || isDlp" style="width:120px">
-            <el-option value="deny" :label="t('rules.intent-deny')" />
-            <el-option value="allow" :label="t('rules.intent-allow')" />
-            <el-option value="challenge" :label="t('rules.intent-challenge')" />
-            <el-option value="review" :label="t('rules.intent-review')" />
+        </div>
+        <div class="rules-field">
+          <span class="rules-field-label" id="rules-field-intent-label">{{ t('rules.label-intent') }}</span>
+          <el-select popper-class="rules-select-popper" v-model="form.intent" :disabled="isReadOnly || isAsync || isDlp" style="width:120px"
+            :aria-labelledby="'rules-field-intent-label'">
+            <el-option value="deny" :label="t('rules.intent.deny')" />
+            <el-option value="allow" :label="t('rules.intent.allow')" />
+            <el-option value="challenge" :label="t('rules.intent.challenge')" />
+            <el-option value="review" :label="t('rules.intent.review')" />
           </el-select>
-        </label>
+        </div>
         <el-checkbox v-if="showAsync" v-model="form.is_async" :disabled="isReadOnly" @change="onAsyncChange">{{ t('rules.label-async') }}</el-checkbox>
       </div>
 
@@ -108,16 +124,27 @@
       </div>
 
       <div v-if="showBindScope" class="v-row">
-        <label>{{ t('rules.label-bind-scope') }}
-          <el-select popper-class="rules-select-popper" v-model="form.bind_scope" :disabled="isReadOnly" style="width:200px" @change="onBindScopeChange">
+        <div class="rules-field">
+          <span class="rules-field-label" id="rules-field-bind-label">{{ t('rules.label-bind') }}</span>
+          <el-select popper-class="rules-select-popper" v-model="form.bind_scope" :disabled="isReadOnly" style="width:220px" @change="onBindScopeChange"
+            :aria-labelledby="'rules-field-bind-label'">
             <el-option v-for="o in bindScopeOptions" :key="o.value" :value="o.value" :label="o.label" />
           </el-select>
-        </label>
-        <label v-if="showToolNames">{{ t('rules.label-tool-names') }} <el-input v-model="form.bind_tools" :disabled="isReadOnly" style="width:200px" /></label>
+        </div>
+        <div v-if="showToolNames" class="rules-field">
+          <label class="rules-field-label" for="rules-field-tools">{{ t('rules.label-tools') }}</label>
+          <el-input id="rules-field-tools" v-model="form.bind_tools" :disabled="isReadOnly" style="width:200px" />
+        </div>
       </div>
       <div v-if="showBindScope" class="v-row">
-        <label v-if="showToolNames">{{ t('rules.label-mcp-servers') }} <el-input v-model="form.bind_mcp_servers" :disabled="isReadOnly" style="width:200px" /></label>
-        <label v-if="showAppIds">{{ t('rules.label-app-ids') }} <el-input v-model="form.bind_app_ids" :disabled="isReadOnly" style="width:240px" /></label>
+        <div v-if="showToolNames" class="rules-field">
+          <label class="rules-field-label" for="rules-field-mcp">{{ t('rules.label-mcp') }}</label>
+          <el-input id="rules-field-mcp" v-model="form.bind_mcp_servers" :disabled="isReadOnly" style="width:200px" />
+        </div>
+        <div v-if="showAppIds" class="rules-field">
+          <label class="rules-field-label" for="rules-field-apps">{{ t('rules.label-apps') }}</label>
+          <el-input id="rules-field-apps" v-model="form.bind_app_ids" :disabled="isReadOnly" style="width:240px" />
+        </div>
       </div>
       <p v-if="showBindScope" class="v-hint" v-html="t('gw.scope-hint')"></p>
 
@@ -431,6 +458,9 @@ function stateLabel(st: string): string {
   const s = st || 'draft';
   return loc('ro-state.' + s, s);
 }
+function stateName(st: string): string {
+  return stateLabel(st);
+}
 function bindLabel(scope: any): string {
   const s = scope || {};
   const bs = field(s, 'bind_scope', 'bindScope') || 'global';
@@ -682,7 +712,7 @@ function onSaveShortcut() {
 
 function saveWithDiff() {
   if (editMeta.value && editMeta.value.rollout_state === 'disabled') { feedback.log(t('rules.disabled-cant-edit'), 'warn'); return; }
-  if (editMeta.value && inExecutionPlane(editMeta.value.rollout_state)) { feedback.log(t('rules.running-cant-edit', [editMeta.value.rollout_state]), 'warn'); return; }
+  if (editMeta.value && inExecutionPlane(editMeta.value.rollout_state)) { feedback.log(t('rules.running-cant-edit', [stateName(editMeta.value.rollout_state)]), 'warn'); return; }
   if (previousBody.value && form.body !== previousBody.value) {
     diffConfirmRef.value?.open();
   } else {
@@ -824,6 +854,8 @@ watch(editorVisible, (open) => {
   padding: 4px 6px;
 }
 .rules-panel-close:hover { color: #0f172a; }
+.rules-field { display: inline-flex; align-items: center; gap: 6px; }
+.rules-field-label { font-size: 13px; color: #475569; white-space: nowrap; }
 .rules-panel-body {
   flex: 1;
   overflow-y: auto;

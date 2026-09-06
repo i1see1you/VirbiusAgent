@@ -47,7 +47,7 @@ public class ChallengeController {
 
     @GetMapping
     public ResponseEntity<List<Map>> listChallenges(
-            @RequestParam(defaultValue = "default") String tenantId,
+            @RequestParam(name = "tenant_id", defaultValue = "default") String tenantId,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "50") int max) {
         try {
@@ -83,7 +83,7 @@ public class ChallengeController {
             // For pending / expired / no status, proxy to engine
             URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
                     .path("/v1/challenges")
-                    .queryParam("tenant_id", tenantId)
+                    .queryParam("tenantId", tenantId)
                     .queryParam("max", max)
                     .queryParam("status", status != null && !status.isBlank() ? status : null)
                     .build()
