@@ -14,7 +14,7 @@
   <name>virbius-engine</name>
 
   <properties>
-    <grpc.version>1.82.1</grpc.version>
+    <grpc.version>1.82.2</grpc.version>
     <protobuf.version>3.25.5</protobuf.version>
   </properties>
 
