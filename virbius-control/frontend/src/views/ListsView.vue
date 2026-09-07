@@ -5,6 +5,7 @@
     <details class="v-hint-more">
       <summary>{{ t('common.learn-more') }}</summary>
       <p class="v-hint" v-html="t('lists.desc')"></p>
+      <p class="v-hint" v-html="t('lists.image-desc')"></p>
     </details>
 
     <div class="v-row">
@@ -34,31 +35,64 @@
       v-model="entryDrawerVisible"
       class="lists-drawer"
       direction="rtl"
-      size="640px"
+      size="720px"
       :title="drawerTitle"
       :close-on-click-modal="true"
       :close-on-press-escape="true"
       @opened="syncTableHighlight"
     >
       <p class="v-hint">{{ t('lists.drawer-hint', [dimLabel(currentDim)]) }}</p>
+      <p v-if="isImageList" class="v-hint" v-html="t('lists.drawer-hint-image')"></p>
       <p class="v-hint">{{ t('lists.drawer-hint-expiry') }}</p>
 
-      <el-input v-model="batchText" type="textarea" :rows="5" :placeholder="t('lists.placeholder-batch')" />
-      <div class="v-row" style="margin-top:8px">
-        <el-select v-model="expireMode" style="width:130px">
-          <el-option value="never" :label="t('lists.expire-never')" />
-          <el-option value="1d" :label="t('lists.expire-1d')" />
-          <el-option value="7d" :label="t('lists.expire-7d')" />
-          <el-option value="custom" :label="t('lists.expire-custom')" />
-        </el-select>
-        <el-date-picker v-if="expireMode === 'custom'" v-model="expireCustom" type="datetime"
-          :placeholder="t('lists.expire-custom')" style="width:220px" />
-        <el-button type="primary" :loading="adding" @click="addBatch">{{ t('lists.btn-add-batch') }}</el-button>
-      </div>
+      <template v-if="isImageList">
+        <div class="v-toolbar">
+          <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/gif,image/bmp"
+            @change="onFilePicked" />
+          <el-input v-model="uploadRemark" :placeholder="t('lists.image-remark-placeholder')" style="width:200px" />
+        </div>
+        <div class="v-row" style="margin-top:8px">
+          <el-select v-model="expireMode" style="width:130px">
+            <el-option value="never" :label="t('lists.expire-never')" />
+            <el-option value="1d" :label="t('lists.expire-1d')" />
+            <el-option value="7d" :label="t('lists.expire-7d')" />
+            <el-option value="custom" :label="t('lists.expire-custom')" />
+          </el-select>
+          <el-date-picker v-if="expireMode === 'custom'" v-model="expireCustom" type="datetime"
+            :placeholder="t('lists.expire-custom')" style="width:220px" />
+          <el-button type="primary" :disabled="!pickedFile" @click="uploadImage">{{ t('lists.btn-upload') }}</el-button>
+        </div>
+        <el-alert v-if="tooLarge" type="warning" :title="tooLarge" show-icon :closable="false"
+          style="margin-top:8px" />
+      </template>
+      <template v-else>
+        <el-input v-model="batchText" type="textarea" :rows="5" :placeholder="t('lists.placeholder-batch')" />
+        <div class="v-row" style="margin-top:8px">
+          <el-select v-model="expireMode" style="width:130px">
+            <el-option value="never" :label="t('lists.expire-never')" />
+            <el-option value="1d" :label="t('lists.expire-1d')" />
+            <el-option value="7d" :label="t('lists.expire-7d')" />
+            <el-option value="custom" :label="t('lists.expire-custom')" />
+          </el-select>
+          <el-date-picker v-if="expireMode === 'custom'" v-model="expireCustom" type="datetime"
+            :placeholder="t('lists.expire-custom')" style="width:220px" />
+          <el-button type="primary" :loading="adding" @click="addBatch">{{ t('lists.btn-add-batch') }}</el-button>
+        </div>
+      </template>
 
       <el-table :data="paginatedEntryRows" size="small" border stripe :row-class-name="entryRowClass"
-        :empty-text="t('lists.empty-entries')" style="margin-top:12px">
-        <el-table-column :label="t('lists.header-value')" prop="value">
+        :empty-text="isImageList ? t('lists.empty-entries-image') : t('lists.empty-entries')" style="margin-top:12px">
+        <el-table-column v-if="isImageList" :label="t('lists.header-sha256')" width="140">
+          <template #default="{ row }">
+            <el-tooltip :content="row.sha256" placement="top">
+              <code>{{ row.sha256 ? row.sha256.slice(0, 12) + '…' : '' }}</code>
+            </el-tooltip>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="isImageList" :label="t('lists.header-phash')" width="170">
+          <template #default="{ row }"><code>{{ row.phashHex }}</code></template>
+        </el-table-column>
+        <el-table-column v-if="!isImageList" :label="t('lists.header-value')" prop="value">
           <template #default="{ row }"><code>{{ row.value }}</code></template>
         </el-table-column>
         <el-table-column :label="t('lists.header-created')" width="160">
@@ -70,7 +104,21 @@
             <span v-else>{{ fmtTime(row.expiresAt) }}</span>
           </template>
         </el-table-column>
-        <el-table-column :label="t('lists.header-remark')" prop="remark" />
+        <el-table-column :label="t('lists.header-remark')" min-width="140">
+          <template #default="{ row }">
+            <template v-if="editingValue === row.value">
+              <div class="v-toolbar" style="margin:0;gap:4px">
+                <el-input v-model="editRemark" size="small" style="flex:1" @keyup.enter="saveRemark(row)" />
+                <el-button type="primary" size="small" link @click="saveRemark(row)">{{ t('common.save') }}</el-button>
+                <el-button size="small" link @click="cancelRemarkEdit">{{ t('common.cancel') }}</el-button>
+              </div>
+            </template>
+            <template v-else>
+              <span>{{ row.remark || '—' }}</span>
+              <el-button size="small" link style="margin-left:6px" @click="startRemarkEdit(row)">{{ t('common.edit') }}</el-button>
+            </template>
+          </template>
+        </el-table-column>
         <el-table-column :label="t('lists.header-actions')" width="80">
           <template #default="{ row }">
             <el-button type="danger" size="small" link @click="deleteEntry(row)">{{ t('common.delete') }}</el-button>
@@ -94,6 +142,7 @@
             <el-option value="user_id" :label="t('lists.dim-user')" />
             <el-option value="device_id" :label="t('lists.dim-device')" />
             <el-option value="ip_cidr" :label="t('lists.dim-ip')" />
+            <el-option value="image" :label="t('lists.dim-image')" />
             <el-option value="var" :label="t('lists.dim-logical')" />
           </el-select>
         </label>
@@ -123,7 +172,7 @@ import { ElMessageBox } from 'element-plus';
 import { useFeedbackStore } from '@/stores/feedback';
 import { useRulesStore } from '@/stores/rules';
 import { useSessionStore } from '@/stores/session';
-import { admin } from '@/api/client';
+import { admin, adminUpload, jsonBody } from '@/api/client';
 import { field, fmtTime, inferListStorage,
   isListEntryActive, countActiveListEntries, listEntryValue } from '@/utils/format';
 
@@ -133,6 +182,8 @@ const rulesStore = useRulesStore();
 const session = useSessionStore();
 
 const MEMORY_LIST_MAX_ACTIVE = 1000;
+/** Keep in sync with server spring.servlet.multipart.max-file-size (20MB). */
+const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const tableRef = ref();
 const filterQ = ref('');
 const createVisible = ref(false);
@@ -147,12 +198,19 @@ const batchText = ref('');
 const expireMode = ref('never');
 const expireCustom = ref<Date | null>(null);
 const adding = ref(false);
+const fileInput = ref<HTMLInputElement | null>(null);
+const pickedFile = ref<File | null>(null);
+const uploadRemark = ref('');
+const tooLarge = ref('');
+const editingValue = ref('');
+const editRemark = ref('');
 
 const listMeta = ref<Record<string, any>>({});
 const logicals = computed(() => rulesStore.contextVars.map((v: any) => v.logical).filter(Boolean));
 const catalogRows = ref<any[]>([]);
 const entryRows = ref<any[]>([]);
 const currentDim = computed(() => listMeta.value[entryListName.value]?.dimension || '');
+const isImageList = computed(() => currentDim.value === 'image');
 const drawerTitle = computed(() => t('lists.drawer-title', [entryListName.value || '']));
 
 const filteredCatalog = computed(() => {
@@ -178,7 +236,8 @@ function dimLabel(dim: string): string {
     keyword: t('lists.dim-keyword'),
     user_id: t('lists.dim-user'),
     device_id: t('lists.dim-device'),
-    ip_cidr: t('lists.dim-ip')
+    ip_cidr: t('lists.dim-ip'),
+    image: t('lists.dim-image')
   };
   return map[dim] || dim;
 }
@@ -239,14 +298,21 @@ function flattenEntries(listName: string, lists: any[]): any[] {
   const dim = field(item, 'dimension') || '';
   const storage = inferListStorage(dim, field(item, 'storage'));
   const entries = field(item, 'entries') || [];
-  return entries.map((e: any) => ({
-    listName,
-    dim, storage,
-    value: listEntryValue(e),
-    createdAt: field(e, 'created_at', 'createdAt') || '',
-    expiresAt: field(e, 'expires_at', 'expiresAt') || '',
-    remark: field(e, 'remark') || ''
-  }));
+  return entries.map((e: any) => {
+    const v = listEntryValue(e);
+    // image fingerprint value: <sha256hex>:<phashhex>
+    const sep = dim === 'image' ? v.indexOf(':') : -1;
+    return {
+      listName,
+      dim, storage,
+      value: v,
+      sha256: sep > 0 ? v.slice(0, sep) : '',
+      phashHex: sep > 0 ? v.slice(sep + 1) : '',
+      createdAt: field(e, 'created_at', 'createdAt') || '',
+      expiresAt: field(e, 'expires_at', 'expiresAt') || '',
+      remark: field(e, 'remark') || ''
+    };
+  });
 }
 
 let rawData: any = null;
@@ -287,9 +353,77 @@ function onCatalogRowClick(row: any) {
 
 function openEntries(name: string) {
   entryListName.value = name;
+  resetUploadState();
+  cancelRemarkEdit();
   loadEntriesForList();
   entryDrawerVisible.value = true;
   nextTick(syncTableHighlight);
+}
+
+function resetUploadState() {
+  pickedFile.value = null;
+  uploadRemark.value = '';
+  tooLarge.value = '';
+  if (fileInput.value) fileInput.value.value = '';
+}
+
+function formatSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + 'MB';
+  if (bytes >= 1024) return Math.round(bytes / 1024) + 'KB';
+  return bytes + 'B';
+}
+
+function onFilePicked(e: Event) {
+  const files = (e.target as HTMLInputElement).files;
+  const f = files && files.length ? files[0] : null;
+  if (f && f.size > MAX_UPLOAD_BYTES) {
+    // friendly inline hint instead of a failed request; the upload button stays disabled
+    tooLarge.value = t('lists.file-too-large', [f.name, formatSize(f.size)]);
+    pickedFile.value = null;
+    return;
+  }
+  tooLarge.value = '';
+  pickedFile.value = f;
+}
+
+async function uploadImage() {
+  if (!pickedFile.value || !entryListName.value) return;
+  const fd = new FormData();
+  fd.append('file', pickedFile.value);
+  if (uploadRemark.value.trim()) fd.append('remark', uploadRemark.value.trim());
+  const expiresAt = batchExpiresAt();
+  if (expiresAt) fd.append('expiresAt', expiresAt);
+  try {
+    await adminUpload('/lists/' + encodeURIComponent(entryListName.value) + '/entries/image', fd);
+    resetUploadState();
+    await loadLists();
+    feedback.log(t('lists.image-added'), 'ok');
+  } catch (e: any) {
+    feedback.log(e.message, 'err');
+  }
+}
+
+function startRemarkEdit(row: any) {
+  editingValue.value = row.value;
+  editRemark.value = row.remark || '';
+}
+
+function cancelRemarkEdit() {
+  editingValue.value = '';
+  editRemark.value = '';
+}
+
+async function saveRemark(row: any) {
+  try {
+    await admin('/lists/' + encodeURIComponent(row.listName)
+      + '/entries/' + encodeURIComponent(row.value) + '/remark',
+      { method: 'PATCH', body: jsonBody({ remark: editRemark.value }) });
+    row.remark = editRemark.value.trim();
+    cancelRemarkEdit();
+    feedback.log(t('lists.remark-saved'), 'ok');
+  } catch (e: any) {
+    feedback.log(e.message, 'err');
+  }
 }
 
 function openCreate() {

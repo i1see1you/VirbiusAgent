@@ -90,9 +90,10 @@ public class AccessListService {
 
     /** Upload an image sample file as a fingerprint entry of an image list. */
     public Map<String, Object> uploadImageEntryAndPush(
-            String tenantId, String listName, byte[] imageBytes, String originalFilename, String remark) {
+            String tenantId, String listName, byte[] imageBytes, String originalFilename, String remark,
+            Instant expiresAt) {
         Map<String, Object> out = new LinkedHashMap<>(
-                imageListSupport.uploadImageEntry(tenantId, listName, imageBytes, originalFilename, remark));
+                imageListSupport.uploadImageEntry(tenantId, listName, imageBytes, originalFilename, remark, expiresAt));
         out.putAll(refreshArtifactsAndPush(tenantId));
         return out;
     }

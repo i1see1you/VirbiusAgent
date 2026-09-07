@@ -47,7 +47,7 @@ export function inferListStorage(dim: string, storage?: string): 'memory' | 'red
   if (storage) return String(storage).toLowerCase() as any;
   const d = (dim || '').toLowerCase();
   if (d === 'keyword' || d === 'ip_cidr' || d === 'ip' || d === 'content') return 'memory';
-  if (d === 'user_id' || d === 'device_id' || d === 'var' || d.startsWith('var:')) return 'redis';
+  if (d === 'user_id' || d === 'device_id' || d === 'var' || d.startsWith('var:') || d === 'image') return 'redis';
   return 'memory';
 }
 
@@ -64,7 +64,8 @@ export function formatListDimension(dim: string): string {
     keyword: t('lists.dim-keyword'),
     user_id: t('lists.dim-user'),
     device_id: t('lists.dim-device'),
-    ip_cidr: 'IP/CIDR'
+    ip_cidr: 'IP/CIDR',
+    image: t('lists.dim-image')
   };
   return (map[dim] || dim) + ' `' + dim + '`';
 }

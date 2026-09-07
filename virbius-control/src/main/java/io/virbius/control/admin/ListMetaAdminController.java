@@ -7,6 +7,8 @@ import io.virbius.control.domain.dto.request.AccessListEntriesRequest;
 import io.virbius.control.domain.dto.request.AccessListEntryInput;
 import io.virbius.control.repository.ListMetaRepository;
 import io.virbius.control.service.AccessListService;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -85,7 +87,8 @@ public class ListMetaAdminController {
             @PathVariable("tenantId") String tenantId,
             @PathVariable("listName") String listName,
             @RequestParam("file") MultipartFile file,
-            @RequestParam(value = "remark", required = false) String remark) {
+            @RequestParam(value = "remark", required = false) String remark,
+            @RequestParam(value = "expiresAt", required = false) String expiresAt) {
         byte[] bytes;
         try {
             bytes = file.getBytes();
@@ -93,7 +96,18 @@ public class ListMetaAdminController {
             throw new IllegalArgumentException("cannot read uploaded file: " + e.getMessage());
         }
         return ApiResult.ok(accessListService.uploadImageEntryAndPush(
-                tenantId, listName, bytes, file.getOriginalFilename(), remark));
+                tenantId, listName, bytes, file.getOriginalFilename(), remark, parseExpiresAt(expiresAt)));
+    }
+
+    private static Instant parseExpiresAt(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return Instant.parse(raw.trim());
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException("expiresAt must be an ISO-8601 instant, e.g. 2026-09-08T00:00:00Z");
+        }
     }
 
     /** Edit only an entry's remark — the fingerprint value (and engine state) is untouched. */

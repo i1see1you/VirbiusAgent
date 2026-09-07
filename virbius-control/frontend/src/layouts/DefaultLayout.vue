@@ -114,7 +114,6 @@ const epLocale = computed(() => (locale.value === 'zh' ? zhCn : en));
 const icons: Record<string, string> = {
   tenants: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="7" cy="7" r="2.5"/><path d="M2 17c0-3 2-5 5-5s5 2 5 5"/><circle cx="14" cy="7" r="2.5"/><path d="M11 17c0-3 2-5 4-5s4 2 4 5"/></svg>',
   lists: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 5h14M3 10h14M3 15h14"/></svg>',
-  'image-lists': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="14" height="12" rx="1.5"/><circle cx="7" cy="8.5" r="1.3"/><path d="M3 14l4-4 3 3 3-4 4 5"/></svg>',
   cumulatives: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 17V4m5 13V8m5 9v-6m5 6V3"/></svg>',
   tools: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M10 7V3m0 14v-4m3-3h4M3 10h4"/></svg>',
   license: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 18V3h10v15l-5-3-5 3z"/></svg>',
@@ -137,7 +136,6 @@ const policyItems = [
 ];
 const assetItems = [
   { to: '/lists', name: 'lists', label: 'nav.lists' },
-  { to: '/image-lists', name: 'image-lists', label: 'nav.image-lists' },
   { to: '/cumulatives', name: 'cumulatives', label: 'nav.cumulatives' },
   { to: '/tools', name: 'tools', label: 'nav.tools' },
   { to: '/license', name: 'license', label: 'nav.license' }

@@ -4,7 +4,7 @@ const routes = [
   { path: '/', redirect: '/lists' },
   { path: '/tenants', name: 'tenants', component: () => import('@/views/TenantsView.vue') },
   { path: '/lists', name: 'lists', component: () => import('@/views/ListsView.vue') },
-  { path: '/image-lists', name: 'image-lists', component: () => import('@/views/ImageBlacklistView.vue') },
+  { path: '/image-lists', redirect: '/lists' },
   { path: '/cumulatives', name: 'cumulatives', component: () => import('@/views/CumulativesView.vue') },
   { path: '/tools', name: 'tools', component: () => import('@/views/ToolsView.vue') },
   { path: '/license', name: 'license', component: () => import('@/views/LicenseView.vue') },

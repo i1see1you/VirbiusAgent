@@ -6,6 +6,7 @@ import io.virbius.control.domain.AccessListMeta;
 import io.virbius.control.domain.AccessListMetaDimension;
 import io.virbius.control.repository.ListMetaRepository;
 import io.virbius.policy.ImageHasher;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -67,7 +68,8 @@ public class ImageBlacklistAdminService {
      * empty remark → filename, non-empty → {@code filename · remark}.
      */
     public Map<String, Object> uploadImageEntry(
-            String tenantId, String listName, byte[] imageBytes, String originalFilename, String remark) {
+            String tenantId, String listName, byte[] imageBytes, String originalFilename, String remark,
+            Instant expiresAt) {
         AccessListMeta meta = listMetaRepo
                 .getMeta(tenantId, listName)
                 .orElseThrow(() -> new IllegalArgumentException("list not found: " + listName));
@@ -85,7 +87,7 @@ public class ImageBlacklistAdminService {
                 ? name
                 : (name != null ? name + " · " + remark.trim() : remark.trim());
         String value = fingerprintValue(imageBytes);
-        boolean added = listMetaRepo.addEntry(tenantId, listName, value, filledRemark, null);
+        boolean added = listMetaRepo.addEntry(tenantId, listName, value, filledRemark, expiresAt);
         Map<String, Object> out = new HashMap<>();
         out.put("added", added);
         out.put("sha256", value.substring(0, 64));
@@ -138,11 +140,17 @@ public class ImageBlacklistAdminService {
                 jedis.del(stale.toArray(new String[0]));
             }
             int entries = 0;
+            // Redis SET/HASH members have no per-member TTL, so expired samples are
+            // filtered here; the scheduled rebuild keeps the keys in sync afterwards.
+            Instant now = Instant.now();
             for (String[] tl : pushList) {
                 String tenantId = tl[0];
                 String listName = tl[1];
                 Map<String, String> phashFields = new HashMap<>();
                 for (AccessListEntry e : entriesByList.get(tenantId + ":" + listName)) {
+                    if (!AccessListService.isActiveEntry(e, now)) {
+                        continue;
+                    }
                     String[] parts = splitFingerprint(e.value());
                     if (parts == null) {
                         log.warn("bad image fingerprint ignored: list={} value={}", listName, e.value());
