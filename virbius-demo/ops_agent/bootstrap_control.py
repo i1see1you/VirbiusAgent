@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""幂等写入 Control：租户 ops、challenge 规则 publish to full、本关 License。"""
+"""幂等写入 Control：租户 ops、工具、本关 License。规则由运营台配置。"""
 import logging
 
+from mcp_runtime.bootstrap import TOOL_NAME_RE
 from mcp_runtime.bootstrap import control_ui_url as _control_ui_url
 from mcp_runtime.bootstrap import run_bootstrap
 from mcp_runtime.labs import get as get_lab
@@ -44,6 +45,7 @@ def tool_upsert_bodies() -> list:
 
 
 def rule_upsert_body() -> dict:
+    """运营台对照用，demo 不会 POST 这条规则。"""
     lab = get_lab("ops")
     return {
         "rule_id": RULE_ID, "bundle_id": "poc-default", "layer": "cloud",
@@ -57,11 +59,25 @@ def rule_upsert_body() -> dict:
     }
 
 
+def license_issue_body(extra_tools=None, risk_quota=100) -> dict:
+    lab = get_lab("ops")
+    names = list(ALL_TOOLS)
+    for t in extra_tools or []:
+        if t not in names:
+            names.append(t)
+    return {
+        "app_id": lab.app_id,
+        "agent_name": lab.agent_name,
+        "allowed_tools": names,
+        "risk_quota": risk_quota,
+    }
+
+
 def run() -> dict:
     global _STATUS
     try:
         _STATUS = run_bootstrap(
-            "ops", tools=tool_upsert_bodies(), rules=[rule_upsert_body()],
+            "ops", tools=tool_upsert_bodies(),
             allowed_tools=list(ALL_TOOLS),
         )
     except Exception as exc:  # noqa: BLE001

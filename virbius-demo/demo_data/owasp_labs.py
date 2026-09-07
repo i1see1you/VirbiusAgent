@@ -227,7 +227,7 @@ LABS = [
                 "这与模型无关：即使助手热心把财务工具都调了，云层仍拦截。本关用 deny 演示开关对照；生产应对打款配 challenge 走运营台真审批（demo 的 mcpproxy 尚未接 challenge 轮询）。",
             ]},
             {"title": "3. 在 virbius-control 上如何配置", "content": [
-                "云侧规则 cloud_expense_agency_deny（启动已写入租户 owasp-llm06）：",
+                "云侧规则 cloud_expense_agency_deny（运营台租户 owasp-llm06 自行配置，不由 demo 写入）：",
                 "· layer = cloud，runtime = groovy，intent_action = deny，risk_score = 100",
                 "· reason_code = EXCESSIVE_AGENCY",
                 "· bind_scope = service，app_ids = [\"llm06-app\"]（租户 owasp-llm06）",

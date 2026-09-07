@@ -87,7 +87,7 @@
 
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
-    <p style="margin:2px 0">启动已写入租户 egress。下面按运营台字段说明，方便对照。</p>
+    <p style="margin:2px 0">规则不由 demo 写入。在运营台租户 egress 上自行新建、更新，并按阶梯放到 full。demo 只登记本关工具、公司名单和 License。下面按运营台字段说明，方便对照。</p>
     <p style="margin:2px 0">先登记工具（名字用小写加下划线）：</p>
     <p style="margin:2px 0">· list_briefs / read_brief：risk_class = low，approval_mode = lax（只读，不用拦）</p>
     <p style="margin:2px 0">· http_get / send_mail：risk_class = high，approval_mode = strict，fast_path = false（外发，要检查）</p>
@@ -116,7 +116,7 @@
     <p style="margin:2px 0">开关关：不检查，简报里藏的外带步骤会真写进假 HTTP 记录或假邮箱，这是旗。</p>
     <p style="margin:2px 0">开关开：打到外面的 HTTP 会被拦住；往外发信也会被拦住。秘密没出去，不发旗。</p>
     <p style="margin:2px 0">点恢复后 HTTP 记录、邮箱和旗都清空，可以再打。</p>
-    <p style="margin:2px 0">如果启动时没写上规则，页顶会红字提示，不会假装已经防住。</p>
+    <p style="margin:2px 0">开关开时拦不拦，以运营台当前规则为准。页顶红字只表示 Control / License 没连上，不表示规则状态。</p>
   </div>
 </details>
 {% endblock %}

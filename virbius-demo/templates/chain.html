@@ -84,7 +84,7 @@
 
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
-    <p style="margin:2px 0">启动已写入租户 chain。下面按运营台字段说明，方便对照。</p>
+    <p style="margin:2px 0">规则不由 demo 写入。在运营台租户 chain 上自行新建、更新，并按阶梯放到 full。demo 只登记本关工具和 License。下面按运营台字段说明，方便对照。</p>
     <p style="margin:2px 0">先登记工具（名字用小写加下划线）：</p>
     <p style="margin:2px 0">· list_files / compress_file：risk_class = low，approval_mode = lax</p>
     <p style="margin:2px 0">· move_file / delete_file：risk_class = high，approval_mode = strict，fast_path = false</p>
@@ -120,7 +120,7 @@
     <p style="margin:2px 0">开关关：不检查。三句都执行后，终稿正文和压缩备份都不在了，这是旗。</p>
     <p style="margin:2px 0">开关开：压缩和搬家放行。第三步要删刚搬出去的文件时被拦住，临时区还留着，不发旗。</p>
     <p style="margin:2px 0">点恢复后柜子、临时区和旗都回到开局，可以再打。</p>
-    <p style="margin:2px 0">如果启动时没写上规则，页顶会红字提示，不会假装已经防住。</p>
+    <p style="margin:2px 0">开关开时拦不拦，以运营台当前规则为准。页顶红字只表示 Control / License 没连上，不表示规则状态。</p>
   </div>
 </details>
 {% endblock %}

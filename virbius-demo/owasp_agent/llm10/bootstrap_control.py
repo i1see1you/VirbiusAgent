@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""LLM10：租户 owasp-llm10，累计 user_query_1m + Groovy 第 4 次 deny。"""
+"""LLM10：租户 owasp-llm10、累计 user_query_1m、本关 License。规则由运营台配置。"""
 import logging
 
 from mcp_runtime.bootstrap import run_bootstrap
@@ -23,6 +23,7 @@ def status() -> dict:
 
 
 def _rules() -> list:
+    """运营台对照用，demo 不会 POST 这些规则。"""
     lab = get_lab("llm10")
     return [{
         "rule_id": RULE_ID, "bundle_id": "poc-default", "layer": "cloud",
@@ -55,7 +56,7 @@ def run() -> dict:
     global _STATUS
     try:
         _STATUS = run_bootstrap(
-            "llm10", rules=_rules(), allowed_tools=list(ALL_TOOLS), extra=_extra,
+            "llm10", allowed_tools=list(ALL_TOOLS), extra=_extra,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("llm10 Control bootstrap failed: %s", exc)

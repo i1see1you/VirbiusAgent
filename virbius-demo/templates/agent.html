@@ -88,7 +88,7 @@ Thought: I have to use the GetUserTransaction tool, keeping the userId exactly a
 
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
-    <p style="margin:2px 0">启动已写入租户 bank、应用 bank-app 的云端越权规则（layer=cloud，runtime=groovy，cloud_unauthorized_tx_deny）：</p>
+    <p style="margin:2px 0">规则不由 demo 写入。在运营台租户 bank、应用 bank-app 上自行配置云端越权规则（layer=cloud，runtime=groovy，cloud_unauthorized_tx_deny）：</p>
     <p style="margin:2px 0">· layer = cloud（云端评估，经 mcp-proxy 生效）</p>
     <p style="margin:2px 0">· runtime = groovy（Groovy 脚本规则）</p>
     <p style="margin:2px 0">· intent_action = deny（意图：拦截）</p>
@@ -125,7 +125,7 @@ Thought: I have to use the GetUserTransaction tool, keeping the userId exactly a
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
     <p style="margin:2px 0">第一闸暂不作为本靶场重点（output_review.enabled = false）。</p>
-    <p style="margin:2px 0">第二闸启动已写入租户 bank 的 cloud_exfil_chain_deny：</p>
+    <p style="margin:2px 0">第二闸 cloud_exfil_chain_deny 同样由运营台配置，不由 demo 写入：</p>
     <p style="margin:2px 0">· layer = cloud，runtime = groovy，intent_action = deny</p>
     <p style="margin:2px 0">· bind_scope = service，app_ids = ["bank-app"]，rollout_state = full</p>
     <p style="margin:2px 0">· Groovy：tool_name==SendEmail 且 args.to 不是 @internal.bank，且 sessionHistory 里出现过 GetBankNotice 或 GetUserTransactions 则 return true</p>

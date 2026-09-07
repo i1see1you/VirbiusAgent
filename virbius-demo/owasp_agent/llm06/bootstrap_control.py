@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""LLM06：租户 owasp-llm06，审批/打款 deny，本关 License。"""
+"""LLM06：租户 owasp-llm06、本关 License。规则由运营台配置。"""
 import logging
 
 from mcp_runtime.bootstrap import run_bootstrap
@@ -22,6 +22,7 @@ def status() -> dict:
 
 
 def _rules() -> list:
+    """运营台对照用，demo 不会 POST 这些规则。"""
     lab = get_lab("llm06")
     return [{
         "rule_id": RULE_ID, "bundle_id": "poc-default", "layer": "cloud",
@@ -35,7 +36,7 @@ def _rules() -> list:
 def run() -> dict:
     global _STATUS
     try:
-        _STATUS = run_bootstrap("llm06", rules=_rules(), allowed_tools=list(ALL_TOOLS))
+        _STATUS = run_bootstrap("llm06", allowed_tools=list(ALL_TOOLS))
     except Exception as exc:  # noqa: BLE001
         log.warning("llm06 Control bootstrap failed: %s", exc)
         _STATUS = {"ok": False, "error": str(exc), "license_appended": False}

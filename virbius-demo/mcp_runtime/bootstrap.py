@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-"""按关卡写入 Control：建租户、工具、规则 publish full、本关 License + 公钥。
+"""按关卡写入 Control：建租户、工具、本关 License + 公钥。
 
+不写规则、不改 rollout、不碰机器 canary。规则由运营台自行新建和放量。
 禁止 rotate-key。JSON 一律 snake_case。失败抛给调用方记 status。
 """
 from __future__ import annotations
@@ -80,44 +81,6 @@ def _create_tenant(lab) -> None:
     if code >= 400:
         raise RuntimeError("create tenant HTTP %s %s" % (code, payload))
     log.info("created tenant %s", lab.tenant_id)
-
-
-def _patch_rollout(lab, rule_id: str, state: str, canary_percent=None) -> None:
-    body = {
-        "rollout_state": state,
-        "force": True,
-        "comment": "demo bootstrap " + lab.id,
-    }
-    if canary_percent is not None:
-        body["canary_percent"] = canary_percent
-    code, payload = http(
-        "PATCH",
-        "/api/v1/admin/tenants/%s/rules/%s/rollout" % (lab.tenant_id, rule_id),
-        body,
-    )
-    if code >= 400:
-        raise RuntimeError("rollout %s HTTP %s %s" % (state, code, payload))
-
-
-def _promote_rule_to_full(lab, rule_id: str, current: str) -> None:
-    state = (current or "draft").lower()
-    if state in ("", "draft", "none"):
-        pub_code, pub = http(
-            "POST",
-            "/api/v1/admin/tenants/%s/rules/%s/rollout/publish" % (lab.tenant_id, rule_id),
-        )
-        if pub_code >= 400:
-            raise RuntimeError("rule publish HTTP %s %s" % (pub_code, pub))
-        state = "dry_run"
-    if state == "dry_run":
-        _patch_rollout(lab, rule_id, "canary", canary_percent=100)
-        state = "canary"
-    if state == "canary":
-        _patch_rollout(lab, rule_id, "full")
-        state = "full"
-    if state != "full":
-        raise RuntimeError("could not promote rule %s, still %s" % (rule_id, state))
-    log.info("rule %s tenant=%s promoted to full", rule_id, lab.tenant_id)
 
 
 def _revoke_active_app_license(lab) -> None:
@@ -223,8 +186,8 @@ def _issue_license(lab, allowed_tools: list) -> bool:
     return True
 
 
-def run_bootstrap(lab_id: str, *, tools=None, rules=None, allowed_tools=None, extra=None) -> dict:
-    """幂等。返回 {ok, error, license_appended}。不 rotate-key。"""
+def run_bootstrap(lab_id: str, *, tools=None, allowed_tools=None, extra=None) -> dict:
+    """幂等。返回 {ok, error, license_appended}。不写规则，不 rotate-key。"""
     lab = get_lab(lab_id)
     _create_tenant(lab)
     for body in tools or []:
@@ -239,28 +202,6 @@ def run_bootstrap(lab_id: str, *, tools=None, rules=None, allowed_tools=None, ex
             raise RuntimeError("tool upsert %s: HTTP %s %s" % (name, code, payload))
     if extra:
         extra(http, lab)
-    for rule in rules or []:
-        rule_id = rule.get("rule_id")
-        if not rule_id:
-            raise RuntimeError("rule missing rule_id")
-        existing_code, existing = http(
-            "GET", "/api/v1/admin/tenants/%s/rules/%s" % (lab.tenant_id, rule_id),
-        )
-        existing_data = unwrap(existing) if existing_code < 400 else None
-        rollout = ""
-        if isinstance(existing_data, dict):
-            rollout = str(existing_data.get("rollout_state") or "")
-        if existing_code >= 400:
-            code, payload = http(
-                "POST", "/api/v1/admin/tenants/%s/rules" % lab.tenant_id, rule,
-            )
-            if code >= 400 and code != 409:
-                raise RuntimeError("rule upsert HTTP %s %s" % (code, payload))
-            rollout = "draft"
-        if rollout != "full":
-            _promote_rule_to_full(lab, rule_id, rollout)
-        else:
-            log.info("rule %s already full", rule_id)
     appended = _issue_license(lab, list(allowed_tools or []))
     return {"ok": True, "error": "", "license_appended": appended}
 

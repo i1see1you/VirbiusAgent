@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""银行客服：租户 bank，越权 deny + 公告外发 deny，本关 License。"""
+"""银行客服：租户 bank、本关 License。规则由运营台配置。"""
 import logging
 
 from mcp_runtime.bootstrap import control_ui_url as _control_ui_url
@@ -46,6 +46,7 @@ def control_ui_url() -> str:
 
 
 def _rules() -> list:
+    """运营台对照用，demo 不会 POST 这些规则。"""
     lab = get_lab("bank")
     app = [lab.app_id]
     return [
@@ -69,7 +70,7 @@ def _rules() -> list:
 def run() -> dict:
     global _STATUS
     try:
-        _STATUS = run_bootstrap("bank", rules=_rules(), allowed_tools=list(ALL_TOOLS))
+        _STATUS = run_bootstrap("bank", allowed_tools=list(ALL_TOOLS))
     except Exception as exc:  # noqa: BLE001
         log.warning("bank Control bootstrap failed: %s", exc)
         _STATUS = {"ok": False, "error": str(exc), "license_appended": False}
