@@ -102,6 +102,13 @@ jobs:
       - name: Maven test
         run: mvn -B -e test
 
+      # Package virbius-control to build the ops console UI via the
+      # frontend-maven-plugin (npm ci + vue-tsc + vite). Keeps type errors and
+      # UI build breakage out of main — the committed-bundle era used to hide
+      # both. UI output is gitignored; only the jar's integrity is checked.
+      - name: Package control (builds ops console UI)
+        run: mvn -B -e -pl virbius-control -am package -DskipTests
+
   # ────────────────────────────────────────────────────────────
   #  Go: fmt + vet + test
   #  virbius-expr  — standard Go module with tests

@@ -151,7 +151,10 @@ fi
 # ─── Step 5: Build Java (engine + control) ───
 if command -v "$MVN" >/dev/null 2>&1; then
   info "Building Java components..."
-  if "$MVN" -q -pl virbius-engine,virbius-control -am package -DskipTests 2>&1 | tail -3; then
+  # Skip the frontend-maven-plugin: step 4 above already rebuilt the UI when
+  # sources changed, so Maven doesn't need to run npm ci + vue-tsc again.
+  if "$MVN" -q -pl virbius-engine,virbius-control -am package -DskipTests \
+      -Dskip.installnodenpm -Dskip.npm 2>&1 | tail -3; then
     ok "Java components built"
   else
     info "Java build skipped (dependencies may need parent POM setup)"
