@@ -78,7 +78,9 @@ ensure_kafka() {
   if (echo >/dev/tcp/127.0.0.1/9092) >/dev/null 2>&1; then
     ok "Kafka already running on port 9092"; return 0
   fi
-  if command -v docker >/dev/null 2>&1 && [[ -f "$ROOT/docker-compose.infra.yml" ]]; then
+  # docker info guards the daemon, not just the CLI: compose failing under
+  # set -e must not kill the script — audit/trace degrade gracefully without Kafka.
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && [[ -f "$ROOT/docker-compose.infra.yml" ]]; then
     info "Starting Kafka (docker-compose.infra.yml)..."
     docker compose -p virbius-infra -f "$ROOT/docker-compose.infra.yml" up -d --wait kafka
     return 0
@@ -91,7 +93,7 @@ ensure_ollama() {
   if curl -sf --noproxy '*' "$VIRBIUS_PROMPT_LLM_BASE_URL/api/tags" >/dev/null 2>&1; then
     ok "Ollama already running at $VIRBIUS_PROMPT_LLM_BASE_URL"; return 0
   fi
-  if command -v docker >/dev/null 2>&1 && [[ -f "$ROOT/docker-compose.infra.yml" ]]; then
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && [[ -f "$ROOT/docker-compose.infra.yml" ]]; then
     info "Starting Ollama + VirbiusGuard (docker-compose.infra.yml, first run downloads ~484MB)..."
     docker compose -p virbius-infra -f "$ROOT/docker-compose.infra.yml" up -d --wait ollama ollama-download ollama-init
     return 0

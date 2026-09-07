@@ -69,8 +69,11 @@ class DeployRolloutServiceLadderSkipTest {
 
     @Test
     void previewMatchesEffectiveStepWhenCanaryWouldSkip() {
-        String instA = findInstanceIdForBucket(17);
-        String instB = findInstanceIdForBucket(73);
+        // Both instances sit in buckets 3/4, i.e. inside the current 5% canary —
+        // stepping to 20%/50% would move no new node, so the effective next step
+        // is 100% where every remaining bucket joins.
+        String instA = findInstanceIdForBucket(3);
+        String instB = findInstanceIdForBucket(4);
         when(nodeRegistry.listNodes("cloud", "t"))
                 .thenReturn(List.of(Map.of("instance_id", instA), Map.of("instance_id", instB)));
         when(nodeRegistry.listNodes("gateway", "t")).thenReturn(List.of());
