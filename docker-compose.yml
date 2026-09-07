@@ -2,8 +2,8 @@
 #  VirbiusAgent — Docker Compose
 #
 #  Starts the full stack: Redis + Kafka + Ollama (VirbiusGuard GGUF) → engine + control (+ proxy)
-#  First start downloads ~484MB from HuggingFace. China:
-#    VIRBIUS_GUARD_GGUF_URL=https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/virbiusguard-v13-q4_k_m.gguf
+#  First start downloads ~1.5GB from HuggingFace (V15 F16). China:
+#    VIRBIUS_GUARD_GGUF_URL=https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v15-f16.gguf
 #
 #  Usage:
 #    docker compose build         # Build all images
@@ -80,7 +80,7 @@ services:
     image: ${CURL_IMAGE:-curlimages/curl:8.12.1}
     user: "0"
     environment:
-      VIRBIUS_GUARD_GGUF_URL: ${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/virbiusguard-v13-q4_k_m.gguf}
+      VIRBIUS_GUARD_GGUF_URL: ${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf}
       VIRBIUS_GUARD_GGUF_PATH: /models/model.gguf
     volumes:
       - ollama-import:/models

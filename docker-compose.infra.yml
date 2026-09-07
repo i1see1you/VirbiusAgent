@@ -88,7 +88,7 @@ services:
     image: ${CURL_IMAGE:-curlimages/curl:8.12.1}
     user: "0"
     environment:
-      VIRBIUS_GUARD_GGUF_URL: ${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/virbiusguard-v13-q4_k_m.gguf}
+      VIRBIUS_GUARD_GGUF_URL: ${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf}
       VIRBIUS_GUARD_GGUF_PATH: /models/model.gguf
     volumes:
       - infra-ollama-import:/models

@@ -47,8 +47,8 @@ kafka:
 
 ollama:
   enabled: true
-  # China: set ggufUrl to the ModelScope resolve URL for virbiusguard-v13-q4_k_m.gguf
-  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/virbiusguard-v13-q4_k_m.gguf
+  # China: set ggufUrl to the ModelScope resolve URL for gguf/virbiusguard-v15-f16.gguf
+  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf
   gpu:
     enabled: false
 

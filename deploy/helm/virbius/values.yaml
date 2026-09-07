@@ -68,9 +68,9 @@ ollama:
   image: hb.grainmind.cn/library/ollama:0.11.10
   curlImage: curlimages/curl:8.12.1
   model: virbiusguard
-  # HuggingFace V13 Q4_K_M (~484MB). For China, switch to ModelScope:
-  # https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/virbiusguard-v13-q4_k_m.gguf
-  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/virbiusguard-v13-q4_k_m.gguf
+  # HuggingFace V15 F16 (~1.5GB). For China, switch to ModelScope:
+  # https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v15-f16.gguf
+  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf
   persistence:
     size: 10Gi
     importSize: 2Gi

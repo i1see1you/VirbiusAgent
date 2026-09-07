@@ -2,7 +2,7 @@
 # Download VirbiusGuard GGUF into /models/model.gguf (idempotent).
 set -eu
 OUT="${VIRBIUS_GUARD_GGUF_PATH:-/models/model.gguf}"
-URL="${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/virbiusguard-v13-q4_k_m.gguf}"
+URL="${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf}"
 
 if [ -s "$OUT" ]; then
   echo "gguf already present: $OUT ($(wc -c < "$OUT") bytes)"

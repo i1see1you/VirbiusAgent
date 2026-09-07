@@ -489,9 +489,9 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 
 靶场 Agent 关卡仍在 Pod 内用 stdio 拉起 `virbius-mcp-proxy`。Ingress 上的端侧是给集群外 MCP 客户端的 TCP 入口，upstream 默认 `http://virbius-demo:9091`。
 
-默认启用集群内 Ollama：Job 从 HuggingFace 下载 VirbiusGuard GGUF（约 484MB，PVC 缓存，升级不重复下）并 `ollama create virbiusguard`。`engine.promptLlm.baseUrl` 留空即指向 `http://{release}-ollama:11434`。国内把 `ollama.ggufUrl` 换成 ModelScope：
+默认启用集群内 Ollama：Job 从 HuggingFace 下载 VirbiusGuard GGUF（V15 F16，约 1.5GB，PVC 缓存，升级不重复下）并 `ollama create virbiusguard`。`engine.promptLlm.baseUrl` 留空即指向 `http://{release}-ollama:11434`。国内把 `ollama.ggufUrl` 换成 ModelScope：
 
-`https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/virbiusguard-v13-q4_k_m.gguf`
+`https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v15-f16.gguf`
 
 设 `ollama.enabled=false` 时必须填写 `engine.promptLlm.baseUrl`，否则 `helm` 会直接失败。关掉集群内 MySQL / Kafka / Redis 时分别填 `mysql.jdbcUrl`、`kafka.bootstrapServers`、`redis.url`，engine/control 不会再死等集群内 Service。GPU 默认关；有 NVIDIA 设备时设 `ollama.gpu.enabled=true`。
 
