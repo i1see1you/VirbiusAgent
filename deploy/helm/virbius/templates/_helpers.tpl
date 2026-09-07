@@ -130,10 +130,21 @@ http://{{ include "virbius.fullname" . }}-ollama:11434
 {{- end }}
 
 {{/*
-In-cluster operator auth base URL.
+In-cluster operator auth base URL (JWKS / token exchange; not for browsers).
 */}}
 {{- define "virbius.authInternalUrl" -}}
 http://{{ include "virbius.fullname" . }}-auth:8083
+{{- end }}
+
+{{/*
+Public control origin (browser login on the control Ingress host).
+*/}}
+{{- define "virbius.controlPublicOrigin" -}}
+{{- if .Values.ingress.tls.enabled -}}
+https://{{ .Values.ingress.hosts.control }}
+{{- else -}}
+http://{{ .Values.ingress.hosts.control }}
+{{- end -}}
 {{- end }}
 
 {{/*

@@ -219,11 +219,9 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         response.addHeader(HttpHeaders.SET_COOKIE, stateCookie.toString());
         String origin = publicOrigin(request);
         String callback = origin + "/ui/callback";
-        // Vite (X-Forwarded-Host) keeps login on the same origin so vrb_login_state is not dropped
-        // when Auth lives on another host (localhost vs 127.0.0.1).
-        String loginPage = header(request, "X-Forwarded-Host").isBlank()
-                ? jwtProperties.getLoginUrl()
-                : origin + "/login";
+        // Behind Ingress/Vite, keep login on the same origin so the state cookie is not dropped
+        // and the browser is not sent to the in-cluster auth Service DNS.
+        String loginPage = behindProxy(request) ? origin + "/login" : jwtProperties.getLoginUrl();
         String login = loginPage
                 + "?return_uri="
                 + URLEncoder.encode(callback, StandardCharsets.UTF_8)
@@ -231,6 +229,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                 + URLEncoder.encode(state, StandardCharsets.UTF_8);
         response.setStatus(HttpServletResponse.SC_FOUND);
         response.setHeader(HttpHeaders.LOCATION, login);
+    }
+
+    private static boolean behindProxy(HttpServletRequest request) {
+        return !header(request, "X-Forwarded-Host").isBlank() || !header(request, "X-Forwarded-Proto").isBlank();
     }
 
     static String publicOrigin(HttpServletRequest request) {

@@ -154,6 +154,22 @@ class OperatorJwtAuthFilterTest {
     }
 
     @Test
+    void uiLoginUsesIngressHostWhenOnlyForwardedProtoSet() throws Exception {
+        ApiKeyAuthFilter filter = filter(false, true);
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/ui/");
+        req.addHeader("Host", "control.virbius.example.com");
+        req.addHeader("X-Forwarded-Proto", "https");
+        MockHttpServletResponse res = new MockHttpServletResponse();
+
+        filter.doFilterInternal(req, res, chain);
+        verify(chain, never()).doFilter(req, res);
+        assertEquals(302, res.getStatus());
+        assertTrue(res.getHeader("Location").startsWith("https://control.virbius.example.com/login?"));
+        assertTrue(res.getHeader("Location")
+                .contains("return_uri=https%3A%2F%2Fcontrol.virbius.example.com%2Fui%2Fcallback"));
+    }
+
+    @Test
     void uiWithoutCookieRedirectsToLogin() throws Exception {
         ApiKeyAuthFilter filter = filter(false, true);
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/ui/");

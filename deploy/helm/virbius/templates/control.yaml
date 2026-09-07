@@ -104,7 +104,7 @@ spec:
             - name: VIRBIUS_AUTH_ISSUER
               value: {{ include "virbius.authInternalUrl" . | quote }}
             - name: VIRBIUS_AUTH_LOGIN_URL
-              value: {{ printf "%s/login" (include "virbius.authInternalUrl" .) | quote }}
+              value: {{ printf "%s/login" (include "virbius.controlPublicOrigin" .) | quote }}
             - name: VIRBIUS_AUTH_TOKEN_URL
               value: {{ printf "%s/oauth/token" (include "virbius.authInternalUrl" .) | quote }}
             {{- end }}
