@@ -8,7 +8,7 @@ import java.util.regex.Pattern;
 public final class AccessListMetaDimension {
 
     private static final Pattern BUILTIN =
-            Pattern.compile("^(keyword|user_id|device_id|ip_cidr)$", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("^(keyword|user_id|device_id|ip_cidr|image)$", Pattern.CASE_INSENSITIVE);
     private static final Pattern VAR = Pattern.compile("^var:([a-zA-Z_][a-zA-Z0-9_]*)$");
 
     private AccessListMetaDimension() {}
@@ -30,7 +30,12 @@ public final class AccessListMetaDimension {
                     "dimension=var is deprecated; use var:logical (e.g. var:app_id) and plain entry values");
         }
         throw new IllegalArgumentException(
-                "invalid list dimension: " + d + " (expected keyword|user_id|device_id|ip_cidr|var:logical)");
+                "invalid list dimension: " + d + " (expected keyword|user_id|device_id|ip_cidr|image|var:logical)");
+    }
+
+    /** Image sample lists: entries are sha256:phash fingerprints uploaded as files. */
+    public static boolean isImage(String dimension) {
+        return dimension != null && "image".equalsIgnoreCase(dimension.trim());
     }
 
     public static boolean isVar(String dimension) {

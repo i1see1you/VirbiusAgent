@@ -21,5 +21,30 @@ public record EvaluateRequestDto(
         String apiKeyGroup,
         String toolName,
         String argsJson,
-        @JsonProperty("license_risk_quota") int riskQuota) {
+        @JsonProperty("license_risk_quota") int riskQuota,
+        List<AttachmentDto> attachments) {
+
+    /** Legacy constructor for callers that don't send attachments. */
+    public EvaluateRequestDto(
+            String tenantId,
+            String role,
+            String sessionId,
+            String content,
+            boolean streamChunk,
+            List<SignalDto> priorSignals,
+            String traceId,
+            String userId,
+            String deviceId,
+            Map<String, String> vars,
+            String routeUri,
+            String upstreamId,
+            String consumerId,
+            String apiKeyGroup,
+            String toolName,
+            String argsJson,
+            int riskQuota) {
+        this(tenantId, role, sessionId, content, streamChunk, priorSignals,
+                traceId, userId, deviceId, vars, routeUri, upstreamId,
+                consumerId, apiKeyGroup, toolName, argsJson, riskQuota, null);
+    }
 }

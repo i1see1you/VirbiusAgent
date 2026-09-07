@@ -14,6 +14,10 @@ spring:
     name: virbius-control
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  servlet:
+    multipart:
+      max-file-size: ${VIRBIUS_UPLOAD_MAX_FILE_SIZE:20MB}    # 与引擎 virbius.file.max-bytes (20MB) 对齐
+      max-request-size: ${VIRBIUS_UPLOAD_MAX_REQUEST_SIZE:25MB}
 
 virbius:
   data-dir: ${VIRBIUS_DATA_DIR:./data}

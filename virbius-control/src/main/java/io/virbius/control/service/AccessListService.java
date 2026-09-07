@@ -2,6 +2,7 @@ package io.virbius.control.service;
 
 import io.virbius.control.domain.AccessListEntry;
 import io.virbius.control.domain.AccessListMeta;
+import io.virbius.control.domain.AccessListMetaDimension;
 import io.virbius.control.domain.dto.request.AccessListEntryInput;
 import io.virbius.control.gateway.artifact.GatewayArtifactPublisher;
 import io.virbius.control.repository.ListMetaRepository;
@@ -25,18 +26,21 @@ public class AccessListService {
     private final PublishService publishService;
     private final ArtifactService artifactService;
     private final GatewayArtifactPublisher gatewayArtifactPublisher;
+    private final ImageBlacklistAdminService imageListSupport;
 
     public AccessListService(
             ListMetaRepository listMetaRepo,
             RegistryRepository registryRepo,
             PublishService publishService,
             ArtifactService artifactService,
-            GatewayArtifactPublisher gatewayArtifactPublisher) {
+            GatewayArtifactPublisher gatewayArtifactPublisher,
+            ImageBlacklistAdminService imageListSupport) {
         this.listMetaRepo = listMetaRepo;
         this.registryRepo = registryRepo;
         this.publishService = publishService;
         this.artifactService = artifactService;
         this.gatewayArtifactPublisher = gatewayArtifactPublisher;
+        this.imageListSupport = imageListSupport;
     }
 
     public Map<String, Object> getAll(String tenantId) {
@@ -70,6 +74,10 @@ public class AccessListService {
         AccessListMeta meta = listMetaRepo
                 .getMeta(tenantId, listName)
                 .orElseThrow(() -> new IllegalArgumentException("list not found"));
+        if (AccessListMetaDimension.isImage(meta.dimension())) {
+            throw new IllegalArgumentException(
+                    "image list entries are uploaded as files: POST /lists/" + listName + "/entries/image");
+        }
         String normalized = value == null ? "" : value.trim();
         if (normalized.isEmpty()) {
             throw new IllegalArgumentException("value required");
@@ -78,6 +86,31 @@ public class AccessListService {
         ensureMemoryListCapacity(meta, listMetaRepo.listEntries(tenantId, listName), normalized, expiresAt, now);
         boolean added = listMetaRepo.addEntry(tenantId, listName, normalized, remark, expiresAt);
         return refreshArtifactsAndPush(tenantId, Map.of("added", added));
+    }
+
+    /** Upload an image sample file as a fingerprint entry of an image list. */
+    public Map<String, Object> uploadImageEntryAndPush(
+            String tenantId, String listName, byte[] imageBytes, String originalFilename, String remark) {
+        Map<String, Object> out = new LinkedHashMap<>(
+                imageListSupport.uploadImageEntry(tenantId, listName, imageBytes, originalFilename, remark));
+        out.putAll(refreshArtifactsAndPush(tenantId));
+        return out;
+    }
+
+    /**
+     * Update only an entry's remark — no Redis rebuild: the engine consumes the
+     * fingerprint value, remark never crosses the control-plane boundary.
+     */
+    public Map<String, Object> updateEntryRemark(String tenantId, String listName, String value, String remark) {
+        listMetaRepo.getMeta(tenantId, listName)
+                .orElseThrow(() -> new IllegalArgumentException("list not found: " + listName));
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("value required");
+        }
+        if (!listMetaRepo.updateEntryRemark(tenantId, listName, value, remark == null ? "" : remark.trim())) {
+            throw new IllegalArgumentException("entry not found");
+        }
+        return Map.of("updated", true);
     }
 
     public AccessListMeta upsertMetaAndPush(String tenantId, AccessListMeta meta) {
@@ -101,6 +134,10 @@ public class AccessListService {
         AccessListMeta meta = listMetaRepo
                 .getMeta(tenantId, listName)
                 .orElseThrow(() -> new IllegalArgumentException("list not found"));
+        if (AccessListMetaDimension.isImage(meta.dimension())) {
+            throw new IllegalArgumentException(
+                    "image list entries are uploaded as files: POST /lists/" + listName + "/entries/image");
+        }
         List<AccessListEntry> entries = new ArrayList<>();
         if (inputs != null) {
             for (AccessListEntryInput in : inputs) {
@@ -151,6 +188,8 @@ public class AccessListService {
 
     private Map<String, Object> refreshArtifactsAndPush(String tenantId, Map<String, Object> extra) {
         Map<String, Object> out = new LinkedHashMap<>(refreshArtifacts(tenantId));
+        // image lists live in dedicated Redis keys, rebuilt on every list change
+        out.put("image_lists", imageListSupport.rebuildImageListKeys());
         out.putAll(extra);
         out.put("engine_reload", publishService.runtimeSnapshot(tenantId));
         return out;

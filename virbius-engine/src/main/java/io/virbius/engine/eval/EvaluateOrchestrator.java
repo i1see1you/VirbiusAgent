@@ -35,6 +35,7 @@ public class EvaluateOrchestrator {
     private final TrustViolationDetector trustViolationDetector;
     private final PolicyDataCache policyDataCache;
     private final PromptLlmProperties promptLlmProperties;
+    private final FileGuardService fileGuardService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -56,6 +57,7 @@ public class EvaluateOrchestrator {
             TrustViolationDetector trustViolationDetector,
             PolicyDataCache policyDataCache,
             PromptLlmProperties promptLlmProperties,
+            FileGuardService fileGuardService,
             @Value("${virbius.session-risk.intent-weight.block:0.5}") double blockWeight,
             @Value("${virbius.session-risk.intent-weight.challenge:0.1}") double challengeWeight,
             @Value("${virbius.session-risk.intent-weight.review:0.0}") double reviewWeight,
@@ -71,6 +73,7 @@ public class EvaluateOrchestrator {
         this.trustViolationDetector = trustViolationDetector;
         this.policyDataCache = policyDataCache;
         this.promptLlmProperties = promptLlmProperties;
+        this.fileGuardService = fileGuardService;
         this.blockWeight = blockWeight;
         this.challengeWeight = challengeWeight;
         this.reviewWeight = reviewWeight;
@@ -114,6 +117,17 @@ public class EvaluateOrchestrator {
         List<SignalDto> signals = new ArrayList<>();
         if (req.priorSignals() != null) {
             signals.addAll(req.priorSignals());
+        }
+
+        // --- P1.0: Multimodal attachment detection (image/PDF/Word → text → injection).
+        // Blacklist match evidence flows on to the rule phase: groovy rules read it
+        // via imageMatch(listName) and apply their own thresholds. ---
+        Map<String, ImageBlacklistService.BlacklistHit> imageEvidence = Map.of();
+        if (req.attachments() != null && !req.attachments().isEmpty()) {
+            FileGuardService.FileGuardResult fileGuard =
+                    fileGuardService.check(req.tenantId(), req.attachments());
+            signals.addAll(fileGuard.signals());
+            imageEvidence = fileGuard.imageEvidence();
         }
 
         // --- P1.1: Prompt Injection Detection (before existing rules) ---
@@ -169,7 +183,7 @@ public class EvaluateOrchestrator {
                 toolName);
 
         signals.addAll(promptRunner.run(req.tenantId(), matchCtx));
-        signals.addAll(scriptRuleRunner.run(req.tenantId(), matchCtx, req.priorSignals()));
+        signals.addAll(scriptRuleRunner.run(req.tenantId(), matchCtx, req.priorSignals(), imageEvidence));
 
         PolicyMerger.PolicyMergeResult merged = policyMerger.merge(req.tenantId(), req.sessionId(), signals);
         EngineDecisionDto decision = merged.decision();

@@ -83,9 +83,21 @@ public class ScriptRuleRunner {
     }
 
     public List<SignalDto> run(String tenantId, MatchContext matchCtx, List<SignalDto> priorSignals) {
+        return run(tenantId, matchCtx, priorSignals, Map.of());
+    }
+
+    /**
+     * @param imageEvidence best-per-list image-blacklist evidence collected by
+     *                      the attachment phase; exposed to scripts as
+     *                      {@code imageMatch(listName)} → {layer, distance, sha} | null
+     */
+    public List<SignalDto> run(String tenantId, MatchContext matchCtx, List<SignalDto> priorSignals,
+                               Map<String, ImageBlacklistService.BlacklistHit> imageEvidence) {
         List<SignalDto> syncSignals = new ArrayList<>();
         PolicyDataCache.TenantPolicyData data = policyData.get(tenantId);
-        ScriptEnvironment scriptEnv = buildScriptEnv(tenantId, matchCtx, data);
+        Map<String, ImageBlacklistService.BlacklistHit> evidence =
+                imageEvidence != null ? imageEvidence : Map.of();
+        ScriptEnvironment scriptEnv = buildScriptEnv(tenantId, matchCtx, data, evidence);
 
         // Pre-load session data once for all rules in this evaluation
         Map<String, Object> sessionData = preloadSession(matchCtx.sessionId());
@@ -221,7 +233,8 @@ public class ScriptRuleRunner {
     }
 
     private ScriptEnvironment buildScriptEnv(String tenantId, MatchContext matchCtx,
-                                              PolicyDataCache.TenantPolicyData data) {
+                                              PolicyDataCache.TenantPolicyData data,
+                                              Map<String, ImageBlacklistService.BlacklistHit> imageEvidence) {
         ScriptEnvironment.CumulativeReader reader = counterStore
                 .map(store -> (ScriptEnvironment.CumulativeReader) (t, name, value, wMin, kind, zone) ->
                         store.read(t, name, value, wMin, kind, zone))
@@ -229,6 +242,11 @@ public class ScriptRuleRunner {
         ScriptEnvironment.RedisListReader redisReader = listRedisMatcher
                 .map(m -> (ScriptEnvironment.RedisListReader) m::matches)
                 .orElse(null);
+        ScriptEnvironment.ImageBlacklistReader imageReader = (t, listName) -> {
+            ImageBlacklistService.BlacklistHit hit = imageEvidence.get(listName);
+            return hit == null ? null
+                    : Map.of("layer", hit.layer(), "distance", hit.distance(), "sha", hit.sha());
+        };
         return new ScriptEnvironment(
                 tenantId,
                 matchCtx,
@@ -236,7 +254,8 @@ public class ScriptRuleRunner {
                 data.redisLists(),
                 data.cumulatives(),
                 reader,
-                redisReader);
+                redisReader,
+                imageReader);
     }
 
     @SuppressWarnings("unchecked")

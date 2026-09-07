@@ -22,6 +22,7 @@ public final class ScriptEnvironment {
     private final Map<String, CumulativeDefinition> cumulatives;
     private final CumulativeReader cumulativeReader;
     private final RedisListReader redisListReader;
+    private final ImageBlacklistReader imageBlacklistReader;
 
     public ScriptEnvironment(
             String tenantId,
@@ -31,6 +32,19 @@ public final class ScriptEnvironment {
             Map<String, CumulativeDefinition> cumulatives,
             CumulativeReader cumulativeReader,
             RedisListReader redisListReader) {
+        this(tenantId, matchCtx, memoryLists, redisLists, cumulatives, cumulativeReader,
+                redisListReader, null);
+    }
+
+    public ScriptEnvironment(
+            String tenantId,
+            MatchContext matchCtx,
+            Map<String, ListDefinition> memoryLists,
+            Map<String, RedisListDefinition> redisLists,
+            Map<String, CumulativeDefinition> cumulatives,
+            CumulativeReader cumulativeReader,
+            RedisListReader redisListReader,
+            ImageBlacklistReader imageBlacklistReader) {
         this.tenantId = tenantId != null ? tenantId : "";
         this.matchCtx = matchCtx;
         this.memoryLists = memoryLists != null ? Map.copyOf(memoryLists) : Map.of();
@@ -38,6 +52,7 @@ public final class ScriptEnvironment {
         this.cumulatives = cumulatives != null ? Map.copyOf(cumulatives) : Map.of();
         this.cumulativeReader = cumulativeReader;
         this.redisListReader = redisListReader;
+        this.imageBlacklistReader = imageBlacklistReader;
     }
 
     /** Backward-compatible constructor (memory lists only). */
@@ -132,6 +147,22 @@ public final class ScriptEnvironment {
                 zone);
     }
 
+    /**
+     * Image-blacklist evidence for this request's attachments, one lookup per
+     * named image list. Mirrors {@link #listMatch(String)}: the list supplies
+     * match evidence, the calling rule's script supplies the threshold.
+     *
+     * @return {@code {layer: "exact"|"phash", distance: int, sha: String}} for the
+     *         closest sample across all images in the request, or {@code null}
+     *         when the list has no snapshot or nothing came close enough to match
+     */
+    public Map<String, Object> imageMatch(String listName) {
+        if (listName == null || listName.isBlank() || imageBlacklistReader == null) {
+            return null;
+        }
+        return imageBlacklistReader.bestMatch(tenantId, listName.trim());
+    }
+
     public record ListDefinition(String listName, String dimension, List<String> entries, ValueSource valueSource) {}
 
     public record RedisListDefinition(String listName, String dimension, String redisKey) {}
@@ -158,5 +189,12 @@ public final class ScriptEnvironment {
     @FunctionalInterface
     public interface RedisListReader {
         boolean matches(String tenantId, String listName, String redisKey, String lookupValue);
+    }
+
+    /** Supplies per-request image-blacklist evidence (engine-side implementation). */
+    @FunctionalInterface
+    public interface ImageBlacklistReader {
+        /** @return {layer, distance, sha} for the closest sample, or null when no evidence. */
+        Map<String, Object> bestMatch(String tenantId, String listName);
     }
 }

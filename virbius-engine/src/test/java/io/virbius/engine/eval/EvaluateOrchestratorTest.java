@@ -42,6 +42,7 @@ class EvaluateOrchestratorTest {
     @Mock private SessionRiskManager sessionRiskManager;
     @Mock private TrustViolationDetector trustViolationDetector;
     @Mock private PolicyDataCache policyDataCache;
+    @Mock private FileGuardService fileGuardService;
     private final PromptLlmProperties promptLlmProperties =
             new PromptLlmProperties(null, null, null, 0, false, null, null, null, null);
 
@@ -56,7 +57,7 @@ class EvaluateOrchestratorTest {
                 scriptRuleRunner, promptRunner, auditWriter, policyMerger,
                 challengeService, injectionDetector, taintDetector,
                 sessionRiskManager, trustViolationDetector, policyDataCache,
-                promptLlmProperties,
+                promptLlmProperties, fileGuardService,
                 0.5, 0.1, 0.0, 0.0);
     }
 
@@ -73,7 +74,7 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of());
 
         SignalDto primary = new SignalDto("POLICY_ALLOW", 0, "cloud", "cloud",
@@ -105,7 +106,7 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Block", 1, "cloud", "cloud",
                 80, "TOOL_DENY", "deny", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of(signal));
 
         SignalDto primary = new SignalDto("Rule_Block", 1, "cloud", "cloud",
@@ -138,7 +139,7 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of(signal));
 
         SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
@@ -178,7 +179,7 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of(signal));
 
         SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
@@ -224,7 +225,7 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of(signal));
 
         SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
@@ -268,7 +269,7 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of(signal));
 
         SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
@@ -309,7 +310,7 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of());
 
         SignalDto primary = new SignalDto("PROMPT_INJECTION", 1, "cloud", "cloud",
@@ -338,7 +339,7 @@ class EvaluateOrchestratorTest {
                         "INJECTION_LEAKAGE", "you are now", 20, "injection from tool result"));
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of());
 
         SignalDto primary = new SignalDto("TRUST_VIOLATION", 1, "cloud", "cloud",
@@ -368,7 +369,7 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of());
 
         SignalDto primary = new SignalDto("POLICY_ALLOW", 0, "cloud", "cloud",
@@ -453,7 +454,7 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of());
         when(sessionRiskManager.updateRiskScore(any()))
                 .thenReturn(0);
@@ -482,7 +483,7 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any()))
+        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
                 .thenReturn(List.of());
         when(sessionRiskManager.updateRiskScore(any()))
                 .thenThrow(new RuntimeException("Redis down"));

@@ -134,6 +134,7 @@ public final class GroovyL3Executor {
         binding.setVariable("ctx", ctx);
         binding.setVariable("listMatch", new ListMatchClosure(ctx));
         binding.setVariable("getCumulative", new GetCumulativeClosure(ctx));
+        binding.setVariable("imageMatch", new ImageMatchClosure(ctx));
         binding.setVariable("mlPredict", new MlPredictClosure());
         instance.setBinding(binding);
         return instance.run();
@@ -182,6 +183,18 @@ public final class GroovyL3Executor {
 
         public long doCall(String cumulativeName) {
             return ctx.getCumulative(cumulativeName);
+        }
+    }
+
+    private static final class ImageMatchClosure {
+        private final PolicyContext ctx;
+
+        ImageMatchClosure(PolicyContext ctx) {
+            this.ctx = ctx;
+        }
+
+        public Map<String, Object> doCall(String listName) {
+            return ctx.imageMatch(listName);
         }
     }
 

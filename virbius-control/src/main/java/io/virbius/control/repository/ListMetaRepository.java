@@ -10,6 +10,9 @@ public interface ListMetaRepository {
 
     List<AccessListMeta> listMeta(String tenantId);
 
+    /** All tenants' list meta (for global rebuilds, e.g. image-list Redis keys). */
+    List<AccessListMeta> listAllMeta();
+
     Optional<AccessListMeta> getMeta(String tenantId, String listName);
 
     void upsertMeta(AccessListMeta meta);
@@ -23,4 +26,7 @@ public interface ListMetaRepository {
     boolean addEntry(String tenantId, String listName, String value, String remark, Instant expiresAt);
 
     boolean removeEntry(String tenantId, String listName, String value);
+
+    /** @return false when the entry does not exist. */
+    boolean updateEntryRemark(String tenantId, String listName, String value, String remark);
 }

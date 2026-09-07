@@ -58,6 +58,17 @@ public class JdbcListMetaRepository implements ListMetaRepository {
     }
 
     @Override
+    public List<AccessListMeta> listAllMeta() {
+        return jdbc.query(
+                """
+                SELECT tenant_id, list_name, dimension, remark
+                FROM tb_access_list_meta
+                ORDER BY tenant_id, list_name
+                """,
+                META_MAPPER);
+    }
+
+    @Override
     public Optional<AccessListMeta> getMeta(String tenantId, String listName) {
         List<AccessListMeta> rows = jdbc.query(
                 """
@@ -149,6 +160,17 @@ public class JdbcListMetaRepository implements ListMetaRepository {
     public boolean removeEntry(String tenantId, String listName, String value) {
         return jdbc.update(
                         "DELETE FROM tb_access_list_entry WHERE tenant_id = ? AND list_name = ? AND value = ?",
+                        tenantId,
+                        listName,
+                        value)
+                > 0;
+    }
+
+    @Override
+    public boolean updateEntryRemark(String tenantId, String listName, String value, String remark) {
+        return jdbc.update(
+                        "UPDATE tb_access_list_entry SET remark = ? WHERE tenant_id = ? AND list_name = ? AND value = ?",
+                        remark,
                         tenantId,
                         listName,
                         value)

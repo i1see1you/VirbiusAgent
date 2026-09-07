@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -19,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/v1/admin/tenants/{tenantId}/lists")
@@ -75,6 +77,34 @@ public class ListMetaAdminController {
         AccessListEntryInput one = singleEntryInput(req);
         return ApiResult.ok(accessListService.addEntry(
                 tenantId, listName, one.value(), one.remark(), one.expiresAt()));
+    }
+
+    /** Image lists: entries are uploaded sample files (sha256+pHash fingerprint values). */
+    @PostMapping("/{listName}/entries/image")
+    public ApiResult<Map<String, Object>> uploadImageEntry(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("listName") String listName,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "remark", required = false) String remark) {
+        byte[] bytes;
+        try {
+            bytes = file.getBytes();
+        } catch (Exception e) {
+            throw new IllegalArgumentException("cannot read uploaded file: " + e.getMessage());
+        }
+        return ApiResult.ok(accessListService.uploadImageEntryAndPush(
+                tenantId, listName, bytes, file.getOriginalFilename(), remark));
+    }
+
+    /** Edit only an entry's remark — the fingerprint value (and engine state) is untouched. */
+    @PatchMapping("/{listName}/entries/{value}/remark")
+    public ApiResult<Map<String, Object>> updateEntryRemark(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("listName") String listName,
+            @PathVariable("value") String value,
+            @RequestBody Map<String, String> body) {
+        return ApiResult.ok(accessListService.updateEntryRemark(
+                tenantId, listName, value, body.get("remark")));
     }
 
     @DeleteMapping("/{listName}/entries/{value}")

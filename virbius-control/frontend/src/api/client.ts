@@ -11,25 +11,26 @@ export function currentTenant(): string {
   return ctx.tenant || 'default';
 }
 
-function authHeaders(extra?: Record<string, string>): Record<string, string> {
-  const h: Record<string, string> = { 'Content-Type': 'application/json', ...(extra || {}) };
+function authHeaders(extra?: Record<string, string>, isFormData = false): Record<string, string> {
+  const h: Record<string, string> = { ...(isFormData ? {} : { 'Content-Type': 'application/json' }), ...(extra || {}) };
   if (ctx.apiKey) h['Authorization'] = 'Bearer ' + ctx.apiKey;
   return h;
 }
 
 export interface AdminOpts {
   method?: string;
-  body?: string;
+  body?: string | FormData;
   headers?: Record<string, string>;
   raw?: boolean;
 }
 
 // Unwraps {code,message,data}; returns data. Throws on code !== 0.
 export async function adminFetch<T = any>(url: string, opts: AdminOpts = {}): Promise<T> {
+  const isFormData = typeof FormData !== 'undefined' && opts.body instanceof FormData;
   const res = await fetch(url, {
     method: opts.method,
     body: opts.body,
-    headers: authHeaders(opts.headers)
+    headers: authHeaders(opts.headers, isFormData)
   });
   const j = await res.json();
   if (j && typeof j === 'object' && 'code' in j) {
@@ -58,6 +59,14 @@ export async function rawJson<T = any>(url: string, opts: AdminOpts = {}): Promi
     headers: authHeaders(opts.headers)
   });
   return (await res.json()) as T;
+}
+
+// Tenant-scoped multipart upload (browser sets the boundary): returns unwrapped data.
+export async function adminUpload<T = any>(path: string, formData: FormData): Promise<T> {
+  const url = '/api/v1/admin/tenants/' + encodeURIComponent(ctx.tenant || 'default') + path;
+  const headers: Record<string, string> = {};
+  if (ctx.apiKey) headers['Authorization'] = 'Bearer ' + ctx.apiKey;
+  return adminFetch<T>(url, { method: 'POST', body: formData, headers });
 }
 
 export function jsonBody(obj: any): string {

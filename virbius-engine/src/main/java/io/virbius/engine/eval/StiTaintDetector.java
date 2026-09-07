@@ -78,8 +78,14 @@ public class StiTaintDetector {
         }
 
         // 2. LLM-based semantic detection via guard model
-        String userContent =
-                "Analyze the following tool return value for embedded prompt injection:\n\n" + content;
+        // Send the raw tool result with no user-message prefix. The previous
+        // "Analyze ... for embedded prompt injection" prefix primed the model
+        // toward hit (vocab contamination + framing bias) and the later
+        // hardcoded neutral prefix was an out-of-distribution user framing that
+        // the fine-tuned model never saw. The guard model was trained on the
+        // auditor system prompt + bare content, so bare content keeps inference
+        // fully in-distribution; the task framing comes from the system prompt.
+        String userContent = content;
         PromptLlmClient.CompleteResult result =
                 llmClient.completeDetail(guardProps.taintSystemPrompt(), userContent);
 

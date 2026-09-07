@@ -77,6 +77,29 @@ virbius:
       If safe:
       {"hit_rule": false, "triggered_id": "none"}
 
+  file:
+    enabled: ${VIRBIUS_FILE_GUARD_ENABLED:true}
+    max-bytes: 20971520                    # 单文件 ≤20MB
+    max-files-per-request: 5
+    max-pdf-pages: 50
+    extract-max-chars: 8000                # 提取文本防御性硬截断(控检测 LLM token)
+    chunk-size: 3500                       # 分块检测: 单块字符数
+    chunk-overlap: 400                     # 分块检测: 相邻块重叠(防跨边界绕过)
+    max-chunks: 32                         # 分块检测: 单文件最大块数, 超出发 FILE_TRUNCATED
+    max-embedded-images-per-file: 10       # 文档内嵌图片送检上限, 超出发 FILE_EMBEDDED_LIMIT
+    min-embedded-image-dim: 64             # 内嵌图片最小宽/高(px), 过滤 icon 装饰图
+    ocr-model: ${VIRBIUS_OCR_MODEL:ovisocr2}
+    ocr-base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
+    ocr-timeout-ms: 30000
+    ocr-breaker-failure-rate: 0.5          # 熔断: 滑动窗口失败率阈值
+    ocr-breaker-wait-ms: 45000             # 熔断: OPEN 后半开探测等待
+    ocr-cache-max-entries: 1000            # OCR 结果缓存(按内容 SHA-256)
+    ocr-cache-ttl-minutes: 60
+    attachment-workers: 3                  # 附件并行检测线程数
+    attachment-timeout-ms: 12000           # 单附件检测预算, 超时发 FILE_OCR_TIMEOUT
+    image-blacklist-enabled: ${VIRBIUS_IMG_BLACKLIST_ENABLED:true}
+    blacklist-refresh-seconds: 60          # 黑名单快照从 Redis 刷新间隔
+
   session-risk:
     enabled: ${VIRBIUS_SESSION_RISK_ENABLED:true}
     base-risk-ratio: 0.1                   # base_risk = risk_quota × ratio

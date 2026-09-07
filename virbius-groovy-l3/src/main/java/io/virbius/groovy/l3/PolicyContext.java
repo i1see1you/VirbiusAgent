@@ -165,6 +165,19 @@ public final class PolicyContext {
         return scriptEnv.getCumulative(cumulativeName);
     }
 
+    /**
+     * Script API: image-blacklist evidence for this request's attachments.
+     *
+     * @return {@code {layer, distance, sha}} for the closest sample in the named
+     *         image list, or {@code null} — the script applies its own threshold.
+     */
+    public Map<String, Object> imageMatch(String listName) {
+        if (scriptEnv == null) {
+            return null;
+        }
+        return scriptEnv.imageMatch(listName);
+    }
+
     // ========== Agent Session API ==========
 
     /**
