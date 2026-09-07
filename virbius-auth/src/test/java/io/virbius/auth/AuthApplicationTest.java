@@ -47,6 +47,13 @@ class AuthApplicationTest {
         assertEquals(400, bad.getStatusCode().value());
         assertTrue(bad.getHeaders().getLocation() == null);
 
+        ResponseEntity<String> page = http.getForEntity(
+                base + "/login?return_uri=http://127.0.0.1:8080/ui/callback&state=s", String.class);
+        assertEquals(200, page.getStatusCode().value());
+        assertTrue(page.getBody() != null && page.getBody().contains("for=\"username\""));
+        assertTrue(page.getBody().contains("for=\"password\""));
+        assertTrue(page.getBody().contains("Virbius 运营登录"));
+
         var form = new org.springframework.util.LinkedMultiValueMap<String, String>();
         form.add("username", "test-admin");
         form.add("password", "test-pass");

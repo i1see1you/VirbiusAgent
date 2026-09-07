@@ -122,6 +122,38 @@ class OperatorJwtAuthFilterTest {
     }
 
     @Test
+    void uiLoginUsesForwardedHostForViteCallback() throws Exception {
+        ApiKeyAuthFilter filter = filter(false, true);
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/ui/login");
+        req.addHeader("Host", "127.0.0.1:8080");
+        req.addHeader("X-Forwarded-Host", "localhost:5173");
+        req.addHeader("X-Forwarded-Proto", "http");
+        MockHttpServletResponse res = new MockHttpServletResponse();
+
+        filter.doFilterInternal(req, res, chain);
+        verify(chain, never()).doFilter(req, res);
+        assertEquals(302, res.getStatus());
+        assertTrue(res.getHeader("Location").startsWith("http://localhost:5173/login?"));
+        assertTrue(res.getHeader("Location").contains("return_uri=http%3A%2F%2Flocalhost%3A5173%2Fui%2Fcallback"));
+    }
+
+    @Test
+    void uiAssetsBypassJwtRedirect() {
+        ApiKeyAuthFilter filter = filter(false, true);
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/ui/assets/index.js");
+        req.setRequestURI("/ui/assets/index.js");
+        assertTrue(filter.shouldNotFilter(req));
+    }
+
+    @Test
+    void jwksVerifierConstructsWithHttpUrl() {
+        OperatorJwtProperties p = new OperatorJwtProperties();
+        p.setJwksUrl("http://127.0.0.1:8083/.well-known/jwks.json");
+        p.setIssuer("http://127.0.0.1:8083");
+        new JwksJwtVerifier(p);
+    }
+
+    @Test
     void uiWithoutCookieRedirectsToLogin() throws Exception {
         ApiKeyAuthFilter filter = filter(false, true);
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/ui/");

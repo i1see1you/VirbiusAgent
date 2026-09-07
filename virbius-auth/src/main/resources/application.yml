@@ -20,6 +20,9 @@ virbius:
     audience: virbius-control
     return-uris:
       - ${VIRBIUS_AUTH_RETURN_URI:http://127.0.0.1:8080/ui/callback}
+      - http://localhost:8080/ui/callback
+      - http://127.0.0.1:5173/ui/callback
+      - http://localhost:5173/ui/callback
     bootstrap:
       username: ${VIRBIUS_AUTH_BOOTSTRAP_USERNAME:}
       password: ${VIRBIUS_AUTH_BOOTSTRAP_PASSWORD:}

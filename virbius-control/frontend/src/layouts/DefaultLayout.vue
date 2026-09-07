@@ -230,7 +230,7 @@ function toggleLang() {
 
 async function logout() {
   await fetch('/ui/logout', { method: 'POST', credentials: 'same-origin' });
-  window.location.href = '/ui/';
+  window.location.href = '/ui/login';
 }
 
 onMounted(loadTenants);

@@ -45,6 +45,52 @@
       }
     },
     {
+      "type": "java",
+      "name": "Virbius Auth (SQLite :8083)",
+      "request": "launch",
+      "mainClass": "io.virbius.auth.VirbiusAuthApplication",
+      "projectName": "virbius-auth",
+      "cwd": "${workspaceFolder}/virbius-auth",
+      "console": "integratedTerminal",
+      "preLaunchTask": "compile: engine and control",
+      "env": {
+        "SPRING_PROFILES_ACTIVE": "dev",
+        "SERVER_PORT": "8083",
+        "VIRBIUS_AUTH_DATA_DIR": "${workspaceFolder}/virbius-auth/data",
+        "VIRBIUS_AUTH_ISSUER": "http://127.0.0.1:8083",
+        "VIRBIUS_AUTH_BOOTSTRAP_USERNAME": "admin",
+        "VIRBIUS_AUTH_BOOTSTRAP_PASSWORD": "admin"
+      }
+    },
+    {
+      "type": "java",
+      "name": "Virbius Control (operator JWT + Auth :8083)",
+      "request": "launch",
+      "mainClass": "io.virbius.control.VirbiusControlApplication",
+      "projectName": "virbius-control",
+      "cwd": "${workspaceFolder}/virbius-control",
+      "console": "integratedTerminal",
+      "preLaunchTask": "prelaunch: infra and compile",
+      "env": {
+        "SPRING_PROFILES_ACTIVE": "prod",
+        "VIRBIUS_JDBC_URL": "jdbc:mariadb://127.0.0.1:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC",
+        "VIRBIUS_JDBC_USER": "virbius",
+        "VIRBIUS_JDBC_PASSWORD": "virbius",
+        "VIRBIUS_REDIS_URL": "redis://127.0.0.1:16379",
+        "KAFKA_BOOTSTRAP_SERVERS": "127.0.0.1:9092",
+        "VIRBIUS_ENGINE_URL": "http://127.0.0.1:8082",
+        "VIRBIUS_LICENSE_MASTER_KEY": "local-dev-license-master-key",
+        "VIRBIUS_SECURITY_API_KEY_ENABLED": "false",
+        "VIRBIUS_OPERATOR_JWT_ENABLED": "true",
+        "VIRBIUS_AUTH_JWKS_URL": "http://127.0.0.1:8083/.well-known/jwks.json",
+        "VIRBIUS_AUTH_ISSUER": "http://127.0.0.1:8083",
+        "VIRBIUS_AUTH_LOGIN_URL": "http://127.0.0.1:8083/login",
+        "VIRBIUS_AUTH_TOKEN_URL": "http://127.0.0.1:8083/oauth/token",
+        "VIRBIUS_DATA_DIR": "${workspaceFolder}/virbius-control/data",
+        "VIRBIUS_LOG_DIR": "${workspaceFolder}/virbius-control/data/logs"
+      }
+    },
+    {
       "type": "node",
       "request": "launch",
       "name": "Virbius Control UI (Vite)",
@@ -75,6 +121,27 @@
       "configurations": [
         "Virbius Engine (MySQL/Redis/Kafka/Ollama)",
         "Virbius Control (MySQL/Redis/Kafka/Ollama)",
+        "Virbius Control UI (Vite)"
+      ],
+      "stopAll": true,
+      "preLaunchTask": "prelaunch: infra and compile"
+    },
+    {
+      "name": "Virbius: Control + Engine + Auth (operator JWT)",
+      "configurations": [
+        "Virbius Engine (MySQL/Redis/Kafka/Ollama)",
+        "Virbius Control (operator JWT + Auth :8083)",
+        "Virbius Auth (SQLite :8083)"
+      ],
+      "stopAll": true,
+      "preLaunchTask": "prelaunch: infra and compile"
+    },
+    {
+      "name": "Virbius: Control + Engine + Auth + UI",
+      "configurations": [
+        "Virbius Engine (MySQL/Redis/Kafka/Ollama)",
+        "Virbius Control (operator JWT + Auth :8083)",
+        "Virbius Auth (SQLite :8083)",
         "Virbius Control UI (Vite)"
       ],
       "stopAll": true,

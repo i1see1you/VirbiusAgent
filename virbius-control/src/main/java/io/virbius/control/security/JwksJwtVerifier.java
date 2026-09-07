@@ -11,12 +11,16 @@ import com.nimbusds.jwt.proc.DefaultJWTProcessor;
 import java.net.URI;
 import java.util.Optional;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
 @ConditionalOnProperty(prefix = "virbius.security.operator-jwt", name = "enabled", havingValue = "true")
 public class JwksJwtVerifier {
+
+    private static final Logger log = LoggerFactory.getLogger(JwksJwtVerifier.class);
 
     private final DefaultJWTProcessor<SecurityContext> processor;
 
@@ -55,6 +59,7 @@ public class JwksJwtVerifier {
             return Optional.of(new ApiKeyPrincipal(
                     claims.getSubject(), tenantId, ApiRole.parse(role), label == null ? "" : label));
         } catch (Exception e) {
+            log.warn("operator JWT verification failed: {}", e.toString());
             return Optional.empty();
         }
     }

@@ -100,6 +100,9 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         if (path.startsWith("/ui/callback") || path.equals("/ui/logout")) {
             return true;
         }
+        if (path.startsWith("/ui/assets/") || path.startsWith("/ui/@vite")) {
+            return true;
+        }
         if (path.startsWith("/actuator")
                 || path.startsWith("/api/v1/internal/")
                 || path.equals("/api/v1/health")) {
@@ -214,8 +217,14 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
                 .secure(request.isSecure())
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, stateCookie.toString());
-        String callback = publicOrigin(request) + "/ui/callback";
-        String login = jwtProperties.getLoginUrl()
+        String origin = publicOrigin(request);
+        String callback = origin + "/ui/callback";
+        // Vite (X-Forwarded-Host) keeps login on the same origin so vrb_login_state is not dropped
+        // when Auth lives on another host (localhost vs 127.0.0.1).
+        String loginPage = header(request, "X-Forwarded-Host").isBlank()
+                ? jwtProperties.getLoginUrl()
+                : origin + "/login";
+        String login = loginPage
                 + "?return_uri="
                 + URLEncoder.encode(callback, StandardCharsets.UTF_8)
                 + "&state="
@@ -262,14 +271,6 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             return authorization.substring("Bearer ".length()).trim();
         }
         return "";
-    }
-
-    static String extractToken(HttpServletRequest request) {
-        String bearer = extractBearer(request);
-        if (!bearer.isBlank()) {
-            return bearer;
-        }
-        return header(request, "X-Virbius-Api-Key");
     }
 
     public static String cookieValue(HttpServletRequest request, String name) {

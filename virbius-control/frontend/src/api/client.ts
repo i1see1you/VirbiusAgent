@@ -17,6 +17,11 @@ function authHeaders(extra?: Record<string, string>, isFormData = false): Record
   return h;
 }
 
+function redirectToLoginIfUnauthorized(res: Response): void {
+  if (res.status !== 401 || typeof window === 'undefined') return;
+  window.location.assign('/ui/login');
+}
+
 export interface AdminOpts {
   method?: string;
   body?: string | FormData;
@@ -33,6 +38,7 @@ export async function adminFetch<T = any>(url: string, opts: AdminOpts = {}): Pr
     credentials: 'same-origin',
     headers: authHeaders(opts.headers, isFormData)
   });
+  redirectToLoginIfUnauthorized(res);
   const j = await res.json();
   if (j && typeof j === 'object' && 'code' in j) {
     if (j.code !== 0) throw new Error(j.message || ('HTTP ' + res.status));
@@ -60,6 +66,7 @@ export async function rawJson<T = any>(url: string, opts: AdminOpts = {}): Promi
     credentials: 'same-origin',
     headers: authHeaders(opts.headers)
   });
+  redirectToLoginIfUnauthorized(res);
   return (await res.json()) as T;
 }
 
