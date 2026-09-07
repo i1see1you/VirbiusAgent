@@ -433,7 +433,7 @@ Agent 是否在 K8s 集群内？
 
 ### 8.5 K8s Helm 部署
 
-用一份 Helm Chart 把靶场、端侧、云侧、管侧和 MySQL / Kafka / Redis / Ollama（含 VirbiusGuard 模型导入）装进**已有集群**。不代装 Ingress Controller、Higress、Falco。
+用一份 Helm Chart 把靶场、端侧、云侧、管侧、运营登录（virbius-auth）和 MySQL / Kafka / Redis / Ollama（含 VirbiusGuard 模型导入）装进**已有集群**。不代装 Ingress Controller、Higress、Falco。
 
 Chart：`deploy/helm/virbius`。脚本：`deploy/scripts/k8s-build-push.sh`、`deploy/scripts/k8s-deploy.sh`。
 
@@ -483,9 +483,9 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 | 云侧 | `engine.virbius.example.com` | `GET /admin/health` |
 | 端侧 | `proxy.virbius.example.com` | `GET /health` |
 
-把这四个名字指到 Ingress 的外部 IP。TLS 默认关闭，在 values 里打开 `ingress.tls`。
+把这四个名字指到 Ingress 的外部 IP。TLS 默认关闭，在 values 里打开 `ingress.tls`。管侧 host 上的 `/login` 转到 `virbius-auth`（与 `/ui/` 同域，避免登录 cookie 丢失）。默认账号 `admin` / `secrets.authBootstrapPassword`。
 
-集群内 DNS：`virbius-control:8080`、`virbius-engine:8082`（gRPC `:50051`）、`virbius-mcp-proxy:9090`、`virbius-demo:8000`（SSE `:9091`）。
+集群内 DNS：`virbius-control:8080`、`virbius-auth:8083`、`virbius-engine:8082`（gRPC `:50051`）、`virbius-mcp-proxy:9090`、`virbius-demo:8000`（SSE `:9091`）。Auth 用 SQLite + JWT 密钥落在 PVC 上，不要扩副本。设 `auth.enabled=false` 则不部署 Auth、Control 也不开 operator JWT。
 
 靶场 Agent 关卡仍在 Pod 内用 stdio 拉起 `virbius-mcp-proxy`。Ingress 上的端侧是给集群外 MCP 客户端的 TCP 入口，upstream 默认 `http://virbius-demo:9091`。
 

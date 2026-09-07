@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and push the four Virbius images used by the Helm chart.
+# Build and push the Virbius images used by the Helm chart.
 set -euo pipefail
 
 usage() {
@@ -7,7 +7,7 @@ usage() {
 Usage: k8s-build-push.sh --registry REGISTRY [--tag TAG] [--apt-mirror cn]
 
   --registry     Image registry prefix, e.g. registry.example.com/virbius
-                 Images: {registry}/virbius-{engine,control,mcp-proxy,demo}:{tag}
+                 Images: {registry}/virbius-{engine,control,auth,mcp-proxy,demo}:{tag}
   --tag          Image tag (default: latest)
   --apt-mirror   Passed to Dockerfiles as APT_MIRROR (e.g. cn)
 
@@ -67,6 +67,10 @@ echo "==> building ${REGISTRY}/virbius-control:${TAG}"
 docker build "${BUILD_ARGS[@]}" --target virbius-control \
   -t "${REGISTRY}/virbius-control:${TAG}" .
 
+echo "==> building ${REGISTRY}/virbius-auth:${TAG}"
+docker build "${BUILD_ARGS[@]}" --target virbius-auth \
+  -t "${REGISTRY}/virbius-auth:${TAG}" .
+
 echo "==> building ${REGISTRY}/virbius-mcp-proxy:${TAG}"
 docker build "${BUILD_ARGS[@]}" --target virbius-mcp-proxy \
   -t "${REGISTRY}/virbius-mcp-proxy:${TAG}" .
@@ -78,7 +82,8 @@ docker build "${BUILD_ARGS[@]}" -f virbius-demo/Dockerfile \
 echo "==> pushing images"
 docker push "${REGISTRY}/virbius-engine:${TAG}"
 docker push "${REGISTRY}/virbius-control:${TAG}"
+docker push "${REGISTRY}/virbius-auth:${TAG}"
 docker push "${REGISTRY}/virbius-mcp-proxy:${TAG}"
 docker push "${REGISTRY}/virbius-demo:${TAG}"
 
-echo "ok: pushed four images under ${REGISTRY} tag ${TAG}"
+echo "ok: pushed images under ${REGISTRY} tag ${TAG}"

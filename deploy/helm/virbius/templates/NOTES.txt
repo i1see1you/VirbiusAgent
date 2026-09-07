@@ -11,12 +11,16 @@ Health checks:
 
   curl -sf http://{{ .Values.ingress.hosts.range }}/
   curl -sf http://{{ .Values.ingress.hosts.control }}/api/v1/health
+{{- if .Values.auth.enabled }}
+  curl -sf http://{{ .Values.ingress.hosts.control }}/login
+{{- end }}
   curl -sf http://{{ .Values.ingress.hosts.engine }}/admin/health
   curl -sf http://{{ .Values.ingress.hosts.proxy }}/health
 
 Before production use:
 
   - Set secrets.licenseMasterKey (do not leave the chart default)
+  - Set secrets.authBootstrapPassword (ops console login; default username {{ .Values.auth.bootstrapUsername }})
   - Set global.imageRegistry and docker login / imagePullSecrets
   - Cluster must already have an Ingress Controller (class {{ .Values.ingress.className }})
 {{- if .Values.ollama.enabled }}

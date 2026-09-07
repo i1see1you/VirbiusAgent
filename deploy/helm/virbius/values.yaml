@@ -97,6 +97,19 @@ control:
       memory: 1Gi
   apiKeyEnabled: false
 
+auth:
+  enabled: true
+  # SQLite + signing key on PVC — keep a single replica.
+  bootstrapUsername: admin
+  persistence:
+    size: 1Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
 engine:
   replicaCount: 1
   grpc:
@@ -141,3 +154,4 @@ secrets:
   licenseMasterKey: ""
   deepseekApiKey: ""
   openrouterApiKey: ""
+  authBootstrapPassword: "admin"

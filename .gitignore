@@ -70,3 +70,9 @@ deploy/helm/virbius/values-*.local.yaml
 
 # PPT
 ppt/
+
+# Local tool credentials / worktrees
+dbhub.toml
+hindsight.toml
+.cursor/bug-evidence/
+.dev-worktree/

@@ -57,5 +57,6 @@ secrets:
   mysqlRootPassword: "change-me-root"
   mysqlPassword: "change-me-virbius"
   licenseMasterKey: "change-me-license-master-key"
+  authBootstrapPassword: "change-me-ops-login"
   deepseekApiKey: "sk-REPLACE-ME"
   openrouterApiKey: ""

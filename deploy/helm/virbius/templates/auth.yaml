@@ -1,0 +1,114 @@
+{{- if .Values.auth.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "virbius.fullname" . }}-auth-data
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auth
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.auth.persistence.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "virbius.fullname" . }}-auth
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auth
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8083
+      targetPort: http
+  selector:
+    {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "auth") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "virbius.fullname" . }}-auth
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: auth
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "auth") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "auth") | nindent 8 }}
+    spec:
+      {{- include "virbius.imagePullSecrets" . | nindent 6 }}
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        runAsGroup: 999
+      containers:
+        - name: auth
+          image: {{ include "virbius.image" (dict "root" . "component" "auth") }}
+          ports:
+            - name: http
+              containerPort: 8083
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: prod
+            - name: SERVER_PORT
+              value: "8083"
+            - name: VIRBIUS_AUTH_DATA_DIR
+              value: /data
+            - name: VIRBIUS_AUTH_ISSUER
+              value: {{ include "virbius.authInternalUrl" . | quote }}
+            - name: VIRBIUS_AUTH_RETURN_URI
+              value: {{ printf "http://%s/ui/callback" .Values.ingress.hosts.control | quote }}
+            - name: VIRBIUS_AUTH_RETURN_URI_TLS
+              value: {{ printf "https://%s/ui/callback" .Values.ingress.hosts.control | quote }}
+            - name: VIRBIUS_AUTH_BOOTSTRAP_USERNAME
+              value: {{ .Values.auth.bootstrapUsername | quote }}
+            - name: VIRBIUS_AUTH_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: auth-bootstrap-password
+            - name: HTTP_PROXY
+              value: ""
+            - name: HTTPS_PROXY
+              value: ""
+            - name: http_proxy
+              value: ""
+            - name: https_proxy
+              value: ""
+            - name: NO_PROXY
+              value: "*"
+            - name: no_proxy
+              value: "*"
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.auth.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "virbius.fullname" . }}-auth-data
+{{- end }}

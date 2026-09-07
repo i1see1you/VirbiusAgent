@@ -36,6 +36,15 @@ spec:
     - host: {{ .Values.ingress.hosts.control | quote }}
       http:
         paths:
+          {{- if .Values.auth.enabled }}
+          - path: /login
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "virbius.fullname" . }}-auth
+                port:
+                  number: 8083
+          {{- end }}
           - path: /
             pathType: Prefix
             backend:

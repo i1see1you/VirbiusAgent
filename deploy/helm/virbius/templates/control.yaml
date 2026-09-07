@@ -60,6 +60,9 @@ spec:
         {{- include "virbius.waitFor" (dict "root" . "name" "kafka" "host" (printf "%s-kafka" (include "virbius.fullname" .)) "port" 9092) | nindent 8 }}
         {{- end }}
         {{- include "virbius.waitFor" (dict "root" . "name" "engine" "host" (printf "%s-engine" (include "virbius.fullname" .)) "port" 8082) | nindent 8 }}
+        {{- if .Values.auth.enabled }}
+        {{- include "virbius.waitFor" (dict "root" . "name" "auth" "host" (printf "%s-auth" (include "virbius.fullname" .)) "port" 8083) | nindent 8 }}
+        {{- end }}
       containers:
         - name: control
           image: {{ include "virbius.image" (dict "root" . "component" "control") }}
@@ -93,6 +96,18 @@ spec:
                   key: license-master-key
             - name: VIRBIUS_SECURITY_API_KEY_ENABLED
               value: {{ .Values.control.apiKeyEnabled | quote }}
+            {{- if .Values.auth.enabled }}
+            - name: VIRBIUS_OPERATOR_JWT_ENABLED
+              value: "true"
+            - name: VIRBIUS_AUTH_JWKS_URL
+              value: {{ printf "%s/.well-known/jwks.json" (include "virbius.authInternalUrl" .) | quote }}
+            - name: VIRBIUS_AUTH_ISSUER
+              value: {{ include "virbius.authInternalUrl" . | quote }}
+            - name: VIRBIUS_AUTH_LOGIN_URL
+              value: {{ printf "%s/login" (include "virbius.authInternalUrl" .) | quote }}
+            - name: VIRBIUS_AUTH_TOKEN_URL
+              value: {{ printf "%s/oauth/token" (include "virbius.authInternalUrl" .) | quote }}
+            {{- end }}
             - name: VIRBIUS_DATA_DIR
               value: /data
             - name: VIRBIUS_LOG_DIR

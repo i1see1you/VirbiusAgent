@@ -8,7 +8,7 @@ import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Profile;
 
 @Configuration
-@Profile("dev")
+@Profile({"dev", "prod"})
 public class DataSourceConfiguration {
 
     @Bean

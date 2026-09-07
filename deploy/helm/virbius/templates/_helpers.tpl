@@ -130,6 +130,13 @@ http://{{ include "virbius.fullname" . }}-ollama:11434
 {{- end }}
 
 {{/*
+In-cluster operator auth base URL.
+*/}}
+{{- define "virbius.authInternalUrl" -}}
+http://{{ include "virbius.fullname" . }}-auth:8083
+{{- end }}
+
+{{/*
 busybox wait-for TCP. Usage: include "virbius.waitFor" (dict "root" . "name" "mysql" "host" "virbius-mysql" "port" 3306)
 */}}
 {{- define "virbius.waitFor" -}}

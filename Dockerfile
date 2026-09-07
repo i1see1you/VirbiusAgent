@@ -4,6 +4,7 @@
 #  Build targets:
 #    virbius-engine   — Java Spring Boot security engine (port 8082)
 #    virbius-control  — Java Spring Boot control plane  (port 8080)
+#    virbius-auth     — Java Spring Boot operator auth  (port 8083)
 #    virbius-mcp-proxy — Rust MCP proxy server          (port 9090)
 #
 #  Usage:
@@ -38,6 +39,7 @@ COPY virbius-groovy-l3/pom.xml virbius-groovy-l3/
 COPY virbius-policy/pom.xml virbius-policy/
 COPY virbius-engine/pom.xml virbius-engine/
 COPY virbius-control/pom.xml virbius-control/
+COPY virbius-auth/pom.xml virbius-auth/
 COPY virbius-compiler/pom.xml virbius-compiler/
 
 # Download dependencies (offline later)
@@ -48,6 +50,7 @@ COPY virbius-groovy-l3/ virbius-groovy-l3/
 COPY virbius-policy/ virbius-policy/
 COPY virbius-engine/ virbius-engine/
 COPY virbius-control/ virbius-control/
+COPY virbius-auth/ virbius-auth/
 COPY virbius-compiler/ virbius-compiler/
 
 RUN mvn package -DskipTests -B -q
@@ -172,7 +175,38 @@ HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
 
 ENTRYPOINT ["java", "-jar", "app.jar"]
 
-# ── Stage 5: virbius-mcp-proxy runtime ──────────────────────────────────────
+# ── Stage 5: virbius-auth runtime ───────────────────────────────────────────
+FROM eclipse-temurin:17-jre-jammy AS virbius-auth
+WORKDIR /app
+
+ARG APT_MIRROR=""
+RUN if [ "$APT_MIRROR" = "cn" ]; then \
+      sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \
+        /etc/apt/sources.list 2>/dev/null || true; \
+    fi && \
+    apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
+
+COPY --from=java-build /build/virbius-auth/target/virbius-auth-0.1.0-SNAPSHOT.jar app.jar
+
+RUN mkdir -p /data /var/log/virbius && chown -R virbius:virbius /app /data /var/log/virbius
+
+USER virbius
+EXPOSE 8083
+
+ENV SERVER_PORT=8083
+ENV SPRING_PROFILES_ACTIVE=prod
+ENV VIRBIUS_AUTH_DATA_DIR=/data
+ENV VIRBIUS_LOG_DIR=/var/log/virbius
+
+HEALTHCHECK --interval=15s --timeout=5s --retries=3 \
+  CMD curl -sf http://localhost:8083/api/v1/health || exit 1
+
+ENTRYPOINT ["java", "-jar", "app.jar"]
+
+# ── Stage 6: virbius-mcp-proxy runtime ──────────────────────────────────────
 FROM debian:bookworm-slim AS virbius-mcp-proxy
 WORKDIR /app
 

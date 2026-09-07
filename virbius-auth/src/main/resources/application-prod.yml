@@ -1,0 +1,10 @@
+spring:
+  datasource:
+    url: jdbc:sqlite:${virbius.data-dir:./data}/virbius-auth.db
+    driver-class-name: org.sqlite.JDBC
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:db/schema.sql
+  flyway:
+    enabled: false
