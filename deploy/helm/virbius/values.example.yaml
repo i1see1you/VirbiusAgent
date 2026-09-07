@@ -29,7 +29,7 @@ ingress:
 engine:
   promptLlm:
     baseUrl: ""   # empty + ollama.enabled → in-cluster Ollama; required if ollama.enabled=false
-    model: virbiusguard
+    model: virbiusguard   # /v1/memory/check; keep in sync with ollama.model
   grpc:
     port: 50051
 

@@ -139,7 +139,7 @@ ollama:
   enabled: true
   image: ollama/ollama:0.11.10
   model: virbiusguard
-  ggufUrl: HuggingFace V13 Q4_K_M (override for ModelScope)
+  ggufUrl: HuggingFace V15 F16 under gguf/ (override for ModelScope)
 
 proxy.upstreamUrl: http://virbius-demo:9091
 

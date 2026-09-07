@@ -67,13 +67,14 @@ ollama:
   enabled: true
   image: hb.grainmind.cn/library/ollama:0.11.10
   curlImage: curlimages/curl:8.12.1
+  # Ollama name after import. Engine /v1/memory/check uses engine.promptLlm.model (defaults to this).
   model: virbiusguard
   # HuggingFace V15 F16 (~1.5GB). For China, switch to ModelScope:
   # https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v15-f16.gguf
   ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf
   persistence:
     size: 10Gi
-    importSize: 2Gi
+    importSize: 4Gi
   resources:
     requests:
       cpu: 500m
@@ -123,6 +124,7 @@ engine:
   promptLlm:
     # Empty + ollama.enabled uses in-cluster http://{release}-ollama:11434
     baseUrl: ""
+    # VIRBIUS_PROMPT_LLM_MODEL — /v1/memory/check. Keep in sync with ollama.model.
     model: virbiusguard
 
 proxy:
