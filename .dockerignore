@@ -1,5 +1,8 @@
 .git
 .gitignore
+**/.env
+virbius-demo/config.json
+virbius-demo/licenses/
 target/
 **/target/
 data/

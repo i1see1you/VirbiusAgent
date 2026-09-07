@@ -13,7 +13,11 @@
 # =============================================================================
 
 # ---- Stage 1: build Rust deps ----
-FROM rust:1.87-slim-bookworm AS rust-build
+# Override on hosts whose docker.io mirror is down, e.g.
+#   --build-arg RUST_BASE=docker.m.daocloud.io/library/rust:1.87-slim-bookworm
+ARG RUST_BASE=rust:1.87-slim-bookworm
+ARG PYTHON_BASE=python:3.11-slim
+FROM ${RUST_BASE} AS rust-build
 WORKDIR /build
 
 # Optional build-time HTTP(S) proxy for apt/pip/cargo downloads (defaults to
@@ -25,6 +29,25 @@ ARG https_proxy=""
 ENV HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy" \
     http_proxy="$http_proxy" https_proxy="$https_proxy" \
     ALL_PROXY="" all_proxy=""
+
+# crates.io is often unreachable from China; CRATES_MIRROR=cn uses rsproxy.
+ARG CRATES_MIRROR=""
+RUN if [ "$CRATES_MIRROR" = "cn" ]; then \
+      mkdir -p /usr/local/cargo && \
+      printf '%s\n' \
+        '[source.crates-io]' \
+        'replace-with = "rsproxy-sparse"' \
+        '' \
+        '[source.rsproxy]' \
+        'registry = "https://rsproxy.cn/crates.io-index"' \
+        '' \
+        '[source.rsproxy-sparse]' \
+        'registry = "sparse+https://rsproxy.cn/index/"' \
+        '' \
+        '[net]' \
+        'git-fetch-with-cli = true' \
+        > /usr/local/cargo/config.toml; \
+    fi
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev g++ python3 python3-pip make \
@@ -61,7 +84,7 @@ RUN cd virbius-mcp-python && maturin build --release
 # ---- Stage 2: runtime ----
 # NOTE: must match the Python version used in the rust-build stage (bookworm = py3.11),
 # because the PyO3 wheel is built with cp311 ABI tags and won't install on py3.12.
-FROM python:3.11-slim
+FROM ${PYTHON_BASE}
 WORKDIR /app
 
 # Optional build-time proxy (same ARG/ENV as the rust-build stage).

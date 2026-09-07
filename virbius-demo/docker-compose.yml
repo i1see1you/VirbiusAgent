@@ -28,13 +28,14 @@ services:
       # because the multi-stage Dockerfile COPYs virbius-core/ sources.
       context: ..
       dockerfile: virbius-demo/Dockerfile
-      # Build-time proxy: route apt/pip/cargo downloads through the host's local
-      # proxy (eztzCore on 7890) to speed up image build. Reaches the host via
-      # host.docker.internal (see extra_hosts below). Override with
-      # DOCKER_BUILD_PROXY to disable or point elsewhere.
+      # Build defaults: no HTTP proxy, official rust/python tags, crates.io.
+      # Optional: DOCKER_BUILD_PROXY, DEMO_RUST_BASE, DEMO_PYTHON_BASE, CRATES_MIRROR=cn.
       args:
-        http_proxy: ${DOCKER_BUILD_PROXY:-http://host.docker.internal:7890}
-        https_proxy: ${DOCKER_BUILD_PROXY:-http://host.docker.internal:7890}
+        http_proxy: ${DOCKER_BUILD_PROXY:-}
+        https_proxy: ${DOCKER_BUILD_PROXY:-}
+        RUST_BASE: ${DEMO_RUST_BASE:-rust:1.87-slim-bookworm}
+        PYTHON_BASE: ${DEMO_PYTHON_BASE:-python:3.11-slim}
+        CRATES_MIRROR: ${CRATES_MIRROR:-}
       extra_hosts:
         - "host.docker.internal:host-gateway"
     container_name: virbius-demo
