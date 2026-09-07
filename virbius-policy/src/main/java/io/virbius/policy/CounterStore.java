@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 
 /** Redis HASH minute/10-minute buckets for cumulative counters. */
 public class CounterStore {
@@ -96,6 +97,13 @@ public class CounterStore {
         if (redisUrl == null || redisUrl.isBlank()) {
             return Optional.empty();
         }
-        return Optional.of(new JedisPool(redisUrl));
+        return Optional.of(createPoolOrThrow(redisUrl));
+    }
+
+    /** Commons-pool2 otherwise registers a fixed MXBean name that collides with Spring JMX. */
+    public static JedisPool createPoolOrThrow(String redisUrl) {
+        JedisPoolConfig config = new JedisPoolConfig();
+        config.setJmxEnabled(false);
+        return new JedisPool(config, redisUrl);
     }
 }

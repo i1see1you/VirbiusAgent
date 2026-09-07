@@ -25,7 +25,7 @@ public class JdbcRolloutEventRepository implements RolloutEventRepository {
                 """
                 INSERT INTO tb_rule_rollout_event (
                   tenant_id, rule_id, rule_revision, rollout_state, canary_percent,
-                  trigger, operator, effective_at
+                  `trigger`, operator, effective_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 """,
                 tenantId,

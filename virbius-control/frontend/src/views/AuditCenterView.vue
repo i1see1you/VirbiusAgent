@@ -1,10 +1,14 @@
 <template>
   <div class="v-card">
     <h2 class="v-card-title">{{ t('ac.title') }}</h2>
-    <p class="v-hint" v-html="t('ac.desc')"></p>
+    <p class="v-hint">{{ t('ac.desc-short') }}</p>
+    <details class="v-hint-more">
+      <summary>{{ t('common.learn-more') }}</summary>
+      <p class="v-hint" v-html="t('ac.desc')"></p>
+    </details>
 
     <div class="v-row">
-      <label>trace_id
+      <label>{{ t('ac.label-trace-id') }}
         <el-input v-model="traceId" :placeholder="t('audit.placeholder-trace')" style="width:360px"
           @keydown.enter="search" />
       </label>
@@ -15,20 +19,20 @@
 
     <div class="v-section">
       <h3 v-html="t('ac.tb-audit-title', [dbCount])"></h3>
-      <el-table :data="paginatedEvents" size="small" border stripe>
-        <el-table-column :label="t('rollout.header-time')" width="170">
+      <el-table :data="paginatedEvents" size="small" border stripe :empty-text="t('ac.empty')">
+        <el-table-column :label="t('ac.header-time')" width="170">
           <template #default="{ row }">{{ fmtTime(row.intercepted_at) }}</template>
         </el-table-column>
-        <el-table-column :label="t('rollout.header-layer')" prop="layer" width="90" />
+        <el-table-column :label="t('ac.header-layer')" prop="layer" width="90" />
         <el-table-column :label="t('ac.header-scene')" prop="scene" width="120" />
-        <el-table-column :label="t('rollout.header-action')" prop="effective_action" width="90" />
+        <el-table-column :label="t('ac.header-action')" prop="effective_action" width="90" />
         <el-table-column :label="t('ac.header-rule')" prop="rule_id" />
-        <el-table-column :label="t('rollout.header-reason')" prop="reason_code" width="130" />
-        <el-table-column :label="t('rollout.header-risk')" prop="max_risk_score" width="70" />
-        <el-table-column :label="t('rollout.header-rollout')" width="110">
+        <el-table-column :label="t('ac.header-reason')" prop="reason_code" width="130" />
+        <el-table-column :label="t('ac.header-risk')" prop="max_risk_score" width="70" />
+        <el-table-column :label="t('ac.header-rollout')" width="110">
           <template #default="{ row }">{{ rolloutLabel(row.rollout_state, row.canary_percent) }}</template>
         </el-table-column>
-        <el-table-column :label="t('rollout.header-user-id')" prop="user_id" />
+        <el-table-column :label="t('ac.header-user-id')" prop="user_id" />
       </el-table>
       <el-pagination v-if="total > size" small background layout="prev, pager, next"
         v-model:current-page="page" :page-size="size" :total="total"
@@ -76,7 +80,7 @@ async function searchRecent(limit = 100) {
     dbCount.value = data?.db_count ?? 0;
     events.value = data?.db_events || [];
     total.value = events.value.length; page.value = 1;
-    summary.value = data?.note || (events.value.length ? '' : t('ac.no-db-records'));
+    summary.value = events.value.length ? t('ac.recent-note', [limit]) : t('ac.no-db-records');
   } catch (e: any) { summary.value = e.message; events.value = []; }
 }
 
@@ -88,7 +92,7 @@ async function search() {
     dbCount.value = data?.db_count ?? 0;
     events.value = data?.db_events || [];
     total.value = events.value.length; page.value = 1;
-    summary.value = data?.note || (events.value.length ? '' : t('ac.no-db-records'));
+    summary.value = events.value.length ? t('ac.trace-note') : t('ac.no-db-records');
   } catch (e: any) { summary.value = e.message; events.value = []; }
 }
 

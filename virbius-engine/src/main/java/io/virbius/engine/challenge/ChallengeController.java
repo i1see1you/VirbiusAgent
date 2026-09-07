@@ -134,10 +134,14 @@ public class ChallengeController {
      */
     @GetMapping("/challenges")
     public ResponseEntity<List<Map<String, Object>>> listChallenges(
-            @RequestParam(defaultValue = "default") String tenantId,
+            @RequestParam(required = false) String tenantId,
+            @RequestParam(name = "tenant_id", required = false) String tenantIdSnake,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "50") int max) {
-        List<Map<String, Object>> challenges = challengeService.listChallenges(tenantId, status, max);
+        String tid = (tenantIdSnake != null && !tenantIdSnake.isBlank())
+                ? tenantIdSnake
+                : (tenantId != null && !tenantId.isBlank() ? tenantId : "default");
+        List<Map<String, Object>> challenges = challengeService.listChallenges(tid, status, max);
         return ResponseEntity.ok(challenges);
     }
 }

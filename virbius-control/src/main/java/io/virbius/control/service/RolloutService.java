@@ -50,14 +50,16 @@ public class RolloutService {
         RolloutStateHelper.validateTransition(from, to);
         RolloutStateHelper.validateCanaryPercent(to, canaryPercent);
 
-        if (shouldCheckConcurrentLimit(from, to)) {
+        if (RolloutStateHelper.shouldEnforceConcurrentLimit(
+                from, to, store.hasOccupiedConcurrentSlot(tenantId, ruleId))) {
             TenantRolloutPolicy policy = policyRepository.getOrDefault(tenantId);
             int active = store.countByRolloutStates(
                     tenantId, List.of("dry_run", "canary"), ruleId);
             if (active >= policy.maxConcurrentRollouts()) {
                 throw new BusinessException(429,
-                        "Active rollout count " + active + " has reached the limit " + policy.maxConcurrentRollouts()
-                                + ". Please finish existing rollouts before operating new rules.");
+                        "进行中的放量已有 " + active + " 条（观察/灰度），上限 "
+                                + policy.maxConcurrentRollouts()
+                                + "。请先把现有规则升到全量或停用，再上线新规则。");
             }
         }
 
@@ -109,11 +111,6 @@ public class RolloutService {
         Map<String, Object> result = gateService.evaluate(tenantId, current, targetState, canaryPercent);
         gateService.recordEvaluateLog(tenantId, ruleId, result);
         return result;
-    }
-
-    private static boolean shouldCheckConcurrentLimit(String from, String to) {
-        return ("draft".equals(from) && "dry_run".equals(to))
-                || ("dry_run".equals(from) && "canary".equals(to));
     }
 
     private static boolean requiresGate(String from, String to) {

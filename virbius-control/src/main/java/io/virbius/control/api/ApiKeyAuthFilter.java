@@ -7,37 +7,88 @@ import io.virbius.control.security.ApiKeyAuthContext;
 import io.virbius.control.security.ApiKeyPrincipal;
 import io.virbius.control.security.ApiKeyRoutePolicy;
 import io.virbius.control.security.ApiRole;
+import io.virbius.control.security.JwksJwtVerifier;
+import io.virbius.control.security.OperatorJwtProperties;
 import io.virbius.control.service.TenantApiCredentialService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Optional;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 @Component
 public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
+    public static final String OPERATOR_COOKIE = "vrb_op";
+    public static final String LOGIN_STATE_COOKIE = "vrb_login_state";
+
     private static final ApiKeyPrincipal DEV_PRINCIPAL =
             new ApiKeyPrincipal("dev", TenantApiCredential.PLATFORM_TENANT, ApiRole.PLATFORM_ADMIN, "dev");
 
     private final TenantApiCredentialService credentialService;
     private final ObjectMapper objectMapper;
-    private final boolean authEnabled;
+    private final boolean apiKeyEnabled;
+    private final boolean operatorJwtEnabled;
+    private final JwksJwtVerifier jwtVerifier;
+    private final OperatorJwtProperties jwtProperties;
+    private final SecureRandom random = new SecureRandom();
+
+    @Autowired
+    public ApiKeyAuthFilter(
+            TenantApiCredentialService credentialService,
+            ObjectMapper objectMapper,
+            @Value("${virbius.security.api-key.enabled:false}") boolean apiKeyEnabled,
+            @Value("${virbius.security.operator-jwt.enabled:false}") boolean operatorJwtEnabled,
+            ObjectProvider<JwksJwtVerifier> jwtVerifier,
+            ObjectProvider<OperatorJwtProperties> jwtProperties) {
+        this.credentialService = credentialService;
+        this.objectMapper = objectMapper;
+        this.apiKeyEnabled = apiKeyEnabled;
+        this.operatorJwtEnabled = operatorJwtEnabled;
+        this.jwtVerifier = jwtVerifier == null ? null : jwtVerifier.getIfAvailable();
+        this.jwtProperties = jwtProperties == null ? null : jwtProperties.getIfAvailable();
+    }
+
+    /** Test helper: API-key-only, operator JWT off. */
+    public ApiKeyAuthFilter(
+            TenantApiCredentialService credentialService, ObjectMapper objectMapper, boolean apiKeyEnabled) {
+        this.credentialService = credentialService;
+        this.objectMapper = objectMapper;
+        this.apiKeyEnabled = apiKeyEnabled;
+        this.operatorJwtEnabled = false;
+        this.jwtVerifier = null;
+        this.jwtProperties = null;
+    }
 
     public ApiKeyAuthFilter(
             TenantApiCredentialService credentialService,
             ObjectMapper objectMapper,
-            @Value("${virbius.security.api-key.enabled:false}") boolean authEnabled) {
+            boolean apiKeyEnabled,
+            boolean operatorJwtEnabled,
+            JwksJwtVerifier jwtVerifier,
+            OperatorJwtProperties jwtProperties) {
         this.credentialService = credentialService;
         this.objectMapper = objectMapper;
-        this.authEnabled = authEnabled;
+        this.apiKeyEnabled = apiKeyEnabled;
+        this.operatorJwtEnabled = operatorJwtEnabled;
+        this.jwtVerifier = jwtVerifier;
+        this.jwtProperties = jwtProperties;
     }
 
     @Override
@@ -46,11 +97,16 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         if (path == null) {
             return true;
         }
-        if (path.startsWith("/ui")
-                || path.startsWith("/actuator")
+        if (path.startsWith("/ui/callback") || path.equals("/ui/logout")) {
+            return true;
+        }
+        if (path.startsWith("/actuator")
                 || path.startsWith("/api/v1/internal/")
                 || path.equals("/api/v1/health")) {
             return true;
+        }
+        if (path.startsWith("/ui")) {
+            return !operatorJwtEnabled;
         }
         return !path.startsWith("/api/v1/admin/")
                 && !path.startsWith("/api/v1/edge/")
@@ -61,66 +117,181 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
-        if (!authEnabled) {
+        String path = request.getRequestURI();
+        if (isUiPath(path)) {
+            handleUi(request, response, filterChain);
+            return;
+        }
+
+        if (!apiKeyEnabled && !operatorJwtEnabled) {
             ApiKeyAuthContext.set(request, DEV_PRINCIPAL);
             filterChain.doFilter(request, response);
             return;
         }
 
-        String path = request.getRequestURI();
         String method = request.getMethod();
         ApiRole required = ApiKeyRoutePolicy.requiredRole(method, path);
         String pathTenantId = ApiKeyRoutePolicy.extractPathTenantId(path);
 
-        String rawToken = extractToken(request);
-        if (rawToken.isBlank()) {
-            reject(request, response, HttpServletResponse.SC_UNAUTHORIZED, "unauthorized", "missing api key");
+        Authn authn = authenticateApi(request);
+        if (authn.principal.isEmpty()) {
+            reject(request, response, HttpServletResponse.SC_UNAUTHORIZED, "unauthorized", "missing or invalid credential");
             return;
         }
-
-        var credentialOpt = credentialService.findActiveByToken(rawToken);
-        if (credentialOpt.isEmpty()) {
-            reject(request, response, HttpServletResponse.SC_UNAUTHORIZED, "unauthorized", "invalid api key");
-            return;
-        }
-
-        var credential = credentialOpt.get();
-        if (!credential.role().satisfies(required)) {
+        ApiKeyPrincipal p = authn.principal.get();
+        if (!p.role().satisfies(required)) {
             reject(request, response, HttpServletResponse.SC_FORBIDDEN, "forbidden", "insufficient role");
             return;
         }
-        if (!ApiKeyRoutePolicy.tenantScopeAllowed(
-                credential.role(), credential.tenantId(), pathTenantId)) {
+        if (!ApiKeyRoutePolicy.tenantScopeAllowed(p.role(), p.tenantId(), pathTenantId)) {
             reject(request, response, HttpServletResponse.SC_FORBIDDEN, "forbidden", "tenant scope mismatch");
             return;
         }
-
-        credentialService.touchLastUsed(credential.credentialId());
-        ApiKeyAuthContext.set(
-                request,
-                new ApiKeyPrincipal(
-                        credential.credentialId(),
-                        credential.tenantId(),
-                        credential.role(),
-                        credential.label()));
+        if (authn.touchCredentialId != null) {
+            credentialService.touchLastUsed(authn.touchCredentialId);
+        }
+        ApiKeyAuthContext.set(request, p);
         filterChain.doFilter(request, response);
     }
 
-    static String extractToken(HttpServletRequest request) {
+    private Authn authenticateApi(HttpServletRequest request) {
+        String bearer = extractBearer(request);
+        String apiKeyHeader = header(request, "X-Virbius-Api-Key");
+        if (isApiKey(bearer) || !apiKeyHeader.isBlank()) {
+            if (!apiKeyEnabled) {
+                return Authn.none();
+            }
+            String raw = !apiKeyHeader.isBlank() ? apiKeyHeader : bearer;
+            return credentialService
+                    .findActiveByToken(raw)
+                    .map(c -> new Authn(Optional.of(toPrincipal(c)), c.credentialId()))
+                    .orElseGet(Authn::none);
+        }
+        if (!bearer.isBlank()) {
+            if (!operatorJwtEnabled || jwtVerifier == null) {
+                return Authn.none();
+            }
+            return new Authn(jwtVerifier.verify(bearer), null);
+        }
+        if (operatorJwtEnabled && jwtVerifier != null) {
+            return new Authn(jwtVerifier.verify(cookieValue(request, OPERATOR_COOKIE)), null);
+        }
+        return Authn.none();
+    }
+
+    private record Authn(Optional<ApiKeyPrincipal> principal, String touchCredentialId) {
+        static Authn none() {
+            return new Authn(Optional.empty(), null);
+        }
+    }
+
+    private void handleUi(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
+            throws ServletException, IOException {
+        if (!operatorJwtEnabled) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+        if (jwtVerifier == null || jwtProperties == null) {
+            redirectToLogin(request, response);
+            return;
+        }
+        Optional<ApiKeyPrincipal> fromCookie = jwtVerifier.verify(cookieValue(request, OPERATOR_COOKIE));
+        if (fromCookie.isPresent()) {
+            ApiKeyAuthContext.set(request, fromCookie.get());
+            filterChain.doFilter(request, response);
+            return;
+        }
+        redirectToLogin(request, response);
+    }
+
+    private void redirectToLogin(HttpServletRequest request, HttpServletResponse response) throws IOException {
+        String state = newState();
+        ResponseCookie stateCookie = ResponseCookie.from(LOGIN_STATE_COOKIE, state)
+                .httpOnly(true)
+                .path("/")
+                .sameSite("Lax")
+                .maxAge(300)
+                .secure(request.isSecure())
+                .build();
+        response.addHeader(HttpHeaders.SET_COOKIE, stateCookie.toString());
+        String callback = publicOrigin(request) + "/ui/callback";
+        String login = jwtProperties.getLoginUrl()
+                + "?return_uri="
+                + URLEncoder.encode(callback, StandardCharsets.UTF_8)
+                + "&state="
+                + URLEncoder.encode(state, StandardCharsets.UTF_8);
+        response.setStatus(HttpServletResponse.SC_FOUND);
+        response.setHeader(HttpHeaders.LOCATION, login);
+    }
+
+    static String publicOrigin(HttpServletRequest request) {
+        String proto = header(request, "X-Forwarded-Proto");
+        String host = header(request, "X-Forwarded-Host");
+        if (host.isBlank()) {
+            host = request.getHeader(HttpHeaders.HOST);
+        }
+        if (host == null || host.isBlank()) {
+            host = "127.0.0.1:" + request.getServerPort();
+        }
+        String scheme = proto.isBlank() ? request.getScheme() : proto;
+        return scheme + "://" + host;
+    }
+
+    private String newState() {
+        byte[] raw = new byte[24];
+        random.nextBytes(raw);
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
+    }
+
+    private static boolean isUiPath(String path) {
+        return path != null && path.startsWith("/ui");
+    }
+
+    private static boolean isApiKey(String token) {
+        return token != null && token.startsWith("vrb_tk_");
+    }
+
+    private ApiKeyPrincipal toPrincipal(TenantApiCredential credential) {
+        return new ApiKeyPrincipal(
+                credential.credentialId(), credential.tenantId(), credential.role(), credential.label());
+    }
+
+    static String extractBearer(HttpServletRequest request) {
         String authorization = request.getHeader(HttpHeaders.AUTHORIZATION);
         if (authorization != null && authorization.startsWith("Bearer ")) {
             return authorization.substring("Bearer ".length()).trim();
         }
-        String apiKey = request.getHeader("X-Virbius-Api-Key");
-        return apiKey != null ? apiKey.trim() : "";
+        return "";
+    }
+
+    static String extractToken(HttpServletRequest request) {
+        String bearer = extractBearer(request);
+        if (!bearer.isBlank()) {
+            return bearer;
+        }
+        return header(request, "X-Virbius-Api-Key");
+    }
+
+    public static String cookieValue(HttpServletRequest request, String name) {
+        Cookie[] cookies = request.getCookies();
+        if (cookies == null) {
+            return "";
+        }
+        for (Cookie c : cookies) {
+            if (name.equals(c.getName()) && c.getValue() != null) {
+                return c.getValue();
+            }
+        }
+        return "";
+    }
+
+    private static String header(HttpServletRequest request, String name) {
+        String v = request.getHeader(name);
+        return v == null ? "" : v.trim();
     }
 
     private void reject(
-            HttpServletRequest request,
-            HttpServletResponse response,
-            int status,
-            String error,
-            String message)
+            HttpServletRequest request, HttpServletResponse response, int status, String error, String message)
             throws IOException {
         if (isDeliveryPath(request.getRequestURI())) {
             writePlainError(response, status, error, message);
@@ -130,12 +301,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     }
 
     private static boolean isDeliveryPath(String path) {
-        return path != null
-                && (path.startsWith("/api/v1/edge/") || path.startsWith("/api/v1/gateway/"));
-    }
-
-    private static boolean isEdgePath(String path) {
-        return isDeliveryPath(path);
+        return path != null && (path.startsWith("/api/v1/edge/") || path.startsWith("/api/v1/gateway/"));
     }
 
     private void writePlainError(HttpServletResponse response, int status, String error, String message)

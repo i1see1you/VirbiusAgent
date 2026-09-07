@@ -56,6 +56,11 @@
   {% for k,v in pwned.items() %}<div class="win">{{ k }}: {{ v }}</div>{% else %}<p class="spin">暂无</p>{% endfor %}
 </div>
 
+<h2>🔬 对话检查器 <span class="insp-sub">聊天框之外 · 每轮完整提交 prompt 与模型原始返回</span></h2>
+<div class="panel"><div class="inspector" id="inspector">
+  <p class="spin insp-ph">发送后，这里显示每轮发给模型的完整 prompt 与原始返回</p>
+</div></div>
+
 <hr class="prot-divider">
 <details class="prot-guide" open>
   <summary>🛡 接入 VirbiusAgent 防护说明 <span class="insp-sub">漏洞 → 能力 → 配置 → 生效</span></summary>
@@ -76,14 +81,14 @@
 
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
-    <p style="margin:2px 0">记忆工具走 interceptor（demo 启动时把离线 manifest 写到 proxy 的 ./data/edge/default/edge-manifest.json）：</p>
+    <p style="margin:2px 0">启动已写入租户 memory。记忆工具走 interceptor（demo 启动时把离线 manifest 写到 proxy 的 ./data/edge/memory/edge-manifest.json）：</p>
     <p style="margin:2px 0">· sdk_config.memory_interceptor_enabled = true</p>
     <p style="margin:2px 0">· memory_detect_injection_on_write = true，memory_detect_injection_on_read = true</p>
     <p style="margin:2px 0">· memory_filter_on_read = true（命中则包 &lt;untrusted_data&gt;）</p>
     <p style="margin:2px 0">· 写工具参数字段必须叫 content；正文须 ≥ 128 字符才会打 /v1/memory/check</p>
     <p style="margin:2px 0">可选 Groovy 第二闸（你在运营台手写）：</p>
     <p style="margin:2px 0">· layer = cloud，runtime = groovy，intent_action = deny</p>
-    <p style="margin:2px 0">· bind_scope = service，app_ids = ["demo-app"]，rollout_state = full</p>
+    <p style="margin:2px 0">· bind_scope = service，app_ids = ["memory-app"]（租户 memory），rollout_state = full</p>
     <p style="margin:2px 0">· Groovy：tool_name==send_email 且 args.to 不是内部域则 return true</p>
     <p style="margin:2px 0">· License JWT 的 allowed_tools 若不是空（通配），必须包含 get_calendar / save_memory / search_memory / send_email，否则端层预检会提前拦</p>
   </div>
@@ -195,6 +200,9 @@ send.onclick = async ()=>{
       if(r.turns!=null) document.getElementById('turns').textContent = r.turns;
       renderState(r.state);
       renderChecks(r.memory_check);
+      const dbg=r.debug;
+      if(Array.isArray(dbg)) dbg.forEach(d=>appendInspector(d));
+      else if(dbg) appendInspector(dbg);
     }
   }catch(e){ wait.remove(); addMsg(chat,'blocked','网络错误'); }
   finally{ send.disabled=false; msg.focus(); }
@@ -209,6 +217,7 @@ document.getElementById('newchat').onclick = async ()=>{
   chat.innerHTML='<div class="msg sys">聊天已清空，长期记忆仍有 '+n+' 条。可以问「下午有会吗？」</div>';
   renderState(r.state);
   renderChecks([]);
+  clearInspector();
 };
 
 document.getElementById('wipe').onclick = async ()=>{
@@ -220,6 +229,7 @@ document.getElementById('wipe').onclick = async ()=>{
   chat.innerHTML='<div class="msg sys">长期记忆、假邮箱已清空，日历邀请已恢复。可从第 1 步重打。</div>';
   renderState(r.state);
   renderChecks([]);
+  clearInspector();
 };
 msg.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send.click();}});
 </script>

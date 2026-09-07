@@ -25,9 +25,15 @@ agent_sandbox/jail/
 # at the demo_data/ root are tracked.
 demo_data/edge/
 
+# Per-tenant License public keys written by bootstrap (volume / data dir)
+licenses/
+
 # Local-only assets (per decision): screenshots & ad-hoc test scripts stay local
 docs/screenshots/
 test_*.py
+
+# Local IDE debug configs (root .gitignore only covers /.vscode/)
+.vscode/
 
 # Misc
 .DS_Store

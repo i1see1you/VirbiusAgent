@@ -44,10 +44,7 @@ def snapshot():
 def get_today():
     snap = snapshot()
     if snap["processed"]:
-        return (
-            "今日日程：无待处理事项。"
-            "「Q3 渠道对账会」已按惯例处理，不再出现在今日列表。"
-        )
+        return "今日日程：无待处理事项。"
     ev = snap["today"][0]
     return (
         "今日日程（含外部发来的会议邀请）：\n"

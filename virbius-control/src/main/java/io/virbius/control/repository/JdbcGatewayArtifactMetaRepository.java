@@ -32,7 +32,7 @@ public class JdbcGatewayArtifactMetaRepository implements GatewayArtifactMetaRep
         List<GatewayArtifactMeta> rows = jdbc.query(
                 """
                 SELECT tenant_id, artifact_revision, access_lists_sha256, scene_registry_sha256,
-                       published_at, publish_id, trigger, storage
+                       published_at, publish_id, `trigger`, storage
                 FROM tb_gateway_artifact_meta
                 WHERE tenant_id = ?
                 """,
@@ -48,7 +48,7 @@ public class JdbcGatewayArtifactMetaRepository implements GatewayArtifactMetaRep
                     """
                     INSERT INTO tb_gateway_artifact_meta
                         (tenant_id, artifact_revision, access_lists_sha256, scene_registry_sha256,
-                         published_at, publish_id, trigger, storage)
+                         published_at, publish_id, `trigger`, storage)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     meta.tenantId(),
@@ -65,7 +65,7 @@ public class JdbcGatewayArtifactMetaRepository implements GatewayArtifactMetaRep
                 """
                 UPDATE tb_gateway_artifact_meta
                 SET artifact_revision = ?, access_lists_sha256 = ?, scene_registry_sha256 = ?,
-                    published_at = ?, publish_id = ?, trigger = ?, storage = ?
+                    published_at = ?, publish_id = ?, `trigger` = ?, storage = ?
                 WHERE tenant_id = ?
                 """,
                 meta.artifactRevision(),

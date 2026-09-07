@@ -30,6 +30,7 @@ export async function adminFetch<T = any>(url: string, opts: AdminOpts = {}): Pr
   const res = await fetch(url, {
     method: opts.method,
     body: opts.body,
+    credentials: 'same-origin',
     headers: authHeaders(opts.headers, isFormData)
   });
   const j = await res.json();
@@ -56,6 +57,7 @@ export async function rawJson<T = any>(url: string, opts: AdminOpts = {}): Promi
   const res = await fetch(url, {
     method: opts.method,
     body: opts.body,
+    credentials: 'same-origin',
     headers: authHeaders(opts.headers)
   });
   return (await res.json()) as T;

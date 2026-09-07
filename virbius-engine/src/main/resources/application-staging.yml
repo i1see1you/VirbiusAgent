@@ -9,6 +9,6 @@ virbius:
 
 audit:
   publish:
-    backend: redis-stream
-    redis:
-      stream-key: virbius:audit:events
+    backend: kafka
+    kafka:
+      topic: virbius-audit-events

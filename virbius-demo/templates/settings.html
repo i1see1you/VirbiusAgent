@@ -7,20 +7,47 @@
 <!-- 平台接入 -->
 <div class="panel">
   <h2 style="margin-top:0">平台接入 <span class="insp-sub">virbius-agent 接入参数</span></h2>
+  <p class="fnote" style="margin-top:0">每个环境各存一套 License。点 Tab 即生效；「+」新增。第一次连某台才会向那台签发。</p>
+  <div class="tabs" id="profile-tabs"></div>
+
+  <div class="field">
+    <label for="profile_label">环境名称</label>
+    <input type="text" id="profile_label" placeholder="例如 本地平台 / 云端">
+  </div>
   <div class="field">
     <label for="control_url">Control 地址</label>
-    <input type="text" id="control_url" value="{{ conf.VIRBIUS_CONTROL_URL }}" placeholder="http://host.docker.internal:8080">
-    <p class="fnote">virbius-agent 控制平面地址，端层防护从这里拉取规则。</p>
+    <input type="text" id="control_url" value="{{ conf.VIRBIUS_CONTROL_URL }}" placeholder="https://control.example.com">
+    <p class="fnote">不要带 /ui。</p>
   </div>
   <div class="field">
     <label for="engine_url">Engine 地址</label>
-    <input type="text" id="engine_url" value="{{ conf.VIRBIUS_ENGINE_URL }}" placeholder="http://host.docker.internal:8082">
-    <p class="fnote">virbius-agent 引擎地址，Agent 工具授权链路使用。</p>
+    <input type="text" id="engine_url" value="{{ conf.VIRBIUS_ENGINE_URL }}" placeholder="https://engine.example.com">
+    <p class="fnote">range 首页不是 Engine。</p>
   </div>
-  <div class="field">
-    <label for="license">License</label>
-    <input type="password" id="license" value="{{ conf.VIRBIUS_LICENSE_JWT }}" placeholder="JWT（选填，未配置时走 fail-open 兜底）">
-    <p class="fnote">control 为租户/应用签发的接入凭证，未配置时 demo 仍可用（最小权限兜底）。</p>
+  <div class="row" style="margin-top:4px">
+    <button type="button" id="profile-save-btn">保存此环境</button>
+    <button type="button" class="ghost" id="profile-delete-btn">删除此环境</button>
+  </div>
+
+  <div id="license-block">
+    <div class="field">
+      <label for="license-lab">License 关卡</label>
+      <select id="license-lab">
+        {% for lab in license_labs %}
+        <option value="{{ lab.id }}">{{ lab.label }} · 租户 {{ lab.tenant_id }}</option>
+        {% endfor %}
+      </select>
+      <p class="fnote">每个环境各存一套票。新 Tab 填好地址后可直接签发，未保存会先落盘再出票。</p>
+    </div>
+    <div class="field">
+      <label for="license">本关 License JWT</label>
+      <input type="password" id="license" value="" placeholder="JWT（选填，未签发时走 fail-open 兜底）">
+      <p class="fnote" id="license-status">选一个关卡查看签发状态。</p>
+    </div>
+    <div class="row" style="margin-top:4px">
+      <button type="button" class="ghost" id="reissue-btn">签发本关</button>
+      <button type="button" id="reissue-all-btn">签发全部关卡</button>
+    </div>
   </div>
 </div>
 
@@ -62,7 +89,19 @@
 
 {% block script %}
 <script>
-// 根据模型 id 反查其 provider（来自 option 的 data-prov）
+const LICENSES = {{ licenses|tojson }};
+let PROFILES = {{ control_profiles|tojson }};
+let viewing = '';
+let draft = false;
+
+function hint(text){
+  const el = document.getElementById('save-hint');
+  el.textContent = text || '';
+}
+function currentUrl(){
+  const p = PROFILES.find(x => x.current);
+  return p ? p.control_url : (document.getElementById('control_url').value || '').replace(/\/$/, '');
+}
 function provForModel(id){
   const opt = document.querySelector('#model-config-select option[value="'+id+'"]');
   return opt ? (opt.dataset.prov || 'deepseek') : 'deepseek';
@@ -73,9 +112,91 @@ function showForm(prov){
   });
   window.__curProv = prov;
 }
+function showLicense(labId){
+  const rec = LICENSES[labId] || {};
+  document.getElementById('license').value = rec.jwt || '';
+  const issued = rec.issued ? '已签发' : '未签发';
+  document.getElementById('license-status').textContent =
+    '租户 ' + (rec.tenant_id || '') + ' · app ' + (rec.app_id || '') + ' · ' + issued +
+    (rec.issued ? (' · 工具 ' + rec.tool_count + ' 个') : '') +
+    '。这张票必须是当前生效这台 Control、该租户下签发的。';
+  window.__curLab = labId;
+}
+function fillForm(p){
+  const rec = p || {};
+  document.getElementById('profile_label').value = rec.label || '';
+  document.getElementById('control_url').value = rec.control_url || '';
+  document.getElementById('engine_url').value = rec.engine_url || '';
+}
+function renderTabs(){
+  const box = document.getElementById('profile-tabs');
+  box.innerHTML = '';
+  PROFILES.forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tab' + ((p.current && !draft) ? ' active' : '');
+    btn.textContent = p.label || p.control_url;
+    if (p.current){
+      const mark = document.createElement('span');
+      mark.className = 'on';
+      mark.textContent = '生效';
+      btn.appendChild(mark);
+    }
+    btn.onclick = () => activateProfile(p);
+    box.appendChild(btn);
+  });
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'tab tab-add' + (draft ? ' active' : '');
+  add.textContent = '+';
+  add.title = '新增接入环境';
+  add.onclick = () => startDraft();
+  box.appendChild(add);
+  document.getElementById('license-block').hidden = false;
+  document.getElementById('profile-delete-btn').hidden = draft || PROFILES.length < 2;
+  if (draft){
+    document.getElementById('license-status').textContent =
+      '新环境还没落盘。填好 Control / Engine 后可直接签发或粘贴 JWT，会先保存再出票。';
+  }
+}
+function startDraft(){
+  draft = true;
+  viewing = '';
+  fillForm({label:'', control_url:'', engine_url:''});
+  renderTabs();
+  hint('填写名称和地址。License 就在下面，保存或签发时会一起落盘。');
+}
+async function activateProfile(p){
+  draft = false;
+  viewing = p.control_url;
+  fillForm(p);
+  if (p.current){
+    renderTabs();
+    showLicense(window.__curLab || document.getElementById('license-lab').value);
+    return;
+  }
+  hint('切换中…');
+  const r = await postJSON('/api/settings/profile', {
+    action: 'activate',
+    control_url: p.control_url,
+    engine_url: p.engine_url || '',
+  });
+  applySettingsPayload(r);
+  hint(r.ok ? '✅ 已生效：' + p.label : ('❌ '+(r.error||'切换失败')));
+  setTimeout(()=>hint(''), 2500);
+}
+function applySettingsPayload(r){
+  if (r.licenses) Object.assign(LICENSES, r.licenses);
+  if (r.control_profiles) PROFILES = r.control_profiles;
+  const cur = PROFILES.find(x => x.current);
+  draft = false;
+  viewing = cur ? cur.control_url : viewing;
+  if (cur) fillForm(cur);
+  renderTabs();
+  showLicense(window.__curLab || document.getElementById('license-lab').value);
+}
 document.addEventListener('DOMContentLoaded', ()=>{
   const sel = document.getElementById('model-config-select');
-  // URL 指定 provider（未配置跳转带参）：先把下拉框定位到该 provider 的第一个模型，保证一致
   const provFromUrl = new URLSearchParams(location.search).get('provider');
   if(provFromUrl && ['deepseek','local'].includes(provFromUrl)){
     const first = document.querySelector('#model-config-select option[data-prov="'+provFromUrl+'"]');
@@ -83,21 +204,99 @@ document.addEventListener('DOMContentLoaded', ()=>{
   }
   showForm(provForModel(sel.value));
   sel.addEventListener('change', ()=> showForm(provForModel(sel.value)));
+  const labSel = document.getElementById('license-lab');
+  showLicense(labSel.value);
+  labSel.addEventListener('change', ()=> showLicense(labSel.value));
+  const cur = PROFILES.find(x => x.current) || PROFILES[0];
+  viewing = cur ? cur.control_url : '';
+  if (cur) fillForm(cur);
+  renderTabs();
   document.getElementById('back-btn').onclick = ()=> history.back();
-  document.getElementById('save-btn').onclick = async ()=>{
-    const hint = document.getElementById('save-hint');
-    hint.textContent = '保存中…';
-    const body = {
+  async function saveProfile(){
+    const r = await postJSON('/api/settings/profile', {
+      action: 'upsert',
+      label: document.getElementById('profile_label').value,
       control_url: document.getElementById('control_url').value,
       engine_url: document.getElementById('engine_url').value,
-      license: document.getElementById('license').value,
+      previous_url: draft ? '' : viewing,
+      activate: true,
+    });
+    applySettingsPayload(r);
+    return r;
+  }
+  document.getElementById('profile-save-btn').onclick = async ()=>{
+    hint('保存中…');
+    const r = await saveProfile();
+    hint(r.ok ? '✅ 已保存并生效，下面可以签发 License' : ('❌ '+(r.error||'保存失败')));
+    setTimeout(()=>hint(''), 3000);
+  };
+  document.getElementById('profile-delete-btn').onclick = async ()=>{
+    const url = viewing || currentUrl();
+    if (!url) return;
+    if (!confirm('删除这个接入环境？本地存的票也会丢掉。')) return;
+    hint('删除中…');
+    const r = await postJSON('/api/settings/profile', {action:'delete', control_url: url});
+    applySettingsPayload(r);
+    hint(r.ok ? '✅ 已删除' : ('❌ '+(r.error||'删除失败')));
+    setTimeout(()=>hint(''), 2500);
+  };
+  document.getElementById('save-btn').onclick = async ()=>{
+    hint('保存中…');
+    const r1 = await saveProfile();
+    if (!r1.ok){
+      hint('❌ '+(r1.error||'保存环境失败'));
+      setTimeout(()=>hint(''), 2500);
+      return;
+    }
+    const body = {
       provider: window.__curProv,
+      lab: window.__curLab,
+      license: document.getElementById('license').value,
     };
     if(window.__curProv==='deepseek') body.deepseek_key = document.getElementById('deepseek_key').value;
     if(window.__curProv==='local') body.ollama_url = document.getElementById('ollama_url').value;
     const r = await postJSON('/api/settings', body);
-    hint.textContent = r.ok ? '✅ 已保存' : ('❌ '+(r.error||'保存失败'));
-    setTimeout(()=>{ hint.textContent=''; }, 2500);
+    applySettingsPayload(r);
+    hint(r.ok ? '✅ 已保存' : ('❌ '+(r.error||'保存失败')));
+    setTimeout(()=>hint(''), 2500);
+  };
+  async function ensureProfileSaved(){
+    const url = (document.getElementById('control_url').value || '').replace(/\/$/, '');
+    if (!url){
+      hint('❌ 先填 Control 地址');
+      return null;
+    }
+    if (!draft) return {ok: true};
+    hint('先保存此环境…');
+    const r = await saveProfile();
+    if (!r.ok){
+      hint('❌ '+(r.error||'保存环境失败'));
+      return null;
+    }
+    return r;
+  }
+  document.getElementById('reissue-btn').onclick = async ()=>{
+    if (!await ensureProfileSaved()) return;
+    hint('签发中…');
+    const r = await postJSON('/api/settings/reissue', {lab: window.__curLab});
+    applySettingsPayload(r);
+    hint(r.ok ? '✅ 已签发本关' : ('❌ '+(r.error||'签发失败')));
+    setTimeout(()=>hint(''), 3500);
+  };
+  document.getElementById('reissue-all-btn').onclick = async ()=>{
+    if (!await ensureProfileSaved()) return;
+    const labs = [...document.querySelectorAll('#license-lab option')].map(o => o.value).filter(Boolean);
+    hint('签发全部关卡…');
+    for (const lab of labs){
+      const r = await postJSON('/api/settings/reissue', {lab});
+      applySettingsPayload(r);
+      if (!r.ok){
+        hint('❌ '+lab+'：'+(r.error||'签发失败'));
+        return;
+      }
+    }
+    hint('✅ 已签发全部 '+labs.length+' 关');
+    setTimeout(()=>hint(''), 3500);
   };
 });
 </script>

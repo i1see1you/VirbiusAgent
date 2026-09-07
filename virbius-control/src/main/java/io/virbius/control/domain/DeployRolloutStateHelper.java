@@ -16,7 +16,10 @@ public final class DeployRolloutStateHelper {
             return;
         }
         Set<DeployRolloutState> allowed = switch (from) {
-            case PENDING -> Set.of(DeployRolloutState.CANARY, DeployRolloutState.ROLLED_BACK);
+            case PENDING -> Set.of(
+                    DeployRolloutState.CANARY,
+                    DeployRolloutState.FULL,
+                    DeployRolloutState.ROLLED_BACK);
             case CANARY -> Set.of(
                     DeployRolloutState.CANARY,
                     DeployRolloutState.PAUSED,

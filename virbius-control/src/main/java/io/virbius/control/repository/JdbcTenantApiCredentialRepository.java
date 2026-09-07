@@ -47,7 +47,7 @@ public class JdbcTenantApiCredentialRepository implements TenantApiCredentialRep
     public Optional<TenantApiCredential> findActiveByKeyHash(String keyHash) {
         List<TenantApiCredential> rows = jdbc.query(
                 """
-                SELECT credential_id, tenant_id, role, key_hash, key_prefix, label, status,
+                SELECT credential_id, tenant_id, `role`, key_hash, key_prefix, label, status,
                        created_by, created_at, revoked_at, last_used_at
                 FROM tb_tenant_api_credential
                 WHERE key_hash = ? AND status = ?
@@ -62,7 +62,7 @@ public class JdbcTenantApiCredentialRepository implements TenantApiCredentialRep
     public List<TenantApiCredential> listByTenant(String tenantId) {
         return jdbc.query(
                 """
-                SELECT credential_id, tenant_id, role, key_hash, key_prefix, label, status,
+                SELECT credential_id, tenant_id, `role`, key_hash, key_prefix, label, status,
                        created_by, created_at, revoked_at, last_used_at
                 FROM tb_tenant_api_credential
                 WHERE tenant_id = ?
@@ -82,7 +82,7 @@ public class JdbcTenantApiCredentialRepository implements TenantApiCredentialRep
         jdbc.update(
                 """
                 INSERT INTO tb_tenant_api_credential
-                    (credential_id, tenant_id, role, key_hash, key_prefix, label, status,
+                    (credential_id, tenant_id, `role`, key_hash, key_prefix, label, status,
                      created_by, created_at, revoked_at, last_used_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,

@@ -15,7 +15,7 @@
 - Control/engine `SPRING_PROFILES_ACTIVE=prod`
 - Ingress: four hosts, no path prefixes; class `nginx`
 - Secrets never committed; `values-prod.yaml` gitignored
-- Do not install nginx-ingress, Higress, Falco, or Ollama
+- Do not install nginx-ingress, Higress, or Falco
 - Do not rewrite demo `mcpproxy_client.py` from stdio to TCP
 - Root Dockerfile proxy stage must COPY the binary
 - SSE server bind host from `VIRBIUS_SSE_BIND` (default `127.0.0.1`)

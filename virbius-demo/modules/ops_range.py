@@ -154,6 +154,7 @@ def run():
         "bootstrap": bootstrap_control.status(),
         "tickets": tickets.public_tickets(),
         "seed_count": SEED_COUNT,
+        "debug": result.get("debug") or [],
     })
 
 
@@ -180,6 +181,7 @@ def resume():
         "bootstrap": bootstrap_control.status(),
         "tickets": tickets.public_tickets(),
         "seed_count": SEED_COUNT,
+        "debug": result.get("debug") or [],
     })
 
 

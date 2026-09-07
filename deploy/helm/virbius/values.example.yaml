@@ -28,8 +28,29 @@ ingress:
 
 engine:
   promptLlm:
-    baseUrl: ""   # e.g. http://ollama.example.com:11434
+    baseUrl: ""   # empty + ollama.enabled → in-cluster Ollama; required if ollama.enabled=false
     model: virbiusguard
+  grpc:
+    port: 50051
+
+mysql:
+  enabled: true
+  # jdbcUrl: jdbc:mariadb://mysql.example:3306/virbius?...   # required if enabled=false
+
+redis:
+  enabled: true
+  # url: redis://redis.example:6379   # required if enabled=false
+
+kafka:
+  enabled: true
+  # bootstrapServers: kafka.example:9092   # required if enabled=false
+
+ollama:
+  enabled: true
+  # China: set ggufUrl to the ModelScope resolve URL for virbiusguard-v13-q4_k_m.gguf
+  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/virbiusguard-v13-q4_k_m.gguf
+  gpu:
+    enabled: false
 
 secrets:
   existingSecret: ""

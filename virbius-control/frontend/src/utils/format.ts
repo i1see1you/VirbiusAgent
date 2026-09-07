@@ -86,19 +86,25 @@ export function listEntryValue(e: any): string {
 }
 
 export function formatBindScope(scope: any): string {
+  const t = i18n.global.t;
   const s = scope || {};
   const bs = s.bind_scope || 'global';
   const ref = s.bind_ref || {};
+  const name = (key: string) => {
+    const k = 'rules.bind.' + key;
+    const label = t(k);
+    return label === k ? key : String(label);
+  };
   if (bs === 'tool') {
     const tools = Array.isArray(ref.tool_names) ? ref.tool_names.join(', ') : '';
     const ids = Array.isArray(ref.app_ids) ? ref.app_ids.join(', ') : '';
-    return (tools || ids) ? `tool:${tools || '*'}` + (ids ? ` [${ids}]` : '') : 'tool';
+    return (tools || ids) ? `${name('tool')}:${tools || '*'}` + (ids ? ` [${ids}]` : '') : name('tool');
   }
   if (bs === 'service') {
     const ids = Array.isArray(ref.app_ids) ? ref.app_ids.join(', ') : '';
-    return ids ? `service:${ids}` : 'service';
+    return ids ? `${name('service')}:${ids}` : name('service');
   }
-  return 'global';
+  return name('global');
 }
 
 export function ruleStatusTagClass(st: string): string {

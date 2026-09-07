@@ -132,7 +132,9 @@ public class RolloutAdminController {
                         body.allowForce(),
                         body.rollbackBlockSpikeRatio() > 0 ? body.rollbackBlockSpikeRatio() : 3.0,
                         body.edgeAuditSampleRateAllow() > 0 ? body.edgeAuditSampleRateAllow() : 0.1,
-                        body.maxConcurrentRollouts() > 0 ? body.maxConcurrentRollouts() : 10);
+                        body.maxConcurrentRollouts() > 0
+                                ? body.maxConcurrentRollouts()
+                                : TenantRolloutPolicy.DEFAULT_MAX_CONCURRENT_ROLLOUTS);
         return ApiResult.ok(policyRepository.save(merged));
     }
 

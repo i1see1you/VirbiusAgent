@@ -73,6 +73,33 @@ ensure_redis() {
   tail -20 "$LOG_DIR/redis.log" 2>/dev/null || true; return 1
 }
 
+ensure_kafka() {
+  export KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
+  if (echo >/dev/tcp/127.0.0.1/9092) >/dev/null 2>&1; then
+    ok "Kafka already running on port 9092"; return 0
+  fi
+  if command -v docker >/dev/null 2>&1 && [[ -f "$ROOT/docker-compose.infra.yml" ]]; then
+    info "Starting Kafka (docker-compose.infra.yml)..."
+    docker compose -p virbius-infra -f "$ROOT/docker-compose.infra.yml" up -d --wait kafka
+    return 0
+  fi
+  info "Kafka not detected on 9092; audit/trace ingest will retry until a broker is available"
+}
+
+ensure_ollama() {
+  export VIRBIUS_PROMPT_LLM_BASE_URL="${VIRBIUS_PROMPT_LLM_BASE_URL:-http://127.0.0.1:11434}"
+  if curl -sf --noproxy '*' "$VIRBIUS_PROMPT_LLM_BASE_URL/api/tags" >/dev/null 2>&1; then
+    ok "Ollama already running at $VIRBIUS_PROMPT_LLM_BASE_URL"; return 0
+  fi
+  if command -v docker >/dev/null 2>&1 && [[ -f "$ROOT/docker-compose.infra.yml" ]]; then
+    info "Starting Ollama + VirbiusGuard (docker-compose.infra.yml, first run downloads ~484MB)..."
+    docker compose -p virbius-infra -f "$ROOT/docker-compose.infra.yml" up -d --wait ollama ollama-download ollama-init
+    return 0
+  fi
+  info "Ollama not detected; prompt LLM calls will fail until $VIRBIUS_PROMPT_LLM_BASE_URL is up"
+}
+
+
 # ─── Pre-flight checks ───
 info "===== VirbiusAgent Local Dev ====="
 echo "  Root:       $ROOT"
@@ -153,10 +180,14 @@ fi
 # ─── Step 5: Start services ───
 for p in 8080 8082; do kill_port "$p"; done
 ensure_redis
+ensure_kafka
+ensure_ollama
+ensure_ollama
 
 if command -v java >/dev/null 2>&1 && [[ -f virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar ]]; then
   info "Starting virbius-control (port 8080)..."
   nohup env VIRBIUS_DATA_DIR="$VIRBIUS_DATA_DIR" VIRBIUS_REDIS_URL="$VIRBIUS_REDIS_URL" \
+    KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
     java -jar "$ROOT/virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar" \
     >"$LOG_DIR/control.log" 2>&1 &
@@ -166,6 +197,7 @@ fi
 if command -v java >/dev/null 2>&1 && [[ -f virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar ]]; then
   info "Starting virbius-engine (port 8082)..."
   nohup env VIRBIUS_DATA_DIR="$VIRBIUS_DATA_DIR" VIRBIUS_REDIS_URL="$VIRBIUS_REDIS_URL" \
+    KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
     java -jar "$ROOT/virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar" \
     >"$LOG_DIR/engine.log" 2>&1 &
@@ -180,6 +212,7 @@ echo "  virbius-kernel  $(cargo metadata --format-version 1 --no-deps 2>/dev/nul
 echo "  virbius-control http://127.0.0.1:8080"
 echo "  virbius-engine  http://127.0.0.1:8082"
 echo "  Redis           $VIRBIUS_REDIS_URL"
+echo "  Kafka           ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
 echo "  Logs:           $LOG_DIR"
 echo ""
 echo "  Quick test:"

@@ -351,7 +351,7 @@ INSERT INTO tb_tenant_rollout_policy (
     min_block_samples_per_step, allow_force, rollback_block_spike_ratio,
     edge_audit_sample_rate_allow, max_concurrent_rollouts
 )
-SELECT 'default', 'assisted', '[5,20,50,100]', 1, 100, 0.05, 2.0, 12, 10, 1, 3.0, 0.1, 10
+SELECT 'default', 'assisted', '[5,20,50,100]', 1, 100, 0.05, 2.0, 12, 10, 1, 3.0, 0.1, 20
 FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_tenant_rollout_policy WHERE tenant_id = 'default');
 

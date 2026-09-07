@@ -92,9 +92,7 @@ public class AuditEventIngestor {
     }
 
     public Map<String, Object> ingestPayloadJson(String payload) throws Exception {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> event = mapper.readValue(payload, Map.class);
-        IngestResult r = ingestEvent(event);
+        IngestResult r = ingestPayload(payload);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("status", r.status());
         if (r.message() != null) {
@@ -106,7 +104,26 @@ public class AuditEventIngestor {
     public IngestResult ingestPayload(String payload) throws Exception {
         @SuppressWarnings("unchecked")
         Map<String, Object> event = mapper.readValue(payload, Map.class);
-        return ingestEvent(event);
+        return ingestEvent(unwrapIfWrapped(event));
+    }
+
+    /**
+     * Engine {@code AuditWriter} publishes {@code {"payload": "<event-json>"}}.
+     * Ingest the inner event so tenant_id / trace_id are visible.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> unwrapIfWrapped(Map<String, Object> event) throws Exception {
+        if (event.containsKey("tenant_id") || event.containsKey("trace_id")) {
+            return event;
+        }
+        Object inner = event.get("payload");
+        if (inner instanceof String s && !s.isBlank()) {
+            return mapper.readValue(s, Map.class);
+        }
+        if (inner instanceof Map<?, ?> m) {
+            return (Map<String, Object>) m;
+        }
+        return event;
     }
 
     public Long countForStatus(String sql, Object... args) {

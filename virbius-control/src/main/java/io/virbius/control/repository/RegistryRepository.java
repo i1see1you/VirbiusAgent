@@ -40,5 +40,7 @@ public interface RegistryRepository {
 
     int countByRolloutStates(String tenantId, List<String> rolloutStates, String excludeRuleId);
 
+    boolean hasOccupiedConcurrentSlot(String tenantId, String ruleId);
+
     Optional<RuleRevision> getCurrentRule(String tenantId, String ruleId);
 }

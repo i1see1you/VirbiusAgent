@@ -21,7 +21,7 @@ public class PolicyRedisConfig {
             throw new IllegalStateException("Redis is required for virbius-engine: virbius.redis.url must be set");
         }
         log.info("Creating JedisPool for redisUrl={}", redisUrl);
-        return new JedisPool(redisUrl);
+        return CounterStore.createPoolOrThrow(redisUrl);
     }
 
     @Bean

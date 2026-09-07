@@ -1,7 +1,11 @@
 <template>
   <div class="v-card">
     <h2 class="v-card-title">{{ t('trace.title') }}</h2>
-    <p class="v-hint" v-html="t('trace.desc')"></p>
+    <p class="v-hint">{{ t('trace.desc-short') }}</p>
+    <details class="v-hint-more">
+      <summary>{{ t('common.learn-more') }}</summary>
+      <p class="v-hint" v-html="t('trace.desc')"></p>
+    </details>
 
     <div class="v-row">
       <el-input v-model="toolName" :placeholder="t('trace.placeholder-tool')" style="width:160px" />
@@ -21,10 +25,9 @@
       </el-select>
       <el-input-number v-model="limit" :min="1" :max="500" style="width:120px" />
       <el-button type="primary" @click="search">{{ t('trace.btn-search') }}</el-button>
-      <el-button @click="search">{{ t('trace.btn-refresh') }}</el-button>
     </div>
 
-    <el-table :data="paginatedResults" size="small" border stripe style="margin-bottom:24px" @row-click="onRowClick">
+    <el-table :data="paginatedResults" size="small" border stripe style="margin-bottom:24px" @row-click="onRowClick" :empty-text="t('trace.empty')">
       <el-table-column :label="t('trace.header-trace-id')" prop="trace_id" show-overflow-tooltip>
         <template #default="{ row }">{{ row.trace_id || '-' }}</template>
       </el-table-column>
@@ -93,17 +96,6 @@
         <div v-if="i < g.steps.length - 1" style="text-align:center;color:#cbd5e1">↓</div>
       </div>
     </div>
-
-    <div class="v-section">
-      <h3>{{ t('trace.ingest-title') }}</h3>
-      <div class="kpi-grid">
-        <div class="kpi-card"><div class="label">启用</div><div class="value">{{ ingest.enabled ? '✅ 是' : '❌ 否' }}</div></div>
-        <div class="kpi-card"><div class="label">Redis</div><div class="value">{{ ingest.redis_ok ? '✅ 已连接' : '❌ 未连接' }}</div></div>
-        <div class="kpi-card"><div class="label">Stream</div><div class="value" style="font-size:13px">{{ ingest.stream_key || '-' }}</div></div>
-        <div class="kpi-card"><div class="label">记录数</div><div class="value">{{ ingest.stream_length ?? '-' }}</div></div>
-        <div class="kpi-card"><div class="label">最近轮询</div><div class="value" style="font-size:12px">{{ ingest.last_poll_at ? fmtTime(ingest.last_poll_at) : '-' }}</div></div>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -132,7 +124,6 @@ function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
 const paginatedResults = computed(() => results.value.slice((page.value - 1) * size.value, page.value * size.value));
 const timeline = ref<any[]>([]);
 const timelineSession = ref('');
-const ingest = ref<any>({});
 
 const groupedTimeline = computed(() => {
   const m: Record<string, any[]> = {};
@@ -167,10 +158,6 @@ async function onRowClick(row: any) {
   } catch (e: any) { feedback.log(e.message, 'err'); }
 }
 
-async function loadIngest() {
-  try { ingest.value = await admin<any>('/trace/ingest-status') || {}; } catch { /* ignore */ }
-}
-
-onMounted(() => { search(); loadIngest(); });
-watch(() => session.tenant, () => { search(); loadIngest(); });
+onMounted(() => { search(); });
+watch(() => session.tenant, () => { search(); });
 </script>

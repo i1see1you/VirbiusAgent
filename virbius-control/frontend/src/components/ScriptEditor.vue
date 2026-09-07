@@ -231,6 +231,9 @@ defineExpose({
   focus() {
     viewRef.value?.focus();
   },
+  refresh() {
+    viewRef.value?.requestMeasure();
+  },
   getView(): EditorView | null {
     return viewRef.value;
   }

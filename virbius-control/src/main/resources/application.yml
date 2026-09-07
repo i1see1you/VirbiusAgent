@@ -18,8 +18,25 @@ spring:
     multipart:
       max-file-size: ${VIRBIUS_UPLOAD_MAX_FILE_SIZE:20MB}    # 与引擎 virbius.file.max-bytes (20MB) 对齐
       max-request-size: ${VIRBIUS_UPLOAD_MAX_REQUEST_SIZE:25MB}
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: virbius-audit-ingest
+      auto-offset-reset: earliest
+    listener:
+      missing-topics-fatal: false
 
 virbius:
+  security:
+    api-key:
+      enabled: ${VIRBIUS_API_KEY_ENABLED:false}
+    operator-jwt:
+      enabled: ${VIRBIUS_OPERATOR_JWT_ENABLED:false}
+      jwks-url: ${VIRBIUS_AUTH_JWKS_URL:http://127.0.0.1:8082/.well-known/jwks.json}
+      issuer: ${VIRBIUS_AUTH_ISSUER:http://127.0.0.1:8082}
+      audience: virbius-control
+      login-url: ${VIRBIUS_AUTH_LOGIN_URL:http://127.0.0.1:8082/login}
+      token-url: ${VIRBIUS_AUTH_TOKEN_URL:http://127.0.0.1:8082/oauth/token}
   data-dir: ${VIRBIUS_DATA_DIR:./data}
   redis:
     url: ${VIRBIUS_REDIS_URL:redis://127.0.0.1:6379}
@@ -61,13 +78,25 @@ audit:
     queue-max: 2000
     flush-batch-size: 64
     flush-interval-ms: 100
+    backend: kafka
+    kafka:
+      topic: virbius-audit-events
   ingest:
+    enabled: true
+    backend: kafka
+    kafka:
+      topic: virbius-audit-events
     poll-ms: 1000
     batch-size: 256
     consumer-group: virbius-audit-ingest
 
 trace:
   ingest:
+    enabled: true
+    backend: kafka
+    kafka:
+      topic: virbius-trace-events
+      group-id: virbius-trace-ingest
     poll-ms: 1000
     batch-size: 256
     consumer-group: virbius-trace-ingest

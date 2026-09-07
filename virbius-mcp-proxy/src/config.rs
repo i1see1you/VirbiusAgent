@@ -313,6 +313,20 @@ impl ProxyConfig {
         if let Ok(v) = std::env::var("VIRBIUS_TRACE_KAFKA_TOPIC") {
             cfg.trace.kafka_topic = v;
         }
+        if let Ok(v) = std::env::var("KAFKA_BOOTSTRAP_SERVERS") {
+            if cfg.audit.kafka_brokers.is_empty() {
+                cfg.audit.kafka_brokers = v.clone();
+            }
+            if cfg.trace.kafka_brokers.is_empty() {
+                cfg.trace.kafka_brokers = v;
+            }
+        }
+        if cfg.audit.backend.is_empty() && !cfg.audit.kafka_brokers.is_empty() {
+            cfg.audit.backend = "kafka".to_string();
+        }
+        if cfg.trace.backend.is_empty() && !cfg.trace.kafka_brokers.is_empty() {
+            cfg.trace.backend = "kafka".to_string();
+        }
         if let Ok(v) = std::env::var("VIRBIUS_TRANSPORT") {
             cfg.proxy.listen = v;
         }

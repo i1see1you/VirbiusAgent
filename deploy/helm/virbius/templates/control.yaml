@@ -50,9 +50,15 @@ spec:
         runAsUser: 999
         runAsGroup: 999
       initContainers:
+        {{- if .Values.mysql.enabled }}
         {{- include "virbius.waitFor" (dict "root" . "name" "mysql" "host" (printf "%s-mysql" (include "virbius.fullname" .)) "port" 3306) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.redis.enabled }}
         {{- include "virbius.waitFor" (dict "root" . "name" "redis" "host" (printf "%s-redis" (include "virbius.fullname" .)) "port" 6379) | nindent 8 }}
+        {{- end }}
+        {{- if .Values.kafka.enabled }}
         {{- include "virbius.waitFor" (dict "root" . "name" "kafka" "host" (printf "%s-kafka" (include "virbius.fullname" .)) "port" 9092) | nindent 8 }}
+        {{- end }}
         {{- include "virbius.waitFor" (dict "root" . "name" "engine" "host" (printf "%s-engine" (include "virbius.fullname" .)) "port" 8082) | nindent 8 }}
       containers:
         - name: control
@@ -66,7 +72,7 @@ spec:
             - name: SERVER_PORT
               value: "8080"
             - name: VIRBIUS_JDBC_URL
-              value: jdbc:mariadb://{{ include "virbius.fullname" . }}-mysql:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+              value: {{ include "virbius.jdbcUrl" . | quote }}
             - name: VIRBIUS_JDBC_USER
               value: virbius
             - name: VIRBIUS_JDBC_PASSWORD
@@ -75,9 +81,9 @@ spec:
                   name: {{ include "virbius.secretName" . }}
                   key: mysql-password
             - name: KAFKA_BOOTSTRAP_SERVERS
-              value: {{ include "virbius.fullname" . }}-kafka:9092
+              value: {{ include "virbius.kafkaBootstrap" . | quote }}
             - name: VIRBIUS_REDIS_URL
-              value: redis://{{ include "virbius.fullname" . }}-redis:6379
+              value: {{ include "virbius.redisUrl" . | quote }}
             - name: VIRBIUS_ENGINE_URL
               value: http://{{ include "virbius.fullname" . }}-engine:8082
             - name: VIRBIUS_LICENSE_MASTER_KEY

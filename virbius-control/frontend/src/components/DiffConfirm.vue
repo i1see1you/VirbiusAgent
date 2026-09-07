@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" :title="t('rules.diff-title')" width="800px" :close-on-click-modal="false">
+  <el-dialog v-model="visible" :title="t('rules.diff-title')" width="800px" :close-on-click-modal="false" :z-index="4300">
     <div class="diff-container">
       <div v-if="!hasChanges" class="diff-no-changes">
         {{ t('rules.diff-no-changes') }}

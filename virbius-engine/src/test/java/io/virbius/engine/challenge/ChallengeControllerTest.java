@@ -139,7 +139,7 @@ class ChallengeControllerTest {
         when(challengeService.listChallenges("default", "pending", 50))
                 .thenReturn(challenges);
 
-        ResponseEntity<List<Map<String, Object>>> resp = controller.listChallenges("default", "pending", 50);
+        ResponseEntity<List<Map<String, Object>>> resp = controller.listChallenges("default", null, "pending", 50);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals(2, resp.getBody().size());
@@ -150,7 +150,7 @@ class ChallengeControllerTest {
         when(challengeService.listChallenges("default", null, 50))
                 .thenReturn(List.of());
 
-        ResponseEntity<List<Map<String, Object>>> resp = controller.listChallenges("default", null, 50);
+        ResponseEntity<List<Map<String, Object>>> resp = controller.listChallenges("default", null, null, 50);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
     }

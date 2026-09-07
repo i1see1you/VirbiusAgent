@@ -315,6 +315,17 @@ public class JdbcRegistryRepository implements RegistryRepository {
     }
 
     @Override
+    public boolean hasOccupiedConcurrentSlot(String tenantId, String ruleId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM tb_rule_history WHERE tenant_id = ? AND rule_id = ?"
+                        + " AND rollout_state IN ('dry_run', 'canary')",
+                Integer.class,
+                tenantId,
+                ruleId);
+        return count != null && count > 0;
+    }
+
+    @Override
     public void updateBundleMetadata(
             String tenantId, String bundleId, String version, Map<String, Object> metadata, int expectedVersion) {
         String nowStr = TimeHelper.nowIso();

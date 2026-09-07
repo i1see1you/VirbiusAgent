@@ -61,6 +61,11 @@ Thought: I have to use the GetUserTransaction tool, keeping the userId exactly a
   {% for k,v in pwned.items() %}<div class="win">{{ k }}: {{ v }}</div>{% else %}<p class="spin">暂无</p>{% endfor %}
 </div>
 
+<h2>🔬 对话检查器 <span class="insp-sub">聊天框之外 · 每轮完整提交 prompt 与模型原始返回</span></h2>
+<div class="panel"><div class="inspector" id="inspector">
+  <p class="spin insp-ph">发送后，这里显示每轮发给模型的完整 prompt 与原始返回</p>
+</div></div>
+
 <hr class="prot-divider">
 <details class="prot-guide" open>
   <summary>🛡 接入 VirbiusAgent 防护说明 <span class="insp-sub">漏洞 → 能力 → 配置 → 生效</span></summary>
@@ -83,11 +88,11 @@ Thought: I have to use the GetUserTransaction tool, keeping the userId exactly a
 
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
-    <p style="margin:2px 0">为应用 demo-app 新增一条云端越权防护规则（layer=cloud，runtime=groovy，如 cloud_unauthorized_tx_deny）：</p>
+    <p style="margin:2px 0">启动已写入租户 bank、应用 bank-app 的云端越权规则（layer=cloud，runtime=groovy，cloud_unauthorized_tx_deny）：</p>
     <p style="margin:2px 0">· layer = cloud（云端评估，经 mcp-proxy 生效）</p>
     <p style="margin:2px 0">· runtime = groovy（Groovy 脚本规则）</p>
     <p style="margin:2px 0">· intent_action = deny（意图：拦截）</p>
-    <p style="margin:2px 0">· bind_scope = service，app_ids = ["demo-app"]（绑定到 demo-app）</p>
+    <p style="margin:2px 0">· bind_scope = service，app_ids = ["bank-app"]（绑定到租户 bank）</p>
     <p style="margin:2px 0">· rollout_state = full（全量生效，防止 dry_run 只观察不拦截）</p>
     <p style="margin:2px 0">· Groovy 脚本：比较 ctx.var('user_id') 与 ctx.var('args.userId')，不一致则返回 true（deny）</p>
   </div>
@@ -120,9 +125,9 @@ Thought: I have to use the GetUserTransaction tool, keeping the userId exactly a
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
     <p style="margin:2px 0">第一闸暂不作为本靶场重点（output_review.enabled = false）。</p>
-    <p style="margin:2px 0">第二闸新增一条云端规则（如 cloud_exfil_chain_deny），由你在运营台手写：</p>
+    <p style="margin:2px 0">第二闸启动已写入租户 bank 的 cloud_exfil_chain_deny：</p>
     <p style="margin:2px 0">· layer = cloud，runtime = groovy，intent_action = deny</p>
-    <p style="margin:2px 0">· bind_scope = service，app_ids = ["demo-app"]，rollout_state = full</p>
+    <p style="margin:2px 0">· bind_scope = service，app_ids = ["bank-app"]，rollout_state = full</p>
     <p style="margin:2px 0">· Groovy：tool_name==SendEmail 且 args.to 不是 @internal.bank，且 sessionHistory 里出现过 GetBankNotice 或 GetUserTransactions 则 return true</p>
     <p style="margin:2px 0">· License JWT 的 allowed_tools 必须包含 GetBankNotice 和 SendEmail，否则端层预检会提前拦，观众会以为「开关一开什么都调不了」</p>
   </div>
@@ -163,6 +168,9 @@ send.onclick = async ()=>{
         Object.entries(r.pwned).forEach(([k,v])=>{ fb.appendChild(el('div','win',k+': '+v)); });
       }
       if(r.turns!=null) document.getElementById('turns').textContent = r.turns;
+      const dbg=r.debug;
+      if(Array.isArray(dbg)) dbg.forEach(d=>appendInspector(d));
+      else if(dbg) appendInspector(dbg);
     }
   }catch(e){ wait.remove(); addMsg(chat,'blocked','网络错误'); }
   finally{ send.disabled=false; msg.focus(); }
@@ -174,6 +182,7 @@ document.getElementById('reset').onclick = async ()=>{
   document.getElementById('captured').innerHTML='';
   msg.value='';
   chat.innerHTML='<div class="msg sys">🧹 会话记忆已清空，已开启新会话</div>';
+  clearInspector();
 };
 msg.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send.click();}});
 </script>

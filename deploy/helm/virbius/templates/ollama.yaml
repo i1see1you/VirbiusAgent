@@ -1,0 +1,168 @@
+{{- if .Values.ollama.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "virbius.fullname" . }}-ollama-import
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+data:
+  download-gguf.sh: |
+{{ .Files.Get "files/download-gguf.sh" | indent 4 }}
+  import-model.sh: |
+{{ .Files.Get "files/import-model.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "virbius.fullname" . }}-ollama
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 11434
+      targetPort: http
+  selector:
+    {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "ollama") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "virbius.fullname" . }}-ollama
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  serviceName: {{ include "virbius.fullname" . }}-ollama
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "ollama") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "ollama") | nindent 8 }}
+    spec:
+      {{- include "virbius.imagePullSecrets" . | nindent 6 }}
+      {{- if .Values.ollama.gpu.enabled }}
+      runtimeClassName: {{ .Values.ollama.gpu.runtimeClassName | default "nvidia" | quote }}
+      {{- end }}
+      containers:
+        - name: ollama
+          image: {{ .Values.ollama.image | quote }}
+          ports:
+            - name: http
+              containerPort: 11434
+          env:
+            - name: OLLAMA_HOST
+              value: 0.0.0.0:11434
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            requests:
+              {{- toYaml .Values.ollama.resources.requests | nindent 14 }}
+            limits:
+              {{- toYaml .Values.ollama.resources.limits | nindent 14 }}
+              {{- if .Values.ollama.gpu.enabled }}
+              nvidia.com/gpu: {{ .Values.ollama.gpu.count | default 1 }}
+              {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /root/.ollama
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.ollama.persistence.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "virbius.fullname" . }}-ollama-import
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.ollama.persistence.importSize | default "2Gi" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "virbius.fullname" . }}-ollama-import-{{ .Release.Revision }}
+  labels:
+    {{- include "virbius.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "ollama-import") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      {{- include "virbius.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        - name: download-gguf
+          image: {{ .Values.ollama.curlImage | quote }}
+          securityContext:
+            runAsUser: 0
+          env:
+            - name: VIRBIUS_GUARD_GGUF_URL
+              value: {{ .Values.ollama.ggufUrl | quote }}
+            - name: VIRBIUS_GUARD_GGUF_PATH
+              value: /models/model.gguf
+          command: ["sh", "/scripts/download-gguf.sh"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: models
+              mountPath: /models
+      containers:
+        - name: import
+          image: {{ .Values.ollama.image | quote }}
+          env:
+            - name: OLLAMA_HOST
+              value: http://{{ include "virbius.fullname" . }}-ollama:11434
+            - name: VIRBIUS_OLLAMA_MODEL
+              value: {{ .Values.ollama.model | quote }}
+            - name: VIRBIUS_GUARD_GGUF_PATH
+              value: /models/model.gguf
+          command: ["sh", "/scripts/import-model.sh"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: models
+              mountPath: /models
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "virbius.fullname" . }}-ollama-import
+            defaultMode: 0755
+        - name: models
+          persistentVolumeClaim:
+            claimName: {{ include "virbius.fullname" . }}-ollama-import
+{{- end }}

@@ -27,7 +27,7 @@ public class MonitorService {
             m.put("total_hits", row.totalHits());
             m.put("block", row.block());
             m.put("review", row.review());
-            m.put("captcha", row.captcha());
+            m.put("challenge", row.captcha());
             m.put("allow", row.allow());
             m.put("total_requests", row.totalRequests());
             if (row.totalRequests() > 0) {

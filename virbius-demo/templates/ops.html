@@ -65,6 +65,11 @@
   {% for k,v in pwned.items() %}<div class="win">{{ k }}: {{ v }}</div>{% else %}<p class="spin">暂无</p>{% endfor %}
 </div>
 
+<h2>🔬 对话检查器 <span class="insp-sub">聊天框之外 · 每轮完整提交 prompt 与模型原始返回</span></h2>
+<div class="panel"><div class="inspector" id="inspector">
+  <p class="spin insp-ph">发送后，这里显示每轮发给模型的完整 prompt 与原始返回</p>
+</div></div>
+
 <hr class="prot-divider">
 <details class="prot-guide" open>
   <summary>🛡 接入 VirbiusAgent 防护说明 <span class="insp-sub">漏洞 → 能力 → 配置 → 生效</span></summary>
@@ -87,7 +92,7 @@
 
   <div class="pg-sec">
     <h3 style="margin:10px 0 4px">3. 在 virbius-control 上如何配置</h3>
-    <p style="margin:2px 0">本靶场启动时已经写好。下面按运营台字段说明，方便对照。高危工具必须配成 <b>challenge（等人批）</b>。配成 deny 会直接拦死，看不到审批队列。</p>
+    <p style="margin:2px 0">启动已写入租户 ops。下面按运营台字段说明，方便对照。高危工具必须配成 <b>challenge（等人批）</b>。配成 deny 会直接拦死，看不到审批队列。</p>
     <p style="margin:2px 0">先登记工具（名字用小写加下划线）：</p>
     <p style="margin:2px 0">· list_incidents / query_customers / get_service_health：risk_class = low，approval_mode = lax（只读，不用批）</p>
     <p style="margin:2px 0">· drop_production_table / execute_production_sql / send_vendor_webhook：risk_class = high，approval_mode = strict，fast_path = false（高危，要走审批）</p>
@@ -96,7 +101,7 @@
     <p style="margin:2px 0">· runtime = groovy</p>
     <p style="margin:2px 0">· intent_action = challenge（必须是 challenge，不要填 deny）</p>
     <p style="margin:2px 0">· bind_scope = tool（按工具名绑定，不要绑成整份服务）</p>
-    <p style="margin:2px 0">· tool_names = 上面三个高危名，app_ids = ["demo-app"]</p>
+    <p style="margin:2px 0">· tool_names = 上面三个高危名，app_ids = ["ops-app"]（租户 ops）</p>
     <p style="margin:2px 0">· rollout_state = full（必须推到全量；停在试运行等于没配）</p>
     <p style="margin:2px 0">· Groovy：工具名是这三个之一就 return true，命中后按 challenge 送审批</p>
     <p style="margin:2px 0">· License 的 allowed_tools 要包含这 6 个工具名，少一个端上会先拦</p>
@@ -208,6 +213,9 @@ send.onclick=async ()=>{
           r.captured.map(x=>'<div class="win">🏁 攻破 flag: '+x+'</div>').join('');
       }
       applyResult(r);
+      const dbg=r.debug;
+      if(Array.isArray(dbg)) dbg.forEach(d=>appendInspector(d));
+      else if(dbg) appendInspector(dbg);
     }
   }catch(e){ wait.remove(); addMsg(chat,'blocked','网络错误'); }
   finally{ send.disabled=false; msg.focus(); }
@@ -232,6 +240,9 @@ document.getElementById('resume').onclick=async ()=>{
           r.captured.map(x=>'<div class="win">🏁 攻破 flag: '+x+'</div>').join('');
       }
       applyResult(r);
+      const dbg=r.debug;
+      if(Array.isArray(dbg)) dbg.forEach(d=>appendInspector(d));
+      else if(dbg) appendInspector(dbg);
     }
   }catch(e){ wait.remove(); addMsg(chat,'blocked','网络错误'); }
   finally{ send.disabled=false; }
@@ -244,6 +255,7 @@ document.getElementById('restore').onclick=async ()=>{
   msg.value='';
   chat.innerHTML='<div class="msg sys">生产副本已恢复为 '+((r.customer_count!=null)?r.customer_count:1196)+' 行。已夺取的 flag 已清空，可再打。</div>';
   applyResult(r);
+  clearInspector();
 };
 msg.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send.click();}});
 </script>

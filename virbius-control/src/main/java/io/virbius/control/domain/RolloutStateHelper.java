@@ -17,6 +17,18 @@ public final class RolloutStateHelper {
         return "dry_run".equals(rolloutState) || "canary".equals(rolloutState);
     }
 
+    /**
+     * Concurrent-slot check is only for newly entering dry_run.
+     * dry_run → canary stays in the same slot. Re-publish after disable
+     * does not consume a new slot if the rule already occupied one.
+     */
+    public static boolean shouldEnforceConcurrentLimit(String from, String to, boolean alreadyOccupiedSlot) {
+        if (!"draft".equals(from) || !"dry_run".equals(to)) {
+            return false;
+        }
+        return !alreadyOccupiedSlot;
+    }
+
     public static boolean inExecutionPlane(RuleRevision rule) {
         return inExecutionPlane(stateOf(rule));
     }
