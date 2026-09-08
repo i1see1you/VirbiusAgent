@@ -1,5 +1,6 @@
 package io.virbius.control.service.deploy;
 
+import io.virbius.control.domain.RolloutStateHelper;
 import io.virbius.control.domain.RuleRevision;
 import io.virbius.control.repository.RegistryRepository;
 import java.util.List;
@@ -19,7 +20,11 @@ public class FalcoConfigBuilder {
     }
 
     public String buildRulesYaml(String tenantId) {
-        List<RuleRevision> rules = ruleRepo.listCurrentRules(tenantId, "falco");
+        // Execution-plane filter, aligned with the other layer builders: draft/disabled rules
+        // must never reach the device.
+        List<RuleRevision> rules = ruleRepo.listCurrentRules(tenantId, "falco").stream()
+                .filter(RolloutStateHelper::inExecutionPlane)
+                .toList();
         StringBuilder sb = new StringBuilder();
         sb.append("# Virbius Falco rules (auto-generated)\n\n");
 

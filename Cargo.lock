@@ -2286,6 +2286,7 @@ dependencies = [
 name = "virbius-kernel"
 version = "0.1.0"
 dependencies = [
+ "crc32c",
  "libc",
  "redis",
  "serde",

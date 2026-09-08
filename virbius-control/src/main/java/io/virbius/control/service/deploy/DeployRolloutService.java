@@ -163,7 +163,9 @@ public class DeployRolloutService {
                 canaryEdgeRev = canaryPaths.isEmpty() ? 0L : 1L;
             }
 
-            long stableFalcoRev = 0L;
+            long stableFalcoRev = doFalco
+                    ? artifactWriter.currentFalcoStableRevision(tenantId)
+                    : 0L;
             long canaryFalcoRev = doFalco
                     ? artifactWriter.writeFalcoCanary(tenantId, "prepare")
                     : stableFalcoRev;

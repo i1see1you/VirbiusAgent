@@ -17,9 +17,9 @@
                 <span class="sync-dot" :class="st.has_unpublished ? 'warn' : 'ok'" aria-hidden="true"></span>
                 {{ layerLabels[layer] || layer }} · {{ st.has_unpublished ? t('rollout.sync-pending') : t('rollout.sync-ok') }}
               </div>
-              <div class="value" style="font-size:0.82rem">{{ deployStatusText(st) }}</div>
+              <div class="value" style="font-size:0.82rem" :class="{ 'pending-link': pendingClickable(st) }" @click="openPending(String(layer), st)">{{ deployStatusText(st) }}</div>
               <div style="font-size:0.72rem;color:#94a3b8">{{ st.deployed_at ? fmtTimeAgo(st.deployed_at) : '-' }}</div>
-              <div v-if="st.has_unpublished && st.pending_rules?.length" style="font-size:0.72rem;color:#64748b;margin-top:2px">
+              <div v-if="st.has_unpublished && st.pending_rules?.length" class="pending-link" style="font-size:0.72rem;color:#64748b;margin-top:2px" @click="openPending(String(layer), st)">
                 <template v-for="(ids, grp) in groupPending(st.pending_rules)" :key="grp">
                   <span style="font-size:0.68rem;color:#64748b;margin-right:0.25rem">[{{ pendingLabel(grp) }}]</span>
                   <code style="font-size:0.7rem" v-for="id in ids.slice(0,2)" :key="id">{{ id }}</code>
@@ -266,6 +266,25 @@
       </el-table>
       <template #footer><el-button @click="traceModalVisible = false">{{ t('rollout.btn-close') }}</el-button></template>
     </el-dialog>
+
+    <el-dialog v-model="pendingModalVisible" :title="pendingModalTitle" width="680px">
+      <el-table :data="pendingRows" size="small" border stripe max-height="420">
+        <el-table-column :label="t('rollout.header-rule')" prop="rule_id" min-width="170" />
+        <el-table-column :label="t('rollout.header-status')" width="130">
+          <template #default="{ row }">{{ stateLabel(row.rollout_state, row.canary_percent) }}</template>
+        </el-table-column>
+        <el-table-column :label="t('rollout.header-layer')" width="90">
+          <template #default="{ row }">{{ row.layer || '-' }}</template>
+        </el-table-column>
+        <el-table-column :label="t('rules.header-runtime')" width="110">
+          <template #default="{ row }">{{ row.runtime || '-' }}</template>
+        </el-table-column>
+        <el-table-column :label="t('rules.header-reason')" min-width="120">
+          <template #default="{ row }">{{ row.reason_code || '-' }}</template>
+        </el-table-column>
+      </el-table>
+      <template #footer><el-button @click="pendingModalVisible = false">{{ t('rollout.btn-close') }}</el-button></template>
+    </el-dialog>
   </div>
 </template>
 
@@ -321,6 +340,9 @@ const combinedData = ref<any>(null);
 const traceModalVisible = ref(false);
 const traceHint = ref('');
 const traceRows = ref<any[]>([]);
+const pendingModalVisible = ref(false);
+const pendingLayer = ref('');
+const pendingRows = ref<any[]>([]);
 const deployStatus = ref<any>({});
 const drChartData = ref<any>(null);
 const layerLabels: Record<string, string> = { cloud: 'cloud', gateway: 'gateway', edge: 'edge' };
@@ -526,6 +548,25 @@ function groupPending(rules: any[]) {
 function pendingLabel(g: string) {
   const mapped = stateName(g);
   return mapped === g ? g : mapped;
+}
+
+// Pending-rules modal: data comes from deploy_status.{layer}.pending_rules (already loaded
+// with the dashboard), enriched client-side from allRules — no extra API calls.
+const pendingModalTitle = computed(() =>
+  t('rollout.pending-modal-title', [layerLabels[pendingLayer.value] || pendingLayer.value, pendingRows.value.length])
+);
+function pendingClickable(st: any) {
+  return !!st?.has_unpublished && (st?.pending_rules?.length || 0) > 0;
+}
+function openPending(layer: string, st: any) {
+  if (!pendingClickable(st)) return;
+  const byId = new Map(allRules.value.map((r: any) => [r.rule_id, r]));
+  pendingRows.value = (st.pending_rules || []).map((p: any) => {
+    const full: any = byId.get(p.rule_id) || {};
+    return { ...p, layer: full.layer || layer, runtime: full.runtime || '', reason_code: full.reason_code || '' };
+  });
+  pendingLayer.value = layer;
+  pendingModalVisible.value = true;
 }
 
 function flowClass(step: string) {
@@ -942,3 +983,13 @@ watch(() => route.query.tab, (tab) => {
 });
 watch(autoRefresh, (on) => { if (on) startTimer(); else if (timer) { clearInterval(timer); timer = null; } });
 </script>
+
+<style scoped>
+.pending-link {
+  cursor: pointer;
+}
+.pending-link:hover {
+  color: #2563eb !important;
+  text-decoration: underline;
+}
+</style>

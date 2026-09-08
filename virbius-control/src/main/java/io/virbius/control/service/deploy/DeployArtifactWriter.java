@@ -79,6 +79,11 @@ public class DeployArtifactWriter {
         }
     }
 
+    /** Stable revision currently recorded on the falco pointer (0 when none promoted yet). */
+    public long currentFalcoStableRevision(String tenantId) {
+        return falcoStore.getStableRevision(tenantId);
+    }
+
     public long writeFalcoCanary(String tenantId, String deployId) {
         try {
             String rulesYaml = falcoConfigBuilder.buildRulesYaml(tenantId);
@@ -100,6 +105,7 @@ public class DeployArtifactWriter {
                     .orElseThrow(() -> new IllegalStateException("falco canary artifact not found: " + canaryRevision));
             falcoStore.putSnapshot(tenantId, canaryRevision, rulesYaml);
             falcoStore.updatePointer(tenantId, canaryRevision, 0);
+            falcoStore.pruneSnapshots(tenantId, falcoStore.retentionFloor(canaryRevision));
             falcoStore.publishRuleUpdate(tenantId, canaryRevision, "full");
             log.info("falco promoted to stable tenant={} revision={}", tenantId, canaryRevision);
         } catch (Exception ex) {
