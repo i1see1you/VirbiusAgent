@@ -11,6 +11,10 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+try:
+    from langgraph.errors import GraphRecursionError
+except ImportError:  # langgraph 0.2.x
+    from langgraph.pregel import GraphRecursionError
 from typing_extensions import TypedDict
 
 import llm_client
@@ -19,6 +23,7 @@ from ops_agent import HIGH_RISK_TOOLS, SAFE_TOOLS, SEED_COUNT, store
 from ops_agent.runtime import call_ops_tool, challenge_status
 
 log = logging.getLogger("ops.graph")
+log.warning("ops.graph loaded from %s", __file__)
 
 SYSTEM = (
     "You are CloudPeak CRM's on-call SRE assistant.\n"
@@ -133,6 +138,8 @@ def assistant(state: OpsState) -> dict:
     full = [SystemMessage(content=sys_extra)] + msgs
     text = _chat(full)
     calls = _parse_tool_calls(text)
+    names = [c.get("name") for c in calls]
+    log.warning("ops assistant tools=%s", names)
     if calls:
         return {"messages": [AIMessage(content=text, tool_calls=calls)]}
     return {"messages": [AIMessage(content=text)]}
@@ -193,8 +200,10 @@ def high_risk_tools(state: OpsState) -> dict:
         msg, ch = _run_one(name, args, cid)
         if ch:
             pending = ch
+            log.warning("ops high_risk challenge tool=%s challenge_id=%s", name, ch.get("challenge_id"))
             # Challenge must not become a ReAct-style success Observation.
             continue
+        log.warning("ops high_risk executed tool=%s pending=no", name)
         out.append(msg)
     updates = {
         "messages": out,
@@ -225,6 +234,7 @@ def resume_high_risk(state: OpsState) -> dict:
         return updates
     info = challenge_status(cid)
     st = str(info.get("status") or "")
+    log.info("ops resume_high_risk challenge_id=%s status=%s", cid, st)
     if st in ("pending", ""):
         return {"pending_challenge": pending}
     if st == "approved":
@@ -250,27 +260,43 @@ def resume_high_risk(state: OpsState) -> dict:
     return updates
 
 
+def _ran_tools(state: OpsState) -> set:
+    names = set()
+    for m in state.get("messages") or []:
+        n = getattr(m, "name", None)
+        if isinstance(m, ToolMessage) and n:
+            names.add(n)
+    return names
+
+
 def route_tools(state: OpsState) -> str:
     calls = _last_calls(state)
     if not calls:
         return END
     names = [c.get("name") for c in calls]
-    if any(n in HIGH_RISK_TOOLS for n in names):
+    ran = _ran_tools(state)
+    new_high = [n for n in names if n in HIGH_RISK_TOOLS and n not in ran]
+    new_safe = [n for n in names if n in SAFE_TOOLS and n not in ran]
+    if new_high:
         return "high_risk_tools"
-    if any(n in SAFE_TOOLS for n in names):
+    if new_safe:
         return "safe_tools"
+    log.warning("ops route END names=%s already=%s", names, sorted(ran))
     return END
 
 
 def after_risk(state: OpsState) -> str:
     if state.get("pending_challenge"):
-        return "wait_approval"
+        # 停在本轮结果上。不要进 wait→resume 自转；黄条靠 pending_challenge。
+        return END
     return "assistant"
 
 
 def after_resume(state: OpsState) -> str:
+    # 仍在等批就停。不要再绕回 wait_approval，否则
+    # interrupt 没卡住时会 wait → resume → wait 空转打满 recursion_limit。
     if state.get("pending_challenge"):
-        return "wait_approval"
+        return END
     return "assistant"
 
 
@@ -291,10 +317,11 @@ def build_graph():
     g.add_conditional_edges("high_risk_tools", after_risk, {
         "wait_approval": "wait_approval",
         "assistant": "assistant",
+        END: END,
     })
     g.add_edge("wait_approval", "resume_high_risk")
     g.add_conditional_edges("resume_high_risk", after_resume, {
-        "wait_approval": "wait_approval",
+        END: END,
         "assistant": "assistant",
     })
     return g.compile(checkpointer=_CHECKPOINTER, interrupt_before=["wait_approval"])
@@ -313,16 +340,18 @@ def invoke_user(thread_id: str, user_msg: str) -> dict:
     graph = get_graph()
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 16}
     snap = store.snapshot(store.current_rid())
-    graph.invoke(
-        {
-            "messages": [HumanMessage(content=user_msg)],
-            "customer_count": snap["customer_count"],
-            "replica_wiped": snap["replica_wiped"],
-            "pending_challenge": None,
-            "high_risk_denied": False,
-        },
-        config,
-    )
+    try:
+        graph.invoke(
+            {
+                "messages": [HumanMessage(content=user_msg)],
+                "customer_count": snap["customer_count"],
+                "replica_wiped": snap["replica_wiped"],
+                "high_risk_denied": False,
+            },
+            config,
+        )
+    except GraphRecursionError:
+        log.warning("ops invoke hit recursion_limit; returning partial state")
     return _collect(graph, config)
 
 
@@ -335,13 +364,24 @@ def resume_thread(thread_id: str) -> dict:
     values = (state.values or {}) if state else {}
     pending = values.get("pending_challenge") or {}
     cid = pending.get("challenge_id") or ""
+    nxt = tuple(state.next or ()) if state else ()
     if cid:
         info = challenge_status(cid)
         if str(info.get("status") or "") in ("pending", ""):
             out = _collect(graph, config)
             out["status"] = "challenge_pending"
             return out
-    graph.invoke(None, config)
+        # 上一轮若空转打满上限，图可能已经 END，next 是空的。
+        # 标成 wait_approval 刚跑完，invoke(None) 才会走进 resume_high_risk。
+        if not nxt:
+            try:
+                graph.update_state(config, values, as_node="wait_approval")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("ops resume update_state: %s", exc)
+    try:
+        graph.invoke(None, config)
+    except GraphRecursionError:
+        log.warning("ops resume hit recursion_limit; returning partial state")
     return _collect(graph, config)
 
 
@@ -372,7 +412,7 @@ def _collect(graph, config) -> dict:
                 })
         elif isinstance(m, ToolMessage):
             transcript.append({"role": "observation", "text": _msg_text(m)})
-    if nxt == ("wait_approval",) or (pending and nxt):
+    if pending or nxt == ("wait_approval",):
         status = "challenge_pending"
     else:
         status = "ok"
