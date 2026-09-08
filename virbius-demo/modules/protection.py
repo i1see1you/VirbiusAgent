@@ -23,7 +23,7 @@ from modules import settings
 _CONFIG_PATH = os.path.join(
     os.path.dirname(__file__), "..", "demo_data", "virbius.json",
 )
-_DEFAULT_CACHE = "demo_data/edge/owasp/owasp-app"
+_DEMO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 def _manifest_path():
     """当前 mode 下用于展示 matched_keywords 的 manifest 路径。"""
@@ -54,7 +54,15 @@ def _absolute_path(p):
     """把配置里的相对路径转成绝对路径（相对 demo 根目录）。"""
     if not p:
         return p
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", p))
+    if os.path.isabs(p):
+        return p
+    return os.path.abspath(os.path.join(_DEMO_ROOT, p))
+
+
+def _writable_root():
+    """端层缓存必须可写。容器走 VIRBIUS_CONFIG_DIR=/data（Helm uid 999）；本地走 demo 根目录。"""
+    env = (os.environ.get("VIRBIUS_CONFIG_DIR") or "").strip()
+    return env if env else _DEMO_ROOT
 
 
 def _edge_identity(mode_cfg):
@@ -64,13 +72,8 @@ def _edge_identity(mode_cfg):
     return tenant, app
 
 
-def _edge_cache_dir(mode, mode_cfg, tenant, app):
-    cache = mode_cfg.get("cache_dir") or _DEFAULT_CACHE
-    json_tenant = (mode_cfg.get("tenant_id") or "owasp").strip()
-    json_app = (mode_cfg.get("app_id") or "owasp-app").strip()
-    if tenant != json_tenant or app != json_app:
-        cache = "demo_data/edge/%s/%s/%s" % (mode, tenant, app)
-    return _absolute_path(cache)
+def _edge_cache_dir(mode, tenant, app):
+    return os.path.join(_writable_root(), "edge", mode, tenant, app)
 
 
 def _build_edge_config(mode_cfg):
@@ -80,18 +83,13 @@ def _build_edge_config(mode_cfg):
     result = {
         "tenant_id": tenant,
         "app_id": app,
-        "cache_dir": _edge_cache_dir(mode, mode_cfg, tenant, app),
+        "cache_dir": _edge_cache_dir(mode, tenant, app),
     }
     if mode_cfg.get("offline_manifest_path"):
-        offline = mode_cfg["offline_manifest_path"]
-        json_tenant = (mode_cfg.get("tenant_id") or "owasp").strip()
-        json_app = (mode_cfg.get("app_id") or "owasp-app").strip()
-        if tenant != json_tenant or app != json_app:
-            offline = "demo_data/edge/%s/%s/edge-manifest.json" % (tenant, app)
-        result["offline_manifest_path"] = _absolute_path(offline)
+        result["offline_manifest_path"] = _absolute_path(mode_cfg["offline_manifest_path"])
     if mode_cfg.get("control_base_url"):
         result["control_base_url"] = mode_cfg["control_base_url"]
-    # 运行期设置 / 环境变量里的 control 地址优先，覆盖 virbius.json（compose 注入或设置页配置）
+    # 设置页 / 运行期覆盖优先；未填才退回环境变量、再退回 virbius.json
     if settings.get("VIRBIUS_CONTROL_URL"):
         result["control_base_url"] = settings.get("VIRBIUS_CONTROL_URL")
     key = (settings.get("VIRBIUS_EDGE_API_KEY") or mode_cfg.get("edge_api_key") or "").strip()
