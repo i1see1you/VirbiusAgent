@@ -153,14 +153,19 @@ fn read_stable_revision(con: &mut redis::Connection, tenant_id: &str) -> redis::
         .arg(falco_pointer_key(tenant_id))
         .arg("stable_revision")
         .query(con)?;
-    Ok(raw.as_deref().map(|s| s.trim().parse().ok()).flatten().unwrap_or(0))
+    Ok(raw
+        .as_deref()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0))
 }
 
 fn read_deploy_pointer(
     con: &mut redis::Connection,
     tenant_id: &str,
 ) -> redis::RedisResult<HashMap<String, String>> {
-    redis::cmd("HGETALL").arg(deploy_pointer_key(tenant_id)).query(con)
+    redis::cmd("HGETALL")
+        .arg(deploy_pointer_key(tenant_id))
+        .query(con)
 }
 
 /// Extracts `tenant_id` from a notification payload. Fail-open (None) so malformed payloads
@@ -321,7 +326,7 @@ pub fn run_with(cfg: NodeConfig) {
                     }
                 };
                 // Ignore notifications for other tenants.
-                if message_tenant(&payload).map_or(true, |t| t == cfg.tenant_id) {
+                if message_tenant(&payload).is_none_or(|t| t == cfg.tenant_id) {
                     if let Err(e) = apply_current(&mut con, &cfg, &mut last_applied) {
                         eprintln!("config_subscriber: apply failed: {e}");
                     }
