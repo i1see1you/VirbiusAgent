@@ -495,6 +495,7 @@ export default {
   'rollout.trace-hint': 'Trace ID: {0}',
   'rollout.not-deployed': 'Not yet deployed',
   'rollout.not-deployed-count': 'Not yet deployed ({0} rules pending push)',
+  'rollout.pending-modal-title': '{0} · Not yet deployed ({1} rules pending push)',
   'rollout.pending-deploy': '{0} rules pending deploy',
   'rollout.synced': 'Synced, no pending changes',
   'rollout.status-deploy': 'Execution sync',

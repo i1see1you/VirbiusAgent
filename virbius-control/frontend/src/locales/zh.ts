@@ -495,6 +495,7 @@ export default {
   'rollout.trace-hint': '追踪 ID：{0}',
   'rollout.not-deployed': '尚未部署',
   'rollout.not-deployed-count': '尚未部署（{0} 条规则在线上未推送）',
+  'rollout.pending-modal-title': '{0} · 尚未部署（{1} 条规则在线上未推送）',
   'rollout.pending-deploy': '{0} 条规则待部署',
   'rollout.synced': '已同步，无待部署变更',
   'rollout.status-deploy': '执行面同步',
