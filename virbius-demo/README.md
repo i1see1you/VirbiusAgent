@@ -176,7 +176,7 @@ pip install --force-reinstall ../target/wheels/virbius_mcp_python-*.whl
 
 | active_mode | 规则来源 |
 |---|---|
-| `offline` | 直接读本地 `demo_data/edge/default/demo-app/edge-manifest.json` |
+| `offline` | 直接读本地 `demo_data/edge/owasp/owasp-app/edge-manifest.json` |
 | `control` | 从本地 virbius-control 的 Edge API 拉取（`control_base_url`）并缓存 |
 | `cloud` | 从云端 control 拉取（`control_base_url` 填云地址） |
 

@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""按关卡写入 Control：建租户、工具、本关 License + 公钥。
+"""Control 管理面对照实现：建租户、工具、本关 License + 公钥。
 
-不写规则、不改 rollout、不碰机器 canary。规则由运营台自行新建和放量。
-禁止 rotate-key。JSON 一律 snake_case。失败抛给调用方记 status。
+demo 启动和关卡页不再调用这些接口。租户 / 工具 / 票由运营台签发，
+demo 只把 JWT 粘进设置页。规则、rollout、rotate-key 同样不在这里做。
+JSON 一律 snake_case。
 """
 from __future__ import annotations
 

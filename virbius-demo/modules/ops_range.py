@@ -103,13 +103,6 @@ def _resume_graph() -> dict:
 
 @bp.route("/")
 def index():
-    from flask import current_app
-    if not current_app.config.get("TESTING"):
-        try:
-            if not bootstrap_control.status().get("ok"):
-                bootstrap_control.run()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("ops bootstrap on page: %s", exc)
     _ensure()
     return render_template("ops.html", state=_page_state(), pwned=session.get("ops_pwned") or {})
 

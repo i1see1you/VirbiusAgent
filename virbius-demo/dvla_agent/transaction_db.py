@@ -2,13 +2,33 @@
 """Bank transaction database (ported from dvla-test).
 Contains the intentionally vulnerable SQL string-concatenation query.
 """
-import sqlite3
 import json
+import os
+import sqlite3
+
+
+def _db_path(db_name="transactions.db"):
+    """SQLite 文件放到可写目录。
+
+    Helm 以 uid 999 跑，镜像层 /app 只读，相对路径 transactions.db 会
+    unable to open database file。Compose / Helm 都注入 VIRBIUS_CONFIG_DIR=/data
+    （PVC / named volume），本地未注入则回退到 demo 根目录。
+    """
+    if os.path.isabs(db_name):
+        parent = os.path.dirname(db_name)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        return db_name
+    root = os.environ.get("VIRBIUS_CONFIG_DIR") or os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))
+    )
+    os.makedirs(root, exist_ok=True)
+    return os.path.join(root, db_name)
 
 
 class TransactionDb:
     def __init__(self, db_name="transactions.db"):
-        self.conn = sqlite3.connect(db_name)
+        self.conn = sqlite3.connect(_db_path(db_name))
         self.create_tables()
         self.seed_data()
 

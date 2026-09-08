@@ -7,7 +7,7 @@
 <!-- 平台接入 -->
 <div class="panel">
   <h2 style="margin-top:0">平台接入 <span class="insp-sub">virbius-agent 接入参数</span></h2>
-  <p class="fnote" style="margin-top:0">每个环境各存一套 License。点 Tab 即生效；「+」新增。第一次连某台才会向那台签发。</p>
+  <p class="fnote" style="margin-top:0">每个环境各存一套 License。点 Tab 即生效；「+」新增。租户、工具和票在运营台签发，粘到下面。</p>
   <div class="tabs" id="profile-tabs"></div>
 
   <div class="field">
@@ -37,16 +37,29 @@
         <option value="{{ lab.id }}">{{ lab.label }} · 租户 {{ lab.tenant_id }}</option>
         {% endfor %}
       </select>
-      <p class="fnote">每个环境各存一套票。新 Tab 填好地址后可直接签发，未保存会先落盘再出票。</p>
+      <p class="fnote">每个环境各存一套票。到运营台 Agent Credentials 签发后，把 JWT 粘进来保存。</p>
     </div>
     <div class="field">
       <label for="license">本关 License JWT</label>
-      <input type="password" id="license" value="" placeholder="JWT（选填，未签发时走 fail-open 兜底）">
-      <p class="fnote" id="license-status">选一个关卡查看签发状态。</p>
+      <input type="password" id="license" value="" placeholder="JWT（选填，未配置时走 fail-open 兜底）">
+      <p class="fnote" id="license-status">选一个关卡查看是否已粘贴本关票。</p>
     </div>
-    <div class="row" style="margin-top:4px">
-      <button type="button" class="ghost" id="reissue-btn">签发本关</button>
-      <button type="button" id="reissue-all-btn">签发全部关卡</button>
+  </div>
+
+  <div id="edge-block">
+    <h2>端层租户 <span class="insp-sub">OWASP 主聊天 LLM01 / 02 / 04 / 07 拉规则</span></h2>
+    <div class="field">
+      <label for="edge_tenant_id">租户 ID</label>
+      <input type="text" id="edge_tenant_id" value="{{ edge.tenant_id }}" placeholder="owasp">
+    </div>
+    <div class="field">
+      <label for="edge_app_id">应用 ID</label>
+      <input type="text" id="edge_app_id" value="{{ edge.app_id }}" placeholder="owasp-app">
+    </div>
+    <div class="field">
+      <label for="edge_api_key">Edge API Key</label>
+      <input type="text" id="edge_api_key" value="{{ edge.key_prefix if edge.key_set else '' }}" placeholder="{{ '已保存，留空不改' if edge.key_set else 'vrb_tk_...' }}" autocomplete="off">
+      <p class="fnote" id="edge-status"></p>
     </div>
   </div>
 </div>
@@ -91,6 +104,7 @@
 <script>
 const LICENSES = {{ licenses|tojson }};
 let PROFILES = {{ control_profiles|tojson }};
+let EDGE = {{ edge|tojson }};
 let viewing = '';
 let draft = false;
 
@@ -128,6 +142,36 @@ function fillForm(p){
   document.getElementById('control_url').value = rec.control_url || '';
   document.getElementById('engine_url').value = rec.engine_url || '';
 }
+const EDGE_KEY_MASK = '••••••••••••';
+function showEdge(edge){
+  EDGE = edge || EDGE || {};
+  const tenant = document.getElementById('edge_tenant_id');
+  const app = document.getElementById('edge_app_id');
+  const key = document.getElementById('edge_api_key');
+  const status = document.getElementById('edge-status');
+  if (EDGE.tenant_id) tenant.value = EDGE.tenant_id;
+  if (EDGE.app_id) app.value = EDGE.app_id;
+  key.value = EDGE.key_set ? (EDGE.key_prefix || EDGE_KEY_MASK) : '';
+  key.placeholder = EDGE.key_set ? '已保存，留空不改' : 'vrb_tk_...';
+  if (EDGE.key_set){
+    status.textContent = '已保存 Key（' + (EDGE.key_prefix || 'vrb_tk_…') +
+      '）· 租户 ' + (EDGE.tenant_id || '') + ' · app ' + (EDGE.app_id || '') +
+      '。跟 License 一样跟当前环境走；框里圆点不是完整 Key，留空或圆点再保存不会覆盖。运营台「租户」→ 凭证 → tenant_viewer 签发。';
+  } else {
+    status.textContent = '还没有 Key。运营台左侧「租户」点 owasp 的「凭证」，角色 tenant_viewer，签发后粘到这里保存。CTF 仍走 default，不改这里。';
+  }
+}
+function edgePayload(){
+  const body = {
+    edge_tenant_id: document.getElementById('edge_tenant_id').value,
+    edge_app_id: document.getElementById('edge_app_id').value,
+  };
+  const key = (document.getElementById('edge_api_key').value || '').trim();
+  const prefix = (EDGE.key_prefix || '').trim();
+  const isMask = !key || key === EDGE_KEY_MASK || key === prefix || key.endsWith('…') || key.endsWith('...');
+  if (key && !isMask) body.edge_api_key = key;
+  return body;
+}
 function renderTabs(){
   const box = document.getElementById('profile-tabs');
   box.innerHTML = '';
@@ -152,11 +196,12 @@ function renderTabs(){
   add.title = '新增接入环境';
   add.onclick = () => startDraft();
   box.appendChild(add);
+  document.getElementById('edge-block').hidden = false;
   document.getElementById('license-block').hidden = false;
   document.getElementById('profile-delete-btn').hidden = draft || PROFILES.length < 2;
   if (draft){
     document.getElementById('license-status').textContent =
-      '新环境还没落盘。填好 Control / Engine 后可直接签发或粘贴 JWT，会先保存再出票。';
+      '新环境还没落盘。填好 Control / Engine 后保存，再把运营台签发的 JWT 粘进来。';
   }
 }
 function startDraft(){
@@ -164,7 +209,7 @@ function startDraft(){
   viewing = '';
   fillForm({label:'', control_url:'', engine_url:''});
   renderTabs();
-  hint('填写名称和地址。License 就在下面，保存或签发时会一起落盘。');
+  hint('填写名称和地址。License 就在下面，保存后把运营台的 JWT 粘进来。');
 }
 async function activateProfile(p){
   draft = false;
@@ -192,6 +237,7 @@ function applySettingsPayload(r){
   draft = false;
   viewing = cur ? cur.control_url : viewing;
   if (cur) fillForm(cur);
+  if (r.edge) showEdge(r.edge);
   renderTabs();
   showLicense(window.__curLab || document.getElementById('license-lab').value);
 }
@@ -210,6 +256,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   const cur = PROFILES.find(x => x.current) || PROFILES[0];
   viewing = cur ? cur.control_url : '';
   if (cur) fillForm(cur);
+  showEdge(EDGE);
   renderTabs();
   document.getElementById('back-btn').onclick = ()=> history.back();
   async function saveProfile(){
@@ -226,8 +273,16 @@ document.addEventListener('DOMContentLoaded', ()=>{
   }
   document.getElementById('profile-save-btn').onclick = async ()=>{
     hint('保存中…');
+    const edge = edgePayload();
     const r = await saveProfile();
-    hint(r.ok ? '✅ 已保存并生效，下面可以签发 License' : ('❌ '+(r.error||'保存失败')));
+    if (!r.ok){
+      hint('❌ '+(r.error||'保存失败'));
+      setTimeout(()=>hint(''), 3000);
+      return;
+    }
+    const r2 = await postJSON('/api/settings', edge);
+    applySettingsPayload(r2);
+    hint(r2.ok ? '✅ 已保存并生效，下面可粘贴 License JWT' : ('❌ '+(r2.error||'保存失败')));
     setTimeout(()=>hint(''), 3000);
   };
   document.getElementById('profile-delete-btn').onclick = async ()=>{
@@ -242,61 +297,24 @@ document.addEventListener('DOMContentLoaded', ()=>{
   };
   document.getElementById('save-btn').onclick = async ()=>{
     hint('保存中…');
+    const edge = edgePayload();
     const r1 = await saveProfile();
     if (!r1.ok){
       hint('❌ '+(r1.error||'保存环境失败'));
       setTimeout(()=>hint(''), 2500);
       return;
     }
-    const body = {
+    const body = Object.assign({
       provider: window.__curProv,
       lab: window.__curLab,
       license: document.getElementById('license').value,
-    };
+    }, edge);
     if(window.__curProv==='deepseek') body.deepseek_key = document.getElementById('deepseek_key').value;
     if(window.__curProv==='local') body.ollama_url = document.getElementById('ollama_url').value;
     const r = await postJSON('/api/settings', body);
     applySettingsPayload(r);
     hint(r.ok ? '✅ 已保存' : ('❌ '+(r.error||'保存失败')));
     setTimeout(()=>hint(''), 2500);
-  };
-  async function ensureProfileSaved(){
-    const url = (document.getElementById('control_url').value || '').replace(/\/$/, '');
-    if (!url){
-      hint('❌ 先填 Control 地址');
-      return null;
-    }
-    if (!draft) return {ok: true};
-    hint('先保存此环境…');
-    const r = await saveProfile();
-    if (!r.ok){
-      hint('❌ '+(r.error||'保存环境失败'));
-      return null;
-    }
-    return r;
-  }
-  document.getElementById('reissue-btn').onclick = async ()=>{
-    if (!await ensureProfileSaved()) return;
-    hint('签发中…');
-    const r = await postJSON('/api/settings/reissue', {lab: window.__curLab});
-    applySettingsPayload(r);
-    hint(r.ok ? '✅ 已签发本关' : ('❌ '+(r.error||'签发失败')));
-    setTimeout(()=>hint(''), 3500);
-  };
-  document.getElementById('reissue-all-btn').onclick = async ()=>{
-    if (!await ensureProfileSaved()) return;
-    const labs = [...document.querySelectorAll('#license-lab option')].map(o => o.value).filter(Boolean);
-    hint('签发全部关卡…');
-    for (const lab of labs){
-      const r = await postJSON('/api/settings/reissue', {lab});
-      applySettingsPayload(r);
-      if (!r.ok){
-        hint('❌ '+lab+'：'+(r.error||'签发失败'));
-        return;
-      }
-    }
-    hint('✅ 已签发全部 '+labs.length+' 关');
-    setTimeout(()=>hint(''), 3500);
   };
 });
 </script>

@@ -134,6 +134,7 @@ def settings_page():
         license_labs=LABS,
         licenses=cfg_store.license_statuses(),
         control_profiles=cfg_store.control_profiles(),
+        edge=cfg_store.edge_status(),
     )
 
 
@@ -149,6 +150,14 @@ def save_settings():
         updates["VIRBIUS_CONTROL_URL"] = new_c
     if "engine_url" in body:
         updates["VIRBIUS_ENGINE_URL"] = (body.get("engine_url") or "").strip()
+    if "edge_tenant_id" in body:
+        updates["VIRBIUS_EDGE_TENANT_ID"] = (body.get("edge_tenant_id") or "").strip()
+    if "edge_app_id" in body:
+        updates["VIRBIUS_EDGE_APP_ID"] = (body.get("edge_app_id") or "").strip()
+    if "edge_api_key" in body:
+        key = (body.get("edge_api_key") or "").strip()
+        if key:
+            updates["VIRBIUS_EDGE_API_KEY"] = key
     provider = body.get("provider")
     if provider == "deepseek" and "deepseek_key" in body:
         updates["DEEPSEEK_API_KEY"] = (body.get("deepseek_key") or "").strip()
@@ -166,27 +175,51 @@ def save_settings():
         return jsonify({"ok": False, "error": str(exc)}), 500
     protection.reload()
     lab_id = (body.get("lab") or "").strip()
+    pem_written = []
     # 切 Control 时不要把上一套环境输入框里的 JWT 写进新环境
-    if lab_id and "license" in body and not control_changed:
-        jwt = (body.get("license") or "").strip()
-        if jwt:
-            from mcp_runtime.bootstrap import fetch_and_store_pem
-            from mcp_runtime.labs import get as get_lab
-            from mcp_runtime.proxy_client import drop_lab
-            lab = get_lab(lab_id)
-            pem_path = ""
+    bundle = body.get("license_bundle")
+    items = []
+    if isinstance(bundle, dict) and not control_changed:
+        items = [(str(k), rec) for k, rec in bundle.items() if isinstance(rec, dict)]
+    elif lab_id and "license" in body and not control_changed:
+        items = [(lab_id, body)]
+    if items:
+        from mcp_runtime.bootstrap import fetch_and_store_pem, write_pem
+        from mcp_runtime.labs import get as get_lab
+        from mcp_runtime.proxy_client import drop_lab
+        for item_id, rec in items:
+            jwt = str(rec.get("license") or rec.get("jwt") or "").strip()
+            pem_text = str(rec.get("license_pem") or rec.get("pem") or "").strip()
+            if not jwt:
+                continue
             try:
-                pem_path = fetch_and_store_pem(lab)
-            except Exception as exc:  # noqa: BLE001
-                logging.getLogger("app").warning("fetch pem lab=%s: %s", lab_id, exc)
-            cfg_store.save_license(lab_id, jwt, pem_path)
-            drop_lab(lab_id)
+                lab = get_lab(item_id)
+            except KeyError:
+                continue
+            pem_path = ""
+            if (
+                pem_text.startswith("-----BEGIN PUBLIC KEY-----")
+                and "PRIVATE KEY" not in pem_text
+            ):
+                pem_path = write_pem(lab.tenant_id, pem_text)
+                pem_written.append(item_id)
+            else:
+                try:
+                    pem_path = fetch_and_store_pem(lab)
+                    if pem_path:
+                        pem_written.append(item_id)
+                except Exception as exc:  # noqa: BLE001
+                    logging.getLogger("app").warning("fetch pem lab=%s: %s", item_id, exc)
+            cfg_store.save_license(item_id, jwt, pem_path)
+            drop_lab(item_id)
     return jsonify({
         "ok": True,
         "conf": cfg_store.all(),
         "licenses": cfg_store.license_statuses(),
         "control_profiles": cfg_store.control_profiles(),
+        "edge": cfg_store.edge_status(),
         "switched": control_changed,
+        "pem_written": pem_written,
     })
 
 
@@ -224,24 +257,7 @@ def save_control_profile():
         "conf": cfg_store.all(),
         "licenses": cfg_store.license_statuses(),
         "control_profiles": cfg_store.control_profiles(),
-    })
-
-
-@app.route("/api/settings/reissue", methods=["POST"])
-def reissue_license():
-    lab_id = ((request.json or {}).get("lab") or "").strip()
-    if not lab_id:
-        return jsonify({"ok": False, "error": "missing lab"}), 400
-    from mcp_runtime.bootstrap import run_lab
-    try:
-        st = run_lab(lab_id)
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"ok": False, "error": str(exc)}), 500
-    return jsonify({
-        "ok": bool(st.get("ok")),
-        "error": st.get("error") or "",
-        "licenses": cfg_store.license_statuses(),
-        "control_profiles": cfg_store.control_profiles(),
+        "edge": cfg_store.edge_status(),
     })
 
 
@@ -352,14 +368,8 @@ def _bootstrap_labs():
 
     def run():
         time.sleep(1)
-        from mcp_runtime.bootstrap import run_lab
         from mcp_runtime.labs import get as get_lab
-        for lab_id in ("bank", "llm10", "llm06", "memory", "ops", "egress", "chain"):
-            try:
-                st = run_lab(lab_id)
-                log.info("lab %s ok=%s err=%s", lab_id, st.get("ok"), st.get("error") or "")
-            except Exception as exc:  # noqa: BLE001
-                log.warning("lab %s bootstrap failed: %s", lab_id, exc)
+        log.info("skip Control admin bootstrap; tenants/tools/licenses are issued on the ops console")
         bank = get_lab("bank")
         _warmup_lab(bank, "GetBankNotice", {"topic": "reconcile"}, want=("allow", "block", "deny"))
         _warmup_lab(bank, "SendEmail", {"to": "recon@clearing-partner.com", "body": "warmup"})

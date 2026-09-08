@@ -1,7 +1,7 @@
 # =============================================================================
 #  VirbiusAgent — Docker Compose
 #
-#  Starts the full stack: Redis + Kafka + Ollama (VirbiusGuard GGUF) → engine + control (+ proxy)
+#  Starts the full stack: Redis + Kafka + Ollama (VirbiusGuard GGUF) → engine + control + auth (+ proxy)
 #  First start downloads ~1.5GB from HuggingFace (V15 F16). China:
 #    VIRBIUS_GUARD_GGUF_URL=https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v15-f16.gguf
 #
@@ -13,7 +13,7 @@
 #    docker compose down          # Stop all
 #
 #  To run only core services (no proxy):
-#    docker compose up -d redis kafka ollama ollama-download ollama-init virbius-engine virbius-control
+#    docker compose up -d redis kafka ollama ollama-download ollama-init virbius-engine virbius-auth virbius-control
 # =============================================================================
 
 services:
@@ -151,6 +151,35 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ── virbius-auth (operator login / JWT, port 8083) ─────────────────────
+  # Off by default for Control: set VIRBIUS_OPERATOR_JWT_ENABLED=true so
+  # /ui redirects to /login and admin APIs require the operator cookie.
+  virbius-auth:
+    build:
+      context: .
+      target: virbius-auth
+      args:
+        APT_MIRROR: ${APT_MIRROR:-cn}
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_PORT: "8083"
+      VIRBIUS_AUTH_DATA_DIR: /data
+      VIRBIUS_AUTH_ISSUER: http://virbius-auth:8083
+      VIRBIUS_AUTH_RETURN_URI: ${VIRBIUS_AUTH_RETURN_URI:-http://127.0.0.1:8080/ui/callback}
+      VIRBIUS_AUTH_RETURN_URI_TLS: ${VIRBIUS_AUTH_RETURN_URI_TLS:-https://127.0.0.1:8080/ui/callback}
+      VIRBIUS_AUTH_BOOTSTRAP_USERNAME: ${VIRBIUS_AUTH_BOOTSTRAP_USERNAME:-admin}
+      VIRBIUS_AUTH_BOOTSTRAP_PASSWORD: ${VIRBIUS_AUTH_BOOTSTRAP_PASSWORD:-admin}
+    volumes:
+      - auth-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8083/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   # ── virbius-control (control plane, port 8080) ──────────────────────────
   virbius-control:
     build:
@@ -166,6 +195,12 @@ services:
       VIRBIUS_DATA_DIR: /data
       SPRING_PROFILES_ACTIVE: dev
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      VIRBIUS_OPERATOR_JWT_ENABLED: ${VIRBIUS_OPERATOR_JWT_ENABLED:-false}
+      VIRBIUS_API_KEY_ENABLED: ${VIRBIUS_API_KEY_ENABLED:-false}
+      VIRBIUS_AUTH_JWKS_URL: ${VIRBIUS_AUTH_JWKS_URL:-http://virbius-auth:8083/.well-known/jwks.json}
+      VIRBIUS_AUTH_ISSUER: ${VIRBIUS_AUTH_ISSUER:-http://virbius-auth:8083}
+      VIRBIUS_AUTH_LOGIN_URL: ${VIRBIUS_AUTH_LOGIN_URL:-http://127.0.0.1:8083/login}
+      VIRBIUS_AUTH_TOKEN_URL: ${VIRBIUS_AUTH_TOKEN_URL:-http://virbius-auth:8083/oauth/token}
     volumes:
       - control-data:/data
       - control-logs:/var/log/virbius
@@ -173,6 +208,8 @@ services:
       redis:
         condition: service_healthy
       kafka:
+        condition: service_healthy
+      virbius-auth:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8080/api/v1/health"]
@@ -232,6 +269,7 @@ volumes:
   engine-logs:
   control-data:
   control-logs:
+  auth-data:
   proxy-logs:
   ollama-data:
   ollama-import:

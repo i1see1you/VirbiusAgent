@@ -1,28 +1,28 @@
 {
-  "_comment": "virbiusDemo · VirbiusAgent 防护规则来源配置。切换 active_mode 即可在 离线/本地control/云端 control 之间切换规则下发源。各 mode 的字段对齐 virbius-core 的 EdgeInitConfig（部分字段带默认值，可省略）。",
+  "_comment": "virbiusDemo · VirbiusAgent 防护规则来源配置。切换 active_mode 即可在 离线/本地control/云端 control 之间切换规则下发源。各 mode 的字段对齐 virbius-core 的 EdgeInitConfig（部分字段带默认值，可省略）。端层 OWASP（LLM01/02/04）用租户 owasp / 应用 owasp-app，不再走 default。CTF 仍走 default（virbius_guard）。",
   "active_mode": "control",
   "modes": {
     "offline": {
-      "offline_manifest_path": "demo_data/edge/default/demo-app/edge-manifest.json",
-      "cache_dir": "demo_data/edge/offline/default/demo-app",
-      "tenant_id": "default",
-      "app_id": "demo-app"
+      "offline_manifest_path": "demo_data/edge/owasp/owasp-app/edge-manifest.json",
+      "cache_dir": "demo_data/edge/offline/owasp/owasp-app",
+      "tenant_id": "owasp",
+      "app_id": "owasp-app"
     },
     "control": {
       "control_base_url": "http://127.0.0.1:8080",
-      "tenant_id": "default",
-      "app_id": "demo-app",
+      "tenant_id": "owasp",
+      "app_id": "owasp-app",
       "edge_api_key": "",
       "device_id": "",
-      "cache_dir": "demo_data/edge/control/default/demo-app"
+      "cache_dir": "demo_data/edge/control/owasp/owasp-app"
     },
     "cloud": {
       "control_base_url": "https://virbius-cloud.example.com",
-      "tenant_id": "default",
-      "app_id": "demo-app",
+      "tenant_id": "owasp",
+      "app_id": "owasp-app",
       "edge_api_key": "",
       "device_id": "",
-      "cache_dir": "demo_data/edge/cloud/default/demo-app"
+      "cache_dir": "demo_data/edge/cloud/owasp/owasp-app"
     }
   }
 }

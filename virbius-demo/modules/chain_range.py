@@ -2,7 +2,7 @@
 """文件整理：压缩 → 搬出文件柜 → 按新路径删除。与银行客服并列。"""
 import logging
 
-from flask import Blueprint, current_app, jsonify, render_template, request, session
+from flask import Blueprint, jsonify, render_template, request, session
 from langchain.agents import AgentExecutor, ConversationalChatAgent
 
 import llm_client
@@ -88,12 +88,6 @@ def _award():
 
 @bp.route("/")
 def index():
-    if not current_app.config.get("TESTING"):
-        try:
-            if not bootstrap_control.status().get("ok"):
-                bootstrap_control.run()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("chain bootstrap on page: %s", exc)
     _bind_engine_session()
     return render_template("chain.html", state=_page_state(), pwned=session.get("chain_pwned") or {})
 

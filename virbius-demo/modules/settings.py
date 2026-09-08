@@ -28,6 +28,9 @@ _overrides = {}
 _DEFAULTS = {
     "VIRBIUS_CONTROL_URL": "http://localhost:8080",
     "VIRBIUS_ENGINE_URL": "http://localhost:8082",
+    "VIRBIUS_EDGE_TENANT_ID": "owasp",
+    "VIRBIUS_EDGE_APP_ID": "owasp-app",
+    "VIRBIUS_EDGE_API_KEY": "",
     "DEEPSEEK_API_KEY": "sk-REPLACE-ME",
     "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
     "DEEPSEEK_MODEL": "deepseek-chat",
@@ -68,6 +71,20 @@ def _load():
     if not isinstance(_overrides.get("control_profiles"), dict):
         _sync_current_profile_into_map()
         _persist()
+    else:
+        current = normalize_control_url(get("VIRBIUS_CONTROL_URL"))
+        rec = (_overrides.get("control_profiles") or {}).get(current) or {}
+        if not (get("VIRBIUS_EDGE_API_KEY") or "").strip():
+            stored = str(rec.get("edge_api_key") or "").strip()
+            if stored:
+                _apply_edge_to_overrides(rec)
+        before = str(rec.get("edge_api_key") or "").strip()
+        _sync_current_profile_into_map()
+        after = str(
+            ((_overrides.get("control_profiles") or {}).get(current) or {}).get("edge_api_key") or ""
+        ).strip()
+        if after and after != before:
+            _persist()
 
 
 def get(key: str) -> str:
@@ -81,6 +98,36 @@ def get(key: str) -> str:
 def all() -> dict:
     """返回当前生效的完整配置（含默认/环境变量兜底）。"""
     return {k: get(k) for k in _DEFAULTS}
+
+
+def edge_status() -> dict:
+    """设置页端层状态。不回传完整 API Key。"""
+    key = (get("VIRBIUS_EDGE_API_KEY") or "").strip()
+    prefix = ""
+    if key:
+        prefix = (key[:10] + "…") if len(key) > 10 else (key[:4] + "…")
+    return {
+        "tenant_id": get("VIRBIUS_EDGE_TENANT_ID") or "owasp",
+        "app_id": get("VIRBIUS_EDGE_APP_ID") or "owasp-app",
+        "key_set": bool(key),
+        "key_prefix": prefix,
+    }
+
+
+def _edge_from_profile(rec):
+    rec = rec if isinstance(rec, dict) else {}
+    return {
+        "edge_tenant_id": str(rec.get("edge_tenant_id") or "").strip() or "owasp",
+        "edge_app_id": str(rec.get("edge_app_id") or "").strip() or "owasp-app",
+        "edge_api_key": str(rec.get("edge_api_key") or "").strip(),
+    }
+
+
+def _apply_edge_to_overrides(rec):
+    edge = _edge_from_profile(rec)
+    _overrides["VIRBIUS_EDGE_TENANT_ID"] = edge["edge_tenant_id"]
+    _overrides["VIRBIUS_EDGE_APP_ID"] = edge["edge_app_id"]
+    _overrides["VIRBIUS_EDGE_API_KEY"] = edge["edge_api_key"]
 
 
 def config_dir() -> str:
@@ -140,12 +187,14 @@ def license_statuses() -> dict:
         rec = get_license(lab.id)
         c = claims(rec.get("jwt") or "")
         tools = c.get("allowed_tools") or []
+        pem_path = rec.get("pem_path") or ""
         out[lab.id] = {
             "label": lab.label,
             "tenant_id": lab.tenant_id,
             "app_id": lab.app_id,
             "jwt": rec.get("jwt") or "",
             "issued": bool(rec.get("jwt")),
+            "has_pem": bool(pem_path and os.path.isfile(pem_path)),
             "tool_count": len(tools) if isinstance(tools, list) else 0,
         }
     return out
@@ -229,14 +278,25 @@ def _sync_current_profile_into_map():
     if not control:
         return
     profiles = dict(_overrides.get("control_profiles") or {})
-    prev = profiles.get(control) or {}
-    profiles[control] = {
+    prev = dict(profiles.get(control) or {})
+    key = str(_overrides.get("VIRBIUS_EDGE_API_KEY") or "").strip() or str(prev.get("edge_api_key") or "").strip()
+    tenant = str(_overrides.get("VIRBIUS_EDGE_TENANT_ID") or "").strip() or str(prev.get("edge_tenant_id") or "").strip() or "owasp"
+    app = str(_overrides.get("VIRBIUS_EDGE_APP_ID") or "").strip() or str(prev.get("edge_app_id") or "").strip() or "owasp-app"
+    prev.update({
         "label": str(prev.get("label") or "").strip() or profile_label(control),
         "engine_url": (get("VIRBIUS_ENGINE_URL") or "").rstrip("/"),
         "licenses": _copy_licenses(_overrides.get("licenses"), control),
-    }
+        "edge_tenant_id": tenant,
+        "edge_app_id": app,
+        "edge_api_key": key,
+    })
+    profiles[control] = prev
     _overrides["control_profiles"] = profiles
     _overrides["licenses"] = profiles[control]["licenses"]
+    _overrides["VIRBIUS_EDGE_TENANT_ID"] = tenant
+    _overrides["VIRBIUS_EDGE_APP_ID"] = app
+    if key:
+        _overrides["VIRBIUS_EDGE_API_KEY"] = key
 
 
 def _persist():
@@ -265,6 +325,7 @@ def apply_control_urls(control_url=None, engine_url=None):
         if engine:
             _overrides["VIRBIUS_ENGINE_URL"] = engine
         _overrides["licenses"] = _copy_licenses(rec.get("licenses"), target)
+        _apply_edge_to_overrides(rec)
     else:
         if target:
             _overrides["VIRBIUS_CONTROL_URL"] = target
@@ -272,6 +333,7 @@ def apply_control_urls(control_url=None, engine_url=None):
             _overrides["VIRBIUS_ENGINE_URL"] = incoming_engine
         if target and target != old:
             _overrides["licenses"] = _empty_licenses()
+            _overrides["VIRBIUS_EDGE_API_KEY"] = ""
     _sync_current_profile_into_map()
     _persist()
 

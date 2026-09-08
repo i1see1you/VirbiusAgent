@@ -96,7 +96,8 @@ control:
       memory: 512Mi
     limits:
       memory: 1Gi
-  apiKeyEnabled: false
+  # Edge SDK / demo 用 vrb_tk_ 拉 policy-version、manifest。运营台 JWT 开着时这项必须 true，否则带 Key 也 401。
+  apiKeyEnabled: true
 
 auth:
   enabled: true

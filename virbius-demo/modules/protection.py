@@ -23,12 +23,15 @@ from modules import settings
 _CONFIG_PATH = os.path.join(
     os.path.dirname(__file__), "..", "demo_data", "virbius.json",
 )
+_DEFAULT_CACHE = "demo_data/edge/owasp/owasp-app"
 
-# 本地离线 manifest（仅离线模式 / 展示用）
-_MANIFEST_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "demo_data", "edge", "default", "demo-app",
-    "edge-manifest.json",
-)
+def _manifest_path():
+    """当前 mode 下用于展示 matched_keywords 的 manifest 路径。"""
+    mode, mode_cfg = _load_config()
+    cfg = _build_edge_config(mode_cfg)
+    if mode == "offline" and cfg.get("offline_manifest_path"):
+        return cfg["offline_manifest_path"]
+    return os.path.join(cfg["cache_dir"], "edge-manifest.json")
 
 # 真实引擎扩展（PyO3 编译自 virbius-core）。构建方式见 README。
 _engine = None
@@ -54,22 +57,46 @@ def _absolute_path(p):
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", p))
 
 
+def _edge_identity(mode_cfg):
+    """租户 / 应用：设置页 > virbius.json > 默认 owasp。"""
+    tenant = (settings.get("VIRBIUS_EDGE_TENANT_ID") or mode_cfg.get("tenant_id") or "owasp").strip()
+    app = (settings.get("VIRBIUS_EDGE_APP_ID") or mode_cfg.get("app_id") or "owasp-app").strip()
+    return tenant, app
+
+
+def _edge_cache_dir(mode, mode_cfg, tenant, app):
+    cache = mode_cfg.get("cache_dir") or _DEFAULT_CACHE
+    json_tenant = (mode_cfg.get("tenant_id") or "owasp").strip()
+    json_app = (mode_cfg.get("app_id") or "owasp-app").strip()
+    if tenant != json_tenant or app != json_app:
+        cache = "demo_data/edge/%s/%s/%s" % (mode, tenant, app)
+    return _absolute_path(cache)
+
+
 def _build_edge_config(mode_cfg):
     """由 virbius.json 的某个 mode 构造 EdgeInitConfig 字典。"""
+    mode, _ = _load_config()
+    tenant, app = _edge_identity(mode_cfg)
     result = {
-        "tenant_id": mode_cfg.get("tenant_id", "default"),
-        "app_id": mode_cfg.get("app_id", "demo-app"),
-        "cache_dir": _absolute_path(mode_cfg.get("cache_dir", "demo_data/edge/default/demo-app")),
+        "tenant_id": tenant,
+        "app_id": app,
+        "cache_dir": _edge_cache_dir(mode, mode_cfg, tenant, app),
     }
     if mode_cfg.get("offline_manifest_path"):
-        result["offline_manifest_path"] = _absolute_path(mode_cfg["offline_manifest_path"])
+        offline = mode_cfg["offline_manifest_path"]
+        json_tenant = (mode_cfg.get("tenant_id") or "owasp").strip()
+        json_app = (mode_cfg.get("app_id") or "owasp-app").strip()
+        if tenant != json_tenant or app != json_app:
+            offline = "demo_data/edge/%s/%s/edge-manifest.json" % (tenant, app)
+        result["offline_manifest_path"] = _absolute_path(offline)
     if mode_cfg.get("control_base_url"):
         result["control_base_url"] = mode_cfg["control_base_url"]
     # 运行期设置 / 环境变量里的 control 地址优先，覆盖 virbius.json（compose 注入或设置页配置）
     if settings.get("VIRBIUS_CONTROL_URL"):
         result["control_base_url"] = settings.get("VIRBIUS_CONTROL_URL")
-    if mode_cfg.get("edge_api_key"):
-        result["edge_api_key"] = mode_cfg["edge_api_key"]
+    key = (settings.get("VIRBIUS_EDGE_API_KEY") or mode_cfg.get("edge_api_key") or "").strip()
+    if key:
+        result["edge_api_key"] = key
     if mode_cfg.get("device_id"):
         result["device_id"] = mode_cfg["device_id"]
     return result
@@ -150,7 +177,7 @@ def _matched_keywords(content, rule_id):
     if not content or not rule_id:
         return []
     try:
-        with open(_MANIFEST_PATH, encoding="utf-8") as f:
+        with open(_manifest_path(), encoding="utf-8") as f:
             manifest = json.load(f)
     except (OSError, ValueError):
         return []
