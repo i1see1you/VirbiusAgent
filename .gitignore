@@ -56,7 +56,7 @@ data/**
 dependency-reduced-pom.xml
 
 # Slow CI integration test scripts (excluded from shellcheck)
-scripts/test-*.sh
+# scripts/test-*.sh
 
 # Backup files
 *.bak
