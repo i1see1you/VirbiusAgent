@@ -112,6 +112,10 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # Demo app + data (rules manifest, level data, config, etc.).
 COPY virbius-demo/ ./
 
+# Runtime may run as non-root (uid 999 in the Helm chart); the app writes
+# ./data/edge manifests under the workdir, so make it group/other-writable.
+RUN mkdir -p /app/data && chmod 777 /app/data
+
 # Entrypoint: start SSE upstream, then launch the demo app.
 COPY virbius-demo/docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
