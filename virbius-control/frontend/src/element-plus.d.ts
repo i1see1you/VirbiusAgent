@@ -1,6 +1,5 @@
-// element-plus MessageBox merges unknown options onto the component state at
-// runtime, so passing zIndex works, but upstream ElMessageBoxOptions does not
-// declare it — views pass explicit z-index values to keep dialogs on top.
+// ElMessageBox.confirm ignores zIndex at runtime (uses nextZIndex ~2000).
+// Keep overlays above drawer masks via theme.css .el-overlay.is-message-box.
 export {};
 
 declare module 'element-plus' {

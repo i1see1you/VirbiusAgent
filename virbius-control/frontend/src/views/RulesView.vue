@@ -427,18 +427,36 @@ function closeDrawer() {
   rules.resetDirty();
 }
 
+const unsavedConfirming = ref(false);
+
+async function confirmLeaveUnsaved(): Promise<boolean> {
+  if (unsavedConfirming.value) return false;
+  unsavedConfirming.value = true;
+  try {
+    await ElMessageBox.confirm(t('rules.confirm-unsaved'), {
+      type: 'warning',
+      closeOnClickModal: false,
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    unsavedConfirming.value = false;
+  }
+}
+
 function requestClose() {
   if (!rules.ruleFormDirty) {
     closeDrawer();
     return;
   }
-  ElMessageBox.confirm(t('rules.confirm-unsaved'), { type: 'warning', zIndex: 4300 })
-    .then(() => closeDrawer())
-    .catch(() => {});
+  void confirmLeaveUnsaved().then((ok) => { if (ok) closeDrawer(); });
 }
 
 function onEsc(e: KeyboardEvent) {
-  if (e.key === 'Escape') requestClose();
+  if (e.key !== 'Escape') return;
+  if (unsavedConfirming.value) return;
+  requestClose();
 }
 
 function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
@@ -523,10 +541,7 @@ async function loadRules() {
 }
 
 async function onRowClick(row: any) {
-  if (rules.ruleFormDirty) {
-    try { await ElMessageBox.confirm(t('rules.confirm-unsaved'), { type: 'warning', zIndex: 4300 }); }
-    catch { return; }
-  }
+  if (rules.ruleFormDirty && !(await confirmLeaveUnsaved())) return;
   await selectRule(row.rule_id);
 }
 
@@ -543,7 +558,7 @@ function resetEditor() {
 
 function openNew() {
   if (rules.ruleFormDirty) {
-    ElMessageBox.confirm(t('rules.confirm-unsaved'), { type: 'warning', zIndex: 4300 }).then(doOpenNew).catch(() => {});
+    void confirmLeaveUnsaved().then((ok) => { if (ok) doOpenNew(); });
   } else doOpenNew();
 }
 function doOpenNew() {

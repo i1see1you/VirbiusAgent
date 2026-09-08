@@ -179,5 +179,7 @@ body {
 .tools-drawer .el-drawer__footer { border-top: 1px solid var(--v-border); padding: 10px 16px; }
 .el-table .is-expired { color: #94a3b8; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-/* Drawers 3000, select 4100, MessageBox 4300/5000 — toast must stay on top. */
+/* Drawers/masks 3000, select 4100. ElMessageBox.confirm ignores the zIndex option
+   and uses nextZIndex() (~2000), so the overlay must be forced above the mask. */
+.el-overlay.is-message-box { z-index: 4300 !important; }
 .el-message { z-index: 5200 !important; }
