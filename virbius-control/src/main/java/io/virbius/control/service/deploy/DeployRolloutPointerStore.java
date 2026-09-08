@@ -71,6 +71,10 @@ public class DeployRolloutPointerStore {
         }
     }
 
+    private static String escape(String s) {
+        return s.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
     public Optional<String> notifyChange(String tenantId, String deployId, String reason) {
         if (pool.isEmpty()) {
             return Optional.empty();
@@ -83,6 +87,12 @@ public class DeployRolloutPointerStore {
                             "tenant_id", tenantId,
                             "deploy_id", deployId == null ? "" : deployId,
                             "reason", reason == null ? "" : reason));
+            // Broadcast for pool-resolving agents (kernel nodes) that re-resolve on any change.
+            jedis.publish(
+                    DeployRolloutKeys.CHANGED_CHANNEL,
+                    "{\"tenant_id\":\"" + escape(tenantId)
+                            + "\",\"deploy_id\":\"" + escape(deployId == null ? "" : deployId)
+                            + "\",\"reason\":\"" + escape(reason == null ? "" : reason) + "\"}");
             return Optional.of(id.toString());
         } catch (Exception ex) {
             log.warn("notify deploy rollout change failed: {}", ex.getMessage());

@@ -6,6 +6,7 @@ package io.virbius.control.service.deploy;
  * <pre>
  *   active pointer: virbius:deploy:active:{tenant}            HASH
  *   notify stream:  virbius:deploy:notify                      STREAM
+ *   changed channel: virbius:deploy:changed                    PUB/SUB (broadcast; kernel nodes)
  *   node registry:  virbius:nodes:{layer}:{tenant}:{instance}  HASH (TTL ~60s)
  *   canary blobs reuse existing engine/gateway artifact key conventions:
  *     engine canary blob:  virbius:engine:{tenant}:r{rev}:snapshot
@@ -15,6 +16,13 @@ package io.virbius.control.service.deploy;
 public final class DeployRolloutKeys {
 
     public static final String STREAM_KEY = "virbius:deploy:notify";
+
+    /**
+     * Pub/Sub broadcast channel mirroring {@link #STREAM_KEY} events. Kernel nodes (and any other
+     * pool-resolving agent that cannot afford per-node consumer groups) subscribe here and
+     * re-resolve their pool from the pointer on every message.
+     */
+    public static final String CHANGED_CHANNEL = "virbius:deploy:changed";
 
     private DeployRolloutKeys() {}
 
