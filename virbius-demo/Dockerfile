@@ -104,9 +104,17 @@ COPY --from=rust-build /build/target/wheels/*.whl /tmp/wheels/
 COPY --from=rust-build /build/target/release/virbius-mcp-proxy /usr/local/bin/virbius-mcp-proxy
 
 # Python deps (Flask/requests + langchain for the ReAct agent + the PyO3 wheel).
+# PIP_INDEX_URL: empty = PyPI; China hosts can pass a mirror, e.g.
+#   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG PIP_INDEX_URL=""
 COPY virbius-demo/requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir --force-reinstall /tmp/wheels/*.whl \
+RUN if [ -n "$PIP_INDEX_URL" ]; then \
+      pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt \
+      && pip install --no-cache-dir -i "$PIP_INDEX_URL" --force-reinstall /tmp/wheels/*.whl; \
+    else \
+      pip install --no-cache-dir -r requirements.txt \
+      && pip install --no-cache-dir --force-reinstall /tmp/wheels/*.whl; \
+    fi \
     && rm -rf /tmp/wheels
 
 # Demo app + data (rules manifest, level data, config, etc.).
