@@ -11,7 +11,6 @@ APP_ID="${APP_ID:-virbius-test}"
 FAIL=0
 PASS=0
 TMPDIR=$(mktemp -d)
-SSE_OUT="$TMPDIR/sse_output"
 SSE_PIPE="$TMPDIR/sse_pipe"
 SSE_PID_FILE="$TMPDIR/sse.pid"
 
@@ -45,10 +44,9 @@ post() {
 
 sse_wait() {
     # Read next SSE event from pipe (blocks until data arrives)
-    local event="" data=""
+    local data=""
     while IFS= read -r -t 70 line <&3; do
         line="${line%$'\r'}"  # Strip trailing CR (SSE uses CRLF)
-        [[ "$line" =~ ^event: ]] && event="${line#event: }"
         [[ "$line" =~ ^data: ]]  && data="${line#data: }" && break
     done
     echo "$data"
@@ -71,7 +69,7 @@ echo
 
 echo -n "  Proxy reachable ... "
 proxy_ok=false
-for i in 1 2 3 4 5; do
+for _ in 1 2 3 4 5; do
     if curl -sf --max-time 3 "$PROXY_URL/health" -o /dev/null -w '%{http_code}' 2>/dev/null | grep -q 200; then
         proxy_ok=true
         break
@@ -96,7 +94,6 @@ echo "$DEGRADE_MODE"
 
 RUNSC=$(which runsc 2>/dev/null || echo "NOT FOUND")
 echo "  runsc        = $RUNSC"
-G_POOL=$(dirname "$(which runsc 2>/dev/null || echo /none)")/..
 echo
 
 # ── 1. establish SSE session ───────────────────────────────────
@@ -260,7 +257,6 @@ echo
 
 # Adapt log path for your deployment
 LOG_FILE="${VIRBIUS_LOG_FILE:-/var/log/virbius/mcp-proxy.log}"
-CONTAINER_LOG_FILE="${VIRBIUS_LOG_FILE:-/var/log/virbius/control.log}"
 
 for f in "$LOG_FILE" /proc/1/fd/1 /dev/stderr; do
     if [ -f "$f" ] || [ -p "$f" ]; then

@@ -25,7 +25,6 @@ FAIL=0
 
 RED='\033[31m'
 GREEN='\033[32m'
-YELLOW='\033[33m'
 BLUE='\033[34m'
 NC='\033[0m'
 
@@ -64,7 +63,7 @@ FUND_BODY='Check if the user input asks for or seeks specific fund product recom
 MEDICAL_BODY='Check if the user input asks for medical diagnosis, treatment plans, drug dosage advice, or interpretation of lab results. General questions about hospital logistics or weather are NOT violations.'
 
 TMPDIR=$(mktemp -d)
-trap "rm -rf ${TMPDIR}" EXIT
+trap 'rm -rf "${TMPDIR}"' EXIT
 echo '{}' > "${TMPDIR}/empty.json"
 
 # --- Helper: Ensure rule is writable (recover if disabled) ---

@@ -88,7 +88,7 @@ if pid == 0:
     )
     sys.exit(0)
 "
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     if curl -sf "$ENGINE/admin/health" >/dev/null 2>&1; then
       ok "Engine ready"; return 0
     fi
@@ -424,13 +424,11 @@ print(json.dumps(body))
 " 2>/dev/null || echo '{}')
 
   FALCO_CONDITION=$(echo "$RULE_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('condition',''))" 2>/dev/null)
-  FALCO_OUTPUT=$(echo "$RULE_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('output',''))" 2>/dev/null)
   FALCO_TAGS=$(echo "$RULE_BODY" | python3 -c "import sys,json; t=json.load(sys.stdin).get('tags',[]); print(','.join(t) if isinstance(t,list) else str(t))" 2>/dev/null)
 
   if [[ -z "$FALCO_CONDITION" ]]; then
     warn "Could not extract rule condition from API, using fallback"
     FALCO_CONDITION="open_file and (fd.name contains /etc/passwd or fd.name contains /etc/shadow or fd.name contains /etc/ssh/ or fd.name contains /etc/sudoers)"
-    FALCO_OUTPUT="Sensitive file read detected (file=%fd.name user=%user.name)"
     FALCO_TAGS="filesystem,mitre_persistence"
   fi
 

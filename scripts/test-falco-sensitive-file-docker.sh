@@ -20,7 +20,6 @@
 #
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FALCO_CONFIG_DIR="$SCRIPT_DIR/falco-test"
 
@@ -161,15 +160,17 @@ if [[ "$MODE" == "mock" ]]; then
 
   # Send simulated alert for /etc/shadow write
   info "Sending simulated alert: write to /etc/shadow"
+  ALERT_TS="$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)"
+  ALERT_EVT_NS="$(date +%s)000000000"
   ALERT_RESPONSE=$(curl -s -X POST "$ENGINE_URL/api/internal/falco-alert" \
     -H 'Content-Type: application/json' \
     -d '{
       "output": "Sensitive file access (user=root, pid=12345, file=/etc/shadow)",
       "priority": "Warning",
       "rule": "builtin_sensitive_file_access",
-      "time": "'$(date -u +%Y-%m-%dT%H:%M:%S.000000000Z)'",
+      "time": "'"$ALERT_TS"'",
       "output_fields": {
-        "evt.time": '$(date +%s)000000000',
+        "evt.time": '"$ALERT_EVT_NS"',
         "proc.pid": 12345,
         "proc.ppid": 1,
         "proc.cgroup.id": 0,
@@ -283,7 +284,7 @@ echo ""
 # Wait for Falco to initialize
 info "Waiting for Falco to initialize..."
 FALCO_READY=false
-for i in $(seq 1 30); do
+for _ in $(seq 1 30); do
   sleep 2
   if docker logs "$FALCO_CONTAINER" 2>&1 | grep -q "Starting health webserver"; then
     FALCO_READY=true

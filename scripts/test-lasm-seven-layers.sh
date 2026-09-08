@@ -109,7 +109,7 @@ restart_engine() {
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
     java -jar "$ROOT/virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar" \
     >/tmp/virbius-agent/logs/engine.log 2>&1 &
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     if curl -sf http://127.0.0.1:8082/admin/health >/dev/null 2>&1; then
       ok "Engine ready"; return 0
     fi

@@ -183,7 +183,7 @@ rule_dry_run "r-falco-e2e-1"
 
 D1=$(deploy_prepare)
 [[ -n "$D1" && "$D1" != "null" ]] || err "prepare failed"
-for i in 1 2 3 4; do deploy_op "$D1" upgrade; done
+for _ in 1 2 3 4; do deploy_op "$D1" upgrade; done
 P=$(deploy_percent "$D1")
 [[ "$P" == "100" ]] || err "expected 100%, got $P"
 deploy_op "$D1" finalize

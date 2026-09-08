@@ -165,7 +165,8 @@ delete_sample() {  # $1=sha256 $2=phash
 # probe image until the expected rule appears (or disappears when want=NONE).
 wait_engine() {  # $1=image_path $2=expected_rule_id(or "NONE") $3=timeout_seconds $4=label
   local img="$1" want="$2" timeout="$3" label="$4"
-  local start=$(date +%s)
+  local start
+  start=$(date +%s)
   local deadline=$(( start + timeout ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     local rid; rid=$(evaluate_attachment "$img" "probe.png" "sess-imgbl-poll-$$-$RANDOM" | eng_field rule_id)

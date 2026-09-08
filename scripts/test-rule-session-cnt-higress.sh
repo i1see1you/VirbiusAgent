@@ -199,7 +199,6 @@ if [[ "$RULE_LAYER" != "gateway" || "$RULE_RUNTIME" != "lua" ]]; then
 fi
 
 # Compile Lua script to expression IR using virbius-expr CLI
-EXPR_CLI="$ROOT/virbius-expr/cmd/virbius-expr"
 EXPR_BIN="$HIGRESS_TEST_DIR/virbius-expr"
 
 info "Building virbius-expr CLI..."
@@ -630,8 +629,7 @@ if [[ -z "$CUM_NAME" ]]; then
 fi
 info "Using cumulative name: $CUM_NAME"
 
-# Determine dimension (usually session_id for session count rules)
-CUM_DIMENSION="session_id"
+# Dimension is session_id for session count rules
 CUM_VALUE="$TEST_SESSION"
 
 # Calculate the current time slot (minute-level bucket)
