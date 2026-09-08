@@ -19,7 +19,7 @@ crc32fast = "1"
 crc32c = "0.6"
 rand = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-ureq = { version = "2", default-features = false, features = ["json"] }
+ureq = { version = "3", default-features = false, features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
 thiserror = "1"
 base64 = "0.22"
