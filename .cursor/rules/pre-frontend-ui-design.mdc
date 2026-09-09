@@ -1,0 +1,63 @@
+---
+description: Before frontend UI implementation — ui-ux-pro-max design gate (web/app/h5/mini-program)
+alwaysApply: true
+---
+
+# Pre-frontend UI/UE design gate (dev-workflow)
+
+**Explicit trigger:** user runs **`/frontend-ui-design`** — follow `dev-workflow/workflows/frontend-ui-design.md` end-to-end.
+
+**Passive trigger:** when the task is to **implement or materially change user-facing UI** (Vue/React web admin, H5, mobile app, WeChat mini-program, new page/component layout, visual refactor) and you have **not** completed UI/UE design for this scope in the current session — **stop before writing UI code**. Run the design workflow first (or user runs `/frontend-ui-design`).
+
+## Scope (when this gate applies)
+
+| In scope | Out of scope (skip gate) |
+|----------|---------------------------|
+| New page / screen / dialog layout | Pure API/backend with no UI |
+| New or redesigned component visuals | Bug fix in logic only (no layout/style change) |
+| H5 / app / mini-program UI | Rename/refactor with zero visual change |
+| Design-system / theme work | Copy/text-only change in existing layout |
+
+## Mandatory first step: read ui-ux-pro-max
+
+Before any frontend implementation in scope, read and follow:
+
+`~/.cursor/skills/ui-ux-pro-max/SKILL.md` **or** `{project}/.cursor/skills/ui-ux-pro-max/SKILL.md`
+
+Run **`--design-system`** (and `--persist` when saving for the feature). See workflow for full steps.
+
+## Style source (pick one path)
+
+### A — Existing project (default for this monorepo)
+
+1. Inspect **similar pages** and **shared components** in the target subproject (`post-loan-backend-page`, `post-loan-mini-program`, etc.).
+2. Summarize **inherited style**: layout shell, spacing, colors, typography, table/form patterns, empty/loading states, icon set.
+3. Feed that summary into ui-ux-pro-max search query + `--design-system`; treat output as **constraints**, not a full rebrand unless user asked.
+4. If `design-system/MASTER.md` exists in the subproject, **reuse it**; add `design-system/pages/<page>.md` only for page-specific overrides.
+
+### B — New project or greenfield UI
+
+Use **AskQuestion** (or structured chat) to confirm before `--design-system`:
+
+- Product type & industry
+- Style keywords (minimal / enterprise / playful / dark, etc.)
+- Target stack (Vue+Naive UI, React+Tailwind, mini-program, Flutter, …)
+- Reference sites or brand colors (optional)
+
+Do **not** start coding until user confirms the design brief or accepts the proposed design-system output.
+
+## Deliver before implementation
+
+Produce a short **UI/UE design note** (in chat or `design-system/pages/<feature>.md`) covering:
+
+- Layout / information hierarchy
+- Key components & interaction (hover, loading, empty, errors)
+- Colors / type / spacing aligned with project or new brief
+- Responsive breakpoints (375 / 768 / 1024+)
+- Accessibility checklist items from ui-ux-pro-max
+
+Only after that → implement Vue/wxml/tsx/etc.
+
+## Exemptions
+
+Skip only when user says **skip UI design**, **logic only**, **hotfix no UI**, or change is explicitly **non-visual**.

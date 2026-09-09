@@ -1,0 +1,40 @@
+# ─────────────────────────────────────────────────────────────────
+# Installer-managed. Regenerated on every install — treat as read-only.
+#
+# Direct edits to this file will be overwritten on the next install.
+# To change an install answer durably, re-run the installer (your prior
+# answers are remembered as defaults). To pin a value regardless of
+# install answers, or to add custom agents / override descriptors, use:
+#   _bmad/custom/config.toml       (team, committed)
+#   _bmad/custom/config.user.toml  (personal, gitignored)
+# Those files are never touched by the installer.
+# ─────────────────────────────────────────────────────────────────
+
+[core]
+project_name = "VirbiusAgent"
+document_output_language = "English"
+output_folder = "{project-root}/_bmad-output"
+
+[modules.tea]
+test_artifacts = "{project-root}/_bmad-output/test-artifacts"
+tea_use_playwright_utils = true
+tea_use_pactjs_utils = true
+tea_pact_mcp = "mcp"
+tea_browser_automation = "auto"
+tea_execution_mode = "auto"
+tea_capability_probe = true
+test_stack_type = "auto"
+ci_platform = "auto"
+test_framework = "auto"
+risk_threshold = "p1"
+test_design_output = "_bmad-output/test-artifacts/test-design"
+test_review_output = "_bmad-output/test-artifacts/test-reviews"
+trace_output = "_bmad-output/test-artifacts/traceability"
+
+[agents.bmad-tea]
+module = "tea"
+team = "software-development"
+name = "Murat"
+title = "Master Test Architect and Quality Advisor"
+icon = "🧪"
+description = "Risk-based testing strategy, fixture architecture, ATDD, API and UI automation (Playwright, Cypress, pytest, JUnit, Go test, xUnit, RSpec), mobile native automation (Maestro), consumer-driven contract testing (Pact), and performance/load/chaos testing (k6). Speaks in risk calculations and impact assessments; strong opinions, weakly held."

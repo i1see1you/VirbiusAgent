@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "VirbiusAgent 四层纵深架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 560],
+    "repository": {
+      "url": "https://github.com/i1see1you/VirbiusAgent",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "148a5659776db8b3ee76cc7050b7790550bf3e6d"
+    },
+    "views": [
+      {
+        "id": "defense-path",
+        "label": "主防御路径",
+        "focus": ["agent", "edge", "gateway", "engine", "mcp"],
+        "note": "工具调用沿端层预检、管层强制、云层终判前进，允许后才到达 MCP。"
+      },
+      {
+        "id": "control-plane",
+        "label": "控制面",
+        "focus": ["auth", "control", "engine"],
+        "note": "virbius-auth 签发 JWT；control 发布规则并消费审计。"
+      },
+      {
+        "id": "session-state",
+        "label": "会话状态",
+        "focus": ["engine", "redis"],
+        "note": "engine 把 session 与 challenge 写到 Redis。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "auth", "type": "security", "label": "virbius-auth", "sublabel": "JWT :8083", "pos": [40, 70], "size": [130, 52], "sources": [{ "path": "virbius-auth/src/main/java/io/virbius/auth/security/JwtIssuer.java", "line": 27, "label": "JwtIssuer" }] },
+    { "id": "control", "type": "frontend", "label": "virbius-control", "sublabel": "规则 · 审计", "pos": [250, 70], "size": [140, 52], "sources": [{ "path": "README.md", "line": 39, "label": "Control Plane" }] },
+    { "id": "agent", "type": "external", "label": "Agent", "sublabel": "MCP client", "pos": [40, 240], "size": [120, 52] },
+    { "id": "edge", "type": "backend", "label": "端层 Edge", "sublabel": "core + proxy", "pos": [230, 240], "size": [130, 52], "sources": [{ "path": "README.md", "line": 51, "label": "Edge" }] },
+    { "id": "gateway", "type": "security", "label": "管层 Gateway", "sublabel": "Higress WASM", "pos": [430, 240], "size": [140, 52], "sources": [{ "path": "README.md", "line": 52, "label": "Gateway" }] },
+    { "id": "engine", "type": "backend", "label": "云层 Engine", "sublabel": "Groovy L3", "pos": [650, 240], "size": [130, 52], "sources": [{ "path": "virbius-engine/src/main/java/io/virbius/engine/eval/EvaluateOrchestrator.java", "line": 275, "label": "evaluate" }] },
+    { "id": "mcp", "type": "external", "label": "MCP Server", "sublabel": "上游工具", "pos": [860, 240], "size": [130, 52] },
+    { "id": "redis", "type": "database", "label": "Redis", "sublabel": "session", "pos": [650, 380], "size": [130, 52], "brand": "redis" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Virbius 安全平台", "wraps": ["auth", "control", "edge", "gateway", "engine", "redis"] }
+  ],
+  "connections": [
+    { "id": "auth-control", "from": "auth", "to": "control", "label": "JWKS", "variant": "security" },
+    { "id": "agent-edge", "from": "agent", "to": "edge", "label": "tools/call", "variant": "emphasis" },
+    { "id": "edge-gateway", "from": "edge", "to": "gateway", "label": "forward" },
+    { "id": "gateway-engine", "from": "gateway", "to": "engine", "label": "/v1/evaluate", "variant": "emphasis", "labelDy": -22 },
+    { "id": "engine-mcp", "from": "engine", "to": "mcp", "label": "allow" },
+    { "id": "engine-redis", "from": "engine", "to": "redis", "label": "session", "labelDy": 24 }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "四层纵深", "items": ["端 / 管 / 云主路径终判", "核层 Falco 旁路观测"] },
+    { "dot": "emerald", "title": "控制面", "items": ["control 发布规则", "auth 签发操作员 JWT"] },
+    { "dot": "rose", "title": "状态", "items": ["Redis 保存 session 与 challenge"] }
+  ]
+}

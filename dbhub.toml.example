@@ -1,0 +1,20 @@
+# DBHub multi-database config (copy → dbhub.toml, fill credentials, keep dbhub.toml gitignored)
+# Docs: https://dbhub.ai/config/toml
+#
+# Start with demo (no file needed): MCP args use --demo
+# For real DB: copy this file to dbhub.toml and point MCP at --config dbhub.toml
+
+[[sources]]
+id = "post-loan-master"
+# MySQL DSN — use env interpolation, never commit real passwords
+dsn = "mysql://${DBHUB_USER}:${DBHUB_PASSWORD}@${DBHUB_HOST}:${DBHUB_PORT}/${DBHUB_DATABASE}?charset=utf8mb4"
+
+# Optional read-only guard (recommended for dev agents)
+# [tools.execute_sql]
+# readonly = true
+# max_rows = 200
+
+# Example second source (disabled — uncomment and set env vars if needed)
+# [[sources]]
+# id = "post-loan-slave"
+# dsn = "mysql://${DBHUB_SLAVE_USER}:${DBHUB_SLAVE_PASSWORD}@${DBHUB_HOST}:${DBHUB_SLAVE_PORT}/${DBHUB_SLAVE_DATABASE}?charset=utf8mb4"

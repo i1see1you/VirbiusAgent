@@ -1,0 +1,19 @@
+# Hindsight 记忆库配置（复制 → hindsight.toml，填写凭证，保持 gitignore）
+# 文档: https://docs.hindsight.vectorize.io/zh-Hans/
+#
+# 每个 bank 的用途、retain 提炼维度等详见 hindsight-banks/<bank_id>.json（可提交仓库）
+# hindsight.toml 仅注册 bank_id → spec 路径；路由/recall/retain 读 spec 文件
+# 新建记忆库：/createKnowledgeBase
+
+[hindsight]
+enabled = false
+default_bank_id = "code"
+
+[hindsight.connection]
+base_url = "https://api.hindsight.vectorize.io"
+api_key = "${HINDSIGHT_API_KEY}"
+tenant = "default"
+
+[[hindsight.banks]]
+bank_id = "code"
+spec = "hindsight-banks/code.json"

@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Virbius Helm 集群工作负载",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 560],
+    "repository": {
+      "url": "https://github.com/i1see1you/VirbiusAgent",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "148a5659776db8b3ee76cc7050b7790550bf3e6d"
+    },
+    "views": [
+      {
+        "id": "ops-path",
+        "label": "控制台入口",
+        "focus": ["ops", "ingress", "control", "mysql"],
+        "note": "操作员经 nginx Ingress 的 control 主机到达控制台，规则落 MySQL。"
+      },
+      {
+        "id": "identity",
+        "label": "操作员身份",
+        "focus": ["auth", "control"],
+        "note": "virbius-auth 单副本 SQLite，control 用 JWKS 校验 JWT。"
+      },
+      {
+        "id": "engine-deps",
+        "label": "引擎依赖",
+        "focus": ["engine", "redis", "ingress"],
+        "note": "engine 主机与 Redis session；Kafka / Ollama / proxy 见卡片。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "ops", "type": "external", "label": "操作员", "sublabel": "浏览器", "pos": [40, 240], "size": [120, 52] },
+    { "id": "ingress", "type": "cloud", "label": "Ingress", "sublabel": "nginx 四主机", "pos": [230, 240], "size": [130, 52], "sources": [{ "path": "deploy/helm/virbius/values.yaml", "line": 9, "label": "ingress" }] },
+    { "id": "auth", "type": "security", "label": "virbius-auth", "sublabel": ":8083 SQLite", "pos": [440, 90], "size": [140, 52], "sources": [{ "path": "deploy/helm/virbius/templates/auth.yaml", "line": 1, "label": "auth" }] },
+    { "id": "control", "type": "frontend", "label": "virbius-control", "sublabel": ":8080", "pos": [440, 240], "size": [140, 52], "sources": [{ "path": "deploy/helm/virbius/values.yaml", "line": 89, "label": "control" }] },
+    { "id": "engine", "type": "backend", "label": "virbius-engine", "sublabel": ":8082", "pos": [440, 380], "size": [140, 52], "sources": [{ "path": "deploy/helm/virbius/values.yaml", "line": 114, "label": "engine" }] },
+    { "id": "mysql", "type": "database", "label": "MySQL 8", "sublabel": ":3306", "pos": [670, 240], "size": [130, 52], "brand": "mysql" },
+    { "id": "redis", "type": "database", "label": "Redis 7", "sublabel": ":6379", "pos": [670, 380], "size": [130, 52], "brand": "redis" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "release virbius", "wraps": ["ingress", "auth", "control", "engine", "mysql", "redis"] }
+  ],
+  "connections": [
+    { "id": "ops-ingress", "from": "ops", "to": "ingress", "label": "HTTPS", "variant": "emphasis" },
+    { "id": "ing-control", "from": "ingress", "to": "control", "label": "control.*", "variant": "emphasis" },
+    { "id": "ing-engine", "from": "ingress", "to": "engine", "label": "engine.*" },
+    { "id": "auth-control", "from": "auth", "to": "control", "label": "JWKS", "variant": "security", "labelDy": 24 },
+    { "id": "control-mysql", "from": "control", "to": "mysql", "label": "JDBC" },
+    { "id": "engine-redis", "from": "engine", "to": "redis", "label": "session" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "四主机", "items": ["range / control / engine / proxy"] },
+    { "dot": "emerald", "title": "依赖", "items": ["control 等 MySQL；engine 等 Redis / Kafka"] },
+    { "dot": "amber", "title": "范围", "items": ["Higress 与 Falco 不在本 chart"] }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "effective_action 裁决生命周期",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 680],
+    "views": [
+      {
+        "id": "main-rail",
+        "label": "主裁决轨",
+        "focus": ["received", "precheck", "evaluate", "merge", "allow"],
+        "note": "从收到 tools/call 到 Groovy 合并信号并放行。"
+      },
+      {
+        "id": "human-gate",
+        "label": "人审等待",
+        "focus": ["evaluate", "challenge", "merge", "review"],
+        "note": "challenge 与 review 可回到裁决，不是终态。"
+      },
+      {
+        "id": "deny-exits",
+        "label": "拒绝出口",
+        "focus": ["merge", "block"],
+        "note": "block / deny 不再转发上游。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "main", "label": "裁决阶段" },
+    { "id": "waiting", "label": "人审等待" },
+    { "id": "terminal", "label": "拒绝终态" }
+  ],
+  "states": [
+    { "id": "received", "type": "start", "label": "已接收", "sublabel": "tools/call", "lane": "main", "col": 0, "step": "01" },
+    { "id": "precheck", "type": "active", "label": "端层预检", "sublabel": "License", "lane": "main", "col": 1, "step": "02" },
+    { "id": "evaluate", "type": "active", "label": "云层评估", "sublabel": "规则 + 模型", "lane": "main", "col": 2, "step": "03" },
+    { "id": "merge", "type": "decision", "label": "ActionMerge", "sublabel": "Groovy L3", "lane": "main", "col": 3, "step": "04" },
+    { "id": "allow", "type": "success", "label": "allow", "sublabel": "转发上游", "lane": "main", "col": 4, "step": "05" },
+    { "id": "challenge", "type": "waiting", "label": "challenge", "sublabel": "Redis 审批单", "lane": "waiting", "col": 0 },
+    { "id": "review", "type": "waiting", "label": "review", "sublabel": "控制台队列", "lane": "waiting", "col": 1 },
+    { "id": "block", "type": "failure", "label": "block", "sublabel": "EngineBlocked", "lane": "terminal", "col": 0 }
+  ],
+  "transitions": [
+    { "id": "eval-challenge", "from": "evaluate", "to": "challenge", "variant": "security", "route": "drop" },
+    { "id": "challenge-resume", "from": "challenge", "to": "evaluate", "variant": "emphasis", "label": "批准 token", "labelDx": -48 },
+    { "id": "merge-review", "from": "merge", "to": "review", "variant": "default", "route": "drop" },
+    { "id": "review-merge", "from": "review", "to": "merge", "variant": "emphasis", "label": "人工结论", "labelDx": 48 },
+    { "id": "merge-block", "from": "merge", "to": "block", "variant": "security" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "主路径", "items": ["预检未命中 fast path 才上云", "Groovy 合并各层信号后放行"] },
+    { "dot": "rose", "title": "等待与终态", "items": ["challenge / review 可回到裁决", "block / deny 不再转发 MCP"] }
+  ]
+}

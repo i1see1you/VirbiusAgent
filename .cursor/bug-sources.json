@@ -1,0 +1,23 @@
+{
+  "env_defaults": {
+    "frontend_base_url": "http://127.0.0.1:9001",
+    "backend_base_url": "http://127.0.0.1:8093",
+    "notes": "与本地 launch / deploy-test 一致；复现 bug 时优先用此环境",
+    "bug_tracker_user": "",
+    "bug_tracker_user_aliases": []
+  },
+  "sources": [
+    {
+      "id": "example-bug-tracker",
+      "label": "示例：Gitee 缺陷列表页",
+      "type": "web",
+      "url": "https://gitee.com/your-org/your-repo/issues?state=open",
+      "list_query": "优先筛选「指派给我的/我负责的」。只提取状态为未完成、未验证、未验收、未取消、且未标明无法复现的缺陷（如：未修复、待处理、新建、进行中、已确认等）。排除已完成、已修复、已验证、已验收、已取消、无法复现、已关闭。每条尽量提取：编号(id)、标题(title)、状态(status)、创建时间(created_at)、更新时间(updated_at)、描述摘要(summary)、描述全文(description，列表可见则给全文否则摘要)、复现步骤(steps)、期望(expected)、实际(actual)、最近评论 comments 数组（最多5条，字段 author/at/body）、附件或截图链接(attachments)、登录提示(login_hints)、环境(environment)、详情页 url、负责人(assignee)、报告人(reporter)；同时返回 current_login_user。不要为列表里每一条都点开详情页（太慢）；列表页看不到的字段可留空，选定后再用 detail_query 补全。",
+      "unfixed_status_keywords": ["未修复", "待修复", "open", "reopened", "待处理", "新建", "进行中", "已确认", "处理中"],
+      "excluded_status_keywords": ["已完成", "完成", "已解决", "已修复", "修复完成", "已关闭", "closed", "resolved", "done", "fixed", "已验证", "验证通过", "已验收", "验收通过", "verified", "accepted", "已取消", "取消", "cancelled", "canceled", "无法复现", "不能复现", "不可复现", "cannot reproduce", "not reproducible"],
+      "detail_query_template": "打开缺陷 {bug_id}，返回 JSON 对象字段：id、title、status、assignee、reporter、created_at、updated_at、url、description（完整描述）、steps（复现步骤）、expected、actual、comments（全部或最近20条，每项 author/at/body）、attachments（截图/附件 URL 列表）、login_hints（描述或截图中的账号密码/登录提示）、environment。便于写入 list-cache 供后续复现。",
+      "verify_query_template": "打开缺陷 {bug_id}，当前状态是否已变为已修复/已关闭；若仍为未修复则列出最新评论",
+      "complete_query_template": "打开缺陷 {bug_id}，将状态改为「已完成」（或等价的已修复/已关闭），并补充评论：代码已合入主分支并推送（change-id: {change_id}）。确认保存成功后回报最终状态"
+    }
+  ]
+}

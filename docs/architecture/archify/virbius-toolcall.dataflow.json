@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "工具调用裁决与审计数据流",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 560],
+    "views": [
+      {
+        "id": "adjudicate",
+        "label": "终判主路径",
+        "focus": ["agent", "proxy", "engine", "mcp"],
+        "note": "tools/call 经 mcp-proxy 交给 engine，allow 后转发 MCP Server。"
+      },
+      {
+        "id": "session",
+        "label": "会话状态",
+        "focus": ["engine", "kafka"],
+        "note": "session 在 Redis；审计事件进 Kafka。"
+      },
+      {
+        "id": "audit",
+        "label": "审计消费",
+        "focus": ["engine", "kafka", "control"],
+        "note": "审计事件进 Kafka，control 的 AuditEventIngestor 落库展示。"
+      }
+    ]
+  },
+  "stages": [
+    { "label": "端层" },
+    { "label": "代理" },
+    { "label": "云层终判" },
+    { "label": "状态" },
+    { "label": "消费" }
+  ],
+  "nodes": [
+    { "id": "agent", "type": "frontend", "label": "Agent", "sublabel": "tools/call", "stage": 0, "row": 0 },
+    { "id": "proxy", "type": "backend", "label": "mcp-proxy", "sublabel": "预检", "stage": 1, "row": 0 },
+    { "id": "engine", "type": "backend", "label": "engine", "sublabel": "ActionMerge", "stage": 2, "row": 0 },
+    { "id": "kafka", "type": "messagebus", "label": "Kafka", "sublabel": "audit", "stage": 3, "row": 2, "brand": "apache-kafka" },
+    { "id": "mcp", "type": "external", "label": "MCP Server", "sublabel": "上游", "stage": 4, "row": 0 },
+    { "id": "control", "type": "frontend", "label": "control", "sublabel": "审计看板", "stage": 4, "row": 2 }
+  ],
+  "flows": [
+    { "from": "agent", "to": "proxy", "label": "tools/call", "classification": "JSON-RPC", "variant": "emphasis" },
+    { "from": "proxy", "to": "engine", "label": "POST /v1/evaluate", "classification": "role=tool_call", "variant": "emphasis" },
+    { "from": "engine", "to": "mcp", "label": "allow 转发", "classification": "effective_action", "variant": "emphasis", "route": "straight" },
+    { "from": "engine", "to": "kafka", "label": "audit", "classification": "at-least-once" },
+    { "from": "kafka", "to": "control", "label": "ingest", "classification": "MySQL sink" }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "裁决", "items": ["Groovy L3 产出 effective_action"] },
+    { "dot": "emerald", "title": "状态", "items": ["Kafka 审计 → control 落库"] },
+    { "dot": "rose", "title": "模型", "items": ["高风险才打 VirbiusGuard"] }
+  ]
+}

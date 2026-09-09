@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "tools/call 终判时序",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 640],
+    "column_fit": "spread",
+    "views": [
+      {
+        "id": "request-eval",
+        "label": "请求与终判",
+        "focus": ["agent", "proxy", "engine"],
+        "note": "mcp-proxy 在转发上游前调用 POST /v1/evaluate。"
+      },
+      {
+        "id": "allow-forward",
+        "label": "允许并转发",
+        "focus": ["engine", "proxy", "mcp", "agent"],
+        "note": "effective_action=allow 后才把 tools/call 交给 MCP Server。"
+      },
+      {
+        "id": "audit-tail",
+        "label": "审计回写",
+        "focus": ["engine", "redis", "kafka"],
+        "note": "session 更新不阻塞 Agent 收到 tool_result。"
+      }
+    ]
+  },
+  "participants": [
+    { "id": "agent", "type": "external", "label": "Agent", "sublabel": "client" },
+    { "id": "proxy", "type": "backend", "label": "mcp-proxy", "sublabel": "pipeline" },
+    { "id": "engine", "type": "backend", "label": "engine", "sublabel": "evaluate" },
+    { "id": "redis", "type": "database", "label": "Redis", "sublabel": "session" },
+    { "id": "mcp", "type": "external", "label": "MCP", "sublabel": "upstream" },
+    { "id": "kafka", "type": "messagebus", "label": "Kafka", "sublabel": "audit" }
+  ],
+  "segments": [
+    { "from": 150, "to": 280, "label": "终判" },
+    { "from": 290, "to": 400, "label": "转发" },
+    { "from": 410, "to": 500, "label": "审计" }
+  ],
+  "messages": [
+    { "id": "call", "from": "agent", "to": "proxy", "y": 160, "label": "tools/call", "variant": "emphasis" },
+    { "id": "evaluate", "from": "proxy", "to": "engine", "y": 190, "label": "POST /v1/evaluate", "variant": "emphasis" },
+    { "id": "risk", "from": "engine", "to": "redis", "y": 220, "label": "updateRiskScore" },
+    { "id": "risk-ok", "from": "redis", "to": "engine", "y": 248, "label": "session score", "variant": "return" },
+    { "id": "action", "from": "engine", "to": "proxy", "y": 276, "label": "allow", "variant": "return" },
+    { "id": "forward", "from": "proxy", "to": "mcp", "y": 310, "label": "tools/call", "variant": "emphasis" },
+    { "id": "result", "from": "mcp", "to": "proxy", "y": 338, "label": "tool_result", "variant": "return" },
+    { "id": "reply", "from": "proxy", "to": "agent", "y": 370, "label": "tool_result", "variant": "return" },
+    { "id": "audit", "from": "engine", "to": "kafka", "y": 438, "label": "audit event", "variant": "dashed" }
+  ],
+  "activations": [
+    { "participant": "proxy", "from": 160, "to": 380, "type": "backend" },
+    { "participant": "engine", "from": 190, "to": 286, "type": "backend" },
+    { "participant": "redis", "from": 215, "to": 254, "type": "database" },
+    { "participant": "mcp", "from": 305, "to": 344, "type": "external" },
+    { "participant": "kafka", "from": 405, "to": 440, "type": "messagebus" }
+  ],
+  "cards": [
+    { "dot": "emerald", "title": "主路径", "items": ["proxy 在转发前同步终判", "allow 才到达 MCP Server"] },
+    { "dot": "rose", "title": "拦截", "items": ["block 返回 EngineBlocked", "challenge 在 Redis 建单"] },
+    { "dot": "orange", "title": "旁路", "items": ["output review 按风险触发", "审计写入 Kafka，不挡时延"] }
+  ]
+}

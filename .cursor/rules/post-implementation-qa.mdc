@@ -1,0 +1,56 @@
+---
+description: After implementation — BMAD TEA QA (unit/E2E) + ponytail review before done
+alwaysApply: true
+---
+
+# Post-implementation QA gate (dev-workflow)
+
+**Explicit trigger:** user runs **`/implementation-qa`** — follow `dev-workflow/workflows/implementation-qa.md` end-to-end. (`/qa` is mattpocock QA session / GitHub issues, not this gate.)
+
+**Passive trigger:** when application code is implemented and you are about to mark work **done**, either run `/implementation-qa` or complete the same steps below unless the user explicitly skips.
+
+Prerequisite: **bmad** pack installed (`/install-skills bmad`). TEA skills live under `.agents/skills/bmad-testarch-*`.
+
+## 1. BMAD TEA — design then automate
+
+Use change-id or feature name as folder slug.
+
+| Step | Skill / action | Output |
+|------|----------------|--------|
+| Test design | `bmad-testarch-test-design` | `{code-root}/docs/test/bmad-tea/<change-id>/test-design.md` |
+| Automate | `bmad-testarch-automate` (or `bmad-testarch-atdd` for new flows) | Tests + optional `README.md` / run scripts in same folder |
+
+**Backend — detect language, do not assume Java**
+
+Find the diff's nearest `go.mod` / `Cargo.toml` / `pom.xml` / `pyproject.toml` / `package.json` / … then run **that** stack's tests (see `workflows/implementation-qa.md` table). Examples: `go test ./...`, `cargo test`, `mvn test`, `pytest`, `npm test`. Write P0 tests in the same language and layout the repo already uses.
+
+**UI**
+
+If this change has user-facing UI: run the project's existing E2E (Playwright / Cypress / … per `e2e/README.md` or CI). `--skip-e2e` skips UI only.
+
+**Other packages**: add tests only when this change touches them; same TEA doc tree under that package's `docs/test/bmad-tea/` if applicable.
+
+Do **not** claim QA complete with only a test-design doc — **implement and run** at least P0 automated checks from the design.
+
+## 2. Ponytail review (mandatory)
+
+After tests exist (or alongside fixing gaps), run **ponytail-review** on the **implementation diff**:
+
+- Hunt over-engineering: delete / stdlib / yagni / shrink
+- End with `net: -N lines possible` or `Lean already. Ship.`
+- Fix trivial findings; call out non-trivial trade-offs to the user
+
+Optional: `bmad-testarch-test-review` on new test files.
+
+## 3. Definition of done (report to user)
+
+Before "完成", summarize:
+
+- Test design path + P0 cases automated (backend / E2E)
+- Commands run + pass/fail
+- Ponytail review outcome (1–3 bullets)
+- Known gaps deferred (with user ack)
+
+## Exemptions
+
+Skip only when user says **skip QA**, **hotfix no tests**, or change is **docs/config-only** with no runtime behavior.

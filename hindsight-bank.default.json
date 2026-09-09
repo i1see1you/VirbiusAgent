@@ -1,0 +1,57 @@
+{
+  "version": "1",
+  "bank": {
+    "retain_mission": "From a senior software architect perspective, extract reusable engineering methodology—not feature changelogs. Capture: (1) solution and architecture patterns with trade-offs and when to apply them; (2) data structure designs (entities, DTOs, invariants, contracts) generalized beyond this task; (3) database design patterns (schema, indexes, migrations, query paths, consistency); (4) coding standards and project conventions (layering, naming, error handling, testing); (5) performance optimization methods (bottleneck identification, batching, parallelism, caching, indexing) with applicable boundaries. Prefer abstract, transferable lessons. Ignore debugging noise, transient hacks, secrets, PII, and file-level diffs without rationale.",
+    "enable_observations": true,
+    "observations_mission": "Track stable, reusable project engineering knowledge: architecture patterns, data models, database schemas, team conventions, review standards, and performance practices that should guide future design and implementation.",
+    "disposition_literalism": 5,
+    "disposition_skepticism": 3
+  },
+  "mental_models": [
+    {
+      "id": "project-context",
+      "name": "Project Context",
+      "source_query": "What is the project's tech stack, architecture, and key conventions? What are the main components and how do they fit together?",
+      "max_tokens": 2048,
+      "trigger": {
+        "refresh_after_consolidation": true
+      }
+    },
+    {
+      "id": "developer-preferences",
+      "name": "Developer Preferences",
+      "source_query": "What are the developer's preferences for tools, libraries, coding style, and workflow? How do they like code to be written and reviewed?",
+      "max_tokens": 1024,
+      "trigger": {
+        "refresh_after_consolidation": true
+      }
+    },
+    {
+      "id": "review-patterns",
+      "name": "Review Patterns",
+      "source_query": "In code review, what does this developer consistently flag or care about (bugs, style, security, tests), and what do they consider acceptable? What categories of feedback recur?",
+      "max_tokens": 1024,
+      "trigger": {
+        "refresh_after_consolidation": true
+      }
+    },
+    {
+      "id": "data-models",
+      "name": "Data Models & Database Design",
+      "source_query": "What are the core data structures (classes, DTOs, interfaces) and database designs (tables, relationships, indexes, migrations) used in this project? How do they relate to each other and to the business logic?",
+      "max_tokens": 4096,
+      "trigger": {
+        "refresh_after_consolidation": true
+      }
+    },
+    {
+      "id": "architecture-and-performance",
+      "name": "Architecture & Performance Patterns",
+      "source_query": "What reusable solution patterns, architectural trade-offs, and performance optimization methods (batching, parallel queries, index design, SQL slimming, caching) have been established? When should each be applied and what are the limits?",
+      "max_tokens": 4096,
+      "trigger": {
+        "refresh_after_consolidation": true
+      }
+    }
+  ]
+}
