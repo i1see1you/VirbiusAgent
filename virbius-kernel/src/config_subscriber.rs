@@ -507,7 +507,7 @@ fn send_sighup_to_falco() -> Vec<i32> {
                 }
             }
         }
-        return signaled;
+        signaled
     }
     #[cfg(not(target_os = "linux"))]
     {

@@ -970,8 +970,10 @@ mod tests {
 
     #[test]
     fn oci_config_uses_applied_memory_limit() {
-        let mut config = GvisorPoolConfig::default();
-        config.memory_limit_bytes = 42 * 1024 * 1024;
+        let config = GvisorPoolConfig {
+            memory_limit_bytes: 42 * 1024 * 1024,
+            ..GvisorPoolConfig::default()
+        };
         let pool = GvisorPool::new(config);
         let parsed: serde_json::Value =
             serde_json::from_str(&pool.build_oci_config(Language::Python)).unwrap();
