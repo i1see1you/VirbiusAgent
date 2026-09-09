@@ -1,0 +1,10 @@
+# config-subscriber test image: static musl binary + busybox pgrep.
+# Build context must contain falco-config-subscriber (aarch64-unknown-linux-musl),
+# copied there by test-falco-full-chain-docker.sh.
+#
+# NOTE: the binary is deliberately renamed to "cfg-subscriber". The subscriber
+# signals falco via `pgrep falco`, whose regex also matches its own comm
+# ("falco-config-su...") — it would SIGHUP itself to death (exit 129).
+FROM alpine:3.20
+COPY falco-config-subscriber /usr/local/bin/cfg-subscriber
+ENTRYPOINT ["/usr/local/bin/cfg-subscriber"]

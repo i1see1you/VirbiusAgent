@@ -13,6 +13,7 @@ import io.virbius.control.service.BundleReleaseService;
 import io.virbius.control.service.BundleStagingService;
 import io.virbius.control.service.RolloutDashboardService;
 import io.virbius.control.service.deploy.DeployRolloutService;
+import io.virbius.control.service.deploy.KernelConvergenceService;
 import io.virbius.control.service.deploy.NodeRegistryService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.ArrayList;
@@ -38,6 +39,7 @@ public class DeployRolloutController {
     private final BundleStagingService stagingService;
     private final RegistryRepository ruleRepo;
     private final RolloutDashboardService dashboardService;
+    private final KernelConvergenceService kernelConvergenceService;
 
     public DeployRolloutController(
             DeployRolloutService deployRolloutService,
@@ -46,7 +48,8 @@ public class DeployRolloutController {
             BundleReleaseService releaseService,
             BundleStagingService stagingService,
             RegistryRepository ruleRepo,
-            RolloutDashboardService dashboardService) {
+            RolloutDashboardService dashboardService,
+            KernelConvergenceService kernelConvergenceService) {
         this.deployRolloutService = deployRolloutService;
         this.rolloutRepo = rolloutRepo;
         this.nodeRegistryService = nodeRegistryService;
@@ -54,6 +57,7 @@ public class DeployRolloutController {
         this.stagingService = stagingService;
         this.ruleRepo = ruleRepo;
         this.dashboardService = dashboardService;
+        this.kernelConvergenceService = kernelConvergenceService;
     }
 
     @GetMapping("/next-version")
@@ -255,9 +259,11 @@ public class DeployRolloutController {
                 .map(this::toEventMap).toList());
         m.put("cloud_nodes", nodeRegistryService.listNodes("cloud", tenantId));
         m.put("gateway_nodes", nodeRegistryService.listNodes("gateway", tenantId));
+        m.put("kernel_nodes", nodeRegistryService.listNodes("kernel", tenantId));
         m.put("pool_distribution", Map.of(
                 "cloud", nodeRegistryService.poolDistribution("cloud", tenantId),
-                "gateway", nodeRegistryService.poolDistribution("gateway", tenantId)));
+                "gateway", nodeRegistryService.poolDistribution("gateway", tenantId),
+                "kernel", nodeRegistryService.poolDistribution("kernel", tenantId)));
         return ApiResult.ok(m);
     }
 
@@ -288,7 +294,22 @@ public class DeployRolloutController {
                 .map(this::toEventMap).toList());
         m.put("cloud_nodes", nodeRegistryService.listNodes("cloud", tenantId));
         m.put("gateway_nodes", nodeRegistryService.listNodes("gateway", tenantId));
+        m.put("kernel_nodes", nodeRegistryService.listNodes("kernel", tenantId));
         return ApiResult.ok(m);
+    }
+
+    /**
+     * Advisory per-kernel-node convergence view: what each falco node should run vs what it
+     * reports as applied. Read-only; never blocks rollout transitions.
+     */
+    @GetMapping("/{deployId}/convergence")
+    public ApiResult<Map<String, Object>> convergence(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("deployId") String deployId) {
+        DeployRollout rollout = rolloutRepo.get(deployId)
+                .filter(r -> r.tenantId().equals(tenantId))
+                .orElseThrow(() -> new BusinessException("Deployment not found: " + deployId));
+        return ApiResult.ok(kernelConvergenceService.convergence(tenantId, rollout));
     }
 
     // ---------------------------------------------------------------

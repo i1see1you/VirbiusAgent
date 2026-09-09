@@ -198,7 +198,11 @@ public class PromotionGateService {
         Map<String, Object> eval = evaluate(tenantId, current, targetState, targetCanaryPercent);
         boolean pass = Boolean.TRUE.equals(eval.get("pass"));
         TenantRolloutPolicy policy = policyRepository.getOrDefault(tenantId);
-        boolean forced = force && policy.allowForce() && comment != null && !comment.isBlank();
+        // dry_run -> full is a hard ban: it skips every data-accumulation gate by design,
+        // so it must not be force-bypassable.
+        boolean hardBanned = RolloutState.DRY_RUN.value().equals(eval.get("from_state"))
+                && RolloutState.FULL.value().equals(eval.get("to_state"));
+        boolean forced = !hardBanned && force && policy.allowForce() && comment != null && !comment.isBlank();
         recordGateLog(
                 tenantId,
                 current.ruleId(),

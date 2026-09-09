@@ -7,6 +7,7 @@ import io.virbius.engine.cache.RuleEntry;
 import io.virbius.engine.eval.SessionRiskManager;
 import io.virbius.policy.BindScope;
 import io.virbius.policy.MatchContext;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -76,6 +77,9 @@ public class FalcoAlertController {
 
     /** Redis key prefix for cgroup reverse index, written by pidmap.rs. */
     private static final String CGROUP_KEY_PREFIX = "cgroup_trace:";
+
+    /** Rule tag emitted by FalcoConfigBuilder for dry_run rules (observe-only, no scoring). */
+    private static final String DRY_RUN_TAG = "virbius_state:dry_run";
 
     private final SessionRiskManager riskManager;
     private final Optional<JedisPool> jedisPool;
@@ -167,6 +171,20 @@ public class FalcoAlertController {
         if (!shouldProcessAlert(tenantId, rule, appId)) {
             return Map.of("status", "filtered", "reason", "bind_scope_mismatch",
                     "rule", rule, "app_id", appId != null ? appId : "");
+        }
+
+        // ── 3.5 dry_run rules observe only ──
+        // dry_run rules are deployed to nodes (execution plane) so they generate
+        // real alerts for observation, but they must not influence session risk
+        // scores until promoted to canary/full. The rollout state travels as a
+        // virbius_state:* tag on the rule (falco echoes rule tags in its alerts),
+        // which reflects the ruleset actually loaded on the node.
+        if (isDryRunAlert(falcoAlert)) {
+            log.info("falco alert observed (dry_run, not scored): session={} pid={} cgroup={} ppid={} resolved_by={} rule={} app_id={}",
+                    sessionId, hostPid, cgroupId, ppid, resolvedBy, rule, appId);
+            return Map.of("status", "observed", "reason", "dry_run",
+                    "session_id", sessionId, "rule", rule,
+                    "resolved_by", resolvedBy, "app_id", appId != null ? appId : "");
         }
 
         // ── 4. Forward to risk manager ──
@@ -308,6 +326,26 @@ public class FalcoAlertController {
                     ruleId, bindScope, appId);
         }
         return matched;
+    }
+
+    /**
+     * Whether the alert comes from a rule that was in {@code dry_run} state when the node's
+     * ruleset was compiled. Falco echoes the rule's tags in every alert, and
+     * {@code FalcoConfigBuilder} tags each rule with {@code virbius_state:<rollout_state>}.
+     *
+     * <p>Fail-open: alerts without the marker (legacy rulesets, third-party rules) are
+     * scored as before.
+     */
+    private static boolean isDryRunAlert(Map<String, Object> falcoAlert) {
+        Object tagsRaw = falcoAlert.get("tags");
+        if (tagsRaw instanceof List<?> tags) {
+            for (Object t : tags) {
+                if (DRY_RUN_TAG.equals(String.valueOf(t))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     /**

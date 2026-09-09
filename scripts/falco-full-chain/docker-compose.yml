@@ -1,0 +1,112 @@
+# Full-chain kernel-rule test topology on Docker Desktop (macOS).
+#
+# Everything runs inside the Docker Desktop Linux VM so Falco can observe real
+# syscalls via modern_ebpf (kernel 6.x + BTF, confirmed on Docker Desktop >= 24).
+#
+#   control ──compiles──▶ redis artifact/pointer ◀── subscriber ──▶ rules dir
+#                                                              │ SIGHUP (pid: host)
+#   trigger ──syscall──▶   falco (modern_ebpf) ◀─────────────────┘
+#                              │ http_output
+#                              ▼
+#                           engine ──▶ session risk (redis)
+#
+# Usage: driven by scripts/test-falco-full-chain-docker.sh (sets WORK/RULES_DIR/TENANT).
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+
+  control:
+    image: eclipse-temurin:17-jre
+    depends_on: [redis]
+    volumes:
+      - ../../virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar:/app/control.jar:ro
+      - control-data:/data
+    environment:
+      VIRBIUS_DATA_DIR: /data
+      VIRBIUS_REDIS_URL: redis://redis:6379
+      SPRING_PROFILES_ACTIVE: dev
+      # resolvable-but-refused: kafka consumers retry in background (non-fatal),
+      # an unresolvable host makes consumer construction fail hard at startup.
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+    command: ["java", "-jar", "/app/control.jar"]
+    ports:
+      - "8080:8080"
+
+  engine:
+    image: eclipse-temurin:17-jre
+    depends_on: [redis]
+    volumes:
+      - ../../virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar:/app/engine.jar:ro
+    environment:
+      VIRBIUS_DATA_DIR: /tmp/engine-data
+      VIRBIUS_REDIS_URL: redis://redis:6379
+      SPRING_PROFILES_ACTIVE: dev
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+    command: ["java", "-jar", "/app/engine.jar"]
+    ports:
+      - "8082:8082"
+
+  falco:
+    image: falcosecurity/falco:0.41.0
+    privileged: true
+    pid: host
+    depends_on: [engine]
+    environment:
+      # Docker Desktop injects the macOS system proxy into every container;
+      # libcurl honors it and alert POSTs to "engine" die at the proxy.
+      # Neutralize it for in-cluster traffic.
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "*"
+    volumes:
+      # Falco 0.41 stock config loads /etc/falco/rules.d (NOT falco_rules.d —
+      # that path is a Virbius DaemonSet convention via its own configMap).
+      - ${RULES_DIR}:/etc/falco/rules.d
+      # Neutralize the default ruleset so logs only show Virbius rules.
+      - ${WORK}/empty-rules.yaml:/etc/falco/falco_rules.yaml:ro
+      # HOST_ROOT mounts: falco reads /host/proc for container enrichment.
+      # On Docker Desktop the daemon resolves these inside the Linux VM,
+      # so this maps the VM's /proc, /dev and /sys — exactly what falco needs.
+      - /proc:/host/proc:ro
+      - /dev:/dev
+      - /sys:/host/sys:ro
+    # Skip the falcoctl entrypoint (no driver download needed for modern_ebpf);
+    # pass config as -o overrides for determinism.
+    entrypoint: ["falco"]
+    command:
+      - "-o"
+      - "engine.kind=modern_ebpf"
+      - "-o"
+      - "json_output=true"
+      - "-o"
+      - "json_include_output_property=true"
+      - "-o"
+      - "stdout_output.enabled=true"
+      - "-o"
+      - "http_output.enabled=true"
+      - "-o"
+      - "http_output.url=http://engine:8082/api/internal/falco-alert"
+      - "-o"
+      - "webserver.enabled=true"
+
+  subscriber:
+    build:
+      context: .
+      dockerfile: Dockerfile.subscriber
+    pid: host
+    depends_on: [redis, control]
+    volumes:
+      - ${RULES_DIR}:/etc/falco/rules.d
+    environment:
+      VIRBIUS_REDIS_URL: redis://redis:6379
+      VIRBIUS_TENANT_ID: ${TENANT}
+      VIRBIUS_NODE_ID: docker-node-1
+      VIRBIUS_FALCO_RULES_DIR: /etc/falco/rules.d
+
+volumes:
+  control-data:

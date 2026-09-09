@@ -15,6 +15,7 @@ import io.virbius.control.gateway.RuleBindScopeValidator;
 import io.virbius.control.groovy.GroovyRuleBodies;
 import io.virbius.control.ruleauthoring.ConditionCompiler;
 import io.virbius.control.repository.RegistryRepository;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
@@ -112,6 +113,9 @@ public class RuleService {
             throw new IllegalArgumentException("runtime " + req.runtime()
                     + " removed; use lua (gateway) or groovy (cloud) script rules");
         }
+        if ("falco".equals(req.layer()) && !"falco_list".equals(req.runtime())) {
+            requireFalcoCondition(resolveBody(req));
+        }
         String bundleId = req.bundleId() != null && !req.bundleId().isBlank() ? req.bundleId() : "poc-default";
         Map<String, Object> bundleMetadata = store.getBundle(
                         tenantId, bundleId, RuleBindScopeValidator.defaultBundleVersion())
@@ -180,6 +184,29 @@ public class RuleService {
             return String.valueOf(script);
         }
         return GroovyRuleBodies.asScript(req.body());
+    }
+
+    /**
+     * Falco rules must carry a non-empty {@code condition} in their JSON body. An empty condition
+     * would otherwise compile to a match-all expression, flooding the falco engine with alerts.
+     */
+    private static void requireFalcoCondition(String body) {
+        String condition = null;
+        if (body != null && !body.isBlank()) {
+            try {
+                JsonNode node = JSON.readTree(body);
+                JsonNode cond = node != null ? node.get("condition") : null;
+                if (cond != null && cond.isTextual()) {
+                    condition = cond.asText();
+                }
+            } catch (Exception ignored) {
+                // body is not valid JSON -> treated as a missing condition
+            }
+        }
+        if (condition == null || condition.isBlank()) {
+            throw new IllegalArgumentException(
+                    "falco rule body must be a JSON object with a non-empty \"condition\" field");
+        }
     }
 
     private static String toJson(Object value) {

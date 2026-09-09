@@ -16,6 +16,9 @@ spec:
     spec:
       serviceAccountName: falco
       hostNetwork: true
+      # The config-subscriber sidecar must see the falco process to SIGHUP it on rule
+      # changes (pgrep runs against the shared PID namespace).
+      shareProcessNamespace: true
       containers:
         - name: falco
           image: falcosecurity/falco:0.41.0
@@ -68,6 +71,21 @@ spec:
                 secretKeyRef:
                   name: virbius-redis-credentials
                   key: url
+                  optional: true
+            # Stable node identity for canary bucketing. Without this the subscriber falls
+            # back to HOSTNAME (the pod name), which changes on every pod restart and would
+            # drift the node between canary/stable pools.
+            - name: VIRBIUS_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Artifact keys are per-tenant (virbius:falco:pointer:{tenant}). Without this
+            # the subscriber defaults to "default" and never sees another tenant's rules.
+            - name: VIRBIUS_TENANT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: falco-config
+                  key: tenant_id
                   optional: true
           volumeMounts:
             - name: falco-rules-d

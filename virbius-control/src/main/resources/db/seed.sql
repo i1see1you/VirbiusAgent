@@ -527,7 +527,7 @@ INSERT INTO tb_rule_history (
 SELECT 'default', 'builtin_sensitive_file_access', 1, 'demo-default', 'falco', 'falco',
     'WARNING', 100, 'deny',
     '{"bind_scope":"global","description":"Detect access to sensitive system files"}',
-    '{"condition":"evt.type in (open, openat, openat2) and fd.name in (/etc/shadow, /etc/passwd, /root/.ssh/id_rsa, /root/.ssh/authorized_keys) and evt.is_open_write=true","output":"Sensitive file access (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, pname=%proc.name, file=%fd.name, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","filesystem","sensitive"]}',
+    '{"condition":"evt.type in (open, openat, openat2) and fd.name in (/etc/shadow, /etc/passwd, /root/.ssh/id_rsa, /root/.ssh/authorized_keys) and evt.is_open_write=true","output":"Sensitive file access (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, pname=%proc.name, file=%fd.name, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","filesystem","sensitive"]}',
     'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'builtin_sensitive_file_access' AND rule_revision = 1);
 
@@ -543,7 +543,7 @@ INSERT INTO tb_rule_history (
 SELECT 'default', 'builtin_agent_process_spawned', 1, 'demo-default', 'falco', 'falco',
     'WARNING', 80, 'deny',
     '{"bind_scope":"global","description":"Detect new processes spawned by Agent"}',
-    '{"condition":"evt.type in (execve, execveat) and evt.dir=< and not proc.name startswith \"falco\" and not proc.name startswith \"virbius\"","output":"Agent process spawned (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, command=%proc.cmdline, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","process"]}',
+    '{"condition":"evt.type in (execve, execveat) and evt.dir=< and not proc.name startswith \"falco\" and not proc.name startswith \"virbius\"","output":"Agent process spawned (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, command=%proc.cmdline, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","process"]}',
     'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_process_spawned' AND rule_revision = 1);
 
@@ -559,7 +559,7 @@ INSERT INTO tb_rule_history (
 SELECT 'default', 'builtin_agent_outbound_connection', 1, 'demo-default', 'falco', 'falco',
     'NOTICE', 60, 'deny',
     '{"bind_scope":"global","description":"Detect outbound connections from Agent"}',
-    '{"condition":"evt.type=connect and evt.dir=< and fd.typechar=4 and not fd.sip in (127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)","output":"Agent outbound connection (pid=%proc.pid, ppid=%proc.ppid, pname=%proc.name, sip=%fd.sip, sport=%fd.sport, pcmdline=%proc.pcmdline)","priority":"NOTICE","tags":["agent","network"]}',
+    '{"condition":"evt.type=connect and evt.dir=< and fd.typechar=4 and not fd.sip in (127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)","output":"Agent outbound connection (pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, pname=%proc.name, sip=%fd.sip, sport=%fd.sport, pcmdline=%proc.pcmdline)","priority":"NOTICE","tags":["agent","network"]}',
     'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_outbound_connection' AND rule_revision = 1);
 

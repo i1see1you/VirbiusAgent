@@ -80,4 +80,110 @@ class FalcoConfigBuilderTest {
         assertFalse(yaml.contains("r_null"), yaml);
         assertTrue(yaml.contains("- rule: r_full"), yaml);
     }
+
+    // ── Regression tests for the JSON parsing / priority / condition fixes ──
+
+    private static RuleRevision ruleWithBody(String id, String reasonCode, String body) {
+        return new RuleRevision(
+                "t1", id, 1, "b1", "falco", "falco",
+                reasonCode, 0, "enforce", Map.of(),
+                body, "full", null, null, null, null, false, null);
+    }
+
+    @Test
+    void escapedQuoteConditionSurvivesIntact() {
+        // Old hand-written parser truncated at the first escaped quote.
+        when(repo.listCurrentRules("t1", "falco")).thenReturn(List.of(
+                ruleWithBody("r_quote", "WARNING",
+                        "{\"condition\":\"evt.type=execve and not proc.name startswith \\\"falco\\\"\",\"output\":\"x\"}")));
+        String yaml = builder.buildRulesYaml("t1");
+        assertTrue(yaml.contains("condition: evt.type=execve and not proc.name startswith \"falco\""), yaml);
+    }
+
+    @Test
+    void reasonCodeIsNotUsedAsPriority() {
+        // reason_code is a business code, not a falco severity; must fall back to WARNING.
+        when(repo.listCurrentRules("t1", "falco")).thenReturn(List.of(
+                ruleWithBody("r_prio", "SENSITIVE_FILE_WRITE",
+                        "{\"condition\":\"evt.type=open\",\"output\":\"x\"}")));
+        String yaml = builder.buildRulesYaml("t1");
+        assertTrue(yaml.contains("priority: WARNING"), yaml);
+        assertFalse(yaml.contains("SENSITIVE_FILE_WRITE"), yaml);
+    }
+
+    @Test
+    void bodyPriorityIsUsedWhenValid() {
+        when(repo.listCurrentRules("t1", "falco")).thenReturn(List.of(
+                ruleWithBody("r_prio", "WHATEVER",
+                        "{\"condition\":\"evt.type=open\",\"output\":\"x\",\"priority\":\"critical\"}")));
+        String yaml = builder.buildRulesYaml("t1");
+        assertTrue(yaml.contains("priority: CRITICAL"), yaml);
+    }
+
+    @Test
+    void invalidBodyPriorityFallsBackToWarning() {
+        when(repo.listCurrentRules("t1", "falco")).thenReturn(List.of(
+                ruleWithBody("r_prio", "WARNING",
+                        "{\"condition\":\"evt.type=open\",\"output\":\"x\",\"priority\":\"SUPER_URGENT\"}")));
+        String yaml = builder.buildRulesYaml("t1");
+        assertTrue(yaml.contains("priority: WARNING"), yaml);
+    }
+
+    @Test
+    void emptyConditionRuleIsSkipped() {
+        // Never fall back to a match-all condition.
+        when(repo.listCurrentRules("t1", "falco")).thenReturn(List.of(
+                ruleWithBody("r_empty", "WARNING", "{\"condition\":\"  \",\"output\":\"x\"}"),
+                ruleWithBody("r_ok", "WARNING", "{\"condition\":\"evt.type=open\",\"output\":\"x\"}")));
+        String yaml = builder.buildRulesYaml("t1");
+        assertFalse(yaml.contains("r_empty"), yaml);
+        assertFalse(yaml.contains("evt.num > 0"), yaml);
+        assertTrue(yaml.contains("- rule: r_ok"), yaml);
+    }
+
+    @Test
+    void malformedJsonBodyIsSkipped() {
+        when(repo.listCurrentRules("t1", "falco")).thenReturn(List.of(
+                ruleWithBody("r_bad", "WARNING", "not json at all"),
+                ruleWithBody("r_ok", "WARNING", "{\"condition\":\"evt.type=open\",\"output\":\"x\"}")));
+        String yaml = builder.buildRulesYaml("t1");
+        assertFalse(yaml.contains("r_bad"), yaml);
+        assertTrue(yaml.contains("- rule: r_ok"), yaml);
+    }
+
+    @Test
+    void arrayTagsAndItemsAreRenderedQuoted() {
+        when(repo.listCurrentRules("t1", "falco")).thenReturn(List.of(
+                new RuleRevision(
+                        "t1", "l_full", 1, "b1", "falco", "falco_list",
+                        "WARNING", 0, "enforce", Map.of(),
+                        "{\"items\":[\"/etc/shadow\",\"/etc/passwd\"]}",
+                        "full", null, null, null, null, false, null),
+                ruleWithBody("r_tags", "WARNING",
+                        "{\"condition\":\"evt.type=open\",\"output\":\"x\",\"tags\":[\"agent\",\"process\"]}")));
+        String yaml = builder.buildRulesYaml("t1");
+        assertTrue(yaml.contains("items: [\"/etc/shadow\", \"/etc/passwd\"]"), yaml);
+        assertTrue(yaml.contains("tags: [\"agent\", \"process\", virbius_state:full]"), yaml);
+    }
+
+    @Test
+    void stringTagsAreKeptAsIs() {
+        when(repo.listCurrentRules("t1", "falco")).thenReturn(List.of(
+                ruleWithBody("r_tags", "WARNING",
+                        "{\"condition\":\"evt.type=open\",\"output\":\"x\",\"tags\":\"e2e,docker\"}")));
+        String yaml = builder.buildRulesYaml("t1");
+        assertTrue(yaml.contains("tags: [e2e,docker, virbius_state:full]"), yaml);
+    }
+
+    @Test
+    void rolloutStateTagReflectsRuleState() {
+        when(repo.listCurrentRules("t1", "falco")).thenReturn(List.of(
+                new RuleRevision(
+                        "t1", "r_dry", 1, "b1", "falco", "falco",
+                        "WARNING", 0, "enforce", Map.of(),
+                        "{\"condition\":\"evt.type=open\",\"output\":\"x\"}",
+                        "dry_run", null, null, null, null, false, null)));
+        String yaml = builder.buildRulesYaml("t1");
+        assertTrue(yaml.contains("tags: [virbius_state:dry_run]"), yaml);
+    }
 }

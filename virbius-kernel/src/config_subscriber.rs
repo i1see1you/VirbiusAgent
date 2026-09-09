@@ -123,6 +123,16 @@ fn parse_i64(raw: Option<&String>) -> i64 {
     raw.and_then(|s| s.trim().parse().ok()).unwrap_or(0)
 }
 
+/// Delete the managed rules file only when this node previously applied a revision AND
+/// there is no active deploy pointer. An in-flight gray with stable_revision=0 must keep
+/// last-known-good rules (out-of-bucket nodes on a first deploy).
+fn should_clear_on_none(
+    deploy_pointer: &HashMap<String, String>,
+    last_applied: &Option<PoolResolution>,
+) -> bool {
+    last_applied.is_some() && deploy_pointer.is_empty()
+}
+
 fn falco_pointer_key(tenant_id: &str) -> String {
     format!("virbius:falco:pointer:{tenant_id}")
 }
@@ -197,6 +207,70 @@ fn remove_file_if_exists(path: &Path) -> std::io::Result<()> {
     }
 }
 
+/// Outcome of one resolve+apply round, reported to the kernel node registry so the control
+/// plane can show per-node convergence (advisory only — never blocks a rollout).
+struct NodeReport {
+    status: &'static str, // "applied" | "cleared" | "error" | "idle"
+    revision: i64,        // last successfully applied revision, 0 when nothing is applied
+    pool: String,         // "stable" | "canary" | "none"
+    sighup_pids: Vec<i32>,
+    error: String,        // empty unless status == "error"
+}
+
+/// Report baseline reflecting what is currently on disk (i.e. `last_applied`).
+fn baseline_report(last_applied: &Option<PoolResolution>) -> NodeReport {
+    match last_applied {
+        Some(res) => NodeReport {
+            status: "applied",
+            revision: res.revision,
+            pool: res.pool.to_string(),
+            sighup_pids: Vec::new(),
+            error: String::new(),
+        },
+        None => NodeReport {
+            status: "idle",
+            revision: 0,
+            pool: "none".to_string(),
+            sighup_pids: Vec::new(),
+            error: String::new(),
+        },
+    }
+}
+
+/// Reports this node's applied state to the kernel node registry
+/// (`virbius:nodes:kernel:{tenant}:{node_id}`, 60s TTL), following the same heartbeat pattern
+/// as engine/gateway nodes. The control plane reads it for advisory convergence display and
+/// for including kernel nodes in canary bucket calculations.
+fn report_node_status(con: &mut redis::Connection, cfg: &NodeConfig, report: &NodeReport) {
+    let key = format!("virbius:nodes:kernel:{}:{}", cfg.tenant_id, cfg.node_id);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let pids = report
+        .sighup_pids
+        .iter()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let fields: Vec<(&str, String)> = vec![
+        ("pool", report.pool.clone()),
+        ("revision", report.revision.to_string()),
+        ("status", report.status.to_string()),
+        ("error", report.error.clone()),
+        ("sighup_pids", pids),
+        ("last_seen", now.to_string()),
+    ];
+    let result: redis::RedisResult<()> = redis::pipe()
+        .atomic()
+        .hset_multiple(&key, &fields)
+        .expire(&key, 60)
+        .query(con);
+    if let Err(e) = result {
+        eprintln!("config_subscriber: failed to report node status: {e}");
+    }
+}
+
 /// One resolve + apply round. `last_applied` dedupes SIGHUPs so the periodic resync is silent
 /// when nothing changed.
 fn apply_current(
@@ -206,42 +280,89 @@ fn apply_current(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let stable_revision = read_stable_revision(con, &cfg.tenant_id)?;
     let deploy_pointer = read_deploy_pointer(con, &cfg.tenant_id)?;
-    match resolve_pool(stable_revision, &deploy_pointer, &cfg.node_id) {
+    let report = match resolve_pool(stable_revision, &deploy_pointer, &cfg.node_id) {
         Some(res) => {
             if last_applied.as_ref() == Some(&res) {
-                return Ok(());
-            }
-            let key = artifact_key(&cfg.tenant_id, res.revision);
-            let yaml: Option<String> = redis::cmd("GET").arg(&key).query(con)?;
-            match yaml {
-                Some(y) => {
-                    write_active_rules(&cfg.rules_dir, &cfg.tenant_id, &y)?;
-                    send_sighup_to_falco();
-                    println!(
-                        "config_subscriber: applied falco rules tenant={} revision={} pool={}",
-                        cfg.tenant_id, res.revision, res.pool
-                    );
-                    *last_applied = Some(res);
-                }
-                None => {
-                    // Artifact not (yet) written; keep current rules, retry on next tick.
-                    eprintln!("config_subscriber: artifact missing: {key}");
+                // Nothing changed; the heartbeat refresh still happens below.
+                baseline_report(last_applied)
+            } else {
+                let key = artifact_key(&cfg.tenant_id, res.revision);
+                let yaml: Option<String> = redis::cmd("GET").arg(&key).query(con)?;
+                match yaml {
+                    Some(y) => match write_active_rules(&cfg.rules_dir, &cfg.tenant_id, &y) {
+                        Ok(()) => {
+                            let pids = send_sighup_to_falco();
+                            println!(
+                                "config_subscriber: applied falco rules tenant={} revision={} pool={} sighup_pids={:?}",
+                                cfg.tenant_id, res.revision, res.pool, pids
+                            );
+                            *last_applied = Some(res);
+                            let mut r = baseline_report(last_applied);
+                            r.sighup_pids = pids;
+                            r
+                        }
+                        Err(e) => {
+                            eprintln!("config_subscriber: failed to write rules: {e}");
+                            let mut r = baseline_report(last_applied);
+                            r.status = "error";
+                            r.error = format!("write rules: {e}");
+                            r
+                        }
+                    },
+                    None => {
+                        // Artifact not (yet) written; keep current rules, retry on next tick.
+                        eprintln!("config_subscriber: artifact missing: {key}");
+                        let mut r = baseline_report(last_applied);
+                        r.status = "error";
+                        r.error = format!("artifact missing: {key}");
+                        r
+                    }
                 }
             }
         }
         None => {
-            // Nothing deployed for this tenant: ensure no stale managed file stays loaded.
-            if last_applied.is_some() {
-                remove_file_if_exists(&active_file(&cfg.rules_dir, &cfg.tenant_id))?;
-                send_sighup_to_falco();
-                println!(
-                    "config_subscriber: cleared falco rules tenant={} (no active revision)",
-                    cfg.tenant_id
-                );
-                *last_applied = None;
+            // Nothing for this node to run. Only delete the managed file when there is also
+            // no active gray — otherwise a first-deploy (stable_revision=0) would wipe
+            // last-known-good rules on out-of-bucket nodes.
+            if should_clear_on_none(&deploy_pointer, last_applied) {
+                match remove_file_if_exists(&active_file(&cfg.rules_dir, &cfg.tenant_id)) {
+                    Ok(()) => {
+                        let pids = send_sighup_to_falco();
+                        println!(
+                            "config_subscriber: cleared falco rules tenant={} (no active revision)",
+                            cfg.tenant_id
+                        );
+                        *last_applied = None;
+                        let mut r = baseline_report(last_applied);
+                        r.status = "cleared";
+                        r.sighup_pids = pids;
+                        r
+                    }
+                    Err(e) => {
+                        eprintln!("config_subscriber: failed to clear rules: {e}");
+                        let mut r = baseline_report(last_applied);
+                        r.status = "error";
+                        r.error = format!("clear rules: {e}");
+                        r
+                    }
+                }
+            } else {
+                if !deploy_pointer.is_empty() && last_applied.is_none() {
+                    eprintln!(
+                        "config_subscriber: no stable revision during gray tenant={} node={}; keeping current rules",
+                        cfg.tenant_id, cfg.node_id
+                    );
+                    let mut r = baseline_report(last_applied);
+                    r.status = "waiting_stable";
+                    r.error = "no stable revision during gray".to_string();
+                    r
+                } else {
+                    baseline_report(last_applied)
+                }
             }
         }
-    }
+    };
+    report_node_status(con, cfg, &report);
     Ok(())
 }
 
@@ -272,14 +393,6 @@ pub fn run_with(cfg: NodeConfig) {
             return;
         }
     };
-    // Dedicated pub/sub connection (a subscribed connection cannot issue other commands).
-    let mut pubsub_con = match client.get_connection() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("config_subscriber: failed to get pubsub connection: {e}");
-            return;
-        }
-    };
 
     // Remove legacy per-target files before applying anything (K5).
     for legacy in legacy_files(&cfg.rules_dir, &cfg.tenant_id) {
@@ -305,40 +418,56 @@ pub fn run_with(cfg: NodeConfig) {
     }
     let mut last_sync = Instant::now();
 
-    let mut pubsub = pubsub_con.as_pubsub();
-    if let Err(e) = pubsub.subscribe(&[DEPLOY_CHANGED_CHANNEL, FALCO_CHANGED_CHANNEL]) {
-        eprintln!("config_subscriber: subscribe failed: {e}");
-        return;
-    }
-    if let Err(e) = pubsub.set_read_timeout(Some(READ_TIMEOUT)) {
-        eprintln!("config_subscriber: set_read_timeout failed: {e}");
-        return;
-    }
-
+    // Pub/Sub is an optimization. Subscribe failures must not exit the process — the
+    // periodic resync below is what actually keeps the node converged.
     loop {
-        match pubsub.get_message() {
-            Ok(msg) => {
-                let payload: String = match msg.get_payload() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("config_subscriber: bad payload: {e}");
-                        continue;
+        match client.get_connection() {
+            Ok(mut pubsub_con) => {
+                let mut pubsub = pubsub_con.as_pubsub();
+                if let Err(e) = pubsub.subscribe(&[DEPLOY_CHANGED_CHANNEL, FALCO_CHANGED_CHANNEL]) {
+                    eprintln!("config_subscriber: subscribe failed: {e}; retrying");
+                } else if let Err(e) = pubsub.set_read_timeout(Some(READ_TIMEOUT)) {
+                    eprintln!("config_subscriber: set_read_timeout failed: {e}; retrying");
+                } else {
+                    loop {
+                        match pubsub.get_message() {
+                            Ok(msg) => {
+                                let payload: String = match msg.get_payload() {
+                                    Ok(p) => p,
+                                    Err(e) => {
+                                        eprintln!("config_subscriber: bad payload: {e}");
+                                        continue;
+                                    }
+                                };
+                                // Ignore notifications for other tenants.
+                                if message_tenant(&payload).is_none_or(|t| t == cfg.tenant_id) {
+                                    if let Err(e) = apply_current(&mut con, &cfg, &mut last_applied)
+                                    {
+                                        eprintln!("config_subscriber: apply failed: {e}");
+                                    }
+                                    last_sync = Instant::now();
+                                }
+                            }
+                            Err(e) if e.is_timeout() => {
+                                // Read timeout: fall through to the resync check below.
+                            }
+                            Err(e) => {
+                                eprintln!("config_subscriber: pubsub error: {e}; resubscribing");
+                                break;
+                            }
+                        }
+
+                        if last_sync.elapsed() >= RESYNC_INTERVAL {
+                            if let Err(e) = apply_current(&mut con, &cfg, &mut last_applied) {
+                                eprintln!("config_subscriber: resync failed: {e}");
+                            }
+                            last_sync = Instant::now();
+                        }
                     }
-                };
-                // Ignore notifications for other tenants.
-                if message_tenant(&payload).is_none_or(|t| t == cfg.tenant_id) {
-                    if let Err(e) = apply_current(&mut con, &cfg, &mut last_applied) {
-                        eprintln!("config_subscriber: apply failed: {e}");
-                    }
-                    last_sync = Instant::now();
                 }
             }
-            Err(e) if e.is_timeout() => {
-                // Read timeout: fall through to the resync check below.
-            }
             Err(e) => {
-                eprintln!("config_subscriber: pubsub error: {e}");
-                std::thread::sleep(Duration::from_secs(1));
+                eprintln!("config_subscriber: pubsub connection failed: {e}; retrying");
             }
         }
 
@@ -348,27 +477,41 @@ pub fn run_with(cfg: NodeConfig) {
             }
             last_sync = Instant::now();
         }
+        std::thread::sleep(Duration::from_secs(1));
     }
 }
 
-fn send_sighup_to_falco() {
+fn send_sighup_to_falco() -> Vec<i32> {
     #[cfg(target_os = "linux")]
     {
-        let output = std::process::Command::new("pgrep").arg("falco").output();
+        // `pgrep -x falco`: exact comm match. A substring match ("pgrep falco") also matches
+        // this subscriber when its binary name contains "falco" (e.g. falco-config-subscriber,
+        // comm truncated to "falco-config-su"), causing a self-SIGHUP kill (exit 129).
+        let output = std::process::Command::new("pgrep")
+            .arg("-x")
+            .arg("falco")
+            .output();
+        let mut signaled = Vec::new();
         if let Ok(output) = output {
             let pids = String::from_utf8_lossy(&output.stdout);
+            let self_pid = std::process::id() as i32;
             for line in pids.lines() {
                 if let Ok(pid) = line.trim().parse::<i32>() {
+                    if pid == self_pid {
+                        continue; // defense in depth: never signal ourselves
+                    }
                     unsafe {
                         libc::kill(pid, libc::SIGHUP);
                     }
+                    signaled.push(pid);
                 }
             }
         }
+        return signaled;
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (); // SIGHUP only supported on Linux
+        Vec::new() // SIGHUP only supported on Linux
     }
 }
 
@@ -467,6 +610,22 @@ mod tests {
         // bucket_of("node-b") == 93 >= 50, and no stable revision exists yet → nothing to run
         let pointer = dp(&[("canary_falco_revision", "9"), ("canary_percent", "50")]);
         assert_eq!(resolve_pool(0, &pointer, "node-b"), None);
+        // apply_current must NOT delete last-known-good files in this case
+        let last = Some(PoolResolution {
+            revision: 1,
+            pool: "canary",
+        });
+        assert!(!should_clear_on_none(&pointer, &last));
+    }
+
+    #[test]
+    fn clears_only_when_nothing_is_deployed() {
+        let last = Some(PoolResolution {
+            revision: 1,
+            pool: "stable",
+        });
+        assert!(should_clear_on_none(&HashMap::new(), &last));
+        assert!(!should_clear_on_none(&HashMap::new(), &None));
     }
 
     #[test]

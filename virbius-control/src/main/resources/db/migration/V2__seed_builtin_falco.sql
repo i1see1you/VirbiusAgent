@@ -13,6 +13,13 @@
 --
 -- All inserts use WHERE NOT EXISTS so that operator modifications
 -- are preserved on re-run.
+--
+-- NOTE: these migrations only run on MySQL/MariaDB (prod profile;
+-- dev/SQLite uses db/seed.sql instead). MySQL consumes \" in string
+-- literals, so JSON-escaped quotes must be written as \\" here.
+-- The output strings must reference %proc.cgroup.id — Falco only
+-- exports output_fields for fields referenced in the output string,
+-- and the engine's cgroup correlation tier depends on it.
 -- ============================================================
 
 -- ── Rule 1: builtin_sensitive_file_access ──
@@ -36,7 +43,7 @@ SELECT
     0,
     NULL,
     '{"bind_scope":"global","description":"Detect access to sensitive system files"}',
-    '{"condition":"evt.type in (open, openat, openat2) and fd.name in (/etc/shadow, /etc/passwd, /root/.ssh/id_rsa, /root/.ssh/authorized_keys) and evt.is_open_write=true","output":"Sensitive file access (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, pname=%proc.name, file=%fd.name, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","filesystem","sensitive"]}',
+    '{"condition":"evt.type in (open, openat, openat2) and fd.name in (/etc/shadow, /etc/passwd, /root/.ssh/id_rsa, /root/.ssh/authorized_keys) and evt.is_open_write=true","output":"Sensitive file access (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, pname=%proc.name, file=%fd.name, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","filesystem","sensitive"]}',
     'full',
     NULL,
     CURRENT_TIMESTAMP,
@@ -88,7 +95,7 @@ SELECT
     0,
     NULL,
     '{"bind_scope":"global","description":"Detect new processes spawned by Agent"}',
-    '{"condition":"evt.type in (execve, execveat) and evt.dir=< and not proc.name startswith \"falco\" and not proc.name startswith \"virbius\"","output":"Agent process spawned (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, command=%proc.cmdline, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","process"]}',
+    '{"condition":"evt.type in (execve, execveat) and evt.dir=< and not proc.name startswith \\"falco\\" and not proc.name startswith \\"virbius\\"","output":"Agent process spawned (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, command=%proc.cmdline, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","process"]}',
     'full',
     NULL,
     CURRENT_TIMESTAMP,
@@ -140,7 +147,7 @@ SELECT
     0,
     NULL,
     '{"bind_scope":"global","description":"Detect outbound connections from Agent"}',
-    '{"condition":"evt.type=connect and evt.dir=< and fd.typechar=4 and not fd.sip in (127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)","output":"Agent outbound connection (pid=%proc.pid, ppid=%proc.ppid, pname=%proc.name, sip=%fd.sip, sport=%fd.sport, pcmdline=%proc.pcmdline)","priority":"NOTICE","tags":["agent","network"]}',
+    '{"condition":"evt.type=connect and evt.dir=< and fd.typechar=4 and not fd.sip in (127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)","output":"Agent outbound connection (pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, pname=%proc.name, sip=%fd.sip, sport=%fd.sport, pcmdline=%proc.pcmdline)","priority":"NOTICE","tags":["agent","network"]}',
     'full',
     NULL,
     CURRENT_TIMESTAMP,

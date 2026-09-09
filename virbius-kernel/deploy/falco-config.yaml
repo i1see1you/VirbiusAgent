@@ -4,6 +4,9 @@ metadata:
   name: falco-config
   namespace: virbius-system
 data:
+  # Read by the config-subscriber sidecar (VIRBIUS_TENANT_ID). Optional in the
+  # DaemonSet so a missing key still falls back to the binary default "default".
+  tenant_id: "default"
   falco.yaml: |
     json_output: true
     json_include_output_property: true
@@ -39,7 +42,7 @@ data:
       k8s_healthz_endpoint: /healthz
     http_output:
       enabled: true
-      url: "http://virbius-engine.virbius-system.svc.cluster.local:8080/api/internal/falco-alert"
+      url: "http://virbius-engine.virbius-system.svc.cluster.local:8082/api/internal/falco-alert"
       user_agent: "falco/virbius"
       connection_keepalive: true
       retry_wait_seconds: 5

@@ -169,6 +169,13 @@ public class DeployRolloutService {
             long canaryFalcoRev = doFalco
                     ? artifactWriter.writeFalcoCanary(tenantId, "prepare")
                     : stableFalcoRev;
+            // First Falco deploy has no previous stable. Seed one from the canary snapshot
+            // (same pattern as edge: writeEdgeForPool("stable") when stable is empty) so
+            // out-of-bucket nodes keep a baseline instead of running zero rules.
+            if (doFalco && stableFalcoRev == 0 && canaryFalcoRev > 0) {
+                artifactWriter.promoteFalcoToStable(tenantId, canaryFalcoRev);
+                stableFalcoRev = canaryFalcoRev;
+            }
 
             String deployId = UUID.randomUUID().toString().replace("-", "");
             String now = DTF.format(Instant.now());
@@ -244,10 +251,10 @@ public class DeployRolloutService {
                     DeployRolloutStateHelper.validateTransition(fromState, DeployRolloutState.FULL.value());
                     toState = DeployRolloutState.FULL.value();
                     toPercent = 100;
-                    if (rollout.canaryFalcoRevision() != null && rollout.canaryFalcoRevision() > 0
-                            && rollout.canaryFalcoRevision() != rollout.stableFalcoRevision()) {
-                        artifactWriter.promoteFalcoToStable(tenantId, rollout.canaryFalcoRevision());
-                    }
+                    // Do not promote Falco here. Subscriber already runs everyone on the
+                    // canary revision when canary_percent >= 100; stable pointer stays on
+                    // the previous revision so rollback before finalize is a real revert.
+                    // Promote happens in finalize(), matching engine/gateway.
                 } else {
                     DeployRolloutStateHelper.validateTransition(fromState, DeployRolloutState.CANARY.value());
                     toState = DeployRolloutState.CANARY.value();
@@ -518,7 +525,7 @@ public class DeployRolloutService {
     // Lock helpers
     // ---------------------------------------------------------------
 
-    private void acquireLock(String tenantId) {
+    void acquireLock(String tenantId) {
         String lockKey = LOCK_PREFIX + tenantId;
         if (pointerStore.redisAvailable()) {
             String owner = "control-" + Thread.currentThread().getId() + "-" + System.currentTimeMillis();
@@ -530,8 +537,8 @@ public class DeployRolloutService {
                     return;
                 }
             } catch (Exception e) {
-                log.warn("lock acquire error, proceeding without lock: {}", e.getMessage());
-                return;
+                log.warn("lock acquire error, refusing deploy: {}", e.getMessage());
+                throw new BusinessException(503, "Deploy lock unavailable, please retry: " + e.getMessage());
             }
             throw new BusinessException(423, "Deployment in progress, please wait for the current deployment to complete");
         }
@@ -665,7 +672,9 @@ public class DeployRolloutService {
 
     private List<Integer> collectLiveBuckets(String tenantId) {
         List<Integer> buckets = new ArrayList<>();
-        for (String layer : List.of("cloud", "gateway")) {
+        // kernel nodes register via the config-subscriber heartbeat (virbius:nodes:kernel:...)
+        // and must participate in ladder-step selection like the other layers.
+        for (String layer : List.of("cloud", "gateway", "kernel")) {
             try {
                 for (Map<String, String> node : nodeRegistryService.listNodes(layer, tenantId)) {
                     String instanceId = node.get("instance_id");
