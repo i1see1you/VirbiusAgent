@@ -23,4 +23,14 @@ class RolloutStateHelperConcurrentLimitTest {
         assertFalse(RolloutStateHelper.shouldEnforceConcurrentLimit("disabled", "draft", false));
         assertFalse(RolloutStateHelper.shouldEnforceConcurrentLimit("full", "disabled", false));
     }
+
+    @Test
+    void sandboxDeliveryPlaneExcludesDryRun() {
+        assertFalse(RolloutStateHelper.inSandboxDeliveryPlane("draft"));
+        assertFalse(RolloutStateHelper.inSandboxDeliveryPlane("disabled"));
+        assertFalse(RolloutStateHelper.inSandboxDeliveryPlane("dry_run"));
+        assertTrue(RolloutStateHelper.inSandboxDeliveryPlane("canary"));
+        assertTrue(RolloutStateHelper.inSandboxDeliveryPlane("full"));
+        assertTrue(RolloutStateHelper.inExecutionPlane("dry_run"));
+    }
 }

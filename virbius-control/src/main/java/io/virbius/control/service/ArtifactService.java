@@ -25,10 +25,12 @@ import io.virbius.control.repository.ListMetaRepository;
 import io.virbius.control.repository.RegistryRepository;
 import io.virbius.control.repository.TenantRolloutPolicyRepository;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.security.MessageDigest;
 import java.time.Instant;
 import org.slf4j.Logger;
@@ -515,9 +517,13 @@ public class ArtifactService {
         }
         root.put("rules", buildEdgeRuleBlocks(rules));
         root.put("dlp_rules", buildDlpRuleBlocks(rules));
-        root.put("tool_policies", buildToolPolicyBlocks(tenantId));
-        root.put("landlock_profiles", buildLandlockProfiles(tenantId));
-        root.put("gvisor_config", buildGvisorConfig(tenantId));
+        List<Map<String, Object>> landlockProfiles = buildLandlockProfiles(tenantId);
+        Map<String, Object> gvisorConfig = buildGvisorConfig(tenantId);
+        List<Map<String, Object>> toolPolicies = new ArrayList<>(buildToolPolicyBlocks(tenantId));
+        applyEffectiveSandboxTypes(toolPolicies, landlockProfiles, gvisorConfig);
+        root.put("tool_policies", toolPolicies);
+        root.put("landlock_profiles", landlockProfiles);
+        root.put("gvisor_config", gvisorConfig);
 
         Map<String, Object> sdk = new LinkedHashMap<>();
         if (!auditIngestUrl.isBlank()) {
@@ -635,20 +641,85 @@ public class ArtifactService {
     /**
      * Build tool_policies for the Edge Manifest from the tool registry.
      * Each tool has exactly one canonical definition — no conflict resolution needed.
+     *
+     * <p>{@code sandbox_type} is rewritten to the <em>effective</em> type by
+     * {@link #applyEffectiveSandboxTypes} before the file is written. Engine
+     * snapshots still use the registry intent unchanged.
      */
     private List<Map<String, Object>> buildToolPolicyBlocks(String tenantId) {
         return toolRegistryService.buildToolPolicyBlocks(tenantId);
     }
 
     /**
+     * Resolve registry sandbox intent against delivered Landlock/gVisor fragments.
+     *
+     * <p>{@code none} is the kill switch and always wins. {@code landlock}/{@code gvisor}
+     * stay armed only when this Edge package actually contains the matching profile
+     * or a non-empty {@code gvisor_config}. Unarmed intent is packed as {@code none}
+     * (prepare still succeeds). {@code sandbox_intent} preserves the registry value
+     * for operators; MCP executes {@code sandbox_type}.
+     */
+    static void applyEffectiveSandboxTypes(
+            List<Map<String, Object>> toolPolicies,
+            List<Map<String, Object>> landlockProfiles,
+            Map<String, Object> gvisorConfig) {
+        Set<String> armedLandlock = new HashSet<>();
+        if (landlockProfiles != null) {
+            for (Map<String, Object> profile : landlockProfiles) {
+                if (profile == null) {
+                    continue;
+                }
+                Object name = profile.get("tool_name");
+                if (name != null && !name.toString().isBlank()) {
+                    armedLandlock.add(name.toString());
+                }
+            }
+        }
+        boolean gvisorArmed = gvisorConfig != null && !gvisorConfig.isEmpty();
+        if (toolPolicies == null) {
+            return;
+        }
+        for (Map<String, Object> tool : toolPolicies) {
+            if (tool == null) {
+                continue;
+            }
+            String toolName = String.valueOf(tool.getOrDefault("tool_name", ""));
+            String intent = String.valueOf(tool.getOrDefault("sandbox_type", "none"))
+                    .trim()
+                    .toLowerCase();
+            if (intent.isEmpty() || "null".equals(intent)) {
+                intent = "none";
+            }
+            String effective = "none";
+            if ("landlock".equals(intent) && armedLandlock.contains(toolName)) {
+                effective = "landlock";
+            } else if ("gvisor".equals(intent) && gvisorArmed) {
+                effective = "gvisor";
+            } else if ("none".equals(intent)) {
+                effective = "none";
+            }
+            tool.put("sandbox_intent", intent);
+            if (!effective.equals(intent)) {
+                log.warn(
+                        "sandbox intent {} for tool {} not armed; packing sandbox_type={}",
+                        intent,
+                        toolName,
+                        effective);
+            }
+            tool.put("sandbox_type", effective);
+        }
+    }
+
+    /**
      * Build landlock_profiles array for the edge manifest from sandbox layer rules
      * with runtime='landlock'. Each rule's body_json contains:
      * { "tool_name": "read_file", "read_paths": [...], "write_paths": [...], "exec_paths": [...] }
+     * Only {@code canary}/{@code full} rules are emitted; {@code dry_run} is observe-only.
      */
-    private List<Map<String, Object>> buildLandlockProfiles(String tenantId) {
+    List<Map<String, Object>> buildLandlockProfiles(String tenantId) {
         List<Map<String, Object>> profiles = new ArrayList<>();
         for (RuleRevision rule : registryRepo.listCurrentRules(tenantId, "sandbox")) {
-            if (!RolloutStateHelper.inExecutionPlane(rule)) continue;
+            if (!RolloutStateHelper.inSandboxDeliveryPlane(rule)) continue;
             if (!"landlock".equals(rule.runtime())) continue;
             try {
                 String bodyStr = rule.body() instanceof String s ? s : mapper.writeValueAsString(rule.body());
@@ -669,12 +740,12 @@ public class ArtifactService {
 
     /**
      * Build gvisor_config object for the edge manifest from sandbox layer rules
-     * with runtime='gvisor'. The first matching rule in execution plane is used.
+     * with runtime='gvisor'. The first matching canary/full rule (rule_id order) is used.
      * Body JSON contains: { "runsc_path": "...", "memory_limit_bytes": ..., ... }
      */
-    private Map<String, Object> buildGvisorConfig(String tenantId) {
+    Map<String, Object> buildGvisorConfig(String tenantId) {
         for (RuleRevision rule : registryRepo.listCurrentRules(tenantId, "sandbox")) {
-            if (!RolloutStateHelper.inExecutionPlane(rule)) continue;
+            if (!RolloutStateHelper.inSandboxDeliveryPlane(rule)) continue;
             if (!"gvisor".equals(rule.runtime())) continue;
             try {
                 String bodyStr = rule.body() instanceof String s ? s : mapper.writeValueAsString(rule.body());
@@ -694,7 +765,8 @@ public class ArtifactService {
                 log.warn("failed to parse gvisor rule body for {}: {}", rule.ruleId(), e.getMessage());
             }
         }
-        // Return empty config if no gvisor rule exists — edge SDK uses defaults.
+        // No canary/full gVisor rule: write {}. Edge treats this as undelivered
+        // and does not impersonate compiled-in pool defaults.
         return Map.of();
     }
 }

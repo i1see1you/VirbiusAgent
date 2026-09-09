@@ -1,0 +1,39 @@
+{
+  "tenant_id": "docker-sbx-e2e",
+  "manifest_version": "1",
+  "app_id": "",
+  "rules": [],
+  "dlp_rules": [],
+  "tool_policies": [
+    {
+      "tool_name": "execute_python",
+      "risk_class": "high",
+      "sandbox_type": "none",
+      "timeout_ms": 3000,
+      "fast_path": false
+    },
+    {
+      "tool_name": "exec_cmd",
+      "risk_class": "high",
+      "sandbox_type": "gvisor",
+      "sandbox_intent": "gvisor",
+      "timeout_ms": 5000,
+      "fast_path": false
+    }
+  ],
+  "landlock_profiles": [],
+  "gvisor_config": {
+    "runsc_path": "/e2e-gvisor-runsc",
+    "rootfs_path": "/opt/virbius/rootfs",
+    "min_warm": 3,
+    "max_idle": 7,
+    "memory_limit_bytes": 67108864,
+    "cpu_quota": 0.5,
+    "network_disabled": true,
+    "exec_timeout_ms": 5000
+  },
+  "sdk_config": {
+    "audit_sample_rate_allow": 0.1,
+    "audit_sample_rate_hit": 1.0
+  }
+}

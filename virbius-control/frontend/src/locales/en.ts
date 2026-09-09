@@ -773,8 +773,8 @@ export default {
   'hint.prompt': 'Write a natural language description (on save, enters Engine "Security Rule Matrix", judged by 1B model for triggered_id). Only bind_scope needs configuration; no list/cumulative conditions needed.',
   'hint.edge-dsl': 'Edge L0 keyword rule: list_type + keywords. Use form in simple mode; edit JSON body directly in advanced mode.',
   'hint.dlp-dsl': 'Edge DLP masking rule: detects PII entities and replaces placeholders (dry_run detects only, does not mask). intent_action is fixed to allow, does not participate in ActionMerge.',
-  'hint.landlock': 'Landlock file-path isolation rule: specifies allowed read/write/exec path globs for a tool. Enforced by kernel Landlock during P2 sandboxed execution.',
-  'hint.gvisor': 'gVisor untrusted-code sandbox config: specifies container runtime params (memory/CPU/network/timeout). First rule in full state takes effect for execute_python/shell tools.',
+  'hint.landlock': 'Landlock file-path isolation: path globs for one <code>tool_name</code>, enforced in the MCP/Edge sandbox. Shipped in the Edge manifest only at <code>canary</code> or <code>full</code> — <code>dry_run</code> is not delivered. Per-rule canary % does not session-split sandbox; node gray is the Edge bundle canary/stable file.',
+  'hint.gvisor': 'gVisor pool config (memory/CPU/network/timeout). The first <code>canary</code> or <code>full</code> rule (by rule_id) is written into the Edge manifest and applied to the process-wide warm pool on MCP load/reload; <code>dry_run</code> is omitted. An empty config does not use compiled-in defaults. Host runsc/rootfs paths follow environment variables. Per-rule canary % does not session-split sandbox.',
 
   'layer.gateway': 'Gateway',
   'layer.cloud': 'Engine',

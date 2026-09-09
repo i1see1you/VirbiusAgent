@@ -81,10 +81,10 @@ Industry security engineering has proven that **the best defense combines determ
 | **Accuracy** | High — zero false negatives for known patterns | Moderate — depends on training data | Rules as the first line of defense; models as safety net |
 | **Recall** | Low — only catches known patterns | High — generalizes to novel attacks | Models fill the gap for unknown threats |
 | **Latency** | Sub-millisecond | 100ms – 2s (LLM) | Edge rules < 1ms; Cloud models for deep analysis |
-| **Cost** | Near-zero (CPU only) | High (GPU/LLM API per call) | 80%+ traffic handled by rules; models only for high-risk |
+| **Cost** | Near-zero (CPU only) | High (GPU/LLM API per call) | Rules and models combined |
 | **Maintainability** | Transparent, auditable, version-controlled | Black-box, hard to debug | Rules in Git; models as augmenting signal |
 
-> **Design philosophy**: Rules are cheap, fast, and precisely match known threats. Models are expensive but have strong recall for novel attacks. Combining them achieves **high performance, precision and recall** at low cost. This draws on the layered security architecture practices of Alibaba's and Meituan's production security platforms (I previously worked on security architecture and security management at Alibaba and Meituan).
+> **Design philosophy**: Not merely using models to fight models, but combining rules and models. Rules are cheap and fast, and new attacks can be addressed more flexibly with targeted rule patches; models generalize well but are expensive to iterate. Combining them achieves **high performance, precision and recall** at relatively low cost. This draws on the layered security architecture practices of Alibaba's and Meituan's production security platforms (I previously worked on security architecture and security management at Alibaba and Meituan).
 
 We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student model, performing knowledge distillation to create **VirbiusGuard** — which covers and optimizes prompt semantic scenarios that Qwen3Guard does not support (such as Agent behavioral safety, multilingual mixed inputs, etc.), progressively expanding the detection scope of Prompt L1.
 
@@ -112,7 +112,7 @@ We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student mo
 
 1. **Four-layer defense-in-depth** — Most competitors offer a single API checkpoint. VirbiusAgent deploys security at four independent layers (Edge → Gateway → Kernel → Cloud), so even if one layer is bypassed, others still catch the threat. This architecture is inspired by the **defense-in-depth principle** used in Alibaba's and Meituan's production security systems.
 
-2. **Rules first, models second** — Rules handle 80%+ of known threats at sub-millisecond latency with near-zero cost. ML/LLM models are reserved for deep analysis of high-risk requests, providing superior recall for novel attacks. This **hybrid approach** is the industry-proven optimal balance of cost, speed, and coverage.
+2. **Rules and models combined** — Rules catch known threats at sub-millisecond latency; models generalize better. Combining them yields high precision/recall and high performance at relatively low cost. This **hybrid approach** is the industry-proven optimal balance of cost, speed, and coverage.
 
 3. **Agent-native, not just LLM-native** — While competitors focus on prompt-level filtering, VirbiusAgent secures the entire **tool-call lifecycle**: pre-execution precheck → on-path gateway enforcement → runtime kernel observation → post-execution audit. This is purpose-built for the MCP era where Agents execute real actions.
 

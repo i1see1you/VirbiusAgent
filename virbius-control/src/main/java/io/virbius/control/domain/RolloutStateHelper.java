@@ -38,6 +38,23 @@ public final class RolloutStateHelper {
         return s == RolloutState.DRY_RUN || s == RolloutState.CANARY || s == RolloutState.FULL;
     }
 
+    /**
+     * Sandbox (Landlock / gVisor) fragments written into the Edge manifest.
+     * {@code dry_run} stays in the execution plane (edit lock, concurrent slot,
+     * Falco-style observe) but is <em>not</em> delivered: profiles only ship at
+     * {@code canary} or {@code full}. Per-rule {@code canary_percent} is still
+     * stored and validated; it does not session-split sandbox (node gray is the
+     * Edge bundle canary/stable file).
+     */
+    public static boolean inSandboxDeliveryPlane(RuleRevision rule) {
+        return inSandboxDeliveryPlane(stateOf(rule));
+    }
+
+    public static boolean inSandboxDeliveryPlane(String rolloutState) {
+        RolloutState s = RolloutState.parse(rolloutState);
+        return s == RolloutState.CANARY || s == RolloutState.FULL;
+    }
+
     public static boolean isDisabled(RuleRevision rule) {
         return RolloutState.DISABLED == RolloutState.parse(stateOf(rule));
     }

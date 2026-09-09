@@ -1677,6 +1677,22 @@ fn inject_local_tools(mut resp: Value) -> Value {
 
 /// Execute a local code-execution tool in the configured sandbox.
 ///
+/// Run sandbox work on a blocking thread, but always return when `wall` elapses.
+/// Does not abort the blocking closure; inner waits must also be bounded.
+async fn await_sandbox_wall<F>(
+    work: F,
+    wall: std::time::Duration,
+) -> Result<Result<virbius_core::sandbox::ExecutionResult, String>, String>
+where
+    F: FnOnce() -> Result<virbius_core::sandbox::ExecutionResult, String> + Send + 'static,
+{
+    match tokio::time::timeout(wall, tokio::task::spawn_blocking(work)).await {
+        Ok(Ok(inner)) => Ok(inner),
+        Ok(Err(e)) => Err(format!("sandbox spawn failed: {e}")),
+        Err(_) => Err("sandbox_exec_timeout".to_string()),
+    }
+}
+
 /// On Linux: reads the tool's `sandbox_type` from the edge manifest, extracts
 /// the code argument, and delegates to [`virbius_core::sandbox::execute`] or
 /// [`virbius_core::sandbox::run_unsandboxed`] depending on the isolated mode
@@ -1692,7 +1708,7 @@ async fn execute_in_sandbox(
     use std::time::Duration;
     use virbius_core::manifest;
     use virbius_core::sandbox::{
-        execute, run_unsandboxed, ExecutionRequest, GvisorPool, LandlockRules, Language,
+        execute, mcp_wall, run_unsandboxed, ExecutionRequest, GvisorPool, LandlockRules, Language,
         SandboxType,
     };
 
@@ -1745,13 +1761,16 @@ async fn execute_in_sandbox(
                     "unsandboxed_local_exec_not_allowed (set VIRBIUS_ALLOW_UNSANDBOXED=true)",
                 );
             }
-            match tokio::task::spawn_blocking(move || run_unsandboxed(lang_enum, &code, timeout_ms))
-                .await
+            match await_sandbox_wall(
+                move || run_unsandboxed(lang_enum, &code, timeout_ms),
+                mcp_wall(Duration::ZERO, Duration::from_millis(timeout_ms)),
+            )
+            .await
             {
                 Ok(inner) => inner,
                 Err(e) => {
-                    warn!("local exec '{}' unsandboxed spawn failed: {}", tool_name, e);
-                    return jsonrpc_error(-32603, id, &format!("sandbox spawn failed: {e}"));
+                    warn!("local exec '{}' unsandboxed wall: {}", tool_name, e);
+                    return jsonrpc_error(-32603, id, &e);
                 }
             }
         }
@@ -1761,24 +1780,20 @@ async fn execute_in_sandbox(
                 Language::Node => "-e",
                 _ => "-c",
             };
-            // Load the tool's Landlock path allowlist from the edge manifest
-            // (runtime='landlock' rules). If no profile is declared, default to
-            // an empty rule set (Lockshell deny-all exec), which the sandbox
-            // treats as degradation to drop-caps only.
-            let ll = manifest::landlock_profile(tool_name);
+            // Profile must be delivered (canary/full) in this Edge package.
+            // Missing profile is unpaired registry intent — do not apply an
+            // empty deny-all ruleset.
+            let Some(ll) = manifest::landlock_profile(tool_name) else {
+                warn!(
+                    "local exec '{}' denied: landlock profile not delivered",
+                    tool_name
+                );
+                return jsonrpc_error(-32603, id, "sandbox_unavailable");
+            };
             let landlock_rules = LandlockRules {
-                read_paths: ll
-                    .as_ref()
-                    .map(|p| p.read_paths.clone())
-                    .unwrap_or_default(),
-                write_paths: ll
-                    .as_ref()
-                    .map(|p| p.write_paths.clone())
-                    .unwrap_or_default(),
-                exec_paths: ll
-                    .as_ref()
-                    .map(|p| p.exec_paths.clone())
-                    .unwrap_or_default(),
+                read_paths: ll.read_paths.clone(),
+                write_paths: ll.write_paths.clone(),
+                exec_paths: ll.exec_paths.clone(),
                 ..LandlockRules::default()
             };
             let req = ExecutionRequest {
@@ -1790,28 +1805,27 @@ async fn execute_in_sandbox(
                 gvisor_config: None,
                 gvisor_language: None,
             };
-            match tokio::task::spawn_blocking(move || execute(req)).await {
+            match await_sandbox_wall(
+                move || execute(req),
+                mcp_wall(Duration::ZERO, Duration::from_millis(timeout_ms)),
+            )
+            .await
+            {
                 Ok(inner) => inner,
                 Err(e) => {
-                    warn!("local exec '{}' landlock spawn failed: {}", tool_name, e);
-                    return jsonrpc_error(-32603, id, &format!("sandbox spawn failed: {e}"));
+                    warn!("local exec '{}' landlock wall: {}", tool_name, e);
+                    return jsonrpc_error(-32603, id, &e);
                 }
             }
         }
         SandboxType::Gvisor => {
-            let fail_closed = std::env::var("VIRBIUS_SANDBOX_DEGRADE_MODE")
-                .map(|v| v == "fail_closed")
-                .unwrap_or(false);
-            if fail_closed && !GvisorPool::global().is_available() {
+            GvisorPool::apply_from_manifest_if_needed();
+            if !GvisorPool::global().is_available() {
                 warn!(
-                    "local exec '{}' denied: gVisor unavailable, fail_closed",
+                    "local exec '{}' denied: gVisor pool not delivered or runsc missing",
                     tool_name
                 );
-                return jsonrpc_error(
-                    -32603,
-                    id,
-                    "gVisor sandbox unavailable (degrade mode=fail_closed)",
-                );
+                return jsonrpc_error(-32603, id, "sandbox_unavailable");
             }
             let req = ExecutionRequest {
                 sandbox_type: SandboxType::Gvisor,
@@ -1822,11 +1836,21 @@ async fn execute_in_sandbox(
                 gvisor_config: None,
                 gvisor_language: Some(lang_enum),
             };
-            match tokio::task::spawn_blocking(move || execute(req)).await {
+            let limits = GvisorPool::global().delivered_limits();
+            let acquire = limits
+                .as_ref()
+                .map(|c| c.acquire_timeout)
+                .unwrap_or(Duration::from_secs(10));
+            let exec = limits
+                .as_ref()
+                .map(|c| timeout_ms.min(c.exec_timeout.as_millis() as u64))
+                .unwrap_or(timeout_ms);
+            let wall = mcp_wall(acquire, Duration::from_millis(exec));
+            match await_sandbox_wall(move || execute(req), wall).await {
                 Ok(inner) => inner,
                 Err(e) => {
-                    warn!("local exec '{}' gvisor spawn failed: {}", tool_name, e);
-                    return jsonrpc_error(-32603, id, &format!("sandbox spawn failed: {e}"));
+                    warn!("local exec '{}' gvisor wall: {}", tool_name, e);
+                    return jsonrpc_error(-32603, id, &e);
                 }
             }
         }
@@ -1843,38 +1867,36 @@ async fn execute_in_sandbox(
                     .trim()
                     .to_string()
             };
+            let mut meta = serde_json::json!({
+                "sandbox_configured": sandbox_type_str,
+                "sandbox_used": r.sandbox_used.as_str(),
+                "degraded": r.degraded
+            });
             if r.degraded {
-                let meta = serde_json::json!({
-                    "sandbox_configured": sandbox_type_str,
-                    "sandbox_used": r.sandbox_used.as_str(),
-                    "degraded": true,
-                    "degrade_note": r.degrade_note
-                });
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{"type": "text", "text": output}],
-                        "isError": is_error,
-                        "_meta": meta
-                    }
-                })
-            } else {
-                let meta = serde_json::json!({
-                    "sandbox_configured": sandbox_type_str,
-                    "sandbox_used": r.sandbox_used.as_str(),
-                    "degraded": false
-                });
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{"type": "text", "text": output}],
-                        "isError": is_error,
-                        "_meta": meta
-                    }
-                })
+                if let Some(note) = &r.degrade_note {
+                    meta["degrade_note"] = serde_json::Value::String(note.clone());
+                }
             }
+            if r.sandbox_used == SandboxType::Gvisor {
+                if let Some(limits) = GvisorPool::global().delivered_limits() {
+                    meta["gvisor_memory_limit_bytes"] =
+                        serde_json::json!(limits.memory_limit_bytes);
+                    meta["gvisor_network_disabled"] = serde_json::json!(limits.network_disabled);
+                    meta["gvisor_cpu_quota"] = serde_json::json!(limits.cpu_quota);
+                    meta["gvisor_min_warm"] = serde_json::json!(limits.min_warm);
+                    meta["gvisor_exec_timeout_ms"] =
+                        serde_json::json!(limits.exec_timeout.as_millis() as u64);
+                }
+            }
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{"type": "text", "text": output}],
+                    "isError": is_error,
+                    "_meta": meta
+                }
+            })
         }
         Err(e) => {
             warn!("local exec '{}' sandbox failed: {}", tool_name, e);
@@ -1893,7 +1915,7 @@ async fn execute_in_sandbox(
     code_arg: &str,
 ) -> Value {
     use virbius_core::manifest;
-    use virbius_core::sandbox::{run_unsandboxed, Language};
+    use virbius_core::sandbox::{mcp_wall, run_unsandboxed, Language};
 
     let code = match args.get(code_arg).and_then(|v| v.as_str()) {
         Some(c) => c.to_string(),
@@ -1928,16 +1950,21 @@ async fn execute_in_sandbox(
         .filter(|&t| t > 0)
         .unwrap_or(30_000);
 
-    let exec_result =
-        match tokio::task::spawn_blocking(move || run_unsandboxed(lang_enum, &code, timeout_ms))
-            .await
-        {
-            Ok(inner) => inner,
-            Err(e) => {
-                warn!("local exec '{}' unsandboxed spawn failed: {}", tool_name, e);
-                return jsonrpc_error(-32603, id, &format!("unsandboxed spawn failed: {e}"));
-            }
-        };
+    let exec_result = match await_sandbox_wall(
+        move || run_unsandboxed(lang_enum, &code, timeout_ms),
+        mcp_wall(
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(timeout_ms),
+        ),
+    )
+    .await
+    {
+        Ok(inner) => inner,
+        Err(e) => {
+            warn!("local exec '{}' unsandboxed wall: {}", tool_name, e);
+            return jsonrpc_error(-32603, id, &e);
+        }
+    };
 
     match exec_result {
         Ok(r) => {
@@ -2101,5 +2128,30 @@ mod tests {
         assert_eq!(strip_tool_prefix("read_file"), "read_file");
         assert_eq!(strip_tool_prefix("fs__read_file"), "read_file");
         assert_eq!(strip_tool_prefix("gh__create_issue"), "create_issue");
+    }
+
+    #[tokio::test]
+    async fn await_sandbox_wall_times_out() {
+        use std::time::Duration;
+        use virbius_core::sandbox::{ExecutionResult, SandboxType};
+
+        let err = await_sandbox_wall(
+            || {
+                std::thread::sleep(Duration::from_millis(200));
+                Ok(ExecutionResult {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    exit_code: 0,
+                    sandbox_used: SandboxType::None,
+                    degraded: false,
+                    degrade_note: None,
+                    landlock_applied: false,
+                })
+            },
+            Duration::from_millis(80),
+        )
+        .await
+        .expect_err("wall must fire");
+        assert!(err.contains("sandbox_exec_timeout"), "got {err}");
     }
 }

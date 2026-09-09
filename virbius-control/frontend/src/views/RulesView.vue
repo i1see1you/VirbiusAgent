@@ -162,6 +162,8 @@
       <p v-if="isPrompt" class="v-hint" v-html="t('hint.prompt')"></p>
       <p v-if="isEdgeDsl" class="v-hint" v-html="t('hint.edge-dsl')"></p>
       <p v-if="isDlp" class="v-hint" v-html="t('hint.dlp-dsl')"></p>
+      <p v-if="form.runtime === 'landlock'" class="v-hint" v-html="t('hint.landlock')"></p>
+      <p v-if="form.runtime === 'gvisor'" class="v-hint" v-html="t('hint.gvisor')"></p>
 
       <div v-if="isScript && form.editor_mode === 'simple'">
         <p class="v-hint">{{ t('rules.condition-hint') }}</p>

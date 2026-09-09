@@ -316,6 +316,169 @@ class ArtifactServiceTest {
         assertEquals(0, dlpBlocks.get(0).get("risk_score"));
     }
 
+    @Test
+    void sandboxProfilesOmitDryRunAndIgnoreCanaryPercent() {
+        RuleRevision dryLandlock = sandboxRule(
+                "aaa_dry_ll",
+                "landlock",
+                "dry_run",
+                null,
+                Map.of(
+                        "tool_name", "dry_tool",
+                        "read_paths", List.of("/tmp/dry/*"),
+                        "write_paths", List.of(),
+                        "exec_paths", List.of("/bin/true")));
+        RuleRevision canaryLandlock = sandboxRule(
+                "bbb_canary_ll",
+                "landlock",
+                "canary",
+                5,
+                Map.of(
+                        "tool_name", "canary_tool",
+                        "read_paths", List.of("/tmp/canary/*"),
+                        "write_paths", List.of(),
+                        "exec_paths", List.of("/bin/true")));
+        RuleRevision fullLandlock = sandboxRule(
+                "ccc_full_ll",
+                "landlock",
+                "full",
+                null,
+                Map.of(
+                        "tool_name", "full_tool",
+                        "read_paths", List.of("/tmp/full/*"),
+                        "write_paths", List.of(),
+                        "exec_paths", List.of("/bin/true")));
+        RuleRevision dryGvisor = sandboxRule(
+                "aaa_dry_gv",
+                "gvisor",
+                "dry_run",
+                null,
+                Map.of("runsc_path", "/opt/dry/runsc", "min_warm", 99));
+        RuleRevision fullGvisor = sandboxRule(
+                "zzz_full_gv",
+                "gvisor",
+                "full",
+                null,
+                Map.of("runsc_path", "/opt/full/runsc", "min_warm", 3));
+
+        when(registryRepo.listCurrentRules(TENANT, "sandbox"))
+                .thenReturn(List.of(dryLandlock, canaryLandlock, fullLandlock, dryGvisor, fullGvisor));
+
+        List<Map<String, Object>> profiles = artifactService.buildLandlockProfiles(TENANT);
+        assertEquals(2, profiles.size());
+        assertEquals(
+                List.of("canary_tool", "full_tool"),
+                profiles.stream().map(p -> p.get("tool_name")).toList());
+        assertFalse(profiles.stream().anyMatch(p -> "dry_tool".equals(p.get("tool_name"))));
+
+        Map<String, Object> gvisor = artifactService.buildGvisorConfig(TENANT);
+        assertEquals("/opt/full/runsc", gvisor.get("runsc_path"));
+        assertEquals(3, gvisor.get("min_warm"));
+    }
+
+    @Test
+    void sandboxGvisorConfigEmptyWhenOnlyDryRun() {
+        RuleRevision dryGvisor = sandboxRule(
+                "gvisor_exec_cmd",
+                "gvisor",
+                "dry_run",
+                null,
+                Map.of("runsc_path", "/opt/virbius/bin/runsc", "min_warm", 1));
+        when(registryRepo.listCurrentRules(TENANT, "sandbox")).thenReturn(List.of(dryGvisor));
+        assertTrue(artifactService.buildGvisorConfig(TENANT).isEmpty());
+        assertTrue(artifactService.buildLandlockProfiles(TENANT).isEmpty());
+    }
+
+    @Test
+    void effectiveSandboxTypeDisarmsUnpairedRegistryIntent() {
+        List<Map<String, Object>> tools = new java.util.ArrayList<>();
+        tools.add(mutableTool("exec_cmd", "gvisor"));
+        tools.add(mutableTool("execute_python", "landlock"));
+        tools.add(mutableTool("shell", "landlock"));
+        tools.add(mutableTool("curl", "none"));
+
+        ArtifactService.applyEffectiveSandboxTypes(tools, List.of(), Map.of());
+
+        assertEquals("none", tools.get(0).get("sandbox_type"));
+        assertEquals("gvisor", tools.get(0).get("sandbox_intent"));
+        assertEquals("none", tools.get(1).get("sandbox_type"));
+        assertEquals("landlock", tools.get(1).get("sandbox_intent"));
+        assertEquals("none", tools.get(2).get("sandbox_type"));
+        assertEquals("none", tools.get(3).get("sandbox_type"));
+        assertEquals("none", tools.get(3).get("sandbox_intent"));
+    }
+
+    @Test
+    void effectiveSandboxTypeArmsWhenProfileAndGvisorConfigDelivered() {
+        List<Map<String, Object>> tools = new java.util.ArrayList<>();
+        tools.add(mutableTool("exec_cmd", "gvisor"));
+        tools.add(mutableTool("execute_python", "landlock"));
+        tools.add(mutableTool("shell", "landlock"));
+        tools.add(mutableTool("curl", "none"));
+
+        List<Map<String, Object>> profiles = List.of(
+                Map.of(
+                        "tool_name", "execute_python",
+                        "read_paths", List.of("/usr/*"),
+                        "write_paths", List.of("/tmp/*"),
+                        "exec_paths", List.of("/usr/bin/*")));
+        Map<String, Object> gvisor = Map.of("runsc_path", "/opt/virbius/bin/runsc", "min_warm", 1);
+
+        ArtifactService.applyEffectiveSandboxTypes(tools, profiles, gvisor);
+
+        assertEquals("gvisor", tools.get(0).get("sandbox_type"));
+        assertEquals("gvisor", tools.get(0).get("sandbox_intent"));
+        assertEquals("landlock", tools.get(1).get("sandbox_type"));
+        assertEquals("none", tools.get(2).get("sandbox_type"));
+        assertEquals("landlock", tools.get(2).get("sandbox_intent"));
+        assertEquals("none", tools.get(3).get("sandbox_type"));
+    }
+
+    @Test
+    void effectiveSandboxTypeKillSwitchNoneWinsEvenIfArmed() {
+        List<Map<String, Object>> tools = new java.util.ArrayList<>();
+        tools.add(mutableTool("execute_python", "none"));
+        List<Map<String, Object>> profiles = List.of(Map.of("tool_name", "execute_python"));
+        ArtifactService.applyEffectiveSandboxTypes(
+                tools, profiles, Map.of("runsc_path", "/opt/virbius/bin/runsc"));
+        assertEquals("none", tools.get(0).get("sandbox_type"));
+        assertEquals("none", tools.get(0).get("sandbox_intent"));
+    }
+
+    private static Map<String, Object> mutableTool(String name, String sandboxType) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("tool_name", name);
+        m.put("sandbox_type", sandboxType);
+        return m;
+    }
+
+    private static RuleRevision sandboxRule(
+            String ruleId,
+            String runtime,
+            String rolloutState,
+            Integer canaryPercent,
+            Map<String, Object> body) {
+        return new RuleRevision(
+                TENANT,
+                ruleId,
+                1,
+                "poc-default",
+                "sandbox",
+                runtime,
+                "SANDBOX",
+                0,
+                "allow",
+                Map.of("bind_scope", "global"),
+                body,
+                rolloutState,
+                canaryPercent,
+                Instant.now(),
+                Instant.now(),
+                null,
+                false,
+                null);
+    }
+
     private static RuleRevision dlpRule(String ruleId, Map<String, Object> body) {
         return new RuleRevision(
                 TENANT,

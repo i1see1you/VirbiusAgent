@@ -27,10 +27,15 @@
 //!        with timeout=5s + memory cgroup limit=128MB
 //! ```
 
+use crate::sandbox::wait::{
+    abort_child, detach_reap, kill_and_wait_brief, recv_buf_timeout, run_command_timed, wait_until,
+    REAP_BUDGET, REAP_STEP,
+};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -86,7 +91,7 @@ impl Language {
 }
 
 /// Configuration for the gVisor pool.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct GvisorPoolConfig {
     /// Path to the `runsc` binary.
     pub runsc_path: String,
@@ -131,6 +136,53 @@ impl Default for GvisorPoolConfig {
     }
 }
 
+impl GvisorPoolConfig {
+    /// Build pool config from a delivered Edge-manifest `gvisor_config`.
+    ///
+    /// Isolation limits come from the rule. Host paths (`runsc_path`,
+    /// `rootfs_path`, `state_root`) are overlaid by `VIRBIUS_*` env vars when set.
+    pub fn from_delivered_manifest(cfg: &crate::manifest::GvisorConfig) -> Self {
+        let exec_timeout_ms = if cfg.exec_timeout_ms == 0 {
+            30_000
+        } else {
+            cfg.exec_timeout_ms
+        };
+        let mut out = Self {
+            runsc_path: cfg.runsc_path.clone(),
+            bundle_root: Self::default().bundle_root,
+            min_warm: cfg.min_warm,
+            max_idle: cfg.max_idle,
+            acquire_timeout: Self::default().acquire_timeout,
+            exec_timeout: Duration::from_millis(exec_timeout_ms),
+            memory_limit_bytes: cfg.memory_limit_bytes,
+            cpu_quota: cfg.cpu_quota,
+            network_disabled: cfg.network_disabled,
+            rootfs_path: cfg.rootfs_path.clone(),
+            state_root: Self::default().state_root,
+        };
+        overlay_host_paths(&mut out);
+        out
+    }
+}
+
+fn overlay_host_paths(config: &mut GvisorPoolConfig) {
+    if let Ok(p) = std::env::var("VIRBIUS_RUNSC_PATH") {
+        if !p.is_empty() {
+            config.runsc_path = p;
+        }
+    }
+    if let Ok(r) = std::env::var("VIRBIUS_GVISOR_ROOTFS") {
+        if !r.is_empty() {
+            config.rootfs_path = r;
+        }
+    }
+    if let Ok(s) = std::env::var("VIRBIUS_GVISOR_STATE_ROOT") {
+        if !s.is_empty() {
+            config.state_root = s;
+        }
+    }
+}
+
 /// A pre-warmed container waiting for a command.
 #[allow(dead_code)]
 struct WarmContainer {
@@ -167,61 +219,151 @@ pub struct GvisorExecResult {
 
 /// The gVisor container pool.
 ///
-/// Thread-safe via internal `Mutex`.  The pool is lazily initialized on
-/// first `execute` call.
+/// Process-wide use goes through [`GvisorPool::global`], which is reconfigured
+/// from the Edge manifest via [`GvisorPool::apply`]. Tests construct isolated
+/// pools with [`GvisorPool::new`].
 pub struct GvisorPool {
-    config: GvisorPoolConfig,
-    warm: Arc<Mutex<HashMap<Language, Vec<WarmContainer>>>>,
-    /// Whether `runsc` is available on this host.
-    pub(crate) runsc_available: bool,
+    inner: Arc<Mutex<GvisorPoolState>>,
 }
 
-/// Process-wide shared gVisor pool, lazily initialized on first use.
-/// Every call to `execute` reuses the same warm-container pool, avoiding
-/// per-call cold-start latency and checking `runsc` availability once.
+struct GvisorPoolState {
+    config: GvisorPoolConfig,
+    warm: HashMap<Language, Vec<WarmContainer>>,
+    runsc_available: bool,
+    /// False when no canary/full gVisor rule is in the current manifest.
+    delivered: bool,
+    generation: u64,
+}
+
+/// Process-wide shared gVisor pool. Inner config is reconfigurable; do not
+/// replace the `OnceLock` with a per-call `GvisorPool::new`.
 static GLOBAL_GVISOR_POOL: OnceLock<GvisorPool> = OnceLock::new();
+static MANIFEST_APPLIED: AtomicBool = AtomicBool::new(false);
 
 impl GvisorPool {
-    /// Get the process-wide shared gVisor pool, initializing it on first access.
+    /// Get the process-wide shared gVisor pool.
     ///
-    /// Configuration is taken from defaults; set `VIRBIUS_RUNSC_PATH`,
-    /// `VIRBIUS_GVISOR_ROOTFS`, and `VIRBIUS_GVISOR_MIN_WARM` to override.
+    /// Starts undelivered until [`apply_from_manifest`] (or first execute)
+    /// loads Edge `gvisor_config`.
     pub fn global() -> &'static GvisorPool {
-        GLOBAL_GVISOR_POOL.get_or_init(|| {
-            let mut config = GvisorPoolConfig::default();
-            if let Ok(p) = std::env::var("VIRBIUS_RUNSC_PATH") {
-                config.runsc_path = p;
-            }
-            if let Ok(r) = std::env::var("VIRBIUS_GVISOR_ROOTFS") {
-                config.rootfs_path = r;
-            }
-            if let Ok(m) = std::env::var("VIRBIUS_GVISOR_MIN_WARM") {
-                if let Ok(n) = m.parse() {
-                    config.min_warm = n;
-                }
-            }
-            if let Ok(s) = std::env::var("VIRBIUS_GVISOR_STATE_ROOT") {
-                if !s.is_empty() {
-                    config.state_root = s;
-                }
-            }
-            GvisorPool::new(config)
-        })
+        GLOBAL_GVISOR_POOL.get_or_init(GvisorPool::undelivered)
     }
 
-    /// Create a new pool with the given configuration.
+    fn undelivered() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(GvisorPoolState {
+                config: GvisorPoolConfig::default(),
+                warm: HashMap::new(),
+                runsc_available: false,
+                delivered: false,
+                generation: 0,
+            })),
+        }
+    }
+
+    /// Apply the current Edge-manifest gVisor config to the process-wide pool.
+    pub fn apply_from_manifest() {
+        let delivered = crate::manifest::gvisor_config();
+        Self::global().apply(delivered);
+        MANIFEST_APPLIED.store(true, Ordering::SeqCst);
+    }
+
+    /// Apply manifest config if bootstrap has not done so yet.
+    pub fn apply_from_manifest_if_needed() {
+        if !MANIFEST_APPLIED.load(Ordering::SeqCst) {
+            Self::apply_from_manifest();
+        }
+    }
+
+    /// Reconfigure this pool from a delivered manifest object.
+    ///
+    /// `None` drains idle containers and marks the pool unavailable.
+    /// Unchanged config is a no-op (in-flight executes keep their containers).
+    pub fn apply(&self, delivered: Option<crate::manifest::GvisorConfig>) {
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match delivered {
+            None => {
+                if !state.delivered {
+                    return;
+                }
+                Self::drain_locked(&mut state);
+                state.delivered = false;
+                state.runsc_available = false;
+                state.generation = state.generation.wrapping_add(1);
+                eprintln!("virbius-gvisor: no delivered gvisor_config; pool drained");
+            }
+            Some(cfg) => {
+                let new_config = GvisorPoolConfig::from_delivered_manifest(&cfg);
+                if state.delivered && state.config == new_config {
+                    state.runsc_available = Path::new(&new_config.runsc_path).exists();
+                    return;
+                }
+                Self::drain_locked(&mut state);
+                let runsc_available = Path::new(&new_config.runsc_path).exists();
+                if !runsc_available {
+                    eprintln!(
+                        "virbius-gvisor: runsc not found at {}, pool unavailable",
+                        new_config.runsc_path
+                    );
+                }
+                state.config = new_config;
+                state.delivered = true;
+                state.runsc_available = runsc_available;
+                state.generation = state.generation.wrapping_add(1);
+            }
+        }
+    }
+
+    /// Isolation limits from the currently delivered config, if any.
+    pub fn delivered_limits(&self) -> Option<GvisorPoolConfig> {
+        let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if state.delivered {
+            Some(state.config.clone())
+        } else {
+            None
+        }
+    }
+
+    /// True when a gVisor rule is delivered and `runsc` exists on this host.
+    pub fn is_available(&self) -> bool {
+        let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        state.delivered && state.runsc_available
+    }
+
+    fn drain_locked(state: &mut GvisorPoolState) {
+        let config = state.config.clone();
+        for containers in state.warm.values_mut() {
+            for mut c in containers.drain(..) {
+                if kill_and_wait_brief(&mut c.child).is_none() {
+                    Self::delete_container_with(&config, &c.id);
+                    if wait_until(&mut c.child, Instant::now() + REAP_STEP).is_none() {
+                        detach_reap(c.child);
+                    }
+                } else {
+                    Self::delete_container_with(&config, &c.id);
+                }
+                let _ = std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&c.id));
+            }
+        }
+    }
+
+    /// Create a new pool with the given configuration (tests / explicit hosts).
     pub fn new(config: GvisorPoolConfig) -> Self {
         let runsc_available = Path::new(&config.runsc_path).exists();
         if !runsc_available {
             eprintln!(
-                "virbius-gvisor: runsc not found at {}, pool will degrade to Landlock sandbox",
+                "virbius-gvisor: runsc not found at {}, pool unavailable",
                 config.runsc_path
             );
         }
         Self {
-            config,
-            warm: Arc::new(Mutex::new(HashMap::new())),
-            runsc_available,
+            inner: Arc::new(Mutex::new(GvisorPoolState {
+                config,
+                warm: HashMap::new(),
+                runsc_available,
+                delivered: true,
+                generation: 0,
+            })),
         }
     }
 
@@ -237,11 +379,31 @@ impl GvisorPool {
     /// If gVisor is not available, returns `Err` so the caller can
     /// fall back to [`super::landlock::LandlockSandbox`].
     pub fn execute(&self, language: Language, code: &str) -> Result<GvisorExecResult, String> {
-        if !self.runsc_available {
-            return Err("runsc binary not available".to_string());
-        }
+        self.execute_with_timeout(language, code, None)
+    }
 
-        let mut container = self.acquire_warm(language)?;
+    /// Like [`execute`](Self::execute), with an optional per-call timeout cap
+    /// (from the tool registry). The pool `exec_timeout` is always an upper bound.
+    pub fn execute_with_timeout(
+        &self,
+        language: Language,
+        code: &str,
+        timeout: Option<Duration>,
+    ) -> Result<GvisorExecResult, String> {
+        let (config, generation) = {
+            let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if !state.delivered || !state.runsc_available {
+                return Err("runsc binary not available".to_string());
+            }
+            (state.config.clone(), state.generation)
+        };
+
+        let timeout = timeout
+            .filter(|t| *t > Duration::ZERO)
+            .map(|t| t.min(config.exec_timeout))
+            .unwrap_or(config.exec_timeout);
+
+        let mut container = self.acquire_warm(language, &config)?;
         let start = Instant::now();
 
         // Write the payload to stdin, then close (EOF).
@@ -257,83 +419,111 @@ impl GvisorPool {
             )),
         };
         if let Err(e) = write_res {
-            // The warm container was dead (EPIPE). Destroy it and retry once
-            // with a fresh cold container before giving up.
             eprintln!("virbius-gvisor: warm container write failed ({e}), cold retry");
-            let _ = container.child.kill();
-            let _ = container.child.wait();
-            self.delete_container(&container.id);
-            container = self.create_container(language).map(|c| AcquiredContainer {
+            let reaped = kill_and_wait_brief(&mut container.child);
+            Self::delete_container_with(&config, &container.id);
+            if reaped.is_none()
+                && wait_until(&mut container.child, Instant::now() + REAP_STEP).is_none()
+            {
+                detach_reap(container.child);
+                return Err(
+                    "sandbox_exec_timeout: runsc did not exit after stdin write failure".into(),
+                );
+            }
+            container = Self::create_container(&config, language).map(|c| AcquiredContainer {
                 id: c.id,
                 language: c.language,
                 stdin: c.stdin,
                 child: c.child,
                 warm_hit: false,
             })?;
-            let mut stdin = container.stdin.take().ok_or("stdin unavailable")?;
-            stdin
-                .write_all(code.as_bytes())
-                .map_err(|e| format!("write stdin failed: {e}"))?;
+            let mut stdin = match container.stdin.take() {
+                Some(s) => s,
+                None => {
+                    Self::delete_container_with(&config, &container.id);
+                    abort_child(container.child);
+                    return Err("stdin unavailable".into());
+                }
+            };
+            if let Err(e) = stdin.write_all(code.as_bytes()) {
+                drop(stdin);
+                Self::delete_container_with(&config, &container.id);
+                abort_child(container.child);
+                return Err(format!("write stdin failed: {e}"));
+            }
             drop(stdin); // EOF
         }
 
         // Drain stdout/stderr on separate threads: a child emitting more than
         // the OS pipe buffer on one stream must not deadlock the other.
         let mut child = container.child;
-        let stdout = child.stdout.take().ok_or("stdout unavailable")?;
-        let stderr = child.stderr.take().ok_or("stderr unavailable")?;
-        let out_handle = std::thread::spawn(move || {
+        let stdout = match child.stdout.take() {
+            Some(s) => s,
+            None => {
+                Self::delete_container_with(&config, &container.id);
+                abort_child(child);
+                return Err("stdout unavailable".into());
+            }
+        };
+        let stderr = match child.stderr.take() {
+            Some(s) => s,
+            None => {
+                Self::delete_container_with(&config, &container.id);
+                abort_child(child);
+                return Err("stderr unavailable".into());
+            }
+        };
+        let (out_tx, out_rx) = std::sync::mpsc::channel();
+        let (err_tx, err_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
             let mut buf = Vec::new();
             let mut out = stdout;
             out.read_to_end(&mut buf).ok();
-            buf
+            let _ = out_tx.send(buf);
         });
-        let err_handle = std::thread::spawn(move || {
+        std::thread::spawn(move || {
             let mut buf = Vec::new();
             let mut err = stderr;
             err.read_to_end(&mut buf).ok();
-            buf
+            let _ = err_tx.send(buf);
         });
 
-        // Wait for exit with a hard deadline. Unlike a blocking read, this
-        // loop always observes the timeout: on expiry the runsc process is
-        // killed, which closes the pipes and unblocks the reader threads.
-        let timeout = self.config.exec_timeout;
-        let status = loop {
+        let timed_out = loop {
             match child.try_wait() {
                 Ok(Some(s)) => break Ok(s),
                 Ok(None) => {
                     if start.elapsed() > timeout {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        break Err(format!(
-                            "gVisor exec timeout after {}ms",
-                            timeout.as_millis()
-                        ));
+                        break Err(());
                     }
                     std::thread::sleep(Duration::from_millis(5));
                 }
-                Err(e) => break Err(format!("wait failed: {e}")),
+                Err(e) => {
+                    return Err(format!("wait failed: {e}"));
+                }
             }
         };
 
-        // Pipes hit EOF once runsc is gone → reader threads finish.
-        let stdout_buf = out_handle.join().unwrap_or_default();
-        let stderr_buf = err_handle.join().unwrap_or_default();
+        if let Err(()) = timed_out {
+            let msg = Self::reap_after_exec_timeout(child, &config, &container.id, timeout);
+            let _ = recv_buf_timeout(out_rx, REAP_STEP);
+            let _ = recv_buf_timeout(err_rx, REAP_STEP);
+            let _ = std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&container.id));
+            self.spawn_warm_async(language, config, generation);
+            return Err(msg);
+        }
+        let status = timed_out.unwrap();
 
-        // One-shot model: the container is spent. `runsc run` leaves state
-        // behind after exit, so explicitly delete it and drop the bundle.
-        self.delete_container(&container.id);
-        let _ =
-            std::fs::remove_dir_all(PathBuf::from(&self.config.bundle_root).join(&container.id));
+        let stdout_buf = recv_buf_timeout(out_rx, REAP_BUDGET);
+        let stderr_buf = recv_buf_timeout(err_rx, REAP_BUDGET);
+
+        Self::delete_container_with(&config, &container.id);
+        let _ = std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&container.id));
 
         let elapsed = start.elapsed();
         let warm_hit = container.warm_hit;
 
-        // Spawn a replacement in the background.
-        self.spawn_warm_async(language);
+        self.spawn_warm_async(language, config, generation);
 
-        let status = status?;
         Ok(GvisorExecResult {
             stdout: String::from_utf8_lossy(&stdout_buf).into_owned(),
             stderr: String::from_utf8_lossy(&stderr_buf).into_owned(),
@@ -343,15 +533,37 @@ impl GvisorPool {
         })
     }
 
+    fn reap_after_exec_timeout(
+        mut child: std::process::Child,
+        config: &GvisorPoolConfig,
+        id: &str,
+        timeout: Duration,
+    ) -> String {
+        let msg = format!("sandbox_exec_timeout after {}ms", timeout.as_millis());
+        if kill_and_wait_brief(&mut child).is_some() {
+            Self::delete_container_with(config, id);
+            return msg;
+        }
+        Self::delete_container_with(config, id);
+        if wait_until(&mut child, Instant::now() + REAP_STEP).is_some() {
+            return msg;
+        }
+        detach_reap(child);
+        msg
+    }
+
     /// Acquire a warm container from the pool, or create a new one.
-    fn acquire_warm(&self, language: Language) -> Result<AcquiredContainer, String> {
-        let deadline = Instant::now() + self.config.acquire_timeout;
+    fn acquire_warm(
+        &self,
+        language: Language,
+        config: &GvisorPoolConfig,
+    ) -> Result<AcquiredContainer, String> {
+        let deadline = Instant::now() + config.acquire_timeout;
 
         loop {
             {
-                let mut pool = self.warm.lock().map_err(|e| format!("pool lock: {e}"))?;
-                let containers = pool.entry(language).or_default();
-                // Remove dead containers.
+                let mut state = self.inner.lock().map_err(|e| format!("pool lock: {e}"))?;
+                let containers = state.warm.entry(language).or_default();
                 containers.retain_mut(|c| c.is_alive());
                 if let Some(mut container) = containers.pop() {
                     return Ok(AcquiredContainer {
@@ -365,8 +577,7 @@ impl GvisorPool {
             }
 
             if Instant::now() >= deadline {
-                // No warm container available; create a cold one.
-                return self.create_container(language).map(|c| AcquiredContainer {
+                return Self::create_container(config, language).map(|c| AcquiredContainer {
                     id: c.id,
                     language: c.language,
                     stdin: c.stdin,
@@ -379,22 +590,22 @@ impl GvisorPool {
     }
 
     /// Create a new gVisor container.
-    fn create_container(&self, language: Language) -> Result<WarmContainer, String> {
+    fn create_container(
+        config: &GvisorPoolConfig,
+        language: Language,
+    ) -> Result<WarmContainer, String> {
         let container_id = format!("virbius-{}-{}", language.as_str(), uuid_v4_short());
-        let bundle_dir = PathBuf::from(&self.config.bundle_root).join(&container_id);
+        let bundle_dir = PathBuf::from(&config.bundle_root).join(&container_id);
         std::fs::create_dir_all(&bundle_dir).map_err(|e| format!("create bundle dir: {e}"))?;
 
-        // Write config.json (OCI runtime spec).
-        let config_json = self.build_oci_config(language);
+        let config_json = Self::oci_config_json(config, language);
         let config_path = bundle_dir.join("config.json");
         std::fs::write(&config_path, &config_json)
             .map_err(|e| format!("write config.json: {e}"))?;
 
-        // Spawn the container process.
-        // runsc runs the process and keeps it alive reading from stdin.
-        let mut child = Command::new(&self.config.runsc_path)
+        let mut child = Command::new(&config.runsc_path)
             .arg("--root")
-            .arg(&self.config.state_root)
+            .arg(&config.state_root)
             .arg("--ignore-cgroups")
             .arg("run")
             .arg("--bundle")
@@ -421,12 +632,19 @@ impl GvisorPool {
 
     /// Build the OCI runtime configuration JSON for a container.
     pub fn build_oci_config(&self, language: Language) -> String {
-        let mem_limit = self.config.memory_limit_bytes;
-        let cpu_quota = self.config.cpu_quota;
-        // Network namespace type: "none" (isolated) or "bridge" (default).
-        // Currently always emitted as a network namespace; the value is kept
-        // for future conditional logic (e.g. omit network namespace entirely).
-        let _network_str = if self.config.network_disabled {
+        let config = self
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .config
+            .clone();
+        Self::oci_config_json(&config, language)
+    }
+
+    fn oci_config_json(config: &GvisorPoolConfig, language: Language) -> String {
+        let mem_limit = config.memory_limit_bytes;
+        let cpu_quota = config.cpu_quota;
+        let _network_str = if config.network_disabled {
             "none"
         } else {
             "bridge"
@@ -454,7 +672,7 @@ impl GvisorPool {
                 "noNewPrivileges": true
             },
             "root": {
-                "path": self.config.rootfs_path,
+                "path": config.rootfs_path,
                 "readonly": false
             },
             "hostname": "sandbox",
@@ -476,21 +694,43 @@ impl GvisorPool {
     }
 
     /// Spawn a warm container in the background to replenish the pool.
-    fn spawn_warm_async(&self, language: Language) {
-        let config = self.config.clone();
-        let warm = Arc::clone(&self.warm);
+    fn spawn_warm_async(&self, language: Language, config: GvisorPoolConfig, generation: u64) {
+        let inner = Arc::clone(&self.inner);
         std::thread::spawn(move || {
-            let pool_inner = GvisorPool {
-                config,
-                warm,
-                runsc_available: true,
+            let created = match Self::create_container(&config, language) {
+                Ok(c) => c,
+                Err(_) => return,
             };
-            if let Ok(container) = pool_inner.create_container(language) {
-                let mut pool = pool_inner.warm.lock().unwrap();
-                let containers = pool.entry(language).or_default();
-                if containers.len() < pool_inner.config.max_idle {
-                    containers.push(container);
+            let mut state = inner.lock().unwrap_or_else(|e| e.into_inner());
+            if state.generation != generation || !state.delivered {
+                let mut c = created;
+                if kill_and_wait_brief(&mut c.child).is_none() {
+                    Self::delete_container_with(&config, &c.id);
+                    if wait_until(&mut c.child, Instant::now() + REAP_STEP).is_none() {
+                        detach_reap(c.child);
+                    }
+                } else {
+                    Self::delete_container_with(&config, &c.id);
                 }
+                let _ = std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&c.id));
+                return;
+            }
+            let max_idle = state.config.max_idle;
+            let containers = state.warm.entry(language).or_default();
+            if containers.len() < max_idle {
+                containers.push(created);
+            } else {
+                drop(state);
+                let mut c = created;
+                if kill_and_wait_brief(&mut c.child).is_none() {
+                    Self::delete_container_with(&config, &c.id);
+                    if wait_until(&mut c.child, Instant::now() + REAP_STEP).is_none() {
+                        detach_reap(c.child);
+                    }
+                } else {
+                    Self::delete_container_with(&config, &c.id);
+                }
+                let _ = std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&c.id));
             }
         });
     }
@@ -498,14 +738,35 @@ impl GvisorPool {
     /// Ensure the pool has at least `min_warm` containers per language.
     /// Call this on startup or periodically.
     pub fn ensure_warm(&self, languages: &[Language]) {
+        let (config, generation) = {
+            let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if !state.delivered {
+                return;
+            }
+            (state.config.clone(), state.generation)
+        };
         for &lang in languages {
-            let pool = self.warm.lock().unwrap();
-            let current = pool.get(&lang).map(|v| v.len()).unwrap_or(0);
-            drop(pool);
-            for _ in current..self.config.min_warm {
-                if let Ok(container) = self.create_container(lang) {
-                    let mut pool = self.warm.lock().unwrap();
-                    pool.entry(lang).or_default().push(container);
+            let current = {
+                let state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                state.warm.get(&lang).map(|v| v.len()).unwrap_or(0)
+            };
+            for _ in current..config.min_warm {
+                if let Ok(container) = Self::create_container(&config, lang) {
+                    let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+                    if state.generation != generation || !state.delivered {
+                        drop(state);
+                        let mut c = container;
+                        if kill_and_wait_brief(&mut c.child).is_none() {
+                            Self::delete_container_with(&config, &c.id);
+                            if wait_until(&mut c.child, Instant::now() + REAP_STEP).is_none() {
+                                detach_reap(c.child);
+                            }
+                        } else {
+                            Self::delete_container_with(&config, &c.id);
+                        }
+                        break;
+                    }
+                    state.warm.entry(lang).or_default().push(container);
                 }
             }
         }
@@ -513,39 +774,34 @@ impl GvisorPool {
 
     /// Shutdown all containers (cleanup on exit).
     pub fn shutdown(&self) {
-        let mut pool = self.warm.lock().unwrap();
-        for containers in pool.values_mut() {
-            for c in containers {
-                let _ = c.child.kill();
-                let _ = c.child.wait();
-                self.delete_container(&c.id);
-                let _ =
-                    std::fs::remove_dir_all(PathBuf::from(&self.config.bundle_root).join(&c.id));
-            }
-        }
-        pool.clear();
+        let mut state = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        Self::drain_locked(&mut state);
+        state.delivered = false;
+        state.runsc_available = false;
+        state.generation = state.generation.wrapping_add(1);
     }
 
     /// Best-effort removal of runsc's runtime state for a container.
-    /// `runsc run` leaves container state behind after exit; without this the
-    /// state directory grows unboundedly with stale `.state`/`.sock` files.
-    fn delete_container(&self, id: &str) {
-        let out = Command::new(&self.config.runsc_path)
+    fn delete_container_with(config: &GvisorPoolConfig, id: &str) {
+        let mut delete = Command::new(&config.runsc_path);
+        delete
             .arg("--root")
-            .arg(&self.config.state_root)
+            .arg(&config.state_root)
             .arg("--ignore-cgroups")
             .arg("delete")
             .arg("--force")
-            .arg(id)
-            .output();
-        if let Ok(o) = out {
-            if !o.status.success() {
-                eprintln!(
-                    "virbius-gvisor: delete container {id} failed: {}",
-                    String::from_utf8_lossy(&o.stderr)
-                );
-            }
+            .arg(id);
+        if let Err(e) = run_command_timed(delete, REAP_STEP) {
+            eprintln!("virbius-gvisor: delete container {id} failed: {e}");
         }
+    }
+
+    #[cfg(test)]
+    fn generation(&self) -> u64 {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .generation
     }
 }
 
@@ -641,5 +897,87 @@ mod tests {
     fn test_pool_creation_does_not_crash() {
         let _pool = GvisorPool::new(GvisorPoolConfig::default());
         // runsc likely not present in test environment — should not crash.
+    }
+
+    fn sample_manifest_config() -> crate::manifest::GvisorConfig {
+        crate::manifest::GvisorConfig {
+            runsc_path: "/nonexistent/runsc".into(),
+            rootfs_path: "/opt/virbius/rootfs".into(),
+            min_warm: 3,
+            max_idle: 7,
+            memory_limit_bytes: 64 * 1024 * 1024,
+            cpu_quota: 0.5,
+            network_disabled: false,
+            exec_timeout_ms: 5_000,
+        }
+    }
+
+    #[test]
+    fn apply_none_marks_pool_unavailable() {
+        let pool = GvisorPool::new(GvisorPoolConfig::default());
+        pool.apply(None);
+        assert!(!pool.is_available());
+        assert!(pool.delivered_limits().is_none());
+    }
+
+    #[test]
+    fn apply_same_config_does_not_bump_generation() {
+        let pool = GvisorPool::undelivered();
+        let cfg = sample_manifest_config();
+        pool.apply(Some(cfg.clone()));
+        let gen = pool.generation();
+        pool.apply(Some(cfg));
+        assert_eq!(pool.generation(), gen);
+        let limits = pool.delivered_limits().expect("delivered");
+        assert_eq!(limits.memory_limit_bytes, 64 * 1024 * 1024);
+        assert!(!limits.network_disabled);
+        assert_eq!(limits.min_warm, 3);
+        assert_eq!(limits.exec_timeout, Duration::from_millis(5_000));
+        assert!(!pool.is_available(), "runsc path does not exist");
+    }
+
+    #[test]
+    fn apply_changed_limits_bumps_generation() {
+        let pool = GvisorPool::undelivered();
+        let mut cfg = sample_manifest_config();
+        pool.apply(Some(cfg.clone()));
+        let gen = pool.generation();
+        cfg.memory_limit_bytes = 32 * 1024 * 1024;
+        pool.apply(Some(cfg));
+        assert_eq!(pool.generation(), gen + 1);
+        assert_eq!(
+            pool.delivered_limits().unwrap().memory_limit_bytes,
+            32 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn from_delivered_manifest_overlays_host_paths() {
+        let cfg = sample_manifest_config();
+        let built = GvisorPoolConfig::from_delivered_manifest(&cfg);
+        assert_eq!(built.memory_limit_bytes, 64 * 1024 * 1024);
+        assert_eq!(built.cpu_quota, 0.5);
+        assert!(!built.network_disabled);
+        // Without env overlay the rule path is used.
+        if std::env::var("VIRBIUS_RUNSC_PATH")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .is_none()
+        {
+            assert_eq!(built.runsc_path, "/nonexistent/runsc");
+        }
+    }
+
+    #[test]
+    fn oci_config_uses_applied_memory_limit() {
+        let mut config = GvisorPoolConfig::default();
+        config.memory_limit_bytes = 42 * 1024 * 1024;
+        let pool = GvisorPool::new(config);
+        let parsed: serde_json::Value =
+            serde_json::from_str(&pool.build_oci_config(Language::Python)).unwrap();
+        assert_eq!(
+            parsed["linux"]["resources"]["memory"]["limit"].as_u64(),
+            Some(42 * 1024 * 1024)
+        );
     }
 }

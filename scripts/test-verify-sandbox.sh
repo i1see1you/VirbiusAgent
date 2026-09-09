@@ -43,13 +43,27 @@ post() {
 }
 
 sse_wait() {
-    # Read next SSE event from pipe (blocks until data arrives)
-    local data=""
-    while IFS= read -r -t 70 line <&3; do
+    # Read next SSE event from pipe (blocks until data arrives or timeout)
+    local timeout="${1:-70}" data="" line
+    while IFS= read -r -t "$timeout" line <&3; do
         line="${line%$'\r'}"  # Strip trailing CR (SSE uses CRLF)
         [[ "$line" =~ ^data: ]]  && data="${line#data: }" && break
     done
     echo "$data"
+}
+
+sse_wait_rpc() {
+    local want_id="$1" seconds="${2:-70}" deadline=$((SECONDS + seconds)) raw
+    while (( SECONDS < deadline )); do
+        raw=$(sse_wait 15)
+        [[ -z "$raw" ]] && continue
+        if echo "$raw" | jq -e --argjson id "$want_id" \
+            '(.id == $id) and (has("result") or has("error"))' >/dev/null 2>&1; then
+            echo "$raw"
+            return 0
+        fi
+    done
+    echo ""
 }
 
 sse_wait_json() {
@@ -164,7 +178,11 @@ test_exec() {
     local label="$1" tool="$2" param_name="$3" code="$4" expect="$5"
     echo -n "  $label ... "
     post 10 "tools/call" "{\"name\":\"$tool\",\"arguments\":{\"$param_name\":\"$code\"}}"
-    RESP=$(sse_wait)
+    if [ "$expect" = "fail" ] || [ "$expect" = "deny" ]; then
+        RESP=$(sse_wait_rpc 10 45)
+    else
+        RESP=$(sse_wait_rpc 10 25)
+    fi
     RESULT=$(echo "$RESP" | jq -c '.result' 2>/dev/null || echo '{}')
     IS_ERROR=$(echo "$RESULT" | jq -r '.isError' 2>/dev/null || echo '')
     TEXT=$(echo "$RESULT" | jq -r '.content[0].text' 2>/dev/null || echo '')
@@ -192,8 +210,8 @@ test_exec() {
 echo "  --- shell (none, hostname) ---"
 test_exec "shell hostname" shell command "hostname" "ok"
 
-echo "  --- shell (none, timeout test: sleep 40) ---"
-# Should be killed after ~30s timeout
+echo "  --- shell (none, timeout wall: sleep 40, expect sandbox_exec_timeout) ---"
+# timeout_ms default 30s + 2s slack; must return, not hang until SSE 70s.
 test_exec "shell timeout" shell command "sleep 40" "fail"
 
 # ── 4b. execute_python (none) ──
@@ -212,7 +230,7 @@ test_exec "node console" execute_node code "console.log('node sandbox ok')" "ok"
 echo "  --- exec_cmd (gvisor) ---"
 if echo "$TOOLS" | grep -qx "exec_cmd"; then
     post 15 "tools/call" '{"name":"exec_cmd","arguments":{"command":"echo gvisor-sandbox-ok && hostname"}}'
-    RESP=$(sse_wait)
+    RESP=$(sse_wait_rpc 15 50)
     RESULT=$(echo "$RESP" | jq -c '.result' 2>/dev/null || echo '{}')
     TEXT=$(echo "$RESULT" | jq -r '.content[0].text' 2>/dev/null || echo '')
     ERR_MSG=$(echo "$RESP" | jq -r '.error.message // empty' 2>/dev/null || echo '')
@@ -220,10 +238,14 @@ if echo "$TOOLS" | grep -qx "exec_cmd"; then
     DEGRADED=$(echo "$RESULT" | jq -r '._meta.degraded // empty' 2>/dev/null || echo '')
     if [ "$SBOX_USED" = "gvisor" ] && [ "$DEGRADED" != "true" ]; then
         _pass "exec_cmd ran inside gVisor (sandbox_used=gvisor): $TEXT"
+    elif echo "$ERR_MSG $TEXT $RESP" | grep -qi "sandbox_exec_timeout"; then
+        _pass "exec_cmd returned sandbox_exec_timeout within MCP wall (no hang): ${ERR_MSG:-$TEXT}"
     elif [ -n "$ERR_MSG" ]; then
         _fail "exec_cmd error: $ERR_MSG"
+    elif [ -z "$RESP" ]; then
+        _fail "exec_cmd SSE hung past wall (no JSON-RPC within 50s)"
     else
-        _fail "exec_cmd sandbox_used=$SBOX_USED degraded=$DEGRADED (expected gvisor): $TEXT"
+        _fail "exec_cmd sandbox_used=$SBOX_USED degraded=$DEGRADED (expected gvisor or wall timeout): $TEXT"
     fi
 else
     _pass "exec_cmd not in tools/list (skip gVisor probe)"

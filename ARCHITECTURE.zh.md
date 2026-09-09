@@ -1838,11 +1838,13 @@ Falco eBPF → 告警触发 → http_output POST → Engine FalcoAlertController
 }
 ```
 
-运营台操作流程：新建规则 → 选择 `sandbox` 层 → 选择 `landlock` runtime → 编辑 JSON body → 保存 → 策略上线 → 部署 → Edge SDK 拉取 manifest → P2 沙箱执行时生效。
+运营台操作流程：新建规则 → 选择 `sandbox` 层 → 选择 `landlock` runtime → 编辑 JSON body → 保存 → 策略上线（`dry_run`）→ 升到 `canary`/`full` → **准备 Edge** → Edge SDK/MCP 拉取 manifest → 沙箱执行时生效。
+
+`dry_run` 的 sandbox 规则 **不会** 写入 `landlock_profiles`。规则上的 `canary_percent` 仍按同一套放量 API 保存，但 **不对** Landlock 做会话分流；节点灰度只发生在 Edge 包的 canary vs stable manifest 文件。
 
 #### 4.9.3 gVisor 规则格式
 
-gVisor 规则为全局配置（首个 `full` 状态的规则生效），定义不可信代码执行容器的资源限制：
+gVisor 规则为全局池配置。按 `rule_id` 取第一条 `canary` 或 `full` 规则写入 Edge `gvisor_config`；`dry_run` 不写入。规则上的 `canary_percent` 不对 gVisor 做会话分流。资源限制：
 
 ```json
 {
@@ -1857,6 +1859,8 @@ gVisor 规则为全局配置（首个 `full` 状态的规则生效），定义�
 }
 ```
 
+MCP 在 Edge manifest 加载和 `virbius_reload` 时把该对象套到进程内 gVisor 热池（`GvisorPool::apply_from_manifest`）。空的 `gvisor_config: {}` 表示没有交付规则：清空gVisor 热池并标为不可用（**不会**回退到编译期默认限额）。`memory_limit_bytes` / `cpu_quota` / `network_disabled` / `min_warm` / `max_idle` / `exec_timeout_ms` 来自规则；`runsc_path` / `rootfs_path` / `state_root` 在设置了 `VIRBIUS_RUNSC_PATH`、`VIRBIUS_GVISOR_ROOTFS`、`VIRBIUS_GVISOR_STATE_ROOT` 时由环境变量覆盖。限额变化会回收空闲 warm 容器；进行中的 `execute` 仍用已拿到的容器。工具登记的 `timeout_ms` 限制单次调用，且不超过池的 `exec_timeout`。本地执行的 MCP 会话硬墙为 **acquire + exec + 2s**（gVisor 缺省 42s）；拆卸不再无限 `wait()`，超时返回 JSON-RPC `sandbox_exec_timeout`。
+
 #### 4.9.4 下发链路
 
 ```
@@ -1869,8 +1873,10 @@ virbius-control（唯一真源）
   +-- 运营台 ops.html
       +-- 导航：🦅 falco / 🔒 沙箱 sandbox
       +-- 规则编辑器：JSON body + 校验 + 预览
-      +-- 策略上线：draft → dry_run → canary → full（复用现有状态机）
+      +-- 策略上线：draft → dry_run → canary → full（同一套状态机；sandbox 的 dry_run 不下发）
 ```
+
+Sandbox 下发走 **Edge 打包**（`prepare layer=edge`），不是 Falco/核打包。`inExecutionPlane`（含 `dry_run`）仍用于编辑锁和并发槽；只有 `ArtifactService.buildLandlockProfiles` / `buildGvisorConfig` 要求 `canary` 或 `full`。
 
 #### 4.9.5 运营台集成
 
@@ -1880,9 +1886,10 @@ virbius-control（唯一真源）
 | 层/运行时 | `LAYER_RUNTIMES.sandbox = ['landlock', 'gvisor']`，运营台自动适配 |
 | 规则编辑 | JSON body 编辑器（与 falco 规则编辑体验一致），支持 landlock/gvisor 模板 |
 | 规则校验 | 保存时解析 JSON body，校验必填字段（tool_name / read_paths 等） |
-| 策略上线 | 复用 `draft → dry_run → canary → full` 状态机，与 falco/edge/cloud 规则一致 |
-| 灰度部署 | sandbox 层加入 `DeployRolloutController.diff-rules` 的 layer 列表 |
-| Manifest 下发 | `ArtifactService.writeEdgeManifestFile` 新增 `landlock_profiles` + `gvisor_config` 字段 |
+| 策略上线 | 复用 `draft → dry_run → canary → full`。sandbox 的 `dry_run` 不进入 Edge manifest。 |
+| 灰度百分比 | `canary` 时放量 API 仍要求 `canary_percent`；**不是** Landlock/gVisor 的会话分流。节点灰度是 Edge 的 canary vs stable 文件。 |
+| 灰度部署 | sandbox 片段随 `prepare layer=edge` 下发，不随 `prepare layer=falco`。 |
+| Manifest 下发 | `ArtifactService.writeEdgeManifestFile` 从 canary/full 的 sandbox 规则写出 `landlock_profiles` + `gvisor_config` |
 
 ---
 

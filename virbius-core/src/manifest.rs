@@ -275,6 +275,10 @@ pub struct ToolPolicy {
     pub fast_path: bool,
     #[serde(default)]
     pub sandbox_type: String,
+    /// Registry intent (`none` / `landlock` / `gvisor`). Packed by Control for
+    /// operators; MCP executes [`Self::sandbox_type`] (the armed effective type).
+    #[serde(default)]
+    pub sandbox_intent: String,
     #[serde(default)]
     pub timeout_ms: u64,
 }
@@ -295,7 +299,7 @@ pub struct LandlockProfile {
 }
 
 /// gVisor sandbox configuration for untrusted code execution (P2).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct GvisorConfig {
     /// Path to the runsc binary.
     #[serde(default = "default_runsc_path")]
@@ -361,8 +365,10 @@ struct EdgeManifestFile {
     tool_policies: Vec<ToolPolicy>,
     #[serde(default)]
     landlock_profiles: Vec<LandlockProfile>,
+    /// Raw JSON so an empty `{}` (no delivered rule) is distinct from a
+    /// fully-defaulted [`GvisorConfig`].
     #[serde(default)]
-    gvisor_config: GvisorConfig,
+    gvisor_config: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -373,10 +379,8 @@ pub struct EdgeManifest {
     pub dlp_rules: Vec<DlpRule>,
     pub sdk_config: SdkConfig,
     pub tool_policies: Vec<ToolPolicy>,
-    #[allow(dead_code)]
     pub landlock_profiles: Vec<LandlockProfile>,
-    #[allow(dead_code)]
-    pub gvisor_config: GvisorConfig,
+    pub gvisor_config: Option<GvisorConfig>,
 }
 
 static MANIFEST: OnceLock<RwLock<EdgeManifest>> = OnceLock::new();
@@ -391,7 +395,7 @@ fn manifest_lock() -> &'static RwLock<EdgeManifest> {
             sdk_config: SdkConfig::default(),
             tool_policies: Vec::new(),
             landlock_profiles: Vec::new(),
-            gvisor_config: GvisorConfig::default(),
+            gvisor_config: None,
         })
     })
 }
@@ -431,7 +435,7 @@ fn read_manifest() -> EdgeManifest {
                 sdk_config: parsed.sdk_config,
                 tool_policies: parsed.tool_policies,
                 landlock_profiles: parsed.landlock_profiles,
-                gvisor_config: parsed.gvisor_config,
+                gvisor_config: parse_delivered_gvisor_config(parsed.gvisor_config),
             };
         }
         eprintln!(
@@ -452,7 +456,23 @@ fn read_manifest() -> EdgeManifest {
         sdk_config: SdkConfig::default(),
         tool_policies: Vec::new(),
         landlock_profiles: Vec::new(),
-        gvisor_config: GvisorConfig::default(),
+        gvisor_config: None,
+    }
+}
+
+/// Control writes `{}` when no canary/full gVisor rule exists, and a populated
+/// object (always including `runsc_path`) when one does.
+fn parse_delivered_gvisor_config(value: serde_json::Value) -> Option<GvisorConfig> {
+    match &value {
+        serde_json::Value::Null => None,
+        serde_json::Value::Object(map) if map.is_empty() => None,
+        _ => match serde_json::from_value::<GvisorConfig>(value) {
+            Ok(cfg) => Some(cfg),
+            Err(e) => {
+                eprintln!("virbius-core: invalid gvisor_config in edge manifest: {e}");
+                None
+            }
+        },
     }
 }
 
@@ -526,6 +546,13 @@ pub fn landlock_profile(name: &str) -> Option<LandlockProfile> {
         .find(|p| p.tool_name == name)
 }
 
+/// Delivered gVisor pool config from the Edge manifest.
+///
+/// `None` means no canary/full gVisor rule was packaged (`{}` or omitted).
+pub fn gvisor_config() -> Option<GvisorConfig> {
+    load().gvisor_config
+}
+
 #[cfg(test)]
 mod manifest_parse_debug {
     use super::*;
@@ -545,5 +572,22 @@ mod manifest_parse_debug {
                 .any(|p| !p.exec_paths.is_empty()),
             "landlock_profiles should carry exec_paths"
         );
+    }
+
+    #[test]
+    fn empty_gvisor_object_is_not_delivered() {
+        assert!(parse_delivered_gvisor_config(serde_json::json!({})).is_none());
+        assert!(parse_delivered_gvisor_config(serde_json::Value::Null).is_none());
+    }
+
+    #[test]
+    fn populated_gvisor_object_is_delivered() {
+        let cfg = parse_delivered_gvisor_config(serde_json::json!({
+            "runsc_path": "/opt/custom/runsc",
+            "memory_limit_bytes": 64
+        }))
+        .expect("populated gvisor_config");
+        assert_eq!(cfg.runsc_path, "/opt/custom/runsc");
+        assert_eq!(cfg.memory_limit_bytes, 64);
     }
 }

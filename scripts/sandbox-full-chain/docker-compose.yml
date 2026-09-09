@@ -1,0 +1,31 @@
+# Sandbox (Landlock / gVisor) full-chain on Docker Desktop.
+# Control jar is bind-mounted (same pattern as scripts/falco-full-chain).
+# Host ports 18080/16379 avoid clashing with a local or Falco e2e stack.
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "16379:6379"
+
+  control:
+    image: eclipse-temurin:17-jre
+    depends_on: [redis]
+    volumes:
+      - ../../virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar:/app/control.jar:ro
+      - control-data:/data
+    environment:
+      VIRBIUS_DATA_DIR: /data
+      VIRBIUS_REDIS_URL: redis://redis:6379
+      SPRING_PROFILES_ACTIVE: dev
+      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+    command: ["java", "-jar", "/app/control.jar"]
+    ports:
+      - "18080:8080"
+
+volumes:
+  control-data:

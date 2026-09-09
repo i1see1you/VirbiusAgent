@@ -10,6 +10,8 @@ pub fn bootstrap(cfg: &EdgeInitConfig) -> Result<(), VirbiusError> {
         eprintln!("virbius-core: edge sync: {e}");
     }
     manifest::reload();
+    #[cfg(target_os = "linux")]
+    crate::sandbox::GvisorPool::apply_from_manifest();
     runtime::ensure_flush_loop();
     Ok(())
 }
@@ -19,4 +21,6 @@ pub(crate) fn reload_synced() {
         eprintln!("virbius-core: edge sync: {e}");
     }
     manifest::reload();
+    #[cfg(target_os = "linux")]
+    crate::sandbox::GvisorPool::apply_from_manifest();
 }

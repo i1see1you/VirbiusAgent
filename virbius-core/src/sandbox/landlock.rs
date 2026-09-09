@@ -779,10 +779,9 @@ impl LandlockSandbox {
                 }
                 Ok(None) => {
                     if start.elapsed() > timeout {
-                        let _ = child.kill();
-                        let _ = child.wait();
+                        crate::sandbox::wait::abort_child(child);
                         return Err(format!(
-                            "sandbox timeout after {}s for '{program}'",
+                            "sandbox_exec_timeout after {}s for '{program}'",
                             timeout.as_secs()
                         ));
                     }

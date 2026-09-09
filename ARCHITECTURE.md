@@ -1842,11 +1842,13 @@ Each Landlock rule is bound to a `tool_name`, defining the path allowlist access
 }
 ```
 
-Ops console operation flow: Create new rule → select `sandbox` layer → select `landlock` runtime → edit JSON body → save → policy publish → deploy → Edge SDK pulls manifest → takes effect during P2 sandbox execution.
+Ops console operation flow: Create new rule → select `sandbox` layer → select `landlock` runtime → edit JSON body → save → policy publish (`dry_run`) → promote to `canary`/`full` → **prepare Edge** → Edge SDK/MCP pulls manifest → takes effect during sandboxed execution.
+
+`dry_run` sandbox rules are **not** written into `landlock_profiles`. Per-rule `canary_percent` is stored (same rollout API as other layers) but does **not** session-split Landlock; the only node gray is the Edge bundle canary vs stable manifest file.
 
 #### 4.9.3 gVisor Rule Format
 
-gVisor rules are global configuration (the first rule in `full` state takes effect), defining resource limits for untrusted code execution containers:
+gVisor rules are global pool configuration. The first `canary` or `full` rule (by `rule_id`) is written into Edge `gvisor_config`; `dry_run` is omitted. Per-rule `canary_percent` does not session-split gVisor. Resource limits:
 
 ```json
 {
@@ -1861,6 +1863,8 @@ gVisor rules are global configuration (the first rule in `full` state takes effe
 }
 ```
 
+MCP applies this object to the process-wide gVisor warm pool on Edge manifest load and `virbius_reload` (`GvisorPool::apply_from_manifest`). An empty `gvisor_config: {}` means no delivered rule: the pool is drained and marked unavailable (it does **not** fall back to compiled-in defaults). `memory_limit_bytes` / `cpu_quota` / `network_disabled` / `min_warm` / `max_idle` / `exec_timeout_ms` come from the rule; `runsc_path` / `rootfs_path` / `state_root` are overlaid by `VIRBIUS_RUNSC_PATH`, `VIRBIUS_GVISOR_ROOTFS`, and `VIRBIUS_GVISOR_STATE_ROOT` when those env vars are set. Changing limits recycles idle warm containers; in-flight `execute` calls finish on the container they already hold. Tool-registry `timeout_ms` caps a single call but cannot exceed the pool `exec_timeout`. Local exec MCP sessions use a hard wall of **acquire + exec + 2s** (default 42s for gVisor); teardown never blocks on unbounded `wait()`, and overtime returns JSON-RPC `sandbox_exec_timeout`.
+
 #### 4.9.4 Delivery Chain
 
 ```
@@ -1873,8 +1877,10 @@ virbius-control (single source of truth)
   +-- Ops console ops.html
       +-- Navigation: 🦅 falco / 🔒 sandbox
       +-- Rule editor: JSON body + validation + preview
-      +-- Policy publish: draft → dry_run → canary → full (reuses existing state machine)
+      +-- Policy publish: draft → dry_run → canary → full (same state machine; sandbox dry_run is not delivered)
 ```
+
+Sandbox delivery is **Edge packaging** (`prepare layer=edge`), not Falco/kernel packaging. `inExecutionPlane` (including `dry_run`) still applies for edit lock and concurrent slots; only `ArtifactService.buildLandlockProfiles` / `buildGvisorConfig` require `canary` or `full`.
 
 #### 4.9.5 Ops Console Integration
 
@@ -1884,9 +1890,10 @@ virbius-control (single source of truth)
 | Layer/runtime | `LAYER_RUNTIMES.sandbox = ['landlock', 'gvisor']`, ops console auto-adapts |
 | Rule editing | JSON body editor (same experience as falco rule editing), supports landlock/gvisor templates |
 | Rule validation | Parse JSON body on save, validate required fields (tool_name / read_paths, etc.) |
-| Policy publish | Reuses `draft → dry_run → canary → full` state machine, consistent with falco/edge/cloud rules |
-| Canary deployment | sandbox layer added to `DeployRolloutController.diff-rules` layer list |
-| Manifest delivery | `ArtifactService.writeEdgeManifestFile` adds `landlock_profiles` + `gvisor_config` fields |
+| Policy publish | Reuses `draft → dry_run → canary → full`. Sandbox `dry_run` does not enter the Edge manifest. |
+| Canary % | When state is `canary`, the rollout API still requires `canary_percent`; **not** a session split for Landlock/gVisor. Node gray is Edge canary vs stable files. |
+| Canary deployment | Sandbox fragments travel with `prepare layer=edge`, not `prepare layer=falco`. |
+| Manifest delivery | `ArtifactService.writeEdgeManifestFile` emits `landlock_profiles` + `gvisor_config` from canary/full sandbox rules |
 
 ---
 

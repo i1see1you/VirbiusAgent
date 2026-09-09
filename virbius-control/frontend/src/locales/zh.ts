@@ -773,8 +773,8 @@ export default {
   'hint.prompt': '填写<strong>自然语言描述</strong>（保存后进入 engine【安全规则矩阵】，由 1B 模型判定 <code>triggered_id</code>）。仅需配置 <code>bind_scope</code>；无需名单/累计等触发条件表单。',
   'hint.edge-dsl': '端 L0 关键词规则：<code>list_type</code> + <code>keywords</code>。简单模式用表单；高级模式直接编辑 JSON body。',
   'hint.dlp-dsl': '端 DLP 脱敏规则：检测 PII 实体并替换占位符（观察模式仅检测不脱敏）。处置动作固定为放行，不参与动作合并。',
-  'hint.landlock': 'Landlock 文件路径隔离规则：指定工具可读/写/执行的路径白名单（glob 模式）。每个规则绑定一个 <code>tool_name</code>，在 P2 沙箱执行时由内核 Landlock 强制限制。',
-  'hint.gvisor': 'gVisor 不可信代码沙箱配置：指定容器运行时参数（内存/CPU/网络/超时）。首个 <code>full</code> 状态的规则生效，用于 <code>execute_python</code> / <code>shell</code> 等不可信代码执行工具。',
+  'hint.landlock': 'Landlock 文件路径隔离：绑定一个 <code>tool_name</code> 的读写/执行 glob，由 MCP/Edge 沙箱强制。只在规则处于 <code>canary</code> 或 <code>full</code> 时写入 Edge manifest；<code>dry_run</code> 不下发。规则上的灰度百分比不对 sandbox 做会话分流，节点灰度是 Edge 包的 canary/stable 文件。',
+  'hint.gvisor': 'gVisor 池配置（内存/CPU/网络/超时）。按 rule_id 取第一条 <code>canary</code> 或 <code>full</code> 规则写入 Edge manifest，MCP 在加载/reload 时套到进程内热池；<code>dry_run</code> 不写入。空配置不会使用编译默认值。主机上的 runsc/rootfs 路径以环境变量为准。规则上的灰度百分比不对 sandbox 做会话分流。',
 
   'layer.gateway': '网关 Gateway',
   'layer.cloud': '引擎 Engine',

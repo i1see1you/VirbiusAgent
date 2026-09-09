@@ -8,6 +8,7 @@
 pub mod gvisor_pool;
 #[cfg(target_os = "linux")]
 pub mod landlock;
+pub mod wait;
 
 #[cfg(target_os = "linux")]
 pub use gvisor_pool::{GvisorExecResult, GvisorPool, GvisorPoolConfig, Language};
@@ -16,6 +17,7 @@ pub use landlock::{
     check_landlock_availability, detect_abi_version, execute_sandboxed, LandlockAbi, LandlockRules,
     LandlockSandbox, SandboxConfig, SandboxResult,
 };
+pub use wait::{mcp_wall, wait_until, REAP_BUDGET, REAP_STEP, WALL_SLACK};
 
 /// Type of sandbox to use for a tool execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,8 +122,8 @@ impl Default for ExecutionRequest {
 /// 2. **SandboxType::Landlock** — spawns subprocess with Landlock + drop caps.
 ///    If Landlock is unavailable, degrades to "drop caps only" and sets `degraded=true`.
 /// 3. **SandboxType::Gvisor** — executes in a gVisor container.
-///    If `runsc` is not available, **automatically degrades to Landlock** sandbox
-///    with timeout=5s.  If Landlock is also unavailable, returns `Err`.
+///    If the pool is not delivered or `runsc` is missing, returns
+///    `sandbox_unavailable` (no Landlock fallback).
 #[cfg(target_os = "linux")]
 pub fn execute(req: ExecutionRequest) -> Result<ExecutionResult, String> {
     match req.sandbox_type {
@@ -159,12 +161,13 @@ pub fn execute(req: ExecutionRequest) -> Result<ExecutionResult, String> {
         }
 
         SandboxType::Gvisor => {
-            // Try gVisor first using the shared global pool.
+            GvisorPool::apply_from_manifest_if_needed();
             let pool = GvisorPool::global();
 
             if pool.is_available() {
                 let language = req.gvisor_language.unwrap_or(Language::Shell);
-                let result = pool.execute(language, &req.program)?;
+                let result =
+                    pool.execute_with_timeout(language, &req.program, Some(req.timeout))?;
                 return Ok(ExecutionResult {
                     stdout: result.stdout,
                     stderr: result.stderr,
@@ -176,26 +179,7 @@ pub fn execute(req: ExecutionRequest) -> Result<ExecutionResult, String> {
                 });
             }
 
-            // gVisor not available → degrade to Landlock with stricter limits.
-            let degraded_config = SandboxConfig {
-                rules: req.landlock_rules,
-                timeout: std::time::Duration::min(req.timeout, std::time::Duration::from_secs(5)),
-                ..SandboxConfig::default()
-            };
-            let sandbox = LandlockSandbox::new(degraded_config);
-            let result = sandbox.execute(&req.program, &req.args)?;
-
-            Ok(ExecutionResult {
-                stdout: result.stdout,
-                stderr: result.stderr,
-                exit_code: result.exit_code,
-                sandbox_used: SandboxType::Landlock,
-                degraded: true,
-                degrade_note: Some(
-                    "gVisor unavailable, degraded to Landlock sandbox (timeout=5s)".to_string(),
-                ),
-                landlock_applied: result.landlock_applied,
-            })
+            Err("sandbox_unavailable".to_string())
         }
     }
 }
@@ -279,9 +263,8 @@ pub fn run_unsandboxed(
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!("unsandboxed exec timed out after {}ms", timeout_ms));
+                    crate::sandbox::wait::abort_child(child);
+                    return Err(format!("sandbox_exec_timeout after {}ms", timeout_ms));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
@@ -391,22 +374,13 @@ pub fn run_unsandboxed(
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!("unsandboxed exec timed out after {}ms", timeout_ms));
+                    crate::sandbox::wait::abort_child(child);
+                    return Err(format!("sandbox_exec_timeout after {}ms", timeout_ms));
                 }
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             Err(e) => return Err(format!("wait failed: {e}")),
         }
-    }
-}
-
-#[cfg(target_os = "linux")]
-impl GvisorPool {
-    /// Check if the pool is functional (runsc binary exists).
-    pub fn is_available(&self) -> bool {
-        self.runsc_available
     }
 }
 

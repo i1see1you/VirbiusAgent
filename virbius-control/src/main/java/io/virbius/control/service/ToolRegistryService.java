@@ -77,8 +77,9 @@ public class ToolRegistryService {
     }
 
     /**
-     * Build tool policy blocks for the Edge Manifest.
-     * Called by {@link io.virbius.control.service.ArtifactService}.
+     * Build tool policy blocks from the registry (intent, including {@code sandbox_type}).
+     * {@link ArtifactService} rewrites Edge {@code sandbox_type} to the armed effective
+     * type; {@link PublishService} sends this list to Engine unchanged.
      */
     public List<Map<String, Object>> buildToolPolicyBlocks(String tenantId) {
         return repo.list(tenantId).stream()
