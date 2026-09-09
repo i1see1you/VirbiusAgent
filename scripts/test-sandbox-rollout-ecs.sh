@@ -356,9 +356,9 @@ wait_http() {
 gvisor_smoke() {
   local runsc="${1:-/opt/virbius/bin/runsc}" out
   if [[ -z "${PROXY_NAME}" ]]; then
-    out=$(timeout 15 "${runsc}" --ignore-cgroups do echo gvisor-do-ok 2>/dev/null || true)
+    out=$(timeout 15 "${runsc}" --ignore-cgroups "do" echo gvisor-do-ok 2>/dev/null || true)
   else
-    out=$(timeout 15 docker exec "${PROXY_NAME}" "${runsc}" --root /tmp/virbius-gvisor-e2e --ignore-cgroups do echo gvisor-do-ok 2>/dev/null || true)
+    out=$(timeout 15 docker exec "${PROXY_NAME}" "${runsc}" --root /tmp/virbius-gvisor-e2e --ignore-cgroups "do" echo gvisor-do-ok 2>/dev/null || true)
   fi
   if echo "${out}" | grep -q gvisor-do-ok; then
     log_pass "runsc do echo gvisor-do-ok (gVisor runtime works in ${PROXY_NAME:-host})"

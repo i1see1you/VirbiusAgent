@@ -53,7 +53,8 @@ sse_wait() {
 }
 
 sse_wait_rpc() {
-    local want_id="$1" seconds="${2:-70}" deadline=$((SECONDS + seconds)) raw
+    local want_id="$1" seconds="${2:-70}" raw
+    local deadline=$((SECONDS + seconds))
     while (( SECONDS < deadline )); do
         raw=$(sse_wait 15)
         [[ -z "$raw" ]] && continue

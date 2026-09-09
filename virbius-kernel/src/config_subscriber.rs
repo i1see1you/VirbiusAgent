@@ -214,7 +214,7 @@ struct NodeReport {
     revision: i64,        // last successfully applied revision, 0 when nothing is applied
     pool: String,         // "stable" | "canary" | "none"
     sighup_pids: Vec<i32>,
-    error: String,        // empty unless status == "error"
+    error: String, // empty unless status == "error"
 }
 
 /// Report baseline reflecting what is currently on disk (i.e. `last_applied`).
