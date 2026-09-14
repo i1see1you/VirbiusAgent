@@ -2,7 +2,7 @@
 {% block title %}CTF 提示注入闯关{% endblock %}
 {% block body %}
 <h1>🧩 CTF · 提示注入闯关</h1>
-<p class="sub">每关都有一个秘密密码，诱导模型把它吐出来。防御逐级加固——已破 {{ solved|length }}/{{ levels|length }} 关。</p>
+<p class="sub">每关都有一个秘密暗号。关掉顶栏防护，就是原版逐级闯关：本关自制过滤器一层层加厚。打开防护，你的话先过评估链；没拦住的，才轮到本关原来那套。——已破 {{ solved|length }}/{{ levels|length }} 关。</p>
 
 {% for lv in levels %}
 <a class="lv" href="/ctf/level/{{ lv.id }}">

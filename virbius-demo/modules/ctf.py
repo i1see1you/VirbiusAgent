@@ -2,11 +2,12 @@
 """CTF 提示注入闯关：路由 + 守卫执行链。"""
 import logging
 import re
+import secrets
 from flask import Blueprint, render_template, request, jsonify, session
 
 import llm_client
 from modules import conversations, modelsel, inspect_util, protection, virbius_guard
-from demo_data.ctf_levels import LEVELS, INPUT_KEYWORDS, get_level
+from demo_data.ctf_levels import LEVELS, INPUT_KEYWORDS, get_level, public_level
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,26 @@ def _llm_output_guard(answer, secret, provider="deepseek", model=None):
         return False
 
 
+def _eval_key(level_id):
+    return f"ctf_eval:{level_id}"
+
+
+def _eval_session_id(level_id):
+    """engine 累计风险按 session_id。每关独立，重置时换新后缀。"""
+    key = _eval_key(level_id)
+    sid = session.get(key)
+    if not sid:
+        sid = f"ctf-{level_id}-{secrets.token_hex(4)}"
+        session[key] = sid
+    return sid
+
+
+def _rotate_eval_session(level_id):
+    sid = f"ctf-{level_id}-{secrets.token_hex(4)}"
+    session[_eval_key(level_id)] = sid
+    return sid
+
+
 # ---------------- 路由 ----------------
 @bp.route("/")
 def index():
@@ -82,8 +103,12 @@ def level(level_id):
     if not lv:
         return "关卡不存在", 404
     solved = set(session.get("ctf_solved", []))
-    public = {k: v for k, v in lv.items() if k != "secret"}  # 不把答案塞进页面
-    return render_template("ctf_level.html", lv=public, solved=solved, total=len(LEVELS))
+    return render_template(
+        "ctf_level.html",
+        lv=public_level(lv),
+        solved=solved,
+        total=len(LEVELS),
+    )
 
 
 @bp.route("/chat/<int:level_id>", methods=["POST"])
@@ -104,7 +129,7 @@ def chat(level_id):
     # ① VirbiusAgent 提示词防护（云层 /v1/evaluate）：命中即拦截，不发给目标模型
     logger.info("[ctf] level=%s protection_enabled=%s user_input=%r", level_id, protection.is_enabled(), user_msg)
     if protection.is_enabled():
-        guard = virbius_guard.guard_prompt(user_msg, session_id=f"ctf:{level_id}")
+        guard = virbius_guard.guard_prompt(user_msg, session_id=_eval_session_id(level_id))
         logger.info("[ctf] guard result: %s", guard)
         if guard.get("blocked"):
             msg = (
@@ -119,7 +144,7 @@ def chat(level_id):
             # engine 不可达时 fail-open 放行，但标注供排查
             logger.warning("[ctf] guard fail-open: %s", guard.get("error"))
 
-    # ② L5 自带输入关键词守卫（被拦截则不进入会话记忆）
+    # ② 本关自制输入守卫（被拦截则不进入会话记忆）
     if "input_block_keywords" in defenses:
         blocked = _input_keyword_guard(user_msg)
         if blocked:
@@ -168,6 +193,7 @@ def chat(level_id):
 @bp.route("/reset/<int:level_id>", methods=["POST"])
 def reset(level_id):
     conversations.clear(f"ctf:{level_id}")
+    _rotate_eval_session(level_id)
     return jsonify({"ok": True, "turns": 0})
 
 
@@ -178,8 +204,13 @@ def submit(level_id):
         return jsonify({"error": "关卡不存在"}), 404
     guess = (request.json or {}).get("guess", "").strip().upper()
     correct = guess == lv["secret"].upper()
+    solved = set(session.get("ctf_solved", []))
     if correct:
-        solved = set(session.get("ctf_solved", []))
         solved.add(level_id)
         session["ctf_solved"] = list(solved)
-    return jsonify({"correct": correct})
+    return jsonify({
+        "correct": correct,
+        "solved": len(solved),
+        "total": len(LEVELS),
+        "all_clear": len(solved) == len(LEVELS),
+    })
