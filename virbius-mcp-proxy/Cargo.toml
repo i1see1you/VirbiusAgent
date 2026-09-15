@@ -24,4 +24,4 @@ axum = { version = "0.7", features = ["json"] }
 tokio-stream = "0.1"
 base64 = "0.22"
 sha2 = "0.10"
-rdkafka = { version = "0.37", features = ["tokio"] }
+rdkafka = { version = "0.39", features = ["tokio"] }
