@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import io.virbius.control.domain.CumulativeDef;
+import io.virbius.control.domain.EdgeArtifactMeta;
 import io.virbius.control.domain.RuleRevision;
 import io.virbius.control.gateway.GatewayListRedisService;
 import io.virbius.control.repository.CumulativeRepository;
@@ -14,12 +16,16 @@ import io.virbius.control.repository.EdgeArtifactMetaRepository;
 import io.virbius.control.repository.ListMetaRepository;
 import io.virbius.control.repository.RegistryRepository;
 import io.virbius.control.repository.TenantRolloutPolicyRepository;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -74,6 +80,43 @@ class ArtifactServiceTest {
                 true,
                 toolRegistryService,
                 expressionCompiler);
+    }
+
+    @Test
+    void promoteEdgeCanaryCopiesCanaryMetaOntoStable() throws Exception {
+        Path tmp = Files.createTempDirectory("edge-promote");
+        ArtifactService svc = new ArtifactService(
+                tmp.toString(),
+                registryRepo,
+                listMetaRepo,
+                cumulativeRepo,
+                policyRepository,
+                "",
+                "",
+                gatewayListRedisService,
+                edgeArtifactMetaRepository,
+                false,
+                true,
+                toolRegistryService,
+                expressionCompiler);
+        Path appDir = tmp.resolve("edge").resolve(TENANT).resolve("app-a");
+        Files.createDirectories(appDir);
+        Files.writeString(appDir.resolve("edge-manifest.json"), "{\"old\":true}");
+        Files.writeString(appDir.resolve("edge-manifest-canary.json"), "{\"new\":true}");
+        when(edgeArtifactMetaRepository.get(eq(TENANT), eq("app-a"), eq("canary")))
+                .thenReturn(Optional.of(new EdgeArtifactMeta(
+                        TENANT, "app-a", "canary", 7L, "abc-canary-sha", Instant.parse("2026-01-01T00:00:00Z"))));
+
+        svc.promoteEdgeCanary(TENANT);
+
+        assertFalse(Files.exists(appDir.resolve("edge-manifest-canary.json")));
+        assertEquals("{\"new\":true}", Files.readString(appDir.resolve("edge-manifest.json")));
+        ArgumentCaptor<EdgeArtifactMeta> captor = ArgumentCaptor.forClass(EdgeArtifactMeta.class);
+        verify(edgeArtifactMetaRepository).save(captor.capture());
+        assertEquals("stable", captor.getValue().pool());
+        assertEquals(7L, captor.getValue().artifactRevision());
+        assertEquals("abc-canary-sha", captor.getValue().contentSha256());
+        verify(edgeArtifactMetaRepository).delete(TENANT, "app-a", "canary");
     }
 
     @Test

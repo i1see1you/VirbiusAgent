@@ -289,6 +289,11 @@ public class ArtifactService {
                     java.nio.file.Files.deleteIfExists(stableTarget);
                     if (java.nio.file.Files.isRegularFile(canaryFile)) {
                         java.nio.file.Files.move(canaryFile, stableFile);
+                        // File bytes stay canary's; copy that sha onto stable or
+                        // Edge nodes reject the pull (sha256 mismatch).
+                        edgeArtifactMetaRepository
+                                .get(tenantId, appId, "canary")
+                                .ifPresent(c -> edgeArtifactMetaRepository.save(c.withPool("stable")));
                     }
                     edgeArtifactMetaRepository.delete(tenantId, appId, "canary");
                     paths.put("edge:" + appId, stableFile.toString());

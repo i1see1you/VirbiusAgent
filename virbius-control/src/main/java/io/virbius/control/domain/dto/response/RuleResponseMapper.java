@@ -37,7 +37,7 @@ public final class RuleResponseMapper {
         m.put("enforce_mode", RolloutEnforceExport.enforceMode(r.rolloutState()));
         m.put("modified_at", r.modifiedAt() != null ? r.modifiedAt().toString() : java.time.Instant.now().toString());
         m.put("effective_from", r.effectiveFrom() != null ? r.effectiveFrom().toString() : null);
-        m.put("effective_to", r.effectiveTo());
+        m.put("effective_to", r.effectiveTo() != null ? r.effectiveTo().toString() : null);
         m.put("tenant_id", r.tenantId());
         m.put("rule_id", r.ruleId());
         m.put("layer", r.layer());
