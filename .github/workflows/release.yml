@@ -200,13 +200,22 @@ jobs:
       - name: Generate changelog
         id: changelog
         run: |
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ github.ref_name }}^ 2>/dev/null || echo "")
-          if [ -z "$PREVIOUS_TAG" ]; then
-            echo "Initial release" > changelog.md
-          else
-            git log --pretty=format:"- %s (%h)" $PREVIOUS_TAG..${{ github.ref_name }} > changelog.md
+          VER="${{ github.ref_name }}"
+          VER="${VER#v}"
+          awk -v sec="$VER" '
+            index($0, "## [" sec "]") == 1 { f = 1; next }
+            /^## \[/ { f = 0 }
+            f
+          ' CHANGELOG.md > changelog.md
+          if [ ! -s changelog.md ]; then
+            PREVIOUS_TAG=$(git describe --tags --abbrev=0 "${{ github.ref_name }}"^ 2>/dev/null || echo "")
+            if [ -z "$PREVIOUS_TAG" ]; then
+              echo "Initial release" > changelog.md
+            else
+              git log --pretty=format:"- %s (%h)" "$PREVIOUS_TAG".."${{ github.ref_name }}" > changelog.md
+            fi
           fi
-          echo "body=$(cat changelog.md | sed ':a;N;$!ba;s/\n/\\n/g')" >> $GITHUB_OUTPUT
+          { echo "body<<CH_LOG_EOF"; cat changelog.md; echo "CH_LOG_EOF"; } >> "$GITHUB_OUTPUT"
 
   # ────────────────────────────────────────────────────────────
   #  Create GitHub Release
