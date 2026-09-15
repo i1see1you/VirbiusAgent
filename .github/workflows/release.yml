@@ -85,14 +85,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     needs: [ci-validate]
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-          - target: x86_64-apple-darwin
-            os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
     steps:
@@ -247,10 +244,8 @@ jobs:
             - `virbius-engine-*.jar` — Security engine (policy evaluation)
             - `virbius-compiler-*.jar` — Rule compiler
 
-            ### Rust Binaries (multi-platform)
+            ### Rust Binaries
             - `virbius-mcp-proxy-x86_64-unknown-linux-gnu` — Linux x86_64
-            - `virbius-mcp-proxy-aarch64-unknown-linux-gnu` — Linux ARM64
-            - `virbius-mcp-proxy-x86_64-apple-darwin` — macOS Intel
             - `virbius-mcp-proxy-aarch64-apple-darwin` — macOS Apple Silicon
 
             ### Docker
