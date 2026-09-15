@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-15
+
 ### Changed
 - Route→Tool migration: replaced `route` bind_scope with `tool` scope for Agent security rules.
 - Falco reverted to a pure system-level syscall observation role (Plan A): cross-layer correlation (syscall events ↔ Agent session context) is now resolved by the Engine's `FalcoAlertController` via Redis pidmap lookup, instead of injecting context fields inside the Falco engine.
