@@ -68,14 +68,17 @@ jobs:
       - name: Package Java modules
         run: mvn -B -e package -DskipTests
 
+      - name: Stage Java artifacts
+        run: |
+          mkdir -p java-artifacts-staged
+          cp virbius-control/target/*.jar virbius-engine/target/*.jar \
+             virbius-compiler/target/*.jar java-artifacts-staged/
+
       - name: Upload Java artifacts
         uses: actions/upload-artifact@v4
         with:
           name: java-artifacts
-          path: |
-            virbius-control/target/*.jar
-            virbius-engine/target/*.jar
-            virbius-compiler/target/*.jar
+          path: java-artifacts-staged/*.jar
 
   # ───────────────────────────────────────────────────────────
   #  Build Rust binaries (multi-platform)
@@ -264,7 +267,7 @@ jobs:
             ./virbius-mcp-proxy-$(uname -m)-unknown-linux-gnu
             ```
           files: |
-            artifacts/java-artifacts/*.jar
+            artifacts/java-artifacts/**/*.jar
             artifacts/rust-artifacts-*/virbius-mcp-proxy-*
             artifacts/docker-artifact/*.tar.gz
           draft: false
