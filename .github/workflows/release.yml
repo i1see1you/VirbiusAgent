@@ -71,8 +71,9 @@ jobs:
       - name: Stage Java artifacts
         run: |
           mkdir -p java-artifacts-staged
-          cp virbius-control/target/*.jar virbius-engine/target/*.jar \
-             virbius-compiler/target/*.jar java-artifacts-staged/
+          find virbius-control/target virbius-engine/target virbius-compiler/target \
+            -maxdepth 1 -name '*.jar' ! -name 'original-*' \
+            -exec cp {} java-artifacts-staged/ \;
 
       - name: Upload Java artifacts
         uses: actions/upload-artifact@v4
