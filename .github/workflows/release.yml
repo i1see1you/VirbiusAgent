@@ -147,12 +147,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Compute lowercase image ref
+        id: image
+        run: echo "ref=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Build multi-arch Docker image
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
-            --tag ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
-            --output type=docker,dest=virbius-agent-${{ github.ref_name }}-multiarch.tar \
+            --tag ${{ steps.image.outputs.ref }}:${{ github.ref_name }} \
+            --output type=oci,dest=virbius-agent-${{ github.ref_name }}-multiarch.tar \
             .
 
       - name: Compress Docker image
@@ -175,8 +179,8 @@ jobs:
         run: |
           docker buildx build \
             --platform linux/amd64,linux/arm64 \
-            --tag ghcr.io/${{ github.repository }}:${{ github.ref_name }} \
-            --tag ghcr.io/${{ github.repository }}:latest \
+            --tag ${{ steps.image.outputs.ref }}:${{ github.ref_name }} \
+            --tag ${{ steps.image.outputs.ref }}:latest \
             --push \
             .
 
