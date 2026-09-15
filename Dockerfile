@@ -56,7 +56,7 @@ COPY virbius-compiler/ virbius-compiler/
 RUN mvn package -DskipTests -B -q
 
 # ── Stage 2: Rust build (workspace) ─────────────────────────────────────────
-FROM rust:1.87-slim-bookworm AS rust-build
+FROM rust:1.94-slim-bookworm AS rust-build
 WORKDIR /build
 
 # Clear proxy env vars inherited from Docker daemon (not reachable inside container)
