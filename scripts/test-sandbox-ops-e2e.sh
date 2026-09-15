@@ -213,8 +213,7 @@ recreate_proxy() {
   export VIRBIUS_CONTROL_BASE_URL="http://control:8080"
   export VIRBIUS_TENANT_ID="$TENANT"
   "${COMPOSE[@]}" up -d --no-deps --force-recreate proxy >/dev/null
-  local i
-  for i in $(seq 1 25); do
+  for _ in $(seq 1 25); do
     curl -sf "$GATEWAY/health" >/dev/null && return 0
     sleep 1
   done
