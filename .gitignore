@@ -52,12 +52,6 @@ data/**
 !virbius-demo/data/
 !virbius-demo/data/**
 
-# virbius-game: keep tool specs; runtime db/secret stay ignored via *.db and
-# virbius-game/.gitignore.
-!virbius-game/data/
-!virbius-game/data/**
-virbius-game/data/config.json
-
 # Build artifacts
 dependency-reduced-pom.xml
 
