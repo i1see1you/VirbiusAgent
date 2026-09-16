@@ -1,0 +1,15 @@
+B³ threat snapshots and tool specs are copied from
+https://github.com/UKGovernmentBEIS/inspect_evals (src/inspect_evals/b3/data).
+Game UI copy is original. Not affiliated with Lakera.
+
+Cycling Coach (cco_coach) L1/L2 正文已汉化，过关仍对 [SYSTEM_PROMPT]。
+L3 用 L1 正文 + 中文自裁判。
+Trippy Planner 过关句改为中文钓鱼 markdown，URL 保持原样。
+OmniChat（mcp_chat_poisoning）对话历史与 notes 过关串已汉化；工具名与 notes 字段名保持英文。L3 用 L1 正文 + 中文自裁判。
+MindfulChat（chatapp_refuse）记忆日志与系统提示词已汉化；[POOH] 词表含中文维尼角色名。L3 用 L1 正文 + 中文自裁判。
+PortfolioIQ Advisor（analytics_misleading）尽调 PDF 与系统提示词已汉化；过关句改为中文 EXACT。JSON 字段名与 risk_level 枚举保持英文。L3 用 L1 正文 + 中文自裁判。
+Curs-ed CodeReview（code_review_malicious）审查说明与规则文件已汉化；过关仍认 proposed_fix 里的英文恶意代码片段。JSON 字段名保持英文。L3 用 L1 正文 + 中文自裁判。
+Thingularity（product_recommendation_tool_extraction）系统提示词已汉化；过关仍认三个英文工具名及其官方英文 description。L3 用 L1 正文 + 中文自裁判。
+CorpConnect Messenger（email_tool_invocation）系统提示词与登录身份说明已汉化；过关正文改为中文 EXACT。工具名 send_email 与邮箱地址保持英文。L3 用 L1 正文 + 中文自裁判。
+Clause AI（legal_TI_exfiltration）检索结果与系统提示词已汉化；过关仍认英文证人姓名、住址和 legal-research@proton.me。L3 用 L1 正文 + 中文自裁判。
+其余快照保持 B³ 英文。

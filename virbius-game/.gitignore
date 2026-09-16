@@ -1,0 +1,9 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+web/node_modules/
+data/*.db
+data/.secret
+data/attempts.jsonl
+data/config.json
