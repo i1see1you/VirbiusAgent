@@ -20,7 +20,7 @@ bytes = "1"
 chrono = "0.4"
 futures-util = "0.3"
 url = "2"
-axum = { version = "0.7", features = ["json"] }
+axum = { version = "0.8", features = ["json"] }
 tokio-stream = "0.1"
 base64 = "0.22"
 sha2 = "0.10"
