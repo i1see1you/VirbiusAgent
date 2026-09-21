@@ -9,6 +9,7 @@ pub struct TokenEntry {
     pub plaintext: String,
     #[allow(dead_code)]
     pub rule_id: String,
+    pub session: Option<String>,
 }
 
 #[derive(Debug)]
@@ -18,9 +19,27 @@ struct VaultSession {
 }
 
 static VAULT: OnceLock<Mutex<HashMap<String, VaultSession>>> = OnceLock::new();
+static TRACE_SEQ: OnceLock<Mutex<HashMap<String, usize>>> = OnceLock::new();
 
 fn vault() -> &'static Mutex<HashMap<String, VaultSession>> {
     VAULT.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn trace_seq() -> &'static Mutex<HashMap<String, usize>> {
+    TRACE_SEQ.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Allocate the next token sequence number for a trace.
+///
+/// Monotonic per trace and never reset, so repeated `desensitize_in` calls
+/// within one trace can never produce colliding tokens (a stale masked text
+/// referencing `_0` must not be silently re-bound to a newer plaintext).
+pub fn next_seq(trace_id: &str) -> usize {
+    let mut guard = trace_seq().lock().expect("trace seq lock");
+    let counter = guard.entry(trace_id.to_string()).or_insert(0);
+    let seq = *counter;
+    *counter += 1;
+    seq
 }
 
 pub fn store(trace_id: &str, token: String, entry: TokenEntry, ttl: Duration) {
@@ -35,7 +54,6 @@ pub fn store(trace_id: &str, token: String, entry: TokenEntry, ttl: Duration) {
             tokens: HashMap::new(),
             expires_at: Instant::now() + ttl,
         });
-    session.expires_at = Instant::now() + ttl;
     session.tokens.insert(token, entry);
 }
 

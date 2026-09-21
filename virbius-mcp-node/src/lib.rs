@@ -64,17 +64,57 @@ pub fn verify_license(jwt: String, public_key_pem: String, app_id: String) -> Re
     })
 }
 
+/// Configure the edge SDK from an EdgeInitConfig JSON string.
+///
+/// Mirrors the Python binding's `configure_rules`: when `offline_manifest_path`
+/// is set the manifest is loaded from that file; otherwise rules are pulled
+/// from `control_base_url` and cached under `cache_dir`.
+#[napi]
+pub fn configure_rules(cfg_json: String) -> Result<String> {
+    let cfg: virbius_core::EdgeInitConfig = serde_json::from_str(&cfg_json)
+        .map_err(|e| Error::from_reason(format!("Invalid EdgeInitConfig JSON: {}", e)))?;
+    virbius_core::VirbiusEdge::init(cfg)
+        .map_err(|e| Error::from_reason(format!("init failed: {:?}", e)))?;
+    Ok(r#"{"ok":true}"#.into())
+}
+
 #[napi]
 pub fn desensitize(text: String, trace_id: String) -> String {
     let manifest = virbius_core::manifest::load();
+    let ttl = std::time::Duration::from_millis(manifest.sdk_config.dlp_vault_ttl_ms);
     let result = virbius_core::dlp::desensitize_in(
         &text,
         &trace_id,
         &manifest.dlp_rules,
-        std::time::Duration::from_secs(1800),
+        ttl,
         Some(&trace_id),
     );
     result.text
+}
+
+/// Restore DLP tokens in model output back to plaintext.
+///
+/// `session_id` must match the session used during `desensitize` for the
+/// tokens to be restored (tokens stored without a session are always
+/// restorable).
+#[napi(object)]
+pub struct RestoreOutput {
+    pub text: String,
+    pub unresolved_tokens: Vec<String>,
+}
+
+#[napi]
+pub fn restore(trace_id: String, session_id: String, text: String) -> RestoreOutput {
+    let session = if session_id.is_empty() {
+        None
+    } else {
+        Some(session_id.as_str())
+    };
+    let result = virbius_core::dlp::desensitize_out(&text, &trace_id, session);
+    RestoreOutput {
+        text: result.text,
+        unresolved_tokens: result.unresolved_tokens,
+    }
 }
 
 /// Enhance a prompt with trust boundary directive and PII desensitization.

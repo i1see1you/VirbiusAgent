@@ -151,6 +151,7 @@ pub fn mask_pii_output(
             masked: false,
             hits: vec![],
             exempt: true,
+            warnings: vec![],
         };
     }
 
@@ -161,6 +162,7 @@ pub fn mask_pii_output(
             masked: false,
             hits: vec![],
             exempt: false,
+            warnings: vec![],
         };
     }
 

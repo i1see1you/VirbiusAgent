@@ -191,7 +191,7 @@ public final class EdgeManifestEmitter {
         sdk.putIfAbsent("audit_flush_interval_ms", 30000);
         sdk.putIfAbsent("audit_queue_max", 500);
         sdk.putIfAbsent("canary_session_key", "device_id");
-        sdk.putIfAbsent("dlp_vault_ttl_ms", 1_800_000L);
+        sdk.putIfAbsent("dlp_vault_ttl_ms", 3_600_000L);
         return sdk;
     }
 

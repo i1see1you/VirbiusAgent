@@ -85,6 +85,6 @@ class EdgeManifestEmitterTest {
         assertEquals(0, dlpRules.get(0).get("risk_score"));
         @SuppressWarnings("unchecked")
         Map<String, Object> sdk = (Map<String, Object>) manifest.get("sdk_config");
-        assertEquals(1_800_000L, ((Number) sdk.get("dlp_vault_ttl_ms")).longValue());
+        assertEquals(3_600_000L, ((Number) sdk.get("dlp_vault_ttl_ms")).longValue());
     }
 }

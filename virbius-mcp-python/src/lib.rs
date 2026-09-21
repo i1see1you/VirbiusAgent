@@ -11,6 +11,7 @@ fn virbius_mcp_python(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> 
     m.add_function(wrap_pyfunction!(precheck_tool, m)?)?;
     m.add_function(wrap_pyfunction!(verify_license, m)?)?;
     m.add_function(wrap_pyfunction!(desensitize, m)?)?;
+    m.add_function(wrap_pyfunction!(restore, m)?)?;
     m.add_function(wrap_pyfunction!(enhance_prompt, m)?)?;
     m.add_function(wrap_pyfunction!(intercept_memory_write, m)?)?;
     m.add_function(wrap_pyfunction!(intercept_memory_read, m)?)?;
@@ -161,18 +162,42 @@ fn verify_license(jwt: String, public_key_pem: String, app_id: String) -> PyResu
 }
 
 /// Desensitize PII in text using Virbius DLP rules.
+///
+/// `rules_json` (optional): JSON array of DlpRule objects. When provided it
+/// overrides the rules loaded from the manifest; invalid JSON raises
+/// ValueError. When omitted, the manifest rules are used.
 #[pyfunction]
-#[pyo3(signature = (text, trace_id, _rules_json=None))]
-fn desensitize(text: String, trace_id: String, _rules_json: Option<String>) -> PyResult<String> {
+#[pyo3(signature = (text, trace_id, rules_json=None))]
+fn desensitize(text: String, trace_id: String, rules_json: Option<String>) -> PyResult<String> {
     let manifest = virbius_core::manifest::load();
-    let result = virbius_core::dlp::desensitize_in(
-        &text,
-        &trace_id,
-        &manifest.dlp_rules,
-        std::time::Duration::from_secs(1800),
-        Some(&trace_id),
-    );
+    let ttl = std::time::Duration::from_millis(manifest.sdk_config.dlp_vault_ttl_ms);
+    let rules: Vec<virbius_core::manifest::DlpRule> = match &rules_json {
+        Some(json) => serde_json::from_str(json)
+            .map_err(|e| PyValueError::new_err(format!("Invalid rules JSON: {}", e)))?,
+        None => manifest.dlp_rules,
+    };
+    let result = virbius_core::dlp::desensitize_in(&text, &trace_id, &rules, ttl, Some(&trace_id));
     Ok(result.text)
+}
+
+/// Restore DLP tokens in model output back to plaintext.
+///
+/// `session_id` must match the session used during `desensitize` for the
+/// tokens to be restored. Returns a dict with `text` and `unresolved_tokens`.
+#[pyfunction]
+fn restore(trace_id: String, session_id: String, text: String) -> PyResult<PyObject> {
+    let session = if session_id.is_empty() {
+        None
+    } else {
+        Some(session_id.as_str())
+    };
+    let result = virbius_core::dlp::desensitize_out(&text, &trace_id, session);
+    Python::with_gil(|py| {
+        let dict = pyo3::types::PyDict::new_bound(py);
+        dict.set_item("text", &result.text)?;
+        dict.set_item("unresolved_tokens", &result.unresolved_tokens)?;
+        Ok(dict.into())
+    })
 }
 
 /// Enhance a prompt with trust directive and PII desensitization.

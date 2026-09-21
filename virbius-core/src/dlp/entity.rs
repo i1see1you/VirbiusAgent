@@ -19,13 +19,17 @@ pub fn built_in_pattern(entity_type: &str) -> Option<&'static str> {
     }
 }
 
-pub fn compile_entity_regex(entity_type: &str, custom_pattern: Option<&str>) -> Option<Regex> {
+pub fn compile_entity_regex(
+    entity_type: &str,
+    custom_pattern: Option<&str>,
+) -> Result<Regex, String> {
     let pat = if entity_type == "custom_regex" {
-        custom_pattern?
+        custom_pattern.ok_or_else(|| "custom_regex rule has no pattern".to_string())?
     } else {
-        built_in_pattern(entity_type)?
+        built_in_pattern(entity_type)
+            .ok_or_else(|| format!("unknown entity_type {entity_type:?}"))?
     };
-    Regex::new(pat).ok()
+    Regex::new(pat).map_err(|e| format!("invalid regex: {e}"))
 }
 
 fn char_before(content: &str, start: usize) -> Option<char> {
@@ -78,6 +82,36 @@ pub fn normalize_bank_card(raw: &str) -> String {
     raw.chars().filter(|c| c.is_ascii_digit()).collect()
 }
 
+pub fn entity_match_valid(entity_type: &str, plaintext: &str) -> bool {
+    if entity_type == "bank_card_cn" {
+        let digits = normalize_bank_card(plaintext);
+        return luhn_valid(&digits);
+    }
+    if entity_type == "idcard_cn" {
+        return idcard_checksum_valid(plaintext);
+    }
+    true
+}
+
+pub fn idcard_checksum_valid(id: &str) -> bool {
+    if id.len() != 18 {
+        return false;
+    }
+    let upper: Vec<char> = id.chars().collect();
+    if !upper[..17].iter().all(|c| c.is_ascii_digit()) {
+        return false;
+    }
+    let weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
+    let mut sum = 0u32;
+    for (i, w) in weights.iter().enumerate() {
+        let d = upper[i].to_digit(10).unwrap_or(0);
+        sum += d * (*w as u32);
+    }
+    let check_map = ['1', '0', 'X', '9', '8', '7', '6', '5', '4', '3', '2'];
+    let expected = check_map[(sum % 11) as usize];
+    upper[17].to_ascii_uppercase() == expected
+}
+
 pub fn luhn_valid(digits: &str) -> bool {
     if digits.len() < 13 || digits.len() > 19 {
         return false;
@@ -123,7 +157,7 @@ mod tests {
     use super::*;
 
     fn first_valid_match(entity_type: &str, text: &str) -> Option<String> {
-        let re = compile_entity_regex(entity_type, None)?;
+        let re = compile_entity_regex(entity_type, None).ok()?;
         for m in re.find_iter(text) {
             if match_has_valid_boundaries(entity_type, text, m.start(), m.end()) {
                 return Some(m.as_str().to_string());

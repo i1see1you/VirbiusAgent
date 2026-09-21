@@ -542,7 +542,7 @@ public class ArtifactService {
         sdk.put("audit_flush_interval_ms", 30000);
         sdk.put("audit_queue_max", 500);
         sdk.put("canary_session_key", "device_id");
-        sdk.put("dlp_vault_ttl_ms", 1_800_000L);
+        sdk.put("dlp_vault_ttl_ms", 3_600_000L);
         root.put("sdk_config", sdk);
 
         Instant publishedAt = Instant.now();

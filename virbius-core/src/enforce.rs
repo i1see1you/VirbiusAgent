@@ -20,6 +20,34 @@ pub fn in_canary_bucket(session_id: Option<&str>, percent: i32) -> bool {
     ((crc % 100) as i32) < percent
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnforceMode {
+    Full,
+    Canary(i32),
+    DryRun,
+}
+
+impl EnforceMode {
+    pub fn parse(mode: &str, canary_percent: Option<i32>) -> Self {
+        let mode = mode.trim();
+        if mode.eq_ignore_ascii_case("full") {
+            EnforceMode::Full
+        } else if mode.eq_ignore_ascii_case("canary") {
+            EnforceMode::Canary(canary_percent.unwrap_or(0))
+        } else {
+            EnforceMode::DryRun
+        }
+    }
+
+    pub fn is_effective(&self, session_id: Option<&str>) -> bool {
+        match self {
+            EnforceMode::Full => true,
+            EnforceMode::Canary(pct) => in_canary_bucket(session_id, *pct),
+            EnforceMode::DryRun => false,
+        }
+    }
+}
+
 fn intent_priority(intent: &str) -> i32 {
     match intent.trim().to_ascii_lowercase().as_str() {
         "deny" => 100,

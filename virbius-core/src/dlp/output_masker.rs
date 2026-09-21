@@ -8,8 +8,8 @@
 //! so that PII from external data sources (files, DBs, HTTP) does not leak
 //! into the LLM context.
 
-use crate::dlp::entity::{self, luhn_valid, normalize_bank_card};
-use crate::enforce;
+use crate::dlp::entity;
+use crate::enforce::EnforceMode;
 use crate::manifest::DlpRule;
 use regex::Regex;
 
@@ -24,6 +24,8 @@ pub struct OutputMaskResult {
     pub hits: Vec<MaskHit>,
     /// True if this tool was in the exempt list (no masking applied).
     pub exempt: bool,
+    /// Non-fatal configuration problems detected while compiling rules.
+    pub warnings: Vec<String>,
 }
 
 /// A single PII entity detected in the output.
@@ -39,6 +41,7 @@ struct CompiledRule {
     rule: DlpRule,
     regex: Regex,
     priority: i32,
+    mode: EnforceMode,
 }
 
 struct SpanMatch {
@@ -53,22 +56,21 @@ struct SpanMatch {
 /// Rules with `enforce_mode = "dry_run"` detect only (no replacement).
 /// Rules with `enforce_mode = "canary"` are applied based on session bucket.
 pub fn mask_pii(content: &str, rules: &[DlpRule], session_id: Option<&str>) -> OutputMaskResult {
-    let compiled = compile_rules(rules);
+    let (compiled, warnings) = compile_rules(rules);
     if compiled.is_empty() {
         return OutputMaskResult {
             text: content.to_string(),
             masked: false,
             hits: vec![],
             exempt: false,
+            warnings,
         };
     }
 
     let spans = find_spans(content, &compiled);
 
     // Check if any rule is effective (not dry_run)
-    let any_effective = spans
-        .iter()
-        .any(|s| dlp_effective(&s.rule.rule, session_id));
+    let any_effective = spans.iter().any(|s| s.rule.mode.is_effective(session_id));
 
     if !any_effective {
         // dry_run mode: detect only, return original text
@@ -86,6 +88,7 @@ pub fn mask_pii(content: &str, rules: &[DlpRule], session_id: Option<&str>) -> O
             masked: false,
             hits,
             exempt: false,
+            warnings,
         };
     }
 
@@ -95,7 +98,7 @@ pub fn mask_pii(content: &str, rules: &[DlpRule], session_id: Option<&str>) -> O
     let mut hits = Vec::new();
 
     for span in &spans {
-        if !dlp_effective(&span.rule.rule, session_id) {
+        if !span.rule.mode.is_effective(session_id) {
             continue;
         }
         out.push_str(&content[last..span.start]);
@@ -117,6 +120,7 @@ pub fn mask_pii(content: &str, rules: &[DlpRule], session_id: Option<&str>) -> O
         masked,
         hits,
         exempt: false,
+        warnings,
     }
 }
 
@@ -128,8 +132,9 @@ fn render_mask(entity_type: &str) -> String {
     format!("[REDACTED:{}]", upper)
 }
 
-fn compile_rules(rules: &[DlpRule]) -> Vec<CompiledRule> {
+fn compile_rules(rules: &[DlpRule]) -> (Vec<CompiledRule>, Vec<String>) {
     let mut out = Vec::new();
+    let mut warnings = Vec::new();
     for rule in rules {
         let body = &rule.body;
         let pattern = if body.entity_type == "custom_regex" {
@@ -137,18 +142,26 @@ fn compile_rules(rules: &[DlpRule]) -> Vec<CompiledRule> {
         } else {
             None
         };
-        let Some(regex) = entity::compile_entity_regex(&body.entity_type, pattern) else {
-            continue;
+        let regex = match entity::compile_entity_regex(&body.entity_type, pattern) {
+            Ok(re) => re,
+            Err(reason) => {
+                let msg = format!("dlp rule {} ignored: {}", rule.rule_id, reason);
+                eprintln!("virbius-core: {msg}");
+                warnings.push(msg);
+                continue;
+            }
         };
         let priority = body.priority.unwrap_or(0);
+        let mode = EnforceMode::parse(&rule.enforce_mode, rule.canary_percent);
         out.push(CompiledRule {
             rule: rule.clone(),
             regex,
             priority,
+            mode,
         });
     }
     out.sort_by_key(|b| std::cmp::Reverse(b.priority));
-    out
+    (out, warnings)
 }
 
 fn find_spans(content: &str, rules: &[CompiledRule]) -> Vec<SpanMatch> {
@@ -164,7 +177,7 @@ fn find_spans(content: &str, rules: &[CompiledRule]) -> Vec<SpanMatch> {
             ) {
                 continue;
             }
-            if !entity_match_valid(&compiled.rule.body.entity_type, &plaintext) {
+            if !entity::entity_match_valid(&compiled.rule.body.entity_type, &plaintext) {
                 continue;
             }
             raw.push(SpanMatch {
@@ -174,41 +187,12 @@ fn find_spans(content: &str, rules: &[CompiledRule]) -> Vec<SpanMatch> {
                     rule: compiled.rule.clone(),
                     regex: compiled.regex.clone(),
                     priority: compiled.priority,
+                    mode: compiled.mode.clone(),
                 },
             });
         }
     }
     resolve_overlaps(raw)
-}
-
-fn entity_match_valid(entity_type: &str, plaintext: &str) -> bool {
-    if entity_type == "bank_card_cn" {
-        let digits = normalize_bank_card(plaintext);
-        return luhn_valid(&digits);
-    }
-    if entity_type == "idcard_cn" {
-        return idcard_checksum_valid(plaintext);
-    }
-    true
-}
-
-fn idcard_checksum_valid(id: &str) -> bool {
-    if id.len() != 18 {
-        return false;
-    }
-    let upper: Vec<char> = id.chars().collect();
-    if !upper[..17].iter().all(|c| c.is_ascii_digit()) {
-        return false;
-    }
-    let weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2];
-    let mut sum = 0u32;
-    for (i, w) in weights.iter().enumerate() {
-        let d = upper[i].to_digit(10).unwrap_or(0);
-        sum += d * (*w as u32);
-    }
-    let check_map = ['1', '0', 'X', '9', '8', '7', '6', '5', '4', '3', '2'];
-    let expected = check_map[(sum % 11) as usize];
-    upper[17].to_ascii_uppercase() == expected
 }
 
 fn resolve_overlaps(mut spans: Vec<SpanMatch>) -> Vec<SpanMatch> {
@@ -234,17 +218,6 @@ fn resolve_overlaps(mut spans: Vec<SpanMatch>) -> Vec<SpanMatch> {
 
 fn overlap(a0: usize, a1: usize, b0: usize, b1: usize) -> bool {
     a0 < b1 && b0 < a1
-}
-
-fn dlp_effective(rule: &DlpRule, session_id: Option<&str>) -> bool {
-    if rule.enforce_mode.eq_ignore_ascii_case("full") {
-        return true;
-    }
-    if rule.enforce_mode.eq_ignore_ascii_case("canary") {
-        let pct = rule.canary_percent.unwrap_or(0);
-        return enforce::in_canary_bucket(session_id, pct);
-    }
-    false
 }
 
 #[cfg(test)]

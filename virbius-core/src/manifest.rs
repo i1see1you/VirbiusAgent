@@ -189,7 +189,7 @@ pub struct SdkConfig {
 }
 
 fn default_dlp_vault_ttl() -> u64 {
-    1_800_000
+    3_600_000
 }
 
 fn default_sample_allow() -> f64 {
