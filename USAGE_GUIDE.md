@@ -29,6 +29,7 @@
   - [5.2 Gateway Rules (lua)](#52-gateway-rules-lua)
   - [5.3 Cloud Rules](#53-cloud-rules)
   - [5.4 Kernel Rules (Falco)](#54-kernel-rules-falco)
+  - [5.5 Tool Argument Transforms (arg_transforms)](#55-tool-argument-transformsarg_transforms)
 - [6. Security Pipeline Flow](#6-security-pipeline-flow)
 - [7. Monitoring and Alerting](#7-monitoring-and-alerting)
 - [8. Production Deployment](#8-production-deployment)
@@ -517,6 +518,8 @@ Navigation: **🔧 工具注册**
 
 Global registry of tool metadata. Each tool defines its risk class, sandbox type, timeout, fast path eligibility, and argument JSON Schema.
 
+> Egress argument narrowing (arg_transforms) is part of tool registration too — **see [§5.5](#55-tool-argument-transformsarg_transforms) for restrict / redact / truncate examples**.
+
 ```json
 {
   "tool_name": "read_file",
@@ -945,6 +948,103 @@ Falco rules monitor system calls at the kernel level via eBPF. Rules are JSON wi
 ```
 
 The `config-subscriber` (part of `virbius-kernel`) watches Redis for rule updates and live-reloads Falco rules without restarting the DaemonSet.
+
+### 5.5 Tool Argument Transforms (arg_transforms)
+
+> Declared on the tool catalog and distributed with it: after the policy allows a call and before forwarding upstream, egress arguments go through three irreversible narrowing operations — **restrict / redact / truncate**. Design details: [ARCHITECTURE.md §2.11](ARCHITECTURE.md#211-argument-transformsarg_transforms).
+
+**Registration example** (`POST /api/v1/admin/tenants/{tenantId}/tools`, full request):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/admin/tenants/acme/tools \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "tool_name": "send_email",
+  "risk_class": "high",
+  "approval_mode": "strict",
+  "arg_transforms": {
+    "phase": "pre_tool_call",
+    "mutations": [
+      {"path": "$.budget",  "op": "restrict", "to": {"max": 500}, "on_violation": "clamp"},
+      {"path": "$.to",      "op": "restrict", "to": ["alerts@corp.com", "audit@corp.com"], "on_violation": "clamp"},
+      {"path": "$.subject", "op": "redact",   "detectors": ["phone_cn", "idcard_cn"]},
+      {"path": "$.body",    "op": "truncate", "max_len": 2000}
+    ]
+  }
+}'
+```
+
+Per-operation examples below omit the outer `{"phase": "pre_tool_call", ...}` wrapper.
+
+**1. restrict — numeric cap (clamped on violation)**
+
+```json
+{"path": "$.amount", "op": "restrict", "to": {"max": 500}, "on_violation": "clamp"}
+```
+`{"amount": 800}` → `{"amount": 500}`; `{"amount": 100}` passes unchanged. A lower bound only `{"min": 5}` or both `{"min": 5, "max": 500}` work too (min > max is rejected at save time).
+
+**2. restrict — enum allowlist (arrays filtered, scalars clamped)**
+
+```json
+{"path": "$.env",  "op": "restrict", "to": ["dev", "staging"], "on_violation": "clamp"},
+{"path": "$.bcc",  "op": "restrict", "to": ["audit@corp.com"], "on_violation": "clamp"}
+```
+`$.env: ["dev","prod"]` → `["dev"]` (non-members dropped, may filter to `[]`); scalar `$.bcc: "x@evil.com"` → replaced with `"audit@corp.com"` (singleton sets only); a scalar missing from a multi-element set fails the whole call.
+
+**3. restrict — URL prefixes / regex (strings only)**
+
+```json
+{"path": "$.file_url", "op": "restrict", "to": {"prefixes": ["https://files.corp.com/"]}, "on_violation": "clamp"},
+{"path": "$.repo",     "op": "restrict", "to": {"match": "^https://git\\.corp\\.com/acme/"}, "on_violation": "clamp"}
+```
+`prefixes` rejects values containing `..` (path traversal); `match` is a regex (≤256 chars). Array inputs are filtered per member. **Do not** point restrict at a single array index (e.g. `$.urls[0]`) — a missing path is silently skipped and the model can bypass by reordering; target the whole container.
+
+**4. redact — built-in entity masking (irreversible)**
+
+```json
+{"path": "$.note",       "op": "redact", "detectors": ["phone_cn", "idcard_cn"]},
+{"path": "$..*string",   "op": "redact", "detectors": ["email"]}
+```
+`"call 13800138000"` → `"call [REDACTED:PHONE_CN]"`. Available detectors: `phone_cn` / `email` / `idcard_cn` / `bank_card_cn`. Multiple detectors resolve in one pass — an id card is never mislabeled as a bank card. `$..*string` recursively hits **every** string value in the argument tree (may coexist with explicit paths); if a catalog DLP rule defines `mask_template` for the entity, egress redaction renders the same template. Plaintext is destroyed immediately — never stored in the vault, never recoverable.
+
+**5. truncate — capping**
+
+```json
+{"path": "$.body",      "op": "truncate", "max_len": 2000},
+{"path": "$.urls",      "op": "truncate", "max_len": 10}
+```
+Strings cut by char count, arrays by element count; unchanged when already within the limit.
+
+**6. memory-write tools accept restrict only**
+
+Write tools (`memory_save` / `memory_store` / `vector_add` …) **reject** `redact`/`truncate` at save time (memory is a trusted store, never desensitized) and accept only restrict:
+
+```json
+{"path": "$.namespace", "op": "restrict", "to": ["work", "public"], "on_violation": "clamp"}
+```
+
+**Rejected at save time (quick reference)**:
+
+| pattern | error |
+|---------|-------|
+| `{"to": {"min": 10, "max": 5}}` | min > max |
+| `{"to": {"min": null}}` | no numeric bound |
+| `{"path": "$.a[01]"}` | leading-zero index (aliases `$.a[1]`) |
+| `{"to": {"domains": ["corp.com"]}}` | domains removed — use `to.match` |
+| `"on_violation": "deny"` | only `clamp` is supported |
+| `{"path": "$..*string", "op": "restrict"}` | scan path does not support restrict |
+| two mutations normalizing to the same path | duplicate path |
+| unknown detector / extra fields (e.g. `value`) | validation failure |
+
+**Runtime verification**: responses carry an annotation when transforms fire, and an `arg_transform` audit event is emitted:
+
+```json
+{"result": {"content": [...], "_meta": {"arg_transform": {
+  "applied": [{"path": "$.amount", "op": "restrict", "count": 1}],
+  "skipped": []
+}}}}
+```
+Transformed args are re-validated against `allowed_args_schema`; failure rejects the whole call with `arg_transform_failed`.
 
 ---
 

@@ -334,6 +334,7 @@ VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依
 | `virbius-core/src/sandbox/gvisor_pool.rs` | Rust | gVisor 预热池 |
 | virbius-core MCP 绑定 | Rust | PyO3 / napi-rs 绑定 |
 | `virbius-mcp-proxy` | Rust | MCP 协议代理（stdio/SSE 传输 + 安全管线 + 会话管理） |
+| `virbius-core/src/arg_transform.rs` | Rust | 工具参数变换（restrict/redact/truncate 不可逆收窄，详见 ARCHITECTURE.zh.md §2.11） |
 | `virbius-control` License 模块 | Java | License 签发(EdDSA) + 吊销(pub/sub) |
 | `virbius-control` 宪法模块 | Java | 宪法规则管理 + 编译为 prompt 模板 |
 | `virbius-control` Memory Interceptor | Java | P1: 记忆读写拦截 |
@@ -585,6 +586,7 @@ if session_risk > 30: 提升审计采样率
 | 风险维度 | VirbiusAgent 能力 | 阶段 | 状态 |
 |---------|-------------------|------|------|
 | 工具权限边界 | 端层 allowlist + JSON Schema + tool_policies | P0 | ✅ 已完成 |
+| 出站参数收窄 | arg_transforms（restrict / redact / truncate 不可逆参数变换，目录级声明） | P1 | ✅ 已完成（详见 [ARCHITECTURE.zh.md §2.11](ARCHITECTURE.zh.md#211-参数变换arg_transforms)） |
 | 输入安全 | Prompt Gateway（宪法注入 + PII 脱敏） | P0 | ✅ 已完成 |
 | Prompt 注入检测 | VirbiusGuard 小模型 | P1 | ✅ 已完成（详见 [§13.1](#131-prompt-注入检测)） |
 | 工具返回值检测 | STI Taint 语义审计 | P1 | ✅ 已完成（详见 [§13.2](#132-sti-taint-语义审计)） |

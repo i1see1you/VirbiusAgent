@@ -25,3 +25,7 @@ tokio-stream = "0.1"
 base64 = "0.22"
 sha2 = "0.10"
 rdkafka = { version = "0.37", features = ["tokio"] }
+
+[dev-dependencies]
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core"] }
+rand = "0.8"

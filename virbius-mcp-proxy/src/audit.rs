@@ -25,6 +25,10 @@ pub struct AuditEvent {
     pub device_id: Option<String>,
     pub session_risk_score: u32,
     pub timestamp: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transformed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transform_applied: Option<serde_json::Value>,
 }
 
 impl AuditEvent {
@@ -51,6 +55,8 @@ impl AuditEvent {
             device_id: session.device_id.clone(),
             session_risk_score: session.session_risk_score,
             timestamp,
+            transformed: None,
+            transform_applied: None,
         }
     }
 
@@ -79,6 +85,8 @@ impl AuditEvent {
             device_id: session.device_id.clone(),
             session_risk_score: session.session_risk_score,
             timestamp,
+            transformed: None,
+            transform_applied: None,
         }
     }
 }

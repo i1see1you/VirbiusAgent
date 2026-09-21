@@ -53,6 +53,12 @@ public class ToolRegistryService {
             }
         }
 
+        String transforms = null;
+        if (req.argTransforms() != null && !req.argTransforms().isNull() && !req.argTransforms().isMissingNode()) {
+            transforms = io.virbius.control.gateway.ArgTransformValidator.normalize(
+                    req.argTransforms().toString(), req.toolName());
+        }
+
         ToolRegistryEntry entry = ToolRegistryEntry.create(
                 tenantId,
                 req.toolName(),
@@ -62,7 +68,8 @@ public class ToolRegistryService {
                 req.fastPath() != null ? req.fastPath() : false,
                 schemaJson,
                 req.description(),
-                req.approvalMode() != null ? req.approvalMode() : "strict");
+                req.approvalMode() != null ? req.approvalMode() : "strict",
+                transforms);
 
         repo.upsert(entry);
         log.info("tool registry upsert: tenant={} tool={} risk={} sandbox={} timeout={} fastPath={} approvalMode={}",
@@ -112,6 +119,13 @@ public class ToolRegistryService {
         if (e.description() != null) {
             m.put("description", e.description());
         }
+        if (e.argTransforms() != null) {
+            try {
+                m.put("arg_transforms", mapper.readValue(e.argTransforms(), Object.class));
+            } catch (Exception ignored) {
+                m.put("arg_transforms", e.argTransforms());
+            }
+        }
         return m;
     }
 
@@ -131,6 +145,13 @@ public class ToolRegistryService {
                 // If JSON is malformed, skip it — the DB CHECK constraint should prevent this
             }
         }
+        if (e.argTransforms() != null) {
+            try {
+                m.put("arg_transforms", mapper.readValue(e.argTransforms(), Object.class));
+            } catch (Exception ignored) {
+                m.put("arg_transforms", e.argTransforms());
+            }
+        }
         return m;
     }
 
@@ -142,5 +163,19 @@ public class ToolRegistryService {
             Boolean fastPath,
             String allowedArgsSchema,
             String description,
-            String approvalMode) {}
+            String approvalMode,
+            com.fasterxml.jackson.databind.JsonNode argTransforms) {
+        public UpsertToolRequest(
+                String toolName,
+                String riskClass,
+                String sandboxType,
+                int timeoutMs,
+                Boolean fastPath,
+                String allowedArgsSchema,
+                String description,
+                String approvalMode) {
+            this(toolName, riskClass, sandboxType, timeoutMs, fastPath, allowedArgsSchema, description,
+                    approvalMode, null);
+        }
+    }
 }

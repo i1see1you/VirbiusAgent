@@ -149,7 +149,10 @@ pub struct SdkConfig {
     #[serde(default)]
     pub memory_interceptor_enabled: bool,
     /// Whether to desensitize PII when writing to Agent memory.
-    #[serde(default = "default_true")]
+    /// Off by default: memory is a trusted store and redaction happens at
+    /// the untrusted tool-call edge (`arg_transform`); masking memory only
+    /// deposits `[REDACTED]` artifacts that break round-tripping.
+    #[serde(default = "default_false")]
     pub memory_desensitize_on_write: bool,
     /// Whether to call Engine for LLM-based injection detection on memory writes.
     #[serde(default = "default_true")]
@@ -210,6 +213,10 @@ fn default_session_key() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_memory_max_entry_size() -> usize {
@@ -281,6 +288,9 @@ pub struct ToolPolicy {
     pub sandbox_intent: String,
     #[serde(default)]
     pub timeout_ms: u64,
+    /// Catalog arg transforms (restrict/redact/truncate). Absent = no rewrite.
+    #[serde(default)]
+    pub arg_transforms: Option<serde_json::Value>,
 }
 
 fn default_risk_class() -> String {

@@ -10,7 +10,7 @@
 
 use crate::dlp::entity;
 use crate::enforce::EnforceMode;
-use crate::manifest::DlpRule;
+use crate::manifest::{DlpRule, DlpRuleBody};
 use regex::Regex;
 
 /// Result of output PII masking.
@@ -102,7 +102,7 @@ pub fn mask_pii(content: &str, rules: &[DlpRule], session_id: Option<&str>) -> O
             continue;
         }
         out.push_str(&content[last..span.start]);
-        let mask = render_mask(&span.rule.rule.body.entity_type);
+        let mask = render_mask(&span.rule.rule.body);
         out.push_str(&mask);
         hits.push(MaskHit {
             rule_id: span.rule.rule.rule_id.clone(),
@@ -127,9 +127,16 @@ pub fn mask_pii(content: &str, rules: &[DlpRule], session_id: Option<&str>) -> O
 /// Render the mask placeholder for an entity type.
 ///
 /// Default: `[REDACTED:PHONE_CN]`, `[REDACTED:IDCARD_CN]`, etc.
-fn render_mask(entity_type: &str) -> String {
-    let upper = entity_type.to_uppercase();
-    format!("[REDACTED:{}]", upper)
+fn render_mask(body: &DlpRuleBody) -> String {
+    // A rule-level `mask_template` renders verbatim here (no `{seq}` binding:
+    // irreversible masking has no vault to resolve against).  Same entity
+    // therefore masks identically at the transform edge and on outputs.
+    if let Some(t) = body.mask_template.as_deref().map(str::trim) {
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    format!("[REDACTED:{}]", body.entity_type.to_uppercase())
 }
 
 fn compile_rules(rules: &[DlpRule]) -> (Vec<CompiledRule>, Vec<String>) {
@@ -309,6 +316,15 @@ mod tests {
         let result = mask_pii("13912345678", &[], None);
         assert!(!result.masked);
         assert_eq!(result.text, "13912345678");
+    }
+
+    #[test]
+    fn mask_template_respected() {
+        let mut rule = phone_rule("full");
+        rule.body.mask_template = Some("***".into());
+        let r = mask_pii("call 13912345678 please", &[rule], None);
+        assert!(r.text.contains("***"), "{}", r.text);
+        assert!(!r.text.contains("13912345678"));
     }
 
     #[test]

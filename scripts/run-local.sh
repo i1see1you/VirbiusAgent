@@ -189,24 +189,32 @@ ensure_kafka
 ensure_ollama
 ensure_ollama
 
-if command -v java >/dev/null 2>&1 && [[ -f virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar ]]; then
-  info "Starting virbius-control (port 8080)..."
+APP_VER=$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+CONTROL_JAR="$ROOT/virbius-control/target/virbius-control-${APP_VER}.jar"
+ENGINE_JAR="$ROOT/virbius-engine/target/virbius-engine-${APP_VER}.jar"
+
+if command -v java >/dev/null 2>&1 && [[ -f "$CONTROL_JAR" ]]; then
+  info "Starting virbius-control (port 8080) from $CONTROL_JAR..."
   nohup env VIRBIUS_DATA_DIR="$VIRBIUS_DATA_DIR" VIRBIUS_REDIS_URL="$VIRBIUS_REDIS_URL" \
     KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
-    java -jar "$ROOT/virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar" \
+    java -jar "$CONTROL_JAR" \
     >"$LOG_DIR/control.log" 2>&1 &
   wait_http "http://127.0.0.1:8080/api/v1/health" "virbius-control" || { err "Check logs: $LOG_DIR/control.log"; tail -30 "$LOG_DIR/control.log" 2>/dev/null || true; }
+else
+  err "control jar not found: $CONTROL_JAR"
 fi
 
-if command -v java >/dev/null 2>&1 && [[ -f virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar ]]; then
-  info "Starting virbius-engine (port 8082)..."
+if command -v java >/dev/null 2>&1 && [[ -f "$ENGINE_JAR" ]]; then
+  info "Starting virbius-engine (port 8082) from $ENGINE_JAR..."
   nohup env VIRBIUS_DATA_DIR="$VIRBIUS_DATA_DIR" VIRBIUS_REDIS_URL="$VIRBIUS_REDIS_URL" \
     KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
-    java -jar "$ROOT/virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar" \
+    java -jar "$ENGINE_JAR" \
     >"$LOG_DIR/engine.log" 2>&1 &
   wait_http "http://127.0.0.1:8082/admin/health" "virbius-engine" || { err "Check logs: $LOG_DIR/engine.log"; tail -30 "$LOG_DIR/engine.log" 2>/dev/null || true; }
+else
+  err "engine jar not found: $ENGINE_JAR"
 fi
 
 # ─── Summary ───

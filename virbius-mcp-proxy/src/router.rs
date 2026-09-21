@@ -668,7 +668,7 @@ async fn handle_tools_call(
     };
 
     let displayed_tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-    let args = params
+    let mut args = params
         .get("arguments")
         .cloned()
         .unwrap_or(Value::Object(serde_json::Map::new()));
@@ -827,28 +827,47 @@ async fn handle_tools_call(
                     "challenge token verified, allowing tool call: tool={}",
                     original_tool_name
                 );
+                let transform_note = match rewrite_tool_args(&original_tool_name, &args) {
+                    Ok(rewritten) => {
+                        args = rewritten.args;
+                        rewritten.note
+                    }
+                    Err(detail) => {
+                        return Some(jsonrpc_error_simple(
+                            VirbiusErrorCode::ArgTransformFailed,
+                            id.clone(),
+                            &original_tool_name,
+                            &session.trace_id,
+                            session.session_risk_score,
+                            Some(&detail),
+                        ));
+                    }
+                };
+                if let Some(note) = &transform_note {
+                    pipeline
+                        .audit_arg_transform(&session, &original_tool_name, note)
+                        .await;
+                }
                 session.increment_calls();
                 session_mgr.update(session_id.to_string(), session.clone());
 
-                // Local code-execution tools: execute in sandbox (same as Allow path)
                 if let Some((lang, code_arg)) = local_exec {
-                    return Some(
-                        execute_in_sandbox(id, &original_tool_name, &args, lang, code_arg).await,
-                    );
+                    let mut resp =
+                        execute_in_sandbox(id, &original_tool_name, &args, lang, code_arg).await;
+                    annotate_arg_transform(&mut resp, transform_note.as_ref());
+                    return Some(resp);
                 }
-
-                // Forward to upstream (same as Allow path)
                 if crate::egress::is_egress_tool(&original_tool_name) {
-                    return Some(
-                        proxy_egress_tool(
-                            id,
-                            &original_tool_name,
-                            &args,
-                            egress_client,
-                            egress_hosts,
-                        )
-                        .await,
-                    );
+                    let mut resp = proxy_egress_tool(
+                        id,
+                        &original_tool_name,
+                        &args,
+                        egress_client,
+                        egress_hosts,
+                    )
+                    .await;
+                    annotate_arg_transform(&mut resp, transform_note.as_ref());
+                    return Some(resp);
                 }
 
                 let upstream = match upstream_mgr
@@ -865,18 +884,12 @@ async fn handle_tools_call(
                     }
                 };
 
-                let forward_params = if displayed_tool_name != original_tool_name {
-                    let mut p = params.clone();
-                    if let Some(obj) = p.as_object_mut() {
-                        obj.insert(
-                            "name".to_string(),
-                            Value::String(original_tool_name.clone()),
-                        );
-                    }
-                    p
-                } else {
-                    params.clone()
-                };
+                let forward_params = patch_forward_params(
+                    params,
+                    displayed_tool_name,
+                    &original_tool_name,
+                    &args,
+                );
 
                 // Strip challenge_token from _meta before forwarding
                 let mut forward_req = serde_json::json!({
@@ -895,7 +908,10 @@ async fn handle_tools_call(
                 }
 
                 match upstream.forward(&forward_req).await {
-                    Ok(resp) => return Some(resp),
+                    Ok(mut resp) => {
+                        annotate_arg_transform(&mut resp, transform_note.as_ref());
+                        return Some(resp);
+                    }
                     Err(e) => {
                         return Some(jsonrpc_error(
                             -32603,
@@ -948,6 +964,27 @@ async fn handle_tools_call(
             risk_score,
             ..
         } => {
+            let transform_note = match rewrite_tool_args(&original_tool_name, &args) {
+                Ok(rewritten) => {
+                    args = rewritten.args;
+                    rewritten.note
+                }
+                Err(detail) => {
+                    return Some(jsonrpc_error_simple(
+                        VirbiusErrorCode::ArgTransformFailed,
+                        id.clone(),
+                        &original_tool_name,
+                        &session.trace_id,
+                        session.session_risk_score,
+                        Some(&detail),
+                    ));
+                }
+            };
+            if let Some(note) = &transform_note {
+                pipeline
+                    .audit_arg_transform(&session, &original_tool_name, note)
+                    .await;
+            }
             // Write back risk score from engine (if evaluated)
             if let Some(score) = risk_score {
                 session.session_risk_score = score;
@@ -1001,6 +1038,7 @@ async fn handle_tools_call(
                 trace_collector.record(tr_event).await;
                 session.set_last_step_id(result_step_id);
                 session_mgr.update(session_id.to_string(), session);
+                annotate_arg_transform(&mut resp, transform_note.as_ref());
                 return Some(resp);
             }
 
@@ -1037,6 +1075,7 @@ async fn handle_tools_call(
                 trace_collector.record(tr_event).await;
                 session.set_last_step_id(result_step_id);
                 session_mgr.update(session_id.to_string(), session);
+                annotate_arg_transform(&mut resp, transform_note.as_ref());
                 return Some(resp);
             }
 
@@ -1056,20 +1095,13 @@ async fn handle_tools_call(
                 }
             };
 
-            // Build forwarded request with original tool name
-            let forward_params = if displayed_tool_name != original_tool_name {
-                // Replace the tool name in params with the original name
-                let mut p = params.clone();
-                if let Some(obj) = p.as_object_mut() {
-                    obj.insert(
-                        "name".to_string(),
-                        Value::String(original_tool_name.clone()),
-                    );
-                }
-                p
-            } else {
-                params.clone()
-            };
+            // Build forwarded request with original tool name and rewritten args
+            let forward_params = patch_forward_params(
+                params,
+                displayed_tool_name,
+                &original_tool_name,
+                &args,
+            );
 
             let forward_req = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -1112,6 +1144,7 @@ async fn handle_tools_call(
                     trace_collector.record(tr_event).await;
                     session.set_last_step_id(result_step_id);
                     session_mgr.update(session_id.to_string(), session);
+                    annotate_arg_transform(&mut resp, transform_note.as_ref());
                     Some(resp)
                 }
                 Err(e) => {
@@ -1328,6 +1361,9 @@ fn jsonrpc_error(code: i32, id: &Value, message: &str) -> Value {
 /// If the tool is in the exempt list, or masking is disabled, the response
 /// is returned unmodified.
 fn mask_pii_in_response(resp: &mut Value, tool_name: &str, session_id: &str) {
+    if output_masking_skipped(tool_name) {
+        return;
+    }
     // Navigate to resp.result.content (array)
     let Some(result) = resp.get_mut("result") else {
         return;
@@ -1362,6 +1398,16 @@ fn mask_pii_in_response(resp: &mut Value, tool_name: &str, session_id: &str) {
             tool_name, session_id
         );
     }
+}
+
+/// Memory is a trusted store whose reads are plaintext by policy (PII egress
+/// is gated at the untrusted sink in `pre_tool_call` via `arg_transform`).
+/// Masking memory reads would deposit `[REDACTED]` artifacts into model
+/// context — where the Agent round-trips them into later tool args and
+/// legitimate restrict checks start failing — so memory read tools bypass
+/// output masking entirely.
+fn output_masking_skipped(tool_name: &str) -> bool {
+    MemoryInterceptor::from_manifest().is_memory_read_tool(tool_name)
 }
 
 /// Extract concatenated text from a JSON-RPC tool call response.
@@ -1480,6 +1526,80 @@ async fn review_tool_output(
                 replace_result_text(resp, "[Content blocked: safety review unavailable]");
             }
         }
+    }
+}
+
+struct RewrittenArgs {
+    args: Value,
+    note: Option<Value>,
+}
+
+fn rewrite_tool_args(tool: &str, args: &Value) -> Result<RewrittenArgs, String> {
+    let Some(policy) = virbius_core::manifest::tool_policy(tool) else {
+        return Ok(RewrittenArgs {
+            args: args.clone(),
+            note: None,
+        });
+    };
+    let Some(cfg) = policy.arg_transforms.filter(|c| !c.is_null()) else {
+        return Ok(RewrittenArgs {
+            args: args.clone(),
+            note: None,
+        });
+    };
+    let applied = virbius_core::arg_transform::apply_config(args, &cfg)
+        .map_err(|e| format!("{}: {}", e.reason, e.detail))?;
+    virbius_core::precheck::revalidate_tool_args(tool, &applied.args)
+        .map_err(|e| format!("arg_transform_revalidation: {e}"))?;
+    if applied.applied.is_empty() && applied.skipped.is_empty() {
+        return Ok(RewrittenArgs {
+            args: applied.args,
+            note: None,
+        });
+    }
+    let map_ops = |ops: &[virbius_core::arg_transform::AppliedOp]| {
+        ops.iter()
+            .map(|o| {
+                serde_json::json!({
+                    "path": o.path,
+                    "op": o.op,
+                    "count": o.count,
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    Ok(RewrittenArgs {
+        args: applied.args,
+        note: Some(serde_json::json!({
+            "applied": map_ops(&applied.applied),
+            "skipped": map_ops(&applied.skipped),
+        })),
+    })
+}
+
+fn patch_forward_params(params: &Value, displayed: &str, original: &str, args: &Value) -> Value {
+    let mut p = params.clone();
+    if let Some(obj) = p.as_object_mut() {
+        obj.insert("arguments".to_string(), args.clone());
+        if displayed != original {
+            obj.insert("name".to_string(), Value::String(original.to_string()));
+        }
+    }
+    p
+}
+
+fn annotate_arg_transform(resp: &mut Value, note: Option<&Value>) {
+    let Some(note) = note else {
+        return;
+    };
+    let Some(result) = resp.get_mut("result").and_then(|r| r.as_object_mut()) else {
+        return;
+    };
+    let meta = result
+        .entry("_meta")
+        .or_insert_with(|| serde_json::json!({}));
+    if let Some(obj) = meta.as_object_mut() {
+        obj.insert("arg_transform".to_string(), note.clone());
     }
 }
 
@@ -2153,5 +2273,41 @@ mod tests {
         .await
         .expect_err("wall must fire");
         assert!(err.contains("sandbox_exec_timeout"), "got {err}");
+    }
+
+    #[test]
+    fn patch_forward_params_rewrites_arguments() {
+        let params = serde_json::json!({"name":"a__t","arguments":{"x":1},"_meta":{"k":1}});
+        let out = patch_forward_params(&params, "a__t", "t", &serde_json::json!({"x":2}));
+        assert_eq!(out["name"], "t");
+        assert_eq!(out["arguments"]["x"], 2);
+        assert_eq!(out["_meta"]["k"], 1);
+    }
+
+    #[test]
+    fn rewrite_unknown_tool_is_noop() {
+        let args = serde_json::json!({"a": 1});
+        let r = rewrite_tool_args("zzz_no_such_tool_for_arg_transform", &args).unwrap();
+        assert_eq!(r.args, args);
+        assert!(r.note.is_none());
+    }
+
+    #[test]
+    fn annotate_arg_transform_writes_meta() {
+        let mut resp = serde_json::json!({"jsonrpc":"2.0","result":{"content":[]}});
+        annotate_arg_transform(
+            &mut resp,
+            Some(&serde_json::json!({"applied":[{"path":"$.a","op":"truncate","count":1}]})),
+        );
+        assert_eq!(resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"], "truncate");
+    }
+
+    #[test]
+    fn memory_read_tools_skip_output_masking() {
+        assert!(output_masking_skipped("memory_search"));
+        assert!(output_masking_skipped("vector_query"));
+        assert!(output_masking_skipped("recall"));
+        assert!(!output_masking_skipped("send_email"));
+        assert!(!output_masking_skipped("http_get"));
     }
 }

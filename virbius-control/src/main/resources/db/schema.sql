@@ -448,6 +448,7 @@ CREATE TABLE IF NOT EXISTS tb_tool_registry (
     allowed_args_schema  TEXT,
     description          VARCHAR(255),
     approval_mode        VARCHAR(8)   NOT NULL DEFAULT 'strict',
+    arg_transforms       TEXT,
     created_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at           TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (tenant_id, tool_name),

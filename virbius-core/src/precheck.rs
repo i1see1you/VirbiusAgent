@@ -111,6 +111,17 @@ fn validate_args(args: &serde_json::Value, schema: &serde_json::Value) -> Result
     Ok(())
 }
 
+/// Re-validate rewritten args against the tool schema (post-apply gate).
+pub fn revalidate_tool_args(tool_name: &str, args: &serde_json::Value) -> Result<(), String> {
+    let Some(policy) = manifest::tool_policy(tool_name) else {
+        return Ok(());
+    };
+    match &policy.allowed_args_schema {
+        Some(schema) => validate_args(args, schema),
+        None => Ok(()),
+    }
+}
+
 fn type_matches(value: &serde_json::Value, expected: &str) -> bool {
     match expected {
         "string" => value.is_string(),

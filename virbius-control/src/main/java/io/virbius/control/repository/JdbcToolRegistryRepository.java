@@ -30,12 +30,13 @@ public class JdbcToolRegistryRepository implements ToolRegistryRepository {
                 rs.getBoolean("fast_path"),
                 rs.getString("allowed_args_schema"),
                 rs.getString("description"),
-                rs.getString("approval_mode"));
+                rs.getString("approval_mode"),
+                rs.getString("arg_transforms"));
     }
 
     private static final String SELECT_COLS = """
             SELECT tenant_id, tool_name, risk_class, sandbox_type, timeout_ms,
-                   fast_path, allowed_args_schema, description, approval_mode
+                   fast_path, allowed_args_schema, description, approval_mode, arg_transforms
             FROM tb_tool_registry
             """;
 
@@ -62,7 +63,8 @@ public class JdbcToolRegistryRepository implements ToolRegistryRepository {
         int updated = jdbc.update(
                 """
                 UPDATE tb_tool_registry SET risk_class=?, sandbox_type=?, timeout_ms=?,
-                    fast_path=?, allowed_args_schema=?, description=?, approval_mode=?, updated_at=CURRENT_TIMESTAMP
+                    fast_path=?, allowed_args_schema=?, description=?, approval_mode=?,
+                    arg_transforms=?, updated_at=CURRENT_TIMESTAMP
                 WHERE tenant_id=? AND tool_name=?
                 """,
                 entry.riskClass(),
@@ -72,6 +74,7 @@ public class JdbcToolRegistryRepository implements ToolRegistryRepository {
                 entry.allowedArgsSchemaJson(),
                 entry.description(),
                 entry.approvalMode(),
+                entry.argTransforms(),
                 entry.tenantId(),
                 entry.toolName());
         if (updated == 0) {
@@ -79,8 +82,8 @@ public class JdbcToolRegistryRepository implements ToolRegistryRepository {
                     """
                     INSERT INTO tb_tool_registry (
                       tenant_id, tool_name, risk_class, sandbox_type, timeout_ms,
-                      fast_path, allowed_args_schema, description, approval_mode)
-                    VALUES (?,?,?,?,?,?,?,?,?)
+                      fast_path, allowed_args_schema, description, approval_mode, arg_transforms)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
                     """,
                     entry.tenantId(),
                     entry.toolName(),
@@ -90,7 +93,8 @@ public class JdbcToolRegistryRepository implements ToolRegistryRepository {
                     entry.fastPath(),
                     entry.allowedArgsSchemaJson(),
                     entry.description(),
-                    entry.approvalMode());
+                    entry.approvalMode(),
+                    entry.argTransforms());
         }
     }
 

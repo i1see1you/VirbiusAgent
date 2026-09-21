@@ -110,6 +110,36 @@
                 <p class="v-hint">{{ t('tools.approval-hint') }}</p>
               </div>
 
+              <div class="v-section">
+                <h3>{{ t('tools.section-xform') }}</h3>
+                <p class="v-hint">{{ t('tools.xform-hint') }}</p>
+                <div v-for="(row, i) in transformRows" :key="i" class="v-row" style="align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+                  <el-select v-model="row.kind" popper-class="tools-select-popper" style="width:130px">
+                    <el-option value="max" :label="t('tools.xform-kind-max')" />
+                    <el-option value="values" :label="t('tools.xform-kind-values')" />
+                    <el-option value="prefixes" :label="t('tools.xform-kind-prefixes')" />
+                    <el-option value="match" :label="t('tools.xform-kind-match')" />
+                    <el-option value="fixed" :label="t('tools.xform-kind-fixed')" />
+                    <el-option value="truncate" :label="t('tools.xform-kind-truncate')" />
+                    <el-option value="redact" :label="t('tools.xform-kind-redact')" />
+                  </el-select>
+                  <el-input v-model="row.path" :placeholder="t('tools.xform-path')" style="width:160px" />
+                  <el-input-number v-if="row.kind === 'max'" v-model="row.min" :step="1" style="width:130px" />
+                  <el-input-number v-if="row.kind === 'max'" v-model="row.max" :min="0" style="width:130px" />
+                  <el-input-number v-if="row.kind === 'truncate'" v-model="row.max_len" :min="1" style="width:130px" />
+                  <el-input v-if="row.kind === 'match'"
+                    v-model="row.listText" :placeholder="t('tools.xform-match')" style="width:220px" />
+                  <el-input v-if="['values','prefixes','fixed'].includes(row.kind)"
+                    v-model="row.listText" :placeholder="t('tools.xform-list')" style="width:180px" />
+                  <el-select v-if="row.kind === 'redact'" v-model="row.detectors" multiple collapse-tags
+                    popper-class="tools-select-popper" style="width:200px">
+                    <el-option v-for="d in DETECTORS" :key="d" :value="d" :label="d" />
+                  </el-select>
+                  <el-button type="danger" link @click="transformRows.splice(i, 1)">{{ t('common.delete') }}</el-button>
+                </div>
+                <el-button size="small" @click="transformRows.push(newRow())">{{ t('tools.xform-add') }}</el-button>
+              </div>
+
               <details class="v-hint-more" :open="schemaOpen" @toggle="onSchemaToggle">
                 <summary>{{ t('tools.advanced') }}</summary>
                 <div v-if="schemaOpen">
@@ -145,6 +175,7 @@ import { useFeedbackStore } from '@/stores/feedback';
 import { useSessionStore } from '@/stores/session';
 import { admin } from '@/api/client';
 import ScriptEditor from '@/components/ScriptEditor.vue';
+import { DETECTORS, newRow, buildConfig, rowsFromConfig, type TransformRow } from '@/utils/argTransform';
 import type { Diagnostic } from '@codemirror/lint';
 import type { EditorView } from '@codemirror/view';
 
@@ -159,6 +190,7 @@ const filterQ = ref('');
 const editorVisible = ref(false);
 const editingName = ref<string | null>(null);
 const schemaOpen = ref(false);
+const transformRows = ref<TransformRow[]>([]);
 const form = reactive<any>({
   tool_name: '', risk_class: 'low', sandbox_type: 'none', timeout_sec: 30,
   fast_path: false, approval_mode: 'strict', allowed_args_schema: '', description: ''
@@ -244,6 +276,7 @@ function fillForm(tool: any) {
     allowed_args_schema: schemaText(tool?.allowed_args_schema),
     description: tool?.description || ''
   });
+  transformRows.value = rowsFromConfig(tool?.arg_transforms);
   schemaOpen.value = !!form.allowed_args_schema;
 }
 
@@ -274,6 +307,11 @@ async function save() {
   if (schema) {
     try { JSON.parse(schema); } catch (e: any) { feedback.log(t('tools.schema-invalid', [e.message]), 'err'); return; }
   }
+  const built = buildConfig(transformRows.value);
+  if (built.errors.length) {
+    feedback.log(t('tools.xform-invalid'), 'err');
+    return;
+  }
   const body = {
     tool_name: name,
     risk_class: form.risk_class,
@@ -282,7 +320,8 @@ async function save() {
     fast_path: form.fast_path,
     approval_mode: form.approval_mode,
     allowed_args_schema: schema || null,
-    description: form.description.trim() || null
+    description: form.description.trim() || null,
+    arg_transforms: built.config
   };
   try {
     await admin('/tools', { method: 'POST', body: JSON.stringify(body) });

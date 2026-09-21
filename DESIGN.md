@@ -332,6 +332,7 @@ VirbiusAgent adopts a **file-level reuse** strategy and does not depend on Virbi
 | `virbius-core/src/sandbox/gvisor_pool.rs` | Rust | gVisor warm pool |
 | virbius-core MCP bindings | Rust | PyO3 / napi-rs bindings |
 | `virbius-mcp-proxy` | Rust | MCP protocol proxy (stdio/SSE transport + security pipeline + session management) |
+| `virbius-core/src/arg_transform.rs` | Rust | Tool argument transforms (restrict/redact/truncate irreversible narrowing, see ARCHITECTURE.md §2.11) |
 | `virbius-control` License module | Java | License issuance (EdDSA) + revocation (pub/sub) |
 | `virbius-control` Constitution module | Java | Constitution rule management + compilation to prompt templates |
 | `virbius-control` Memory Interceptor | Java | P1: Memory read/write interception |
@@ -584,6 +585,7 @@ Use a matrix to assess each Agent's control coverage:
 | Risk Dimension | VirbiusAgent Capability | Phase | Status |
 |---------------|------------------------|-------|--------|
 | Tool authorization boundary | Edge layer allowlist + JSON Schema + tool_policies | P0 | ✅ Completed |
+| Egress argument narrowing | arg_transforms (restrict / redact / truncate irreversible argument transforms, catalog-declared) | P1 | ✅ Completed (see [ARCHITECTURE.md §2.11](ARCHITECTURE.md#211-argument-transformsarg_transforms)) |
 | Input security | Prompt Gateway (constitution injection + PII desensitization) | P0 | ✅ Completed |
 | Prompt injection detection | VirbiusGuard small model | P1 | ✅ Completed (see [§13.1](#131-prompt-injection-detection)) |
 | Tool return value detection | STI Taint semantic audit | P1 | ✅ Completed (see [§13.2](#132-sti-taint-semantic-audit)) |

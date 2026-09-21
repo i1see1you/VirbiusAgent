@@ -632,6 +632,25 @@ impl SecurityPipeline {
         self.audit.report(event).await;
     }
 
+    pub async fn audit_arg_transform(
+        &self,
+        session: &Session,
+        tool_name: &str,
+        note: &Value,
+    ) {
+        let mut event = AuditEvent::tool_call(
+            session,
+            tool_name,
+            "arg_transform",
+            None,
+            Some("args rewritten after allow"),
+        );
+        event.transformed = Some(true);
+        event.transform_applied = Some(note.clone());
+        event.event_type = "arg_transform".into();
+        self.audit.report(event).await;
+    }
+
     /// Check if output review should be triggered for the given text and risk score.
     ///
     /// Review is triggered when either:

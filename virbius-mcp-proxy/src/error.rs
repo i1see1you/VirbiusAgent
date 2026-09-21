@@ -15,6 +15,7 @@ pub enum VirbiusErrorCode {
     FallbackBlocked = -32010,
     ChallengeRequired = -32011,
     MemoryWriteBlocked = -32012,
+    ArgTransformFailed = -32013,
 }
 
 impl VirbiusErrorCode {
@@ -32,6 +33,7 @@ impl VirbiusErrorCode {
             Self::FallbackBlocked => "fallback_blocked",
             Self::ChallengeRequired => "challenge_required",
             Self::MemoryWriteBlocked => "memory_write_blocked",
+            Self::ArgTransformFailed => "arg_transform_failed",
         }
     }
 
@@ -45,7 +47,8 @@ impl VirbiusErrorCode {
             | Self::FallbackBlocked
             | Self::OutputReviewBlocked
             | Self::ChallengeRequired
-            | Self::MemoryWriteBlocked => 403,
+            | Self::MemoryWriteBlocked
+            | Self::ArgTransformFailed => 403,
             Self::SchemaViolation => 400,
             Self::RateExceeded => 429,
         }
@@ -109,6 +112,7 @@ mod tests {
         assert_eq!(VirbiusErrorCode::FallbackBlocked as i32, -32010);
         assert_eq!(VirbiusErrorCode::ChallengeRequired as i32, -32011);
         assert_eq!(VirbiusErrorCode::MemoryWriteBlocked as i32, -32012);
+        assert_eq!(VirbiusErrorCode::ArgTransformFailed as i32, -32013);
     }
 
     #[test]
@@ -140,6 +144,7 @@ mod tests {
         assert_eq!(VirbiusErrorCode::OutputReviewBlocked.http_analog(), 403);
         assert_eq!(VirbiusErrorCode::ChallengeRequired.http_analog(), 403);
         assert_eq!(VirbiusErrorCode::MemoryWriteBlocked.http_analog(), 403);
+        assert_eq!(VirbiusErrorCode::ArgTransformFailed.http_analog(), 403);
         assert_eq!(VirbiusErrorCode::NotInAllowlist.http_analog(), 403);
     }
 

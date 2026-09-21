@@ -196,6 +196,7 @@ Using the "Enterprise AI Agent Constitution" as the guiding principle, implement
 | **Prompt Enhancement** | Inject constitutional constraints to prevent dangerous intent generation | §2.8 Prompt Gateway | Prevention |
 | **Memory Control** | Agent memory read/write interception + desensitization + injection detection | §2.9 Memory Interceptor | Prevention + Detection |
 | **Tool Interception** | Parameter validation + allowlist + schema + tool chain detection | §2.1 Edge precheck + §3.2 Gateway WASM + §5.3 Cloud L3 | Detection + Blocking |
+| **Argument Transform** | Catalog-declared irreversible egress narrowing (restrict / redact / truncate) | §2.11 arg_transforms | Prevention + Blocking |
 | **Output Review** | Tool result content security review + Agent final response review | §2.10 Output Review | Detection + Blocking |
 
 Runtime protection flow:
@@ -207,6 +208,7 @@ User input
   → LLM inference
   → [Memory Control] Memory Interceptor intercepts memory reads/writes (§2.9)
   → [Tool Interception] Edge precheck → Gateway rules → Cloud L3 final judgment (§2.1 + §3.2 + §5.3)
+  → [Argument Transform] Irreversible egress narrowing: restrict / redact / truncate (§2.11)
   → Tool execution
   → [Output Review] STI Taint + final response review (§5.4 + §2.10)
   → Return to user
@@ -1058,6 +1060,74 @@ fail_open = true
 
 **Cost control**: PII/credential detection uses rules + regex, no LLM call. Content safety detection reuses VirbiusGuard small model, only triggered on high risk (output >512 characters or session_risk > 50), not on every call.
 
+### 2.11 Argument Transforms (arg_transforms)
+
+> **P1 implemented.** A tool-catalog mechanism that narrows egress arguments: after the policy allows the call (including fast-path and cleared challenge), and before forwarding upstream, `tools/call` arguments go through three **irreversible** operations — `restrict / redact / truncate`. Transforms may only narrow, never widen, what policy authorized. Division of labor with DLP: reversible desensitization lives in the vault (`desensitize_in/out`, chat channel); irreversible masking lives here (egress args) and in §2.10 output masking (ingress results) — both converge on untrusted boundaries.
+
+**Execution position**:
+
+```
+tools/call
+  → [precheck] License allowlist + allowed_args_schema (§2.1)
+  → [policy] Engine /v1/evaluate (sees plaintext args; engine is in the trusted domain)
+  → allow / fast_path / challenge cleared
+  → [transform] virbius_core::arg_transform::apply_config
+  → [revalidation] precheck::revalidate_tool_args (result must still satisfy the schema)
+  → forward upstream / local sandbox / egress
+  → response _meta.arg_transform annotation (applied/skipped: path/op/count only, never values)
+  → audit event arg_transform
+```
+
+**Configuration** (`tb_tool_registry.arg_transforms`, distributed with the tool catalog):
+
+```json
+{"phase": "pre_tool_call", "mutations": [
+  {"path": "$.amount", "op": "restrict", "to": {"max": 500}, "on_violation": "clamp"},
+  {"path": "$.note",   "op": "redact",   "detectors": ["phone_cn", "idcard_cn"]},
+  {"path": "$..*string", "op": "truncate", "max_len": 2000}
+]}
+```
+
+**The three operations**:
+
+| op | parameters | behavior | notes |
+|----|-----------|----------|-------|
+| `restrict` | `to`: array enum / `{values}` / `{prefixes}` / `{match}` (regex ≤256 chars) / `{min},{max}` | Enum on arrays filters by membership (may become `[]`); a scalar must be a member — replaced only when the set is a singleton, otherwise the call fails; prefixes/match apply to strings only, and prefixes additionally rejects values containing `..`; range clamps numbers | `on_violation` is `clamp` only today (deny semantics removed; violating = whole call fails) |
+| `redact` | `detector` / `detectors` (built-ins: `phone_cn` `email` `idcard_cn` `bank_card_cn`) | Recurses into all strings under the target; PII spans replaced by the catalog `mask_template` or `[REDACTED:TYPE]` | **Irreversible**: plaintext is destroyed, never stored in the vault |
+| `truncate` | `max_len > 0` | Strings cut by char count, arrays by element count | — |
+
+**Path grammar** (kept equivalent across three implementations: the Rust parser is the semantic source, Java/TS are mirrors, tests anchor each other): must start with `$` and not be root alone; `.key` charset `[A-Za-z0-9_@ -]`; `[n]` indices **reject leading zeros**, stack (`$.a[0][1]`) and may lead (`$[0].a`); the only wildcard is `$..*string` (recursively hits every string value, may coexist with explicit paths). Max 64 mutations per config; duplicate paths are detected on **canonicalized segments** (`arg_transform_conflict`).
+
+**Application order**: fixed sort `restrict → redact → truncate` — restrict first so masked values never enter membership checks; redact first so `[REDACTED:…]` markers are never cut by truncate.
+
+**Detector resolution (detector = catalog selector)**: a detector name selects the catalog `dlp_rules` entry with the same `entity_type`, **inheriting its `priority` and `mask_template`** so edge redaction competes and renders exactly like output masking for the same entity. Enforcement posture is **not** inherited — at the edge the rule always runs `full` (configuring a redact is itself the decision to enforce; catalog dry_run/canary rollout does not leak into the boundary). Missing catalog rule falls back to built-in specificity (`idcard_cn=100 > bank_card_cn=50 > phone_cn/email=10`). All detectors go into **one** `mask_pii` pass, where priority + longest-span-wins resolves overlaps — preventing an 18-digit id card from being mislabeled `[REDACTED:BANK_CARD_CN]` by the 13–19-digit bank-card pattern.
+
+**Fail-closed semantics**: invalid path/op/detector → `arg_transform_invalid`; duplicate path → `arg_transform_conflict`; type mismatch → `arg_transform_type_mismatch`; scalar outside set → `arg_transform_value_outside_set`; post-transform schema failure → `arg_transform_revalidation`. All reject the whole call (error code `arg_transform_failed`). The one lenient case: a missing path is skipped and reported in `_meta.arg_transform.skipped` (see known boundary 3).
+
+**Memory policy** (memory is trusted and never desensitized):
+
+| decision | rationale |
+|----------|-----------|
+| `memory_desensitize_on_write` defaults to `false` | masking a trusted store is pseudo-protection that only deposits `[REDACTED]` artifacts breaking arg round-trips; PII egress control converges on untrusted sinks |
+| memory-write tools (`memory_save` etc.) reject `redact`/`truncate` transforms | enforced by control save-time lint (mirrored rule); `restrict` is allowed (narrowing writable namespaces is authority, not content fidelity) |
+| memory-read tools (`memory_search` etc.) bypass output masking | router skips `mask_pii_in_response` for read tools, preventing artifacts from being re-saved into the trusted store |
+
+**Implementation map**:
+
+| file | role |
+|------|------|
+| `virbius-core/src/arg_transform.rs` | semantic source (parse / apply / detector selector / dedupe) |
+| `virbius-mcp-proxy/src/router.rs` (`rewrite_tool_args`) | call site, schema revalidation, `_meta` annotation, audit |
+| `virbius-control .../gateway/ArgTransformValidator.java` | save-time lint (mirror of Rust semantics) + memory-write gate |
+| `virbius-control/frontend/src/utils/argTransform.ts` | visual builder; edit round-trip fidelity locked by `scripts/test-arg-transform-roundtrip.mjs` |
+| `virbius-control .../db/migration/V6__tool_arg_transforms.sql` | catalog storage column |
+
+**Known boundaries (deliberate trade-offs, each with a plan item)**:
+
+1. Challenge tokens bind the **pre-transform** args — a post-approval clamp may still rewrite what is sent; the planned fix is an `enforced_identity` (approval bound to a canonical digest of the transformed args).
+2. The Engine evaluates plaintext args (a consequence of transform running after policy); "PII never leaves" assumes the engine is a trusted domain.
+3. Explicit index paths (e.g. `$.bcc[0]`) are silently skipped when absent, so array reordering is a structural bypass; catalogs should point restrict at whole containers.
+4. Config is parsed per request (no compiled cache); cacheable at tool-policy load time.
 
 ---
 

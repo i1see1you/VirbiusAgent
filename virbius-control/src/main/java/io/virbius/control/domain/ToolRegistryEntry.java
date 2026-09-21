@@ -24,12 +24,21 @@ public record ToolRegistryEntry(
         boolean fastPath,
         String allowedArgsSchemaJson,
         String description,
-        String approvalMode) {
+        String approvalMode,
+        String argTransforms) {
 
     public static ToolRegistryEntry create(
             String tenantId, String toolName, String riskClass, String sandboxType,
             int timeoutMs, boolean fastPath, String allowedArgsSchemaJson, String description,
             String approvalMode) {
+        return create(tenantId, toolName, riskClass, sandboxType, timeoutMs, fastPath,
+                allowedArgsSchemaJson, description, approvalMode, null);
+    }
+
+    public static ToolRegistryEntry create(
+            String tenantId, String toolName, String riskClass, String sandboxType,
+            int timeoutMs, boolean fastPath, String allowedArgsSchemaJson, String description,
+            String approvalMode, String argTransforms) {
         return new ToolRegistryEntry(
                 tenantId,
                 validateToolName(toolName),
@@ -39,7 +48,8 @@ public record ToolRegistryEntry(
                 fastPath,
                 allowedArgsSchemaJson,
                 description,
-                validateApprovalMode(approvalMode));
+                validateApprovalMode(approvalMode),
+                argTransforms);
     }
 
     private static String validateToolName(String toolName) {

@@ -29,6 +29,7 @@
   - [5.2 网关规则（lua）](#52-网关规则lua)
   - [5.3 云端规则](#53-云端规则)
   - [5.4 内核规则（Falco）](#54-内核规则falco)
+  - [5.5 工具参数变换（arg_transforms）](#55-工具参数变换arg_transforms)
 - [6. 安全流水线流程](#6-安全流水线流程)
 - [7. 监控与告警](#7-监控与告警)
 - [8. 生产部署](#8-生产部署)
@@ -513,6 +514,8 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants/default/cumulatives \
 
 工具元数据的全局注册表。每个工具定义其风险等级、沙箱类型、超时时间、快速路径资格和参数 JSON Schema。
 
+> 出站参数收窄(arg_transforms)也是工具注册的一部分——**restrict / redact / truncate 配置示例见 [§5.5](#55-工具参数变换arg_transforms)**。
+
 ```json
 {
   "tool_name": "read_file",
@@ -941,6 +944,103 @@ Falco 规则通过 eBPF 在内核级别监控系统调用。规则为 JSON 格�
 ```
 
 `config-subscriber`（属于 `virbius-kernel` 的一部分）监控 Redis 中的规则更新，并实时重新加载 Falco 规则，无需重启 DaemonSet。
+
+### 5.5 工具参数变换（arg_transforms）
+
+> 工具目录级声明,随工具注册下发:策略 allow 之后、转发上游之前,对出站参数做 **restrict(限制)/ redact(脱敏)/ truncate(截断)** 三种不可逆收窄。设计细节见 [ARCHITECTURE.zh.md §2.11](ARCHITECTURE.zh.md#211-参数变换arg_transforms)。
+
+**注册示例**(`POST /api/v1/admin/tenants/{tenantId}/tools`,完整请求):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/admin/tenants/acme/tools \
+  -H 'Content-Type: application/json' \
+  -d '{
+  "tool_name": "send_email",
+  "risk_class": "high",
+  "approval_mode": "strict",
+  "arg_transforms": {
+    "phase": "pre_tool_call",
+    "mutations": [
+      {"path": "$.budget",  "op": "restrict", "to": {"max": 500}, "on_violation": "clamp"},
+      {"path": "$.to",      "op": "restrict", "to": ["alerts@corp.com", "audit@corp.com"], "on_violation": "clamp"},
+      {"path": "$.subject", "op": "redact",   "detectors": ["phone_cn", "idcard_cn"]},
+      {"path": "$.body",    "op": "truncate", "max_len": 2000}
+    ]
+  }
+}'
+```
+
+以下按操作逐个举例,`mutations` 均省略外层 `{"phase": "pre_tool_call", ...}` 包装。
+
+**1. restrict — 数值上限(超出即钳制)**
+
+```json
+{"path": "$.amount", "op": "restrict", "to": {"max": 500}, "on_violation": "clamp"}
+```
+`{"amount": 800}` → `{"amount": 500}`;`{"amount": 100}` 原样通过。也可只写下限 `{"min": 5}` 或同时写 `{"min": 5, "max": 500}`(min > max 的配置在注册期即被拒绝)。
+
+**2. restrict — 枚举白名单(数组过滤,标量钳制)**
+
+```json
+{"path": "$.env",  "op": "restrict", "to": ["dev", "staging"], "on_violation": "clamp"},
+{"path": "$.bcc",  "op": "restrict", "to": ["audit@corp.com"], "on_violation": "clamp"}
+```
+`$.env: ["dev","prod"]` → `["dev"]`(不合规成员被剔除,可滤为空数组);标量 `$.bcc: "x@evil.com"` → 直接替换为 `"audit@corp.com"`(单元素集合特有);两元素集合中标量不命中则整个调用失败。
+
+**3. restrict — URL 前缀 / 正则(仅字符串)**
+
+```json
+{"path": "$.file_url", "op": "restrict", "to": {"prefixes": ["https://files.corp.com/"]}, "on_violation": "clamp"},
+{"path": "$.repo",     "op": "restrict", "to": {"match": "^https://git\\.corp\\.com/acme/"}, "on_violation": "clamp"}
+```
+`prefixes` 拒绝含 `..` 的值(防路径回溯);`match` 为正则(≤256 字符)。数组输入时按成员过滤。**不要**把 restrict 指向数组单个下标(如 `$.urls[0]`)——路径缺失会被静默跳过,模型重排数组即可绕开;应指向整个容器。
+
+**4. redact — 内置实体脱敏(不可逆)**
+
+```json
+{"path": "$.note",       "op": "redact", "detectors": ["phone_cn", "idcard_cn"]},
+{"path": "$..*string",   "op": "redact", "detectors": ["email"]}
+```
+`"联系 13800138000"` → `"联系 [REDACTED:PHONE_CN]"`。可选 detector:`phone_cn` / `email` / `idcard_cn` / `bank_card_cn`。多 detector 一次归并,身份证不会被误标成银行卡。`$..*string` 递归命中参数树中**所有**字符串值(可与显式路径共存);若目录 DLP 规则为该实体配了 `mask_template`,出边脱敏会使用同一模板。原文直接丢弃、不进 vault、不可还原。
+
+**5. truncate — 截断**
+
+```json
+{"path": "$.body",      "op": "truncate", "max_len": 2000},
+{"path": "$.urls",      "op": "truncate", "max_len": 10}
+```
+字符串按字符数、数组按元素数截断;未超长则原样通过。
+
+**6. memory 写工具只允许 restrict**
+
+`memory_save` / `memory_store` / `vector_add` 等写工具在保存期**拒绝** `redact`/`truncate`(memory 为可信存储,不做脱敏),只接受 restrict:
+
+```json
+{"path": "$.namespace", "op": "restrict", "to": ["work", "public"], "on_violation": "clamp"}
+```
+
+**会被注册期拒绝的写法(速查)**:
+
+| 写法 | 错误 |
+|------|------|
+| `{"to": {"min": 10, "max": 5}}` | min > max |
+| `{"to": {"min": null}}` | 无有效数值边界 |
+| `{"path": "$.a[01]"}` | 下标前导零(与 `$.a[1]` 别名) |
+| `{"to": {"domains": ["corp.com"]}}` | domains 已移除,改用 `to.match` |
+| `"on_violation": "deny"` | 仅支持 `clamp` |
+| `{"path": "$..*string", "op": "restrict"}` | scan 路径不支持 restrict |
+| 两条 mutation 的 path 规范化后相同 | 路径重复 |
+| 未知 detector / 多余字段(如 `value`) | 校验失败 |
+
+**运行时验证**:命中变换的响应会带注记,审计流出现 `arg_transform` 事件:
+
+```json
+{"result": {"content": [...], "_meta": {"arg_transform": {
+  "applied": [{"path": "$.amount", "op": "restrict", "count": 1}],
+  "skipped": []
+}}}}
+```
+变换后参数会再过一遍 `allowed_args_schema` 重校验,失败则整个调用以 `arg_transform_failed` 拒绝。
 
 ---
 

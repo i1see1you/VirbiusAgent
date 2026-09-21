@@ -41,6 +41,12 @@ use virbius_mcp_proxy::upstream::UpstreamManager;
 struct MockMcpState {
     /// SSE session_id → sender for pushing JSON-RPC responses
     sse_senders: Arc<DashMap<String, mpsc::Sender<Value>>>,
+    last_call_args: Arc<std::sync::Mutex<Option<Value>>>,
+}
+
+struct MockUpstream {
+    url: String,
+    last_call_args: Arc<std::sync::Mutex<Option<Value>>>,
 }
 
 #[derive(Deserialize)]
@@ -102,14 +108,22 @@ async fn mock_post_handler(
                 ]
             }
         }),
-        "tools/call" => json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": {
-                "content": [{ "type": "text", "text": "ok" }],
-                "isError": false
-            }
-        }),
+        "tools/call" => {
+            let args = req
+                .get("params")
+                .and_then(|p| p.get("arguments"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            *state.last_call_args.lock().unwrap() = Some(args);
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{ "type": "text", "text": "ok" }],
+                    "isError": false
+                }
+            })
+        }
         _ => json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -126,12 +140,18 @@ async fn mock_post_handler(
 
 /// Start a mock MCP server on a random port, return its base URL.
 async fn start_mock_mcp() -> String {
+    start_mock_mcp_capture().await.url
+}
+
+async fn start_mock_mcp_capture() -> MockUpstream {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let url = format!("http://{}", addr);
+    let last_call_args = Arc::new(std::sync::Mutex::new(None));
 
     let state = MockMcpState {
         sse_senders: Arc::new(DashMap::new()),
+        last_call_args: last_call_args.clone(),
     };
 
     let app = Router::new()
@@ -143,7 +163,10 @@ async fn start_mock_mcp() -> String {
         let _ = axum::serve(listener, app).await;
     });
 
-    url
+    MockUpstream {
+        url,
+        last_call_args,
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -597,6 +620,7 @@ async fn start_mock_mcp_with_tools(tools: Vec<(&str, &str)>) -> String {
 
     let state = MockMcpState {
         sse_senders: Arc::new(DashMap::new()),
+        last_call_args: Arc::new(std::sync::Mutex::new(None)),
     };
 
     // We need to pass the tools to the handler. Use a shared state.
@@ -917,4 +941,293 @@ async fn test_multi_upstream_name_conflict() {
     let resp = route(&env, &call_req, sid).await;
     let resp = resp.unwrap();
     assert!(resp.get("result").is_some(), "restore should succeed");
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  arg_transforms: initialize → allow → apply → forward / local shell
+// ═══════════════════════════════════════════════════════════════
+
+static MANIFEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+struct OfflineManifestGuard {
+    path: std::path::PathBuf,
+}
+
+impl Drop for OfflineManifestGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::write(&self.path, "{}");
+        virbius_core::manifest::reload();
+        virbius_core::EdgeInitConfig::default().install();
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn install_offline_manifest(body: &Value) -> OfflineManifestGuard {
+    let path = std::env::temp_dir().join(format!("virbius-at-{}.json", uuid::Uuid::new_v4()));
+    std::fs::write(&path, serde_json::to_vec_pretty(body).unwrap()).unwrap();
+    virbius_core::EdgeInitConfig {
+        offline_manifest_path: Some(path.clone()),
+        cache_dir: std::env::temp_dir().join("virbius-itest-edge"),
+        tenant_id: "default".into(),
+        app_id: "test-app".into(),
+        ..Default::default()
+    }
+    .install();
+    virbius_core::manifest::reload();
+    OfflineManifestGuard { path }
+}
+
+fn sign_license(app_id: &str, allowed_tools: &[&str]) -> (String, String) {
+    use base64::Engine;
+    use ed25519_dalek::pkcs8::EncodePublicKey;
+    use ed25519_dalek::{Signer, SigningKey};
+    use rand::rngs::OsRng;
+    let signing_key = SigningKey::generate(&mut OsRng);
+    let pub_pem = signing_key
+        .verifying_key()
+        .to_public_key_pem(Default::default())
+        .unwrap();
+    let claims = json!({
+        "app_id": app_id,
+        "tenant_id": "tenant-1",
+        "allowed_tools": allowed_tools,
+        "risk_quota": 60,
+        "tool_rate_limit": 50,
+        "exp": 9999999999i64,
+        "iat": 1700000000i64,
+    });
+    let header = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9";
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&claims).unwrap());
+    let message = format!("{}.{}", header, payload);
+    let sig = signing_key.sign(message.as_bytes());
+    let jwt = format!(
+        "{}.{}.{}",
+        header,
+        payload,
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(sig.to_bytes())
+    );
+    (pub_pem, jwt)
+}
+
+async fn setup_proxy_fast_path(upstream_url: &str, pubkey: String) -> ProxyEnv {
+    let session_mgr = Arc::new(SessionManager::new());
+    let upstream_mgr = Arc::new(UpstreamManager::new(
+        vec![UpstreamEntry {
+            name: "default".to_string(),
+            url: upstream_url.to_string(),
+            sse_path: "/sse".to_string(),
+        }],
+        10,
+    ));
+    let audit = Arc::new(AuditSink::new(AuditBackend::Disabled, 1.0));
+    let pipeline = Arc::new(SecurityPipeline::new(
+        pubkey.clone(),
+        "http://127.0.0.1:59999",
+        FastPathConfig {
+            enabled: true,
+            warmup_calls: 0,
+            risk_threshold: 100,
+        },
+        FailoverConfig::default(),
+        FallbackPolicy::MinimumPrivilege,
+        audit,
+        OutputReviewConfig::default(),
+    ));
+    ProxyEnv {
+        session_mgr,
+        upstream_mgr,
+        pipeline,
+        egress_client: EgressClient::new(30, 50),
+        egress_hosts: Vec::new(),
+        pubkey,
+        trace_collector: Arc::new(TraceCollector::new(TraceBackend::Disabled)),
+        conn_to_session: Arc::new(DashMap::new()),
+    }
+}
+
+/// Low-risk upstream tool: original args go to evaluate/fallback; Apply clamps before forward.
+#[tokio::test]
+async fn arg_transform_search_restrict_clamped_before_upstream() {
+    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _manifest = install_offline_manifest(&json!({
+        "tenant_id": "default",
+        "app_id": "test-app",
+        "tool_policies": [{
+            "tool_name": "search",
+            "risk_class": "low",
+            "sandbox_type": "none",
+            "timeout_ms": 5000,
+            "fast_path": false,
+            "arg_transforms": {
+                "phase": "pre_tool_call",
+                "mutations": [{
+                    "path": "$.limit",
+                    "op": "restrict",
+                    "to": { "max": 10 },
+                    "on_violation": "clamp"
+                }]
+            }
+        }]
+    }));
+    let mock = start_mock_mcp_capture().await;
+    let env = setup_proxy(&mock.url).await;
+    let sid = "itest-at-search";
+    let _ = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "_meta": { "session_id": sid, "app_id": "test-app" } }
+        }),
+        sid,
+    )
+    .await;
+
+    let resp = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": { "name": "search", "arguments": { "query": "q", "limit": 99 } }
+        }),
+        sid,
+    )
+    .await
+    .unwrap();
+    assert!(resp.get("result").is_some(), "search allow+apply: {resp}");
+    assert_eq!(resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"], "restrict");
+    let forwarded = mock.last_call_args.lock().unwrap().clone().unwrap();
+    assert_eq!(forwarded["limit"], 10);
+    assert_eq!(forwarded["query"], "q");
+}
+
+/// High-risk local `shell`: license + fast_path skip engine; Apply still rewrites command then exec.
+#[tokio::test]
+async fn arg_transform_shell_full_flow_clamps_then_executes() {
+    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _manifest = install_offline_manifest(&json!({
+        "tenant_id": "default",
+        "app_id": "test-app",
+        "tool_policies": [{
+            "tool_name": "shell",
+            "risk_class": "high",
+            "sandbox_type": "none",
+            "timeout_ms": 5000,
+            "fast_path": true,
+            "arg_transforms": {
+                "phase": "pre_tool_call",
+                "mutations": [{
+                    "path": "$.command",
+                    "op": "restrict",
+                    "to": ["echo ARG_XFORM_OK"],
+                    "on_violation": "clamp"
+                }]
+            }
+        }]
+    }));
+    let (pub_pem, jwt) = sign_license("test-app", &["shell"]);
+    let mock = start_mock_mcp_capture().await;
+    let env = setup_proxy_fast_path(&mock.url, pub_pem).await;
+    let sid = "itest-at-shell";
+    let init = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "_meta": { "session_id": sid, "app_id": "test-app", "license_jwt": jwt } }
+        }),
+        sid,
+    )
+    .await
+    .unwrap();
+    assert!(init.get("result").is_some(), "initialize: {init}");
+
+    let resp = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "shell",
+                "arguments": { "command": "echo SHOULD_NOT_APPEAR" }
+            }
+        }),
+        sid,
+    )
+    .await
+    .unwrap();
+    assert!(resp.get("result").is_some(), "shell allow+apply+exec: {resp}");
+    let text = resp["result"]["content"][0]["text"].as_str().unwrap_or("");
+    assert!(
+        text.contains("ARG_XFORM_OK"),
+        "rewritten command should run, got {text:?} resp={resp}"
+    );
+    assert!(
+        !text.contains("SHOULD_NOT_APPEAR"),
+        "original command must not run: {text:?}"
+    );
+    assert_eq!(resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"], "restrict");
+    assert!(
+        mock.last_call_args.lock().unwrap().is_none(),
+        "local shell must not be forwarded upstream"
+    );
+}
+
+/// Prefix restrict: scalar miss fails the call; nothing is forwarded.
+#[tokio::test]
+async fn arg_transform_search_restrict_prefix_mismatch_fails() {
+    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _manifest = install_offline_manifest(&json!({
+        "tenant_id": "default",
+        "app_id": "test-app",
+        "tool_policies": [{
+            "tool_name": "search",
+            "risk_class": "low",
+            "sandbox_type": "none",
+            "timeout_ms": 5000,
+            "arg_transforms": {
+                "phase": "pre_tool_call",
+                "mutations": [{
+                    "path": "$.query",
+                    "op": "restrict",
+                    "to": { "prefixes": ["ok-"] },
+                    "on_violation": "clamp"
+                }]
+            }
+        }]
+    }));
+    let mock = start_mock_mcp_capture().await;
+    let env = setup_proxy(&mock.url).await;
+    let sid = "itest-at-prefix-fail";
+    let _ = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "_meta": { "session_id": sid, "app_id": "test-app" } }
+        }),
+        sid,
+    )
+    .await;
+
+    let resp = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": { "name": "search", "arguments": { "query": "evil" } }
+        }),
+        sid,
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp["error"]["code"], -32013);
+    assert!(mock.last_call_args.lock().unwrap().is_none());
 }

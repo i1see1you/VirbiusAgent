@@ -194,6 +194,7 @@ virbius-control 签发 License（JWT 签名）：
 | **提示增强** | 注入宪法约束，预防危险意图产生 | §2.8 Prompt Gateway | 预防 |
 | **记忆管控** | Agent 记忆读写拦截 + 脱敏 + 注入检测 | §2.9 Memory Interceptor | 预防+检测 |
 | **工具拦截** | 参数校验 + allowlist + schema + 工具链检测 | §2.1 端层预检 + §3.2 管层 WASM + §5.3 云层 L3 | 检测+阻断 |
+| **参数变换** | 工具目录级出站参数不可逆收窄（限制/脱敏/截断） | §2.11 arg_transforms | 预防+阻断 |
 | **输出审查** | 工具结果内容安全审查 + Agent 最终响应审查 | §2.10 Output Review | 检测+阻断 |
 
 运行时防护流程：
@@ -205,6 +206,7 @@ virbius-control 签发 License（JWT 签名）：
   → LLM 推理
   → [记忆管控] Memory Interceptor 拦截记忆读写（§2.9）
   → [工具拦截] 端层预检 → 管层规则 → 云层 L3 终判（§2.1 + §3.2 + §5.3）
+  → [参数变换] 出站参数不可逆收窄：restrict / redact / truncate（§2.11）
   → 工具执行
   → [输出审查] STI Taint + 最终响应审查（§5.4 + §2.10）
   → 返回用户
@@ -1054,6 +1056,74 @@ fail_open = true
 
 **成本控制**：PII/凭据检测为规则+正则，无 LLM 调用。内容安全检测复用 VirbiusGuard 小模型，仅高风险触发（输出 >512 字符 或 session_risk > 50），非每次调用。
 
+### 2.11 参数变换（arg_transforms）
+
+> **P1 实现（已完成）。** 工具目录级的出站参数收窄机制：策略 allow（含 fast-path / challenge 通过）之后、转发上游之前，对 `tools/call` 参数执行 `restrict / redact / truncate` 三种**不可逆**变换。只收窄、不放大授权。与 DLP 的分工：可逆脱敏归 vault（`desensitize_in/out`，聊天通道）；不可逆脱敏归本机制（出站参数）与 §2.10 输出遮蔽（入站结果）——两者都收敛在不可信边界上。
+
+**执行位置**：
+
+```
+tools/call
+  → [预检] License 白名单 + allowed_args_schema（§2.1）
+  → [策略] Engine /v1/evaluate（评估明文参数，引擎属可信域）
+  → allow / fast_path / challenge 通过
+  → [参数变换] virbius_core::arg_transform::apply_config
+  → [重校验] precheck::revalidate_tool_args（变换结果仍须满足 schema）
+  → 上游转发 / 本地沙箱 / egress
+  → 响应 _meta.arg_transform 注记（applied/skipped，仅 path/op/count，不含值）
+  → 审计事件 arg_transform
+```
+
+**配置格式**（`tb_tool_registry.arg_transforms`，随工具目录下发）：
+
+```json
+{"phase": "pre_tool_call", "mutations": [
+  {"path": "$.amount", "op": "restrict", "to": {"max": 500}, "on_violation": "clamp"},
+  {"path": "$.note",   "op": "redact",   "detectors": ["phone_cn", "idcard_cn"]},
+  {"path": "$..*string", "op": "truncate", "max_len": 2000}
+]}
+```
+
+**三种操作语义**：
+
+| op | 参数 | 行为 | 说明 |
+|----|------|------|------|
+| `restrict` | `to`：数组枚举 / `{values}` / `{prefixes}` / `{match}`（正则 ≤256 字符）/ `{min},{max}` | 枚举对数组按成员过滤（可滤为空 `[]`）；标量须命中集合，集合仅一元时替换为该值，否则失败；prefixes/match 仅作用字符串，prefixes 额外拒绝含 `..` 的值；range 对数字钳制 | `on_violation` 现仅 `clamp`（deny 语义已移除，违规=整体失败） |
+| `redact` | `detector` / `detectors`（内置实体：`phone_cn` `email` `idcard_cn` `bank_card_cn`） | 递归下探目标对象/数组中所有字符串，PII span 替换为目录 `mask_template` 或 `[REDACTED:TYPE]` | **不可逆**：替换即丢弃原文，不进 vault |
+| `truncate` | `max_len > 0` | 字符串按字符数、数组按元素数截断 | — |
+
+**路径文法**（三份实现保持等价：Rust parser 为语义源，Java/TS 为镜像，测试互锚）：`$` 起始且不可单独为根；`.key` 字符集 `[A-Za-z0-9_@ -]`；`[n]` 下标**禁前导零**、可多重（`$.a[0][1]`）亦可开头（`$[0].a`）；唯一通配 `$..*string`（递归命中全部字符串值，可与显式路径共存）。配置 ≤64 条 mutation；重复路径按**规范化 segments** 判重（`arg_transform_conflict`）。
+
+**执行顺序**：固定 `restrict → redact → truncate` 排序——restrict 先行避免被脱敏值参与枚举比较；redact 先行避免 `[REDACTED:…]` 标记被 truncate 截断。
+
+**脱敏规则解析（detector = 目录选择器）**：detector 名指向目录 `dlp_rules` 中同 `entity_type` 的规则，**继承其 `priority` 与 `mask_template`**（与输出遮蔽的渲染、竞争行为完全一致）；**不继承 enforcement 姿态**——边界恒 `full`（配置 redact 本身即执行决定，目录的 dry_run/canary 灰度不外溢）。目录缺该实体时按内置专一度回退（`idcard_cn=100 > bank_card_cn=50 > phone_cn/email=10`）。多个 detector **一次性**作为规则集交 `mask_pii` 单趟执行，由 priority + 最长 span 优先仲裁重叠——防止 18 位身份证被 13–19 位银行卡模式误标为 `[REDACTED:BANK_CARD_CN]`。
+
+**Fail-closed 语义**：非法路径/op/detector → `arg_transform_invalid`；重复路径 → `arg_transform_conflict`；类型不符 → `arg_transform_type_mismatch`；标量值出集合 → `arg_transform_value_outside_set`；变换后重校验失败 → `arg_transform_revalidation`。以上全部拒绝整个调用（错误码 `arg_transform_failed`）。唯一宽容项：路径不存在 → 跳过并记入 `_meta.arg_transform.skipped`（见"已知边界" 3）。
+
+**与记忆管控的政策关系**（memory 可信，完全不脱敏）：
+
+| 决策 | 说明 |
+|------|------|
+| `memory_desensitize_on_write` 默认 `false` | 对可信存储做脱敏是伪保护，只会制造破坏参数回引的 `[REDACTED]` 残留物；PII 出口管控统一收敛在不可信 sink |
+| memory 写工具（`memory_save` 等）禁配 `redact`/`truncate` | control 保存期拒绝（Java 镜像规则）；`restrict` 允许（收窄可写 namespace 属权限而非保真度） |
+| memory 读工具（`memory_search` 等）豁免输出遮蔽 | router 对读工具结果跳过 `mask_pii_in_response`，防止残留物经模型回写沉淀进可信库 |
+
+**实现位置**：
+
+| 文件 | 角色 |
+|------|------|
+| `virbius-core/src/arg_transform.rs` | 语义源（解析 / 应用 / detector 选择器 / 去重） |
+| `virbius-mcp-proxy/src/router.rs`（`rewrite_tool_args`） | 调用点、schema 重校验、`_meta` 注记与审计 |
+| `virbius-control .../gateway/ArgTransformValidator.java` | 保存期 lint（Rust 语义镜像）+ memory 写工具门禁 |
+| `virbius-control/frontend/src/utils/argTransform.ts` | 可视化构建器；回读保真由 `scripts/test-arg-transform-roundtrip.mjs` 锁定 |
+| `virbius-control .../db/migration/V6__tool_arg_transforms.sql` | 目录存储列 |
+
+**已知边界（设计取舍，均有计划项）**：
+
+1. challenge token 绑定**变换前**参数——审批通过后 clamp 仍可能改写外发内容；计划引入 `enforced_identity`（审批绑定变换后参数的规范化摘要）。
+2. Engine 评估的是明文参数（transform 后置于策略的执行顺序所致）；"PII 不出边界"的口径前提是引擎属可信域。
+3. 显式下标路径（如 `$.bcc[0]`）缺失即静默 skip，模型可通过重排数组元素结构性绕开；目录配置应将 restrict 指向整个容器而非单元素。
+4. 配置逐请求解析（无编译缓存）；可随 tool_policy 加载期缓存。
 
 ---
 

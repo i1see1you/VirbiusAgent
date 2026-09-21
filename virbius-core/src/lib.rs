@@ -3,6 +3,7 @@
 mod api;
 mod audit;
 pub mod bootstrap;
+pub mod arg_transform;
 pub mod dlp;
 mod enforce;
 mod engine;

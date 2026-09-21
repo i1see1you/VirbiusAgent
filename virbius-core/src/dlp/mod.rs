@@ -1,5 +1,5 @@
 mod engine;
-mod entity;
+pub(crate) mod entity;
 mod output_masker;
 mod vault;
 
