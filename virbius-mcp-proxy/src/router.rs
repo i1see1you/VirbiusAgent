@@ -884,12 +884,8 @@ async fn handle_tools_call(
                     }
                 };
 
-                let forward_params = patch_forward_params(
-                    params,
-                    displayed_tool_name,
-                    &original_tool_name,
-                    &args,
-                );
+                let forward_params =
+                    patch_forward_params(params, displayed_tool_name, &original_tool_name, &args);
 
                 // Strip challenge_token from _meta before forwarding
                 let mut forward_req = serde_json::json!({
@@ -1096,12 +1092,8 @@ async fn handle_tools_call(
             };
 
             // Build forwarded request with original tool name and rewritten args
-            let forward_params = patch_forward_params(
-                params,
-                displayed_tool_name,
-                &original_tool_name,
-                &args,
-            );
+            let forward_params =
+                patch_forward_params(params, displayed_tool_name, &original_tool_name, &args);
 
             let forward_req = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -2299,7 +2291,10 @@ mod tests {
             &mut resp,
             Some(&serde_json::json!({"applied":[{"path":"$.a","op":"truncate","count":1}]})),
         );
-        assert_eq!(resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"], "truncate");
+        assert_eq!(
+            resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"],
+            "truncate"
+        );
     }
 
     #[test]

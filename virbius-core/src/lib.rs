@@ -1,9 +1,9 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref, clippy::too_many_arguments)]
 
 mod api;
+pub mod arg_transform;
 mod audit;
 pub mod bootstrap;
-pub mod arg_transform;
 pub mod dlp;
 mod enforce;
 mod engine;

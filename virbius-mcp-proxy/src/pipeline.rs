@@ -632,12 +632,7 @@ impl SecurityPipeline {
         self.audit.report(event).await;
     }
 
-    pub async fn audit_arg_transform(
-        &self,
-        session: &Session,
-        tool_name: &str,
-        note: &Value,
-    ) {
+    pub async fn audit_arg_transform(&self, session: &Session, tool_name: &str, note: &Value) {
         let mut event = AuditEvent::tool_call(
             session,
             tool_name,

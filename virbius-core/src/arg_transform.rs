@@ -100,7 +100,10 @@ fn parse_config(config: &Value) -> Result<Vec<Mutation>, TransformError> {
     let arr = if config.is_array() {
         config
     } else if let Some(m) = config.get("mutations") {
-        let phase = config.get("phase").and_then(Value::as_str).unwrap_or("pre_tool_call");
+        let phase = config
+            .get("phase")
+            .and_then(Value::as_str)
+            .unwrap_or("pre_tool_call");
         if phase != "pre_tool_call" {
             return Err(TransformError::new(
                 "arg_transform_invalid",
@@ -179,7 +182,10 @@ fn parse_one(m: WireMutation) -> Result<Mutation, TransformError> {
             Op::Restrict { to }
         }
         "truncate" => Op::Truncate {
-            max_len: m.max_len.filter(|n| *n > 0).ok_or_else(|| bad(&m, "max_len"))?,
+            max_len: m
+                .max_len
+                .filter(|n| *n > 0)
+                .ok_or_else(|| bad(&m, "max_len"))?,
         },
         "redact" => {
             let mut detectors = m.detectors.clone().unwrap_or_default();
@@ -190,7 +196,10 @@ fn parse_one(m: WireMutation) -> Result<Mutation, TransformError> {
             }
             detectors.sort();
             detectors.dedup();
-            if detectors.is_empty() || detectors.iter().any(|d| d == "custom_regex" || d.is_empty())
+            if detectors.is_empty()
+                || detectors
+                    .iter()
+                    .any(|d| d == "custom_regex" || d.is_empty())
             {
                 return Err(TransformError::new(
                     "arg_transform_invalid",
@@ -297,18 +306,24 @@ fn string_list(items: &[Value]) -> Result<Vec<String>, TransformError> {
         .iter()
         .map(|i| {
             i.as_str().map(str::to_string).ok_or_else(|| {
-                TransformError::new("arg_transform_invalid", "restrict.to entries must be strings")
+                TransformError::new(
+                    "arg_transform_invalid",
+                    "restrict.to entries must be strings",
+                )
             })
         })
         .collect()
 }
 
 fn parse_path(s: &str) -> Result<PathSpec, TransformError> {
-    let bad = |why: &str| TransformError::new("arg_transform_invalid", format!("path '{s}': {why}"));
+    let bad =
+        |why: &str| TransformError::new("arg_transform_invalid", format!("path '{s}': {why}"));
     if s == "$..*string" {
         return Ok(PathSpec::ScanStrings);
     }
-    let rest = s.strip_prefix('$').ok_or_else(|| bad("must start with $"))?;
+    let rest = s
+        .strip_prefix('$')
+        .ok_or_else(|| bad("must start with $"))?;
     if rest.is_empty() {
         return Err(bad("root path not allowed"));
     }
@@ -380,7 +395,10 @@ fn find_mut<'a>(root: &'a mut Value, segs: &[PathSeg]) -> Option<&'a mut Value> 
     Some(cur)
 }
 
-fn map_strings_mut(v: &mut Value, f: &mut dyn FnMut(&mut String) -> Result<u32, TransformError>) -> Result<u32, TransformError> {
+fn map_strings_mut(
+    v: &mut Value,
+    f: &mut dyn FnMut(&mut String) -> Result<u32, TransformError>,
+) -> Result<u32, TransformError> {
     match v {
         Value::String(s) => f(s),
         Value::Array(items) => {
@@ -462,7 +480,12 @@ fn op_label(op: &Op) -> &'static str {
 }
 
 fn apply_on_value(target: &mut Value, op: &Op, path: &str) -> Result<u32, TransformError> {
-    let mismatch = |want: &str| TransformError::new("arg_transform_type_mismatch", format!("{path}: expected {want}"));
+    let mismatch = |want: &str| {
+        TransformError::new(
+            "arg_transform_type_mismatch",
+            format!("{path}: expected {want}"),
+        )
+    };
     match op {
         Op::Truncate { max_len } => match target {
             Value::String(s) => {
@@ -587,7 +610,10 @@ fn apply_restrict(target: &mut Value, to: &To, path: &str) -> Result<u32, Transf
     match to {
         To::Range { min, max } => {
             let x = target.as_f64().ok_or_else(|| {
-                TransformError::new("arg_transform_type_mismatch", format!("{path}: expected number"))
+                TransformError::new(
+                    "arg_transform_type_mismatch",
+                    format!("{path}: expected number"),
+                )
             })?;
             let lo = min.unwrap_or(f64::MIN);
             let hi = max.unwrap_or(f64::MAX);
@@ -597,11 +623,9 @@ fn apply_restrict(target: &mut Value, to: &To, path: &str) -> Result<u32, Transf
             }
             Ok(0)
         }
-        To::Prefixes(list) => restrict_strings(
-            target,
-            path,
-            |s| !s.contains("..") && list.iter().any(|p| s.starts_with(p.as_str())),
-        ),
+        To::Prefixes(list) => restrict_strings(target, path, |s| {
+            !s.contains("..") && list.iter().any(|p| s.starts_with(p.as_str()))
+        }),
         To::Match(re) => restrict_strings(target, path, |s| re.is_match(s)),
         To::Values(list) => {
             let member = |v: &Value| list.iter().any(|x| x == v);
@@ -712,7 +736,10 @@ mod tests {
             {"path":"$.note","op":"redact","detector":"phone_cn"}
         ]});
         let r = apply_config(&json!({"note":"call 13800138000"}), &cfg).unwrap();
-        assert!(r.args["note"].as_str().unwrap().contains("[REDACTED:PHONE_CN]"));
+        assert!(r.args["note"]
+            .as_str()
+            .unwrap()
+            .contains("[REDACTED:PHONE_CN]"));
     }
 
     #[test]
@@ -757,7 +784,9 @@ mod tests {
             {"path":"$.url","op":"restrict","to":{"prefixes":["https://"]},"on_violation":"clamp"}
         ]});
         assert_eq!(
-            apply_config(&json!({"url":"http://x"}), &prefix).unwrap_err().reason,
+            apply_config(&json!({"url":"http://x"}), &prefix)
+                .unwrap_err()
+                .reason,
             "arg_transform_value_outside_set"
         );
 
@@ -788,7 +817,9 @@ mod tests {
         let r = apply_config(&json!({"url":"https://files.corp.com/a"}), &cfg).unwrap();
         assert!(r.applied.is_empty());
         assert_eq!(
-            apply_config(&json!({"url":"https://evil.com"}), &cfg).unwrap_err().reason,
+            apply_config(&json!({"url":"https://evil.com"}), &cfg)
+                .unwrap_err()
+                .reason,
             "arg_transform_value_outside_set"
         );
 
@@ -818,7 +849,9 @@ mod tests {
             {"path":"$.to","op":"restrict","to":{"domains":["corp.com"]},"on_violation":"clamp"}
         ]});
         assert_eq!(
-            apply_config(&json!({"to":"a@corp.com"}), &cfg).unwrap_err().reason,
+            apply_config(&json!({"to":"a@corp.com"}), &cfg)
+                .unwrap_err()
+                .reason,
             "arg_transform_invalid"
         );
     }
@@ -833,7 +866,10 @@ mod tests {
             &cfg,
         )
         .unwrap();
-        assert!(r.args["recipients"][0].as_str().unwrap().contains("[REDACTED:EMAIL]"));
+        assert!(r.args["recipients"][0]
+            .as_str()
+            .unwrap()
+            .contains("[REDACTED:EMAIL]"));
         assert_eq!(r.args["recipients"][1], json!("ok"));
         assert_eq!(r.args["note"], json!("keep 13800138000"));
     }
@@ -850,7 +886,7 @@ mod tests {
     fn truncate_array_still_caps_len() {
         let cfg = json!({"mutations":[{"path":"$.recipients","op":"truncate","max_len":2}]});
         let r = apply_config(&json!({"recipients":["a","b","c"]}), &cfg).unwrap();
-        assert_eq!(r.args["recipients"], json!(["a","b"]));
+        assert_eq!(r.args["recipients"], json!(["a", "b"]));
     }
 
     #[test]
@@ -939,7 +975,9 @@ mod tests {
             {"path":"$.a[01]","op":"truncate","max_len":1}
         ]});
         assert_eq!(
-            apply_config(&json!({"a": ["xyz"]}), &cfg).unwrap_err().reason,
+            apply_config(&json!({"a": ["xyz"]}), &cfg)
+                .unwrap_err()
+                .reason,
             "arg_transform_invalid"
         );
     }
@@ -979,6 +1017,9 @@ mod tests {
         ]});
         let r = apply_config(&json!({"amount": 99, "note":"a@x.com"}), &cfg).unwrap();
         assert_eq!(r.args["amount"], json!(10));
-        assert!(r.args["note"].as_str().unwrap().contains("[REDACTED:EMAIL]"));
+        assert!(r.args["note"]
+            .as_str()
+            .unwrap()
+            .contains("[REDACTED:EMAIL]"));
     }
 }

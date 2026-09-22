@@ -947,7 +947,8 @@ async fn test_multi_upstream_name_conflict() {
 //  arg_transforms: initialize → allow → apply → forward / local shell
 // ═══════════════════════════════════════════════════════════════
 
-static MANIFEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static MANIFEST_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 struct OfflineManifestGuard {
     path: std::path::PathBuf,
@@ -1049,7 +1050,7 @@ async fn setup_proxy_fast_path(upstream_url: &str, pubkey: String) -> ProxyEnv {
 /// Low-risk upstream tool: original args go to evaluate/fallback; Apply clamps before forward.
 #[tokio::test]
 async fn arg_transform_search_restrict_clamped_before_upstream() {
-    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = MANIFEST_LOCK.lock().await;
     let _manifest = install_offline_manifest(&json!({
         "tenant_id": "default",
         "app_id": "test-app",
@@ -1098,7 +1099,10 @@ async fn arg_transform_search_restrict_clamped_before_upstream() {
     .await
     .unwrap();
     assert!(resp.get("result").is_some(), "search allow+apply: {resp}");
-    assert_eq!(resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"], "restrict");
+    assert_eq!(
+        resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"],
+        "restrict"
+    );
     let forwarded = mock.last_call_args.lock().unwrap().clone().unwrap();
     assert_eq!(forwarded["limit"], 10);
     assert_eq!(forwarded["query"], "q");
@@ -1107,7 +1111,7 @@ async fn arg_transform_search_restrict_clamped_before_upstream() {
 /// High-risk local `shell`: license + fast_path skip engine; Apply still rewrites command then exec.
 #[tokio::test]
 async fn arg_transform_shell_full_flow_clamps_then_executes() {
-    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = MANIFEST_LOCK.lock().await;
     let _manifest = install_offline_manifest(&json!({
         "tenant_id": "default",
         "app_id": "test-app",
@@ -1161,7 +1165,10 @@ async fn arg_transform_shell_full_flow_clamps_then_executes() {
     )
     .await
     .unwrap();
-    assert!(resp.get("result").is_some(), "shell allow+apply+exec: {resp}");
+    assert!(
+        resp.get("result").is_some(),
+        "shell allow+apply+exec: {resp}"
+    );
     let text = resp["result"]["content"][0]["text"].as_str().unwrap_or("");
     assert!(
         text.contains("ARG_XFORM_OK"),
@@ -1171,7 +1178,10 @@ async fn arg_transform_shell_full_flow_clamps_then_executes() {
         !text.contains("SHOULD_NOT_APPEAR"),
         "original command must not run: {text:?}"
     );
-    assert_eq!(resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"], "restrict");
+    assert_eq!(
+        resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"],
+        "restrict"
+    );
     assert!(
         mock.last_call_args.lock().unwrap().is_none(),
         "local shell must not be forwarded upstream"
@@ -1181,7 +1191,7 @@ async fn arg_transform_shell_full_flow_clamps_then_executes() {
 /// Prefix restrict: scalar miss fails the call; nothing is forwarded.
 #[tokio::test]
 async fn arg_transform_search_restrict_prefix_mismatch_fails() {
-    let _lock = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = MANIFEST_LOCK.lock().await;
     let _manifest = install_offline_manifest(&json!({
         "tenant_id": "default",
         "app_id": "test-app",
