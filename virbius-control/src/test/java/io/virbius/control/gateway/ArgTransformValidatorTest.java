@@ -134,6 +134,13 @@ class ArgTransformValidatorTest {
     }
 
     @Test
+    void keepsFieldName() {
+        String out = ArgTransformValidator.normalize(
+                "{\"mutations\":[{\"path\":\"$.a\",\"op\":\"truncate\",\"max_len\":1,\"name\":\"金额\"}]}");
+        assertTrue(out.contains("\"name\":\"金额\""));
+    }
+
+    @Test
     void rejectsValueField() {
         assertThrows(IllegalArgumentException.class, () -> ArgTransformValidator.normalize(
                 "{\"mutations\":[{\"path\":\"$.a\",\"op\":\"truncate\",\"max_len\":1,\"value\":9}]}"));

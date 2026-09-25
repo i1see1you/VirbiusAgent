@@ -75,6 +75,10 @@ struct WireMutation {
     detectors: Option<Vec<String>>,
     #[serde(default)]
     max_len: Option<usize>,
+    /// Display name for the ops editor. Ignored when the transform runs.
+    #[serde(default)]
+    #[allow(dead_code)]
+    name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

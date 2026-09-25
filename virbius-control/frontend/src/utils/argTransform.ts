@@ -6,6 +6,7 @@ export type TransformKind = 'max' | 'values' | 'prefixes' | 'fixed' | 'match' | 
 export interface TransformRow {
   kind: TransformKind;
   path: string;
+  name?: string;
   min?: number;
   max?: number;
   max_len?: number;
@@ -22,7 +23,7 @@ const MAX = 64;
 const MAX_MATCH = 256;
 
 export function newRow(kind: TransformKind = 'max'): TransformRow {
-  return { kind, path: '', max: 500, max_len: 512, listText: '', detectors: ['phone_cn'] };
+  return { kind, path: '', name: '', max: 500, max_len: 512, listText: '', detectors: ['phone_cn'] };
 }
 
 export function ensurePath(path: string): string {
@@ -44,7 +45,10 @@ export function buildConfig(rows: TransformRow[]): { config: any | null; errors:
     if (!path || !PATH_RE.test(path)) errors.push(`${at} path`);
     if (paths.has(path)) errors.push(`${at} dup_path`);
     paths.add(path);
+    const name = (r.name || '').trim();
+    if (name.length > 64) errors.push(`${at} name`);
     const m: any = { path, op: 'restrict' };
+    if (name && name.length <= 64) m.name = name;
     switch (r.kind) {
       case 'max': {
         const hasMin = typeof r.min === 'number' && !Number.isNaN(r.min);
@@ -110,14 +114,15 @@ export function rowsFromConfig(raw?: any): TransformRow[] {
     const mutations = Array.isArray(cfg) ? cfg : (Array.isArray(cfg?.mutations) ? cfg.mutations : []);
     return mutations.map((m: any) => {
       const path = m.path || '';
-      if (m.op === 'truncate') return { ...newRow('truncate'), path, max_len: m.max_len || 512 };
+      const name = typeof m.name === 'string' ? m.name : '';
+      if (m.op === 'truncate') return { ...newRow('truncate'), path, name, max_len: m.max_len || 512 };
       if (m.op === 'redact') {
         const detectors = Array.isArray(m.detectors) ? m.detectors : (m.detector ? [m.detector] : ['phone_cn']);
-        return { ...newRow('redact'), path, detectors };
+        return { ...newRow('redact'), path, name, detectors };
       }
       const to = m.to;
       if (to && typeof to === 'object' && !Array.isArray(to) && typeof to.match === 'string') {
-        return { ...newRow('match'), path, listText: to.match };
+        return { ...newRow('match'), path, name, listText: to.match };
       }
       if (to && typeof to === 'object' && !Array.isArray(to) && ('max' in to || 'min' in to)) {
         // Preserve real bounds exactly; absent bound stays undefined so the
@@ -125,16 +130,17 @@ export function rowsFromConfig(raw?: any): TransformRow[] {
         return {
           ...newRow('max'),
           path,
+          name,
           min: typeof to.min === 'number' ? to.min : undefined,
           max: typeof to.max === 'number' ? to.max : undefined,
         };
       }
       if (to && typeof to === 'object' && Array.isArray(to.prefixes)) {
-        return { ...newRow('prefixes'), path, listText: JSON.stringify(to.prefixes) };
+        return { ...newRow('prefixes'), path, name, listText: JSON.stringify(to.prefixes) };
       }
       const vals = Array.isArray(to) ? to : (to?.values || []);
-      if (vals.length === 1) return { ...newRow('fixed'), path, listText: JSON.stringify(vals[0]) };
-      return { ...newRow('values'), path, listText: JSON.stringify(vals) };
+      if (vals.length === 1) return { ...newRow('fixed'), path, name, listText: JSON.stringify(vals[0]) };
+      return { ...newRow('values'), path, name, listText: JSON.stringify(vals) };
     });
   } catch {
     return [];

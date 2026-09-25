@@ -174,8 +174,14 @@ public final class ArgTransformValidator {
             }
             default -> throw new IllegalArgumentException("unreachable");
         }
+        if (m.has("name") && !m.path("name").isNull()) {
+            JsonNode name = m.path("name");
+            if (!name.isTextual() || name.asText().length() > 64) {
+                throw new IllegalArgumentException("arg_transforms name must be a string of at most 64 chars");
+            }
+        }
         Set<String> allowed = Set.of(
-                "path", "op", "to", "on_violation", "detector", "detectors", "max_len");
+                "path", "op", "to", "on_violation", "detector", "detectors", "max_len", "name");
         Iterator<String> fields = m.fieldNames();
         while (fields.hasNext()) {
             String f = fields.next();

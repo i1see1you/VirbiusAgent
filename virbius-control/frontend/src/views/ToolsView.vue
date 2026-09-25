@@ -55,11 +55,14 @@
             <div class="tools-panel-body">
               <div class="v-section" style="margin-top:0;padding-top:0;border-top:none">
                 <h3>{{ t('tools.label-name') }}</h3>
-                <div class="v-row">
+                <div class="tools-control-row">
                   <el-input v-model="form.tool_name" :disabled="!!editingName"
                     :placeholder="t('tools.placeholder-name')" style="width:220px" />
+                  <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="tools-help-popper">
+                    <template #content>{{ t('tools.name-hint') }}</template>
+                    <button type="button" class="tools-help" :aria-label="t('common.learn-more')">?</button>
+                  </el-tooltip>
                 </div>
-                <p class="v-hint">{{ t('tools.name-hint') }}</p>
               </div>
 
               <div class="v-section">
@@ -71,83 +74,139 @@
 
               <div class="v-section">
                 <h3>{{ t('tools.section-risk') }}</h3>
-                <div class="v-row">
+                <div class="tools-control-row">
                   <el-select v-model="form.risk_class" popper-class="tools-select-popper" style="width:220px">
                     <el-option value="low" :label="t('tools.risk-low')" />
                     <el-option value="medium" :label="t('tools.risk-medium')" />
                     <el-option value="high" :label="t('tools.risk-high')" />
                     <el-option value="network" :label="t('tools.risk-network')" />
                   </el-select>
+                  <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="tools-help-popper">
+                    <template #content>{{ t('tools.risk-hint') }}</template>
+                    <button type="button" class="tools-help" :aria-label="t('common.learn-more')">?</button>
+                  </el-tooltip>
                 </div>
-                <p class="v-hint">{{ t('tools.risk-hint') }}</p>
               </div>
 
               <div class="v-section">
                 <h3>{{ t('tools.section-exec') }}</h3>
                 <div class="v-row">
-                  <span>{{ t('tools.label-sandbox') }}
+                  <span class="tools-control-row">{{ t('tools.label-sandbox') }}
                     <el-select v-model="form.sandbox_type" popper-class="tools-select-popper" style="width:200px">
                       <el-option value="none" :label="t('tools.sandbox-none')" />
                       <el-option value="landlock" :label="t('tools.sandbox-landlock')" />
                       <el-option value="gvisor" :label="t('tools.sandbox-gvisor')" />
                     </el-select>
+                    <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="tools-help-popper">
+                      <template #content>{{ t('tools.sandbox-hint') }}</template>
+                      <button type="button" class="tools-help" :aria-label="t('common.learn-more')">?</button>
+                    </el-tooltip>
                   </span>
                   <span>{{ t('tools.label-timeout') }}
                     <el-input-number v-model="form.timeout_sec" :min="1" :max="300" style="width:120px" />
                   </span>
                 </div>
-                <p class="v-hint">{{ t('tools.sandbox-hint') }}</p>
-                <div class="v-row">
+                <div class="tools-control-row">
                   <el-checkbox v-model="form.fast_path">{{ t('tools.fastpath-label') }}</el-checkbox>
+                  <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="tools-help-popper">
+                    <template #content>{{ t('tools.fastpath-hint') }}</template>
+                    <button type="button" class="tools-help" :aria-label="t('common.learn-more')">?</button>
+                  </el-tooltip>
                 </div>
-                <p class="v-hint">{{ t('tools.fastpath-hint') }}</p>
               </div>
 
               <div class="v-section">
                 <h3>{{ t('tools.section-approval') }}</h3>
-                <div class="v-row">
+                <div class="tools-control-row">
                   <el-select v-model="form.approval_mode" popper-class="tools-select-popper" style="width:280px">
                     <el-option value="strict" :label="t('tools.approval-strict')" />
                     <el-option value="lax" :label="t('tools.approval-lax')" />
                   </el-select>
+                  <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="tools-help-popper">
+                    <template #content>
+                      <p>{{ t('tools.approval-hint') }}</p>
+                      <p><strong>{{ t('tools.approval-strict') }}</strong> — {{ t('tools.approval-strict-tip') }}</p>
+                      <p><strong>{{ t('tools.approval-lax') }}</strong> — {{ t('tools.approval-lax-tip') }}</p>
+                    </template>
+                    <button type="button" class="tools-help" :aria-label="t('common.learn-more')">?</button>
+                  </el-tooltip>
                 </div>
-                <p class="v-hint">{{ t('tools.approval-hint') }}</p>
               </div>
 
               <div class="v-section">
-                <h3>{{ t('tools.section-xform') }}</h3>
-                <p class="v-hint">{{ t('tools.xform-hint') }}</p>
-                <div v-for="(row, i) in transformRows" :key="i" class="v-row" style="align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:8px">
-                  <el-select v-model="row.kind" popper-class="tools-select-popper" style="width:130px">
-                    <el-option value="max" :label="t('tools.xform-kind-max')" />
-                    <el-option value="values" :label="t('tools.xform-kind-values')" />
-                    <el-option value="prefixes" :label="t('tools.xform-kind-prefixes')" />
-                    <el-option value="match" :label="t('tools.xform-kind-match')" />
-                    <el-option value="fixed" :label="t('tools.xform-kind-fixed')" />
-                    <el-option value="truncate" :label="t('tools.xform-kind-truncate')" />
-                    <el-option value="redact" :label="t('tools.xform-kind-redact')" />
-                  </el-select>
-                  <el-input v-model="row.path" :placeholder="t('tools.xform-path')" style="width:160px" />
-                  <el-input-number v-if="row.kind === 'max'" v-model="row.min" :step="1" style="width:130px" />
-                  <el-input-number v-if="row.kind === 'max'" v-model="row.max" :min="0" style="width:130px" />
-                  <el-input-number v-if="row.kind === 'truncate'" v-model="row.max_len" :min="1" style="width:130px" />
-                  <el-input v-if="row.kind === 'match'"
-                    v-model="row.listText" :placeholder="t('tools.xform-match')" style="width:220px" />
-                  <el-input v-if="['values','prefixes','fixed'].includes(row.kind)"
-                    v-model="row.listText" :placeholder="t('tools.xform-list')" style="width:180px" />
-                  <el-select v-if="row.kind === 'redact'" v-model="row.detectors" multiple collapse-tags
-                    popper-class="tools-select-popper" style="width:200px">
-                    <el-option v-for="d in DETECTORS" :key="d" :value="d" :label="d" />
-                  </el-select>
-                  <el-button type="danger" link @click="transformRows.splice(i, 1)">{{ t('common.delete') }}</el-button>
+                <h3 class="tools-control-row">{{ t('tools.section-xform') }}
+                  <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="tools-help-popper">
+                    <template #content>{{ t('tools.xform-hint') }}</template>
+                    <button type="button" class="tools-help" :aria-label="t('common.learn-more')">?</button>
+                  </el-tooltip>
+                </h3>
+                <div v-for="(row, i) in transformRows" :key="i" class="xform-card">
+                  <el-button class="xform-delete" type="danger" link @click="transformRows.splice(i, 1)">{{ t('common.delete') }}</el-button>
+                  <div class="xform-card-head">
+                    <div class="xform-field">
+                      <label class="xform-label">{{ t('tools.xform-label-name') }}</label>
+                      <el-input v-model="row.name" maxlength="64" :placeholder="t('tools.xform-name')" />
+                    </div>
+                  </div>
+                  <div class="xform-grid">
+                    <div class="xform-field">
+                      <label class="xform-label">{{ t('tools.xform-label-path') }}</label>
+                      <el-input v-model="row.path" :placeholder="t('tools.xform-path')" />
+                    </div>
+                    <div class="xform-field">
+                      <span class="xform-label">{{ t('tools.xform-label-kind') }}</span>
+                      <el-select v-model="row.kind" popper-class="tools-select-popper">
+                        <el-option value="max" :label="t('tools.xform-kind-max')" />
+                        <el-option value="values" :label="t('tools.xform-kind-values')" />
+                        <el-option value="prefixes" :label="t('tools.xform-kind-prefixes')" />
+                        <el-option value="match" :label="t('tools.xform-kind-match')" />
+                        <el-option value="fixed" :label="t('tools.xform-kind-fixed')" />
+                        <el-option value="truncate" :label="t('tools.xform-kind-truncate')" />
+                        <el-option value="redact" :label="t('tools.xform-kind-redact')" />
+                      </el-select>
+                    </div>
+                    <template v-if="row.kind === 'max'">
+                      <div class="xform-field">
+                        <label class="xform-label">{{ t('tools.xform-label-min') }}</label>
+                        <el-input-number v-model="row.min" :step="1" controls-position="right" />
+                      </div>
+                      <div class="xform-field">
+                        <label class="xform-label">{{ t('tools.xform-label-max') }}</label>
+                        <el-input-number v-model="row.max" :min="0" controls-position="right" />
+                      </div>
+                    </template>
+                    <div v-if="row.kind === 'truncate'" class="xform-field">
+                      <label class="xform-label">{{ t('tools.xform-label-len') }}</label>
+                      <el-input-number v-model="row.max_len" :min="1" controls-position="right" />
+                    </div>
+                    <div v-if="row.kind === 'match'" class="xform-field xform-span">
+                      <label class="xform-label">{{ t('tools.xform-label-pattern') }}</label>
+                      <el-input v-model="row.listText" :placeholder="t('tools.xform-match')" />
+                    </div>
+                    <div v-if="['values','prefixes','fixed'].includes(row.kind)" class="xform-field xform-span">
+                      <label class="xform-label">{{ t('tools.xform-label-value') }}</label>
+                      <el-input v-model="row.listText" :placeholder="t('tools.xform-list')" />
+                    </div>
+                    <div v-if="row.kind === 'redact'" class="xform-field xform-span">
+                      <label class="xform-label">{{ t('tools.xform-label-detect') }}</label>
+                      <el-select v-model="row.detectors" multiple collapse-tags popper-class="tools-select-popper">
+                        <el-option v-for="d in DETECTORS" :key="d" :value="d" :label="d" />
+                      </el-select>
+                    </div>
+                  </div>
                 </div>
                 <el-button size="small" @click="transformRows.push(newRow())">{{ t('tools.xform-add') }}</el-button>
               </div>
 
-              <details class="v-hint-more" :open="schemaOpen" @toggle="onSchemaToggle">
+              <details class="v-hint-more tools-schema" :open="schemaOpen" @toggle="onSchemaToggle">
                 <summary>{{ t('tools.advanced') }}</summary>
-                <div v-if="schemaOpen">
-                  <label>{{ t('tools.label-schema') }}</label>
+                <div v-if="schemaOpen" class="tools-schema-body">
+                  <label class="tools-control-row">{{ t('tools.label-schema') }}
+                    <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="tools-help-popper">
+                      <template #content>{{ t('tools.schema-hint') }}</template>
+                      <button type="button" class="tools-help" :aria-label="t('common.learn-more')">?</button>
+                    </el-tooltip>
+                  </label>
                   <ScriptEditor
                     ref="schemaEditorRef"
                     v-model="form.allowed_args_schema"
@@ -156,7 +215,6 @@
                     max-height="280px"
                     :lint-fn="jsonLint"
                   />
-                  <p class="v-hint">{{ t('tools.schema-hint') }}</p>
                 </div>
               </details>
             </div>
@@ -414,6 +472,26 @@ watch(editorVisible, (open) => {
   cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
 }
 .tools-help:hover, .tools-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
+.tools-control-row { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.xform-card {
+  position: relative;
+  margin: 0 0 10px; padding: 12px 12px 12px; border: 1px solid var(--v-border); border-radius: 8px; background: #f8fafc;
+}
+.xform-delete { position: absolute; top: 8px; right: 8px; }
+.xform-card-head { margin: 0 40px 10px 0; }
+.xform-card-head .xform-field { min-width: 0; }
+.xform-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.xform-span { grid-column: 1 / -1; }
+.xform-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.xform-label { font-size: 12px; color: var(--v-muted); }
+.tools-schema { margin-top: 16px; }
+.tools-schema-body { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.xform-field :deep(.el-input),
+.xform-field :deep(.el-select),
+.xform-field :deep(.el-input-number) { width: 100%; }
+@media (max-width: 640px) {
+  .xform-grid { grid-template-columns: 1fr; }
+}
 .tools-panel-close:hover { color: #0f172a; }
 .tools-panel-body {
   flex: 1;
