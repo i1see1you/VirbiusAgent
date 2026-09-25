@@ -1,11 +1,15 @@
 <template>
   <div class="v-card">
-    <h2 class="v-card-title">{{ t('tools.title') }}</h2>
-    <p class="v-hint">{{ t('tools.desc-short') }}</p>
-    <details class="v-hint-more">
-      <summary>{{ t('common.learn-more') }}</summary>
-      <p class="v-hint" v-html="t('tools.desc')"></p>
-    </details>
+    <div class="tools-title-row">
+      <h2 class="v-card-title">{{ t('tools.title') }}</h2>
+      <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="tools-help-popper">
+        <template #content>
+          <p>{{ t('tools.desc-short') }}</p>
+          <p v-html="t('tools.desc')"></p>
+        </template>
+        <button type="button" class="tools-help" :aria-label="t('common.learn-more')">?</button>
+      </el-tooltip>
+    </div>
 
     <div class="v-row">
       <el-input v-model="filterQ" :placeholder="t('tools.filter-q')" clearable style="width:220px" />
@@ -402,6 +406,14 @@ watch(editorVisible, (open) => {
   font-size: 13px;
   padding: 4px 6px;
 }
+.tools-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.tools-title-row .v-card-title { margin: 0; }
+.tools-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.tools-help:hover, .tools-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
 .tools-panel-close:hover { color: #0f172a; }
 .tools-panel-body {
   flex: 1;
@@ -429,4 +441,7 @@ watch(editorVisible, (open) => {
 .tools-select-popper {
   z-index: 4100 !important;
 }
+.tools-help-popper { max-width: 420px; line-height: 1.55; }
+.tools-help-popper p { margin: 0; }
+.tools-help-popper p + p { margin-top: 8px; }
 </style>

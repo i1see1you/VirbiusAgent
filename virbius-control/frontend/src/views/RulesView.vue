@@ -65,43 +65,46 @@
               <h2>{{ drawerTitle }}</h2>
               <button type="button" class="rules-panel-close" @click="requestClose">{{ t('common.close') }}</button>
             </header>
-            <div class="rules-panel-body">
+            <div class="rules-panel-body rules-form">
 
-      <div v-if="isNew" class="v-row">
-        <div class="rules-field">
-          <label class="rules-field-label" for="rules-field-id">{{ t('rules.label-id') }}</label>
-          <el-input id="rules-field-id" v-model="form.rule_id" style="width:200px" />
+      <section class="rules-section">
+        <h3 class="rules-section-title">{{ t('rules.section-basic') }}</h3>
+        <div class="rules-grid">
+          <div v-if="isNew" class="rules-field">
+            <label class="rules-field-label" for="rules-field-id">{{ t('rules.label-id') }}</label>
+            <el-input id="rules-field-id" v-model="form.rule_id" maxlength="128" />
+          </div>
+          <div v-if="isNew" class="rules-field">
+            <span class="rules-field-label" id="rules-field-runtime-label">{{ t('rules.label-runtime') }}</span>
+            <el-select popper-class="rules-select-popper" v-model="form.runtime" @change="onRuntimeChange"
+              :aria-labelledby="'rules-field-runtime-label'">
+              <el-option v-for="rt in layerRuntimes" :key="rt" :value="rt" :label="runtimeLabel(rt)" />
+            </el-select>
+          </div>
+          <div class="rules-field">
+            <label class="rules-field-label" for="rules-field-reason">{{ t('rules.label-reason') }}</label>
+            <el-input id="rules-field-reason" v-model="form.reason" maxlength="64" :disabled="isReadOnly" />
+          </div>
+          <div class="rules-field">
+            <span class="rules-field-label">{{ t('rules.label-risk') }}</span>
+            <el-input-number v-model="form.risk" :min="0" :max="100" :disabled="isReadOnly || isDlp" controls-position="right" />
+          </div>
+          <div class="rules-field">
+            <span class="rules-field-label" id="rules-field-intent-label">{{ t('rules.label-intent') }}</span>
+            <el-select popper-class="rules-select-popper" v-model="form.intent" :disabled="isReadOnly || isAsync || isDlp"
+              :aria-labelledby="'rules-field-intent-label'">
+              <el-option value="deny" :label="t('rules.intent.deny')" />
+              <el-option value="allow" :label="t('rules.intent.allow')" />
+              <el-option value="challenge" :label="t('rules.intent.challenge')" />
+              <el-option value="review" :label="t('rules.intent.review')" />
+            </el-select>
+          </div>
+          <div v-if="showAsync" class="rules-field rules-field-check">
+            <span class="rules-field-label">{{ t('rules.header-async') }}</span>
+            <el-checkbox v-model="form.is_async" :disabled="isReadOnly" @change="onAsyncChange">{{ t('rules.label-async') }}</el-checkbox>
+          </div>
         </div>
-        <div class="rules-field">
-          <span class="rules-field-label" id="rules-field-runtime-label">{{ t('rules.label-runtime') }}</span>
-          <el-select popper-class="rules-select-popper" v-model="form.runtime" style="width:140px" @change="onRuntimeChange"
-            :aria-labelledby="'rules-field-runtime-label'">
-            <el-option v-for="rt in layerRuntimes" :key="rt" :value="rt" :label="runtimeLabel(rt)" />
-          </el-select>
-        </div>
-      </div>
-
-      <div class="v-row">
-        <div class="rules-field">
-          <label class="rules-field-label" for="rules-field-reason">{{ t('rules.label-reason') }}</label>
-          <el-input id="rules-field-reason" v-model="form.reason" :disabled="isReadOnly" style="width:200px" />
-        </div>
-        <div class="rules-field">
-          <span class="rules-field-label">{{ t('rules.label-risk') }}</span>
-          <el-input-number v-model="form.risk" :min="0" :max="100" :disabled="isReadOnly || isDlp" style="width:100px" />
-        </div>
-        <div class="rules-field">
-          <span class="rules-field-label" id="rules-field-intent-label">{{ t('rules.label-intent') }}</span>
-          <el-select popper-class="rules-select-popper" v-model="form.intent" :disabled="isReadOnly || isAsync || isDlp" style="width:120px"
-            :aria-labelledby="'rules-field-intent-label'">
-            <el-option value="deny" :label="t('rules.intent.deny')" />
-            <el-option value="allow" :label="t('rules.intent.allow')" />
-            <el-option value="challenge" :label="t('rules.intent.challenge')" />
-            <el-option value="review" :label="t('rules.intent.review')" />
-          </el-select>
-        </div>
-        <el-checkbox v-if="showAsync" v-model="form.is_async" :disabled="isReadOnly" @change="onAsyncChange">{{ t('rules.label-async') }}</el-checkbox>
-      </div>
+      </section>
 
       <div v-if="form.is_async" class="v-card" style="padding:12px;background:#fff;border:1px dashed #cbd5e1;margin:8px 0">
         <div class="v-row">
@@ -123,38 +126,48 @@
           :stream-key="asyncCfg.stream_key" :webhook-url="asyncCfg.url" />
       </div>
 
-      <div v-if="showBindScope" class="v-row">
-        <div class="rules-field">
-          <span class="rules-field-label" id="rules-field-bind-label">{{ t('rules.label-bind') }}</span>
-          <el-select popper-class="rules-select-popper" v-model="form.bind_scope" :disabled="isReadOnly" style="width:220px" @change="onBindScopeChange"
-            :aria-labelledby="'rules-field-bind-label'">
-            <el-option v-for="o in bindScopeOptions" :key="o.value" :value="o.value" :label="o.label" />
-          </el-select>
+      <section v-if="showBindScope" class="rules-section">
+        <h3 class="rules-section-title">{{ t('rules.section-bind') }}</h3>
+        <div class="rules-grid">
+          <div class="rules-field">
+            <span class="rules-field-label" id="rules-field-bind-label">{{ t('rules.label-bind') }}</span>
+            <div class="rules-control-row">
+              <el-select popper-class="rules-select-popper" v-model="form.bind_scope" :disabled="isReadOnly" @change="onBindScopeChange"
+                :aria-labelledby="'rules-field-bind-label'">
+                <el-option v-for="o in bindScopeOptions" :key="o.value" :value="o.value" :label="o.label" />
+              </el-select>
+              <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="rules-help-popper">
+                <template #content><span v-html="t('gw.scope-hint')"></span></template>
+                <button type="button" class="rules-help" :aria-label="t('common.learn-more')">?</button>
+              </el-tooltip>
+            </div>
+          </div>
+          <div v-if="showToolNames" class="rules-field">
+            <label class="rules-field-label" for="rules-field-tools">{{ t('rules.label-tools') }}</label>
+            <el-input id="rules-field-tools" v-model="form.bind_tools" :disabled="isReadOnly" />
+          </div>
+          <div v-if="showToolNames" class="rules-field">
+            <label class="rules-field-label" for="rules-field-mcp">{{ t('rules.label-mcp') }}</label>
+            <el-input id="rules-field-mcp" v-model="form.bind_mcp_servers" :disabled="isReadOnly" />
+          </div>
+          <div v-if="showAppIds" class="rules-field">
+            <label class="rules-field-label" for="rules-field-apps">{{ t('rules.label-apps') }}</label>
+            <el-input id="rules-field-apps" v-model="form.bind_app_ids" :disabled="isReadOnly" />
+          </div>
         </div>
-        <div v-if="showToolNames" class="rules-field">
-          <label class="rules-field-label" for="rules-field-tools">{{ t('rules.label-tools') }}</label>
-          <el-input id="rules-field-tools" v-model="form.bind_tools" :disabled="isReadOnly" style="width:200px" />
-        </div>
-      </div>
-      <div v-if="showBindScope" class="v-row">
-        <div v-if="showToolNames" class="rules-field">
-          <label class="rules-field-label" for="rules-field-mcp">{{ t('rules.label-mcp') }}</label>
-          <el-input id="rules-field-mcp" v-model="form.bind_mcp_servers" :disabled="isReadOnly" style="width:200px" />
-        </div>
-        <div v-if="showAppIds" class="rules-field">
-          <label class="rules-field-label" for="rules-field-apps">{{ t('rules.label-apps') }}</label>
-          <el-input id="rules-field-apps" v-model="form.bind_app_ids" :disabled="isReadOnly" style="width:240px" />
-        </div>
-      </div>
-      <p v-if="showBindScope" class="v-hint" v-html="t('gw.scope-hint')"></p>
+      </section>
 
-      <div v-if="isScript" class="v-row">
-        <label>{{ t('rules.editor-mode') }}
-          <el-select popper-class="rules-select-popper" v-model="form.editor_mode" :disabled="isReadOnly" style="width:160px" @change="onEditorModeChange">
+      <section class="rules-section">
+        <h3 class="rules-section-title">{{ t('rules.section-body') }}</h3>
+      <div v-if="isScript" class="rules-grid">
+        <div class="rules-field">
+          <span class="rules-field-label" id="rules-field-editor-label">{{ t('rules.editor-mode') }}</span>
+          <el-select popper-class="rules-select-popper" v-model="form.editor_mode" :disabled="isReadOnly" @change="onEditorModeChange"
+            :aria-labelledby="'rules-field-editor-label'">
             <el-option value="simple" :label="t('rules.editor-simple')" />
             <el-option value="advanced" :label="t('rules.editor-advanced')" />
           </el-select>
-        </label>
+        </div>
       </div>
 
       <p v-if="form.runtime === 'groovy'" class="v-hint" v-html="t('hint.groovy')"></p>
@@ -268,6 +281,7 @@
         :condition="readConditionPayload()"
         :bundle-id="session.bundleId"
       />
+      </section>
 
             </div>
             <footer class="rules-panel-foot">
@@ -840,8 +854,7 @@ watch(editorVisible, (open) => {
   position: absolute;
   top: 0;
   right: 0;
-  width: 640px;
-  max-width: 100%;
+  width: min(760px, 100%);
   height: 100%;
   background: #fff;
   box-shadow: -8px 0 24px rgba(15, 23, 42, 0.16);
@@ -870,13 +883,41 @@ watch(editorVisible, (open) => {
   font-size: 13px;
   padding: 4px 6px;
 }
-.rules-panel-close:hover { color: #0f172a; }
+.rules-panel-close:hover { color: #0f172a; background: #f1f5f9; }
+.rules-panel-close:focus-visible { outline: 2px solid var(--v-primary); outline-offset: 2px; }
 .rules-field { display: inline-flex; align-items: center; gap: 6px; }
 .rules-field-label { font-size: 13px; color: #475569; white-space: nowrap; }
+.rules-form .rules-section + .rules-section { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--v-border); }
+.rules-section-title { margin: 0 0 12px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: none; color: var(--v-muted); }
+.rules-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 16px; }
+.rules-form .rules-field { display: flex; flex-direction: column; align-items: stretch; gap: 4px; min-width: 0; }
+.rules-form .rules-field-label { white-space: normal; }
+.rules-form .rules-field :deep(.el-input),
+.rules-form .rules-field :deep(.el-select),
+.rules-form .rules-field :deep(.el-input-number) { width: 100%; }
+.rules-field-check { justify-content: flex-end; }
+.rules-control-row { display: flex; align-items: center; gap: 8px; }
+.rules-control-row :deep(.el-select) { flex: 1; min-width: 0; }
+.rules-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.rules-help:hover, .rules-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
+.rules-form .v-hint { margin-top: 10px; }
 .rules-panel-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px 20px;
+  padding: 16px 20px 24px;
+}
+@media (max-width: 640px) {
+  .rules-grid { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rules-slide-enter-active,
+  .rules-slide-leave-active,
+  .rules-slide-enter-active .rules-panel,
+  .rules-slide-leave-active .rules-panel { transition: none; }
 }
 .rules-panel-foot {
   display: flex;
@@ -897,4 +938,5 @@ watch(editorVisible, (open) => {
 </style>
 <style>
 .rules-select-popper { z-index: 4100 !important; }
+.rules-help-popper { max-width: 360px; line-height: 1.55; }
 </style>

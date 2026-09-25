@@ -28,7 +28,7 @@
       "mainClass": "io.virbius.control.VirbiusControlApplication",
       "projectName": "virbius-control",
       "cwd": "${workspaceFolder}/virbius-control",
-      "console": "integratedTerminal",
+      "console": "internalConsole",
       "preLaunchTask": "prelaunch: infra and compile",
       "env": {
         "SPRING_PROFILES_ACTIVE": "prod",
@@ -69,7 +69,7 @@
       "mainClass": "io.virbius.control.VirbiusControlApplication",
       "projectName": "virbius-control",
       "cwd": "${workspaceFolder}/virbius-control",
-      "console": "integratedTerminal",
+      "console": "internalConsole",
       "preLaunchTask": "prelaunch: infra and compile",
       "env": {
         "SPRING_PROFILES_ACTIVE": "prod",
