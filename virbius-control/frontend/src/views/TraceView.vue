@@ -1,11 +1,15 @@
 <template>
   <div class="v-card">
-    <h2 class="v-card-title">{{ t('trace.title') }}</h2>
-    <p class="v-hint">{{ t('trace.desc-short') }}</p>
-    <details class="v-hint-more">
-      <summary>{{ t('common.learn-more') }}</summary>
-      <p class="v-hint" v-html="t('trace.desc')"></p>
-    </details>
+    <div class="trace-title-row">
+      <h2 class="v-card-title">{{ t('trace.title') }}</h2>
+      <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="trace-help-popper">
+        <template #content>
+          <p>{{ t('trace.desc-short') }}</p>
+          <p v-html="t('trace.desc')"></p>
+        </template>
+        <button type="button" class="trace-help" :aria-label="t('common.learn-more')">?</button>
+      </el-tooltip>
+    </div>
 
     <div class="v-row">
       <el-input v-model="toolName" :placeholder="t('trace.placeholder-tool')" style="width:160px" />
@@ -161,3 +165,18 @@ async function onRowClick(row: any) {
 onMounted(() => { search(); });
 watch(() => session.tenant, () => { search(); });
 </script>
+<style scoped>
+.trace-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.trace-title-row .v-card-title { margin: 0; }
+.trace-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.trace-help:hover, .trace-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
+</style>
+<style>
+.trace-help-popper { max-width: 420px; line-height: 1.55; }
+.trace-help-popper p { margin: 0; }
+.trace-help-popper p + p { margin-top: 8px; }
+</style>

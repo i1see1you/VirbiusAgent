@@ -1,11 +1,15 @@
 <template>
   <div class="v-card">
-    <h2 class="v-card-title">{{ t('cum.title') }}</h2>
-    <p class="v-hint">{{ t('cum.desc-short') }}</p>
-    <details class="v-hint-more">
-      <summary>{{ t('common.learn-more') }}</summary>
-      <p class="v-hint" v-html="t('cum.desc')"></p>
-    </details>
+    <div class="cum-title-row">
+      <h2 class="v-card-title">{{ t('cum.title') }}</h2>
+      <el-tooltip placement="bottom" :show-after="200" :z-index="4200" popper-class="cum-help-popper">
+        <template #content>
+          <p>{{ t('cum.desc-short') }}</p>
+          <p v-html="t('cum.desc')"></p>
+        </template>
+        <button type="button" class="cum-help" :aria-label="t('common.learn-more')">?</button>
+      </el-tooltip>
+    </div>
 
     <div class="v-row">
       <el-button type="primary" @click="openNew">{{ t('cum.btn-new') }}</el-button>
@@ -329,10 +333,24 @@ watch([() => form.cumulative_name, editorVisible], () => { nextTick(syncTableHig
 </script>
 
 <style scoped>
+.cum-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.cum-title-row .v-card-title { margin: 0; }
+.cum-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.cum-help:hover, .cum-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
 .cum-drawer-footer {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
 }
+</style>
+<style>
+.cum-help-popper { max-width: 420px; line-height: 1.55; }
+.cum-help-popper p { margin: 0; }
+.cum-help-popper p + p { margin-top: 8px; }
+.cum-help-popper code { font-size: 12px; }
 </style>

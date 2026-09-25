@@ -1,11 +1,15 @@
 <template>
   <div class="v-card">
-    <h2 class="v-card-title">{{ t('ac.title') }}</h2>
-    <p class="v-hint">{{ t('ac.desc-short') }}</p>
-    <details class="v-hint-more">
-      <summary>{{ t('common.learn-more') }}</summary>
-      <p class="v-hint" v-html="t('ac.desc')"></p>
-    </details>
+    <div class="ac-title-row">
+      <h2 class="v-card-title">{{ t('ac.title') }}</h2>
+      <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="ac-help-popper">
+        <template #content>
+          <p>{{ t('ac.desc-short') }}</p>
+          <p v-html="t('ac.desc')"></p>
+        </template>
+        <button type="button" class="ac-help" :aria-label="t('common.learn-more')">?</button>
+      </el-tooltip>
+    </div>
 
     <div class="v-row">
       <label>{{ t('ac.label-trace-id') }}
@@ -103,3 +107,18 @@ onMounted(() => {
 });
 watch(() => session.tenant, () => searchRecent(100));
 </script>
+<style scoped>
+.ac-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.ac-title-row .v-card-title { margin: 0; }
+.ac-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.ac-help:hover, .ac-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
+</style>
+<style>
+.ac-help-popper { max-width: 420px; line-height: 1.55; }
+.ac-help-popper p { margin: 0; }
+.ac-help-popper p + p { margin-top: 8px; }
+</style>

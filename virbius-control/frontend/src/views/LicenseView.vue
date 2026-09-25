@@ -1,11 +1,15 @@
 <template>
   <div class="v-card">
-    <h2 class="v-card-title">{{ t('license.title') }}</h2>
-    <p class="v-hint">{{ t('license.desc-short') }}</p>
-    <details class="v-hint-more">
-      <summary>{{ t('common.learn-more') }}</summary>
-      <p class="v-hint">{{ t('license.desc') }}</p>
-    </details>
+    <div class="license-title-row">
+      <h2 class="v-card-title">{{ t('license.title') }}</h2>
+      <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="license-help-popper">
+        <template #content>
+          <p>{{ t('license.desc-short') }}</p>
+          <p>{{ t('license.desc') }}</p>
+        </template>
+        <button type="button" class="license-help" :aria-label="t('common.learn-more')">?</button>
+      </el-tooltip>
+    </div>
 
     <div class="v-row">
       <el-radio-group v-model="statusFilter" size="small">
@@ -462,6 +466,14 @@ watch(() => session.tenant, loadPage);
 </script>
 
 <style scoped>
+.license-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.license-title-row .v-card-title { margin: 0; }
+.license-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.license-help:hover, .license-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
 .license-keys { margin-top: 20px; }
 .license-field {
   display: flex;
@@ -562,6 +574,9 @@ watch(() => session.tenant, loadPage);
 .license-slide-enter-from .license-panel,
 .license-slide-leave-to .license-panel { transform: translateX(100%); }
 .license-select-popper { z-index: 4100 !important; }
+.license-help-popper { max-width: 420px; line-height: 1.55; }
+.license-help-popper p { margin: 0; }
+.license-help-popper p + p { margin-top: 8px; }
 .license-jwt-warn {
   margin: 0 0 12px;
   color: #b91c1c;

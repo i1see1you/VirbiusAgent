@@ -1,11 +1,15 @@
 <template>
   <div class="v-card">
-    <h2 class="v-card-title">{{ t('rules.title') }}</h2>
-    <p class="v-hint">{{ t('rules.desc-short') }}</p>
-    <details class="v-hint-more">
-      <summary>{{ t('common.learn-more') }}</summary>
-      <p class="v-hint" v-html="t('hint.rules')"></p>
-    </details>
+    <div class="rules-title-row">
+      <h2 class="v-card-title">{{ t('rules.title') }}</h2>
+      <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="rules-help-popper">
+        <template #content>
+          <p>{{ t('rules.desc-short') }}</p>
+          <p v-html="t('hint.rules')"></p>
+        </template>
+        <button type="button" class="rules-help" :aria-label="t('common.learn-more')">?</button>
+      </el-tooltip>
+    </div>
 
     <div class="v-row">
       <span class="v-hint" style="margin:0" v-html="t('rules.current-layer', [rules.currentLayer])"></span>
@@ -898,6 +902,8 @@ watch(editorVisible, (open) => {
 .rules-field-check { justify-content: flex-end; }
 .rules-control-row { display: flex; align-items: center; gap: 8px; }
 .rules-control-row :deep(.el-select) { flex: 1; min-width: 0; }
+.rules-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.rules-title-row .v-card-title { margin: 0; }
 .rules-help {
   width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
   border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
@@ -938,5 +944,7 @@ watch(editorVisible, (open) => {
 </style>
 <style>
 .rules-select-popper { z-index: 4100 !important; }
-.rules-help-popper { max-width: 360px; line-height: 1.55; }
+.rules-help-popper { max-width: 420px; line-height: 1.55; }
+.rules-help-popper p { margin: 0; }
+.rules-help-popper p + p { margin-top: 8px; }
 </style>

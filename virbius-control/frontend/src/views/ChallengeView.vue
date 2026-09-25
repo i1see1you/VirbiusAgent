@@ -1,11 +1,15 @@
 <template>
   <div class="v-card">
-    <h2 class="v-card-title">{{ t('challenge.title') }}</h2>
-    <p class="v-hint">{{ t('challenge.desc-short') }}</p>
-    <details class="v-hint-more">
-      <summary>{{ t('common.learn-more') }}</summary>
-      <p class="v-hint" v-html="t('challenge.desc')"></p>
-    </details>
+    <div class="challenge-title-row">
+      <h2 class="v-card-title">{{ t('challenge.title') }}</h2>
+      <el-tooltip placement="top" :show-after="200" :z-index="4200" popper-class="challenge-help-popper">
+        <template #content>
+          <p>{{ t('challenge.desc-short') }}</p>
+          <p v-html="t('challenge.desc')"></p>
+        </template>
+        <button type="button" class="challenge-help" :aria-label="t('common.learn-more')">?</button>
+      </el-tooltip>
+    </div>
 
     <div class="v-row">
       <el-button @click="load">{{ t('challenge.btn-refresh') }}</el-button>
@@ -190,3 +194,19 @@ onMounted(start);
 onUnmounted(stop);
 watch(() => session.tenant, load);
 </script>
+<style scoped>
+.challenge-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.challenge-title-row .v-card-title { margin: 0; }
+.challenge-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.challenge-help:hover, .challenge-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
+</style>
+<style>
+.challenge-help-popper { max-width: 420px; line-height: 1.55; }
+.challenge-help-popper p { margin: 0; }
+.challenge-help-popper p + p { margin-top: 8px; }
+.challenge-help-popper code { font-size: 12px; }
+</style>

@@ -1,12 +1,16 @@
 <template>
   <div class="v-card">
-    <h2 class="v-card-title">{{ t('lists.title') }}</h2>
-    <p class="v-hint">{{ t('lists.desc-short') }}</p>
-    <details class="v-hint-more">
-      <summary>{{ t('common.learn-more') }}</summary>
-      <p class="v-hint" v-html="t('lists.desc')"></p>
-      <p class="v-hint" v-html="t('lists.image-desc')"></p>
-    </details>
+    <div class="lists-title-row">
+      <h2 class="v-card-title">{{ t('lists.title') }}</h2>
+      <el-tooltip placement="bottom" :show-after="200" :z-index="4200" popper-class="lists-help-popper">
+        <template #content>
+          <p>{{ t('lists.desc-short') }}</p>
+          <p v-html="t('lists.desc')"></p>
+          <p v-html="t('lists.image-desc')"></p>
+        </template>
+        <button type="button" class="lists-help" :aria-label="t('common.learn-more')">?</button>
+      </el-tooltip>
+    </div>
 
     <div class="v-row">
       <el-input v-model="filterQ" :placeholder="t('lists.filter-q')" clearable style="width:220px" />
@@ -547,3 +551,19 @@ watch(() => session.tenant, () => {
 });
 watch([entryListName, entryDrawerVisible], () => { nextTick(syncTableHighlight); });
 </script>
+<style scoped>
+.lists-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.lists-title-row .v-card-title { margin: 0; }
+.lists-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.lists-help:hover, .lists-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
+</style>
+<style>
+.lists-help-popper { max-width: 420px; line-height: 1.55; }
+.lists-help-popper p { margin: 0; }
+.lists-help-popper p + p { margin-top: 8px; }
+.lists-help-popper code { font-size: 12px; }
+</style>
