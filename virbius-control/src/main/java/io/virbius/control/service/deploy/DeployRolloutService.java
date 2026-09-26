@@ -38,6 +38,36 @@ import org.springframework.stereotype.Service;
 @Service
 public class DeployRolloutService {
 
+    /** Matches tb_deploy_event.layer. Combined labels such as cloud+gateway+edge must fit. */
+    static final int LAYER_LABEL_MAX = 32;
+
+    /** Label stored on tb_deploy_event.layer. Longest current value is cloud+gateway+edge (18). */
+    static String layerLabel(boolean falco, boolean engine, boolean gateway, boolean edge) {
+        String label;
+        if (falco) {
+            label = "falco";
+        } else if (engine && gateway && edge) {
+            label = "cloud+gateway+edge";
+        } else if (engine && gateway) {
+            label = "cloud+gateway";
+        } else if (engine && edge) {
+            label = "cloud+edge";
+        } else if (gateway && edge) {
+            label = "gateway+edge";
+        } else if (engine) {
+            label = "cloud";
+        } else if (gateway) {
+            label = "gateway";
+        } else {
+            label = "edge";
+        }
+        if (label.length() > LAYER_LABEL_MAX) {
+            throw new IllegalArgumentException(
+                    "deploy event layer exceeds " + LAYER_LABEL_MAX + " chars: " + label);
+        }
+        return label;
+    }
+
     private static final Logger log = LoggerFactory.getLogger(DeployRolloutService.class);
     private static final DateTimeFormatter DTF = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
             .withZone(ZoneOffset.UTC);
@@ -110,24 +140,7 @@ public class DeployRolloutService {
         boolean doGateway = layer == null || layer.isBlank() || "gateway".equalsIgnoreCase(layer);
         boolean doEdge = layer == null || layer.isBlank() || "edge".equalsIgnoreCase(layer);
         boolean doFalco = layer != null && "falco".equalsIgnoreCase(layer);
-        String effectiveLayer;
-        if (doFalco) {
-            effectiveLayer = "falco";
-        } else if (doEngine && doGateway && doEdge) {
-            effectiveLayer = "cloud+gateway+edge";
-        } else if (doEngine && doGateway) {
-            effectiveLayer = "cloud+gateway";
-        } else if (doEngine && doEdge) {
-            effectiveLayer = "cloud+edge";
-        } else if (doGateway && doEdge) {
-            effectiveLayer = "gateway+edge";
-        } else if (doEngine) {
-            effectiveLayer = "cloud";
-        } else if (doGateway) {
-            effectiveLayer = "gateway";
-        } else {
-            effectiveLayer = "edge";
-        }
+        String effectiveLayer = layerLabel(doFalco, doEngine, doGateway, doEdge);
 
         acquireLock(tenantId);
         try {

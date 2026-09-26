@@ -372,7 +372,7 @@ CREATE TABLE IF NOT EXISTS tb_deploy_event (
     from_percent INTEGER,
     to_state     VARCHAR(16),
     to_percent   INTEGER,
-    layer        VARCHAR(16),
+    layer        VARCHAR(32),
     operator     VARCHAR(64),
     note         TEXT,
     created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
