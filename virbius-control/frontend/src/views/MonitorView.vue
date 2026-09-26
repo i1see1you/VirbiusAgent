@@ -2,12 +2,17 @@
   <div class="v-card monitor-page">
     <header class="monitor-head">
       <div class="monitor-head-copy">
-        <h2 class="v-card-title">{{ t('monitor.title') }}</h2>
-        <p class="v-hint">{{ t('monitor.scope-tenant', [tenantLabel]) }} · {{ t('monitor.desc-short') }}</p>
-        <details class="v-hint-more">
-          <summary>{{ t('common.learn-more') }}</summary>
-          <p class="v-hint" v-html="t('hint.monitor')"></p>
-        </details>
+        <div class="monitor-title-row">
+          <h2 class="v-card-title">{{ t('monitor.title') }}</h2>
+          <el-tooltip placement="bottom" :show-after="200" :z-index="4200" popper-class="monitor-help-popper">
+            <template #content>
+              <p>{{ t('monitor.desc-short') }}</p>
+              <p v-html="t('hint.monitor')"></p>
+            </template>
+            <button type="button" class="monitor-help" :aria-label="t('common.learn-more')">?</button>
+          </el-tooltip>
+        </div>
+        <p class="v-hint">{{ t('monitor.scope-tenant', [tenantLabel]) }}</p>
       </div>
       <div class="monitor-head-actions">
         <el-button-group>
@@ -548,9 +553,15 @@ watch(() => [route.query.tenant, route.query.hours], () => {
   gap: 12px;
   margin-bottom: 10px;
 }
+.monitor-title-row { display: flex; align-items: center; gap: 8px; }
 .monitor-head .v-card-title { margin: 0; }
+.monitor-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.monitor-help:hover, .monitor-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
 .monitor-head .v-hint { margin: 2px 0 0; }
-.monitor-head .v-hint-more { margin: 2px 0 0; }
 .monitor-head-actions {
   display: flex;
   flex-wrap: wrap;
@@ -704,4 +715,10 @@ watch(() => [route.query.tenant, route.query.hours], () => {
 @media (prefers-reduced-motion: reduce) {
   .monitor-page :deep(*) { transition: none !important; }
 }
+</style>
+<style>
+.monitor-help-popper { max-width: 420px; line-height: 1.55; }
+.monitor-help-popper p { margin: 0; }
+.monitor-help-popper p + p { margin-top: 8px; }
+.monitor-help-popper code { font-size: 12px; }
 </style>
