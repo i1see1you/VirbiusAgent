@@ -162,7 +162,13 @@
       </section>
 
       <section class="rules-section">
-        <h3 class="rules-section-title">{{ t('rules.section-body') }}</h3>
+        <h3 class="rules-section-title rules-control-row">
+          {{ t('rules.section-body') }}
+          <el-tooltip v-if="bodyHint" placement="top" :show-after="200" :z-index="4200" popper-class="rules-help-popper">
+            <template #content><span v-html="bodyHint"></span></template>
+            <button type="button" class="rules-help" :aria-label="t('common.learn-more')">?</button>
+          </el-tooltip>
+        </h3>
       <div v-if="isScript" class="rules-grid">
         <div class="rules-field">
           <span class="rules-field-label" id="rules-field-editor-label">{{ t('rules.editor-mode') }}</span>
@@ -174,13 +180,6 @@
         </div>
       </div>
 
-      <p v-if="form.runtime === 'groovy'" class="v-hint" v-html="t('hint.groovy')"></p>
-      <p v-if="form.runtime === 'lua'" class="v-hint" v-html="t('hint.lua')"></p>
-      <p v-if="isPrompt" class="v-hint" v-html="t('hint.prompt')"></p>
-      <p v-if="isEdgeDsl" class="v-hint" v-html="t('hint.edge-dsl')"></p>
-      <p v-if="isDlp" class="v-hint" v-html="t('hint.dlp-dsl')"></p>
-      <p v-if="form.runtime === 'landlock'" class="v-hint" v-html="t('hint.landlock')"></p>
-      <p v-if="form.runtime === 'gvisor'" class="v-hint" v-html="t('hint.gvisor')"></p>
 
       <div v-if="isScript && form.editor_mode === 'simple'">
         <p class="v-hint">{{ t('rules.condition-hint') }}</p>
@@ -381,6 +380,17 @@ const isPrompt = computed(() => form.runtime === 'prompt');
 const isScript = computed(() => form.runtime === 'groovy' || form.runtime === 'lua');
 const isEdgeDsl = computed(() => form.runtime === 'lua-dsl');
 const isDlp = computed(() => form.runtime === 'dlp-dsl');
+const bodyHint = computed(() => {
+  const r = form.runtime;
+  if (r === 'groovy') return t('hint.groovy');
+  if (r === 'lua') return t('hint.lua');
+  if (isPrompt.value) return t('hint.prompt');
+  if (isEdgeDsl.value) return t('hint.edge-dsl');
+  if (isDlp.value) return t('hint.dlp-dsl');
+  if (r === 'landlock') return t('hint.landlock');
+  if (r === 'gvisor') return t('hint.gvisor');
+  return '';
+});
 const isKernel = computed(() => ['falco', 'landlock', 'gvisor'].includes(form.runtime));
 const isFalco = computed(() => form.runtime === 'falco');
 const isEdgeForm = computed(() => isEdgeDsl.value || isDlp.value);

@@ -1,11 +1,15 @@
 <template>
   <div class="v-card">
-    <h2 class="v-card-title">{{ t('rollout.title') }}</h2>
-    <p class="v-hint">{{ pageDescShort }}</p>
-    <details class="v-hint-more">
-      <summary>{{ t('common.learn-more') }}</summary>
-      <p class="v-hint" v-html="pageDesc"></p>
-    </details>
+    <div class="rollout-title-row">
+      <h2 class="v-card-title">{{ t('rollout.title') }}</h2>
+      <el-tooltip placement="bottom" :show-after="200" :z-index="4200" popper-class="rollout-help-popper">
+        <template #content>
+          <p>{{ pageDescShort }}</p>
+          <p v-html="pageDesc"></p>
+        </template>
+        <button type="button" class="rollout-help" :aria-label="t('common.learn-more')">?</button>
+      </el-tooltip>
+    </div>
 
     <el-tabs v-model="rolloutTab">
       <el-tab-pane :label="t('rollout.tab-rule')" name="rule" lazy>
@@ -985,6 +989,14 @@ watch(autoRefresh, (on) => { if (on) startTimer(); else if (timer) { clearInterv
 </script>
 
 <style scoped>
+.rollout-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.rollout-title-row .v-card-title { margin: 0; }
+.rollout-help {
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 50%;
+  border: 1px solid var(--v-border); background: #f8fafc; color: var(--v-muted);
+  cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
+}
+.rollout-help:hover, .rollout-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
 .pending-link {
   cursor: pointer;
 }
@@ -992,4 +1004,10 @@ watch(autoRefresh, (on) => { if (on) startTimer(); else if (timer) { clearInterv
   color: #2563eb !important;
   text-decoration: underline;
 }
+</style>
+<style>
+.rollout-help-popper { max-width: 420px; line-height: 1.55; }
+.rollout-help-popper p { margin: 0; }
+.rollout-help-popper p + p { margin-top: 8px; }
+.rollout-help-popper code { font-size: 12px; }
 </style>

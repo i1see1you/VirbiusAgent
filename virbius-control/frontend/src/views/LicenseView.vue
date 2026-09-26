@@ -62,8 +62,16 @@
     </el-table>
 
     <details class="v-hint-more license-keys">
-      <summary>{{ t('license.keys-summary') }}</summary>
-      <p class="v-hint">{{ t('license.key-desc') }}</p>
+      <summary class="license-keys-summary">
+        <span>{{ t('license.keys-summary') }}</span>
+        <el-tooltip placement="bottom" :show-after="200" :z-index="4200" popper-class="license-help-popper">
+          <template #content>
+            <p>{{ t('license.keys-hint') }}</p>
+            <p>{{ t('license.key-desc') }}</p>
+          </template>
+          <button type="button" class="license-help" :aria-label="t('common.learn-more')" @click.stop.prevent>?</button>
+        </el-tooltip>
+      </summary>
       <el-input v-if="publicKey" v-model="publicKey" type="textarea" readonly :rows="5" class="mono" />
       <div class="v-row" style="margin-top:8px">
         <el-button :disabled="!publicKey" @click="copy(publicKey, t('license.key-copied'))">{{ t('license.copy-key') }}</el-button>
@@ -475,6 +483,7 @@ watch(() => session.tenant, loadPage);
 }
 .license-help:hover, .license-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
 .license-keys { margin-top: 20px; }
+.license-keys-summary { display: flex; align-items: center; gap: 8px; width: fit-content; }
 .license-field {
   display: flex;
   flex-direction: column;
