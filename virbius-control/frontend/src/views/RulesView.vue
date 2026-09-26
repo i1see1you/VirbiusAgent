@@ -367,7 +367,7 @@ const previousBody = ref('');
 const enableSimulate = ref(false);
 
 const form = reactive<any>({
-  rule_id: '', runtime: 'groovy', reason: 'CUSTOM_RULE', risk: 100, intent: 'deny',
+  rule_id: '', runtime: 'groovy', reason: '', risk: 100, intent: 'deny',
   is_async: false, bind_scope: 'global', bind_tools: '', bind_mcp_servers: '', bind_app_ids: '',
   editor_mode: 'simple', body: ''
 });
@@ -576,7 +576,7 @@ async function onRowClick(row: any) {
 }
 
 function resetEditor() {
-  Object.assign(form, { rule_id: '', runtime: layerRuntimes.value[0], reason: 'CUSTOM_RULE', risk: 100, intent: 'deny', is_async: false, bind_scope: 'global', bind_tools: '', bind_mcp_servers: '', bind_app_ids: '', editor_mode: 'simple', body: '' });
+  Object.assign(form, { rule_id: '', runtime: layerRuntimes.value[0], reason: '', risk: 100, intent: 'deny', is_async: false, bind_scope: 'global', bind_tools: '', bind_mcp_servers: '', bind_app_ids: '', editor_mode: 'simple', body: '' });
   Object.assign(asyncCfg, { type: 'redis_stream', stream_key: '', url: '', message: '' });
   Object.assign(edgeBody, { list_type: 'deny', keywordsText: '' });
   Object.assign(dlpBody, { entity_type: 'phone_cn', priority: 0, pattern: '', mask_template: '' });
