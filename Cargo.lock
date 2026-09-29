@@ -2350,6 +2350,7 @@ dependencies = [
  "futures-util",
  "rand 0.8.7",
  "rdkafka",
+ "redis",
  "reqwest",
  "serde",
  "serde_json",

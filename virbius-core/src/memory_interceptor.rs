@@ -240,6 +240,19 @@ impl MemoryInterceptor {
         self.policies.enabled
     }
 
+    /// Override the write-size cap. Used when Control pushes a proxy policy.
+    pub fn with_max_entry_size(mut self, max_entry_size: usize) -> Self {
+        if max_entry_size > 0 {
+            self.policies.max_entry_size = max_entry_size;
+        }
+        self
+    }
+
+    pub fn with_enabled(mut self, enabled: bool) -> Self {
+        self.policies.enabled = enabled;
+        self
+    }
+
     /// Check if a tool name looks like a memory read operation.
     ///
     /// Memory read tools retrieve previously stored content from long-term

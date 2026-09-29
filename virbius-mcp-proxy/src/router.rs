@@ -95,7 +95,7 @@ pub async fn route_request(
         _ => {
             // Transparent forward for all other methods
             if is_notification {
-                if upstream_mgr.is_single_upstream() {
+                if upstream_mgr.is_single_for(&session_id) {
                     match upstream_mgr.get_or_connect_single(&session_id).await {
                         Ok(upstream) => {
                             let _ = upstream.forward_notification(request).await;
@@ -106,15 +106,15 @@ pub async fn route_request(
                     }
                 } else {
                     // Multi-upstream: forward to all (best-effort)
-                    for name in upstream_mgr.upstream_names() {
-                        if let Ok(upstream) = upstream_mgr.get_or_connect(&session_id, name).await {
+                    for name in upstream_mgr.names_for(&session_id) {
+                        if let Ok(upstream) = upstream_mgr.get_or_connect(&session_id, &name).await {
                             let _ = upstream.forward_notification(request).await;
                         }
                     }
                 }
                 None
             } else {
-                if upstream_mgr.is_single_upstream() {
+                if upstream_mgr.is_single_for(&session_id) {
                     match upstream_mgr.get_or_connect_single(&session_id).await {
                         Ok(upstream) => match upstream.forward(request).await {
                             Ok(resp) => Some(resp),
@@ -131,8 +131,8 @@ pub async fn route_request(
                 } else {
                     // Multi-upstream: forward to first upstream that succeeds
                     let mut last_err = None;
-                    for name in upstream_mgr.upstream_names() {
-                        match upstream_mgr.get_or_connect(&session_id, name).await {
+                    for name in upstream_mgr.names_for(&session_id) {
+                        match upstream_mgr.get_or_connect(&session_id, &name).await {
                             Ok(upstream) => match upstream.forward(request).await {
                                 Ok(resp) => return Some(resp),
                                 Err(e) => {
@@ -207,11 +207,14 @@ pub(crate) async fn handle_initialize(
         session.has_license()
     );
 
+    // TTL is fixed at creation so a later policy change does not expire sessions already open.
+    session.ttl = session_mgr.ttl_for(&session.tenant_id);
     // Map transport connection ID -> logical session ID, and store session
     conn_to_session.insert(transport_session_id.to_string(), logical_sid.clone());
-    session_mgr.insert(logical_sid.clone(), session);
+    session_mgr.insert(logical_sid.clone(), session.clone());
+    upstream_mgr.bind_session(&logical_sid, &session.tenant_id);
 
-    if upstream_mgr.is_single_upstream() {
+    if upstream_mgr.is_single_for(&logical_sid) {
         // ── Single-upstream mode (original behavior) ──
         let upstream = match upstream_mgr.get_or_connect_single(&logical_sid).await {
             Ok(u) => u,
@@ -270,7 +273,7 @@ pub(crate) async fn handle_initialize(
         }
     } else {
         // ── Multi-upstream mode ──
-        let upstream_names = upstream_mgr.upstream_names();
+        let upstream_names = upstream_mgr.names_for(&logical_sid);
 
         // Forward initialize to all upstreams, skipping alive ones on reconnect
         let mut tasks = Vec::new();
@@ -403,7 +406,7 @@ async fn handle_tools_list(
         }
     };
 
-    if upstream_mgr.is_single_upstream() {
+    if upstream_mgr.is_single_for(&session_id) {
         // ── Single-upstream mode (original behavior) ──
         let upstream = match upstream_mgr.get_or_connect_single(session_id).await {
             Ok(u) => u,
@@ -432,7 +435,7 @@ async fn handle_tools_list(
         }
     } else {
         // ── Multi-upstream mode ──
-        let upstream_names = upstream_mgr.upstream_names();
+        let upstream_names = upstream_mgr.names_for(&session_id);
 
         // Fetch tools/list from all upstreams, tracking which upstream
         // each tool came from.
@@ -440,7 +443,7 @@ async fn handle_tools_list(
         let mut last_err: Option<String> = None;
 
         for name in &upstream_names {
-            let upstream = match upstream_mgr.get_or_connect(session_id, name).await {
+            let upstream = match upstream_mgr.get_or_connect(session_id, &name).await {
                 Ok(u) => u,
                 Err(e) => {
                     warn!("upstream {} connect failed for tools/list: {}", name, e);
@@ -694,15 +697,15 @@ async fn handle_tools_call(
     } else {
         // Resolve tool route: determine upstream_name and original_tool_name.
         // In single-upstream mode, route_tool always returns the sole upstream.
-        match upstream_mgr.route_tool(displayed_tool_name) {
+        match upstream_mgr.route_tool_for(session_id, displayed_tool_name) {
             Some(route) => route,
             None => {
                 // Tool not in routes. In multi-upstream mode, this means tools/list
                 // wasn't called or the tool doesn't exist. Try to use the displayed
                 // name as-is and pick the first upstream as best-effort.
-                if upstream_mgr.is_single_upstream() {
+                if upstream_mgr.is_single_for(&session_id) {
                     (
-                        upstream_mgr.upstream_names()[0].to_string(),
+                        upstream_mgr.names_for(&session_id)[0].to_string(),
                         displayed_tool_name.to_string(),
                     )
                 } else {
@@ -712,8 +715,8 @@ async fn handle_tools_call(
                         // Has a prefix — try to find the upstream by the prefix
                         let prefix_end = displayed_tool_name.find(TOOL_PREFIX_SEP).unwrap_or(0);
                         let possible_upstream = &displayed_tool_name[..prefix_end];
-                        let names = upstream_mgr.upstream_names();
-                        if names.contains(&possible_upstream) {
+                        let names = upstream_mgr.names_for(&session_id);
+                        if names.iter().any(|n| n == possible_upstream) {
                             (possible_upstream.to_string(), stripped.to_string())
                         } else {
                             return Some(jsonrpc_error(
@@ -745,10 +748,13 @@ async fn handle_tools_call(
     let challenge_token = SecurityPipeline::extract_challenge_token(meta);
 
     // ── P1.3: Memory Interceptor (write-only) ──
-    let memory_interceptor = MemoryInterceptor::from_manifest();
-    if memory_interceptor.is_enabled()
-        && memory_interceptor.is_memory_write_tool(&original_tool_name)
-    {
+    let memory_interceptor = memory_interceptor_for(pipeline, &session.tenant_id);
+    let pushed_memory = pipeline.memory_for(&session.tenant_id);
+    let memory_write = memory_interceptor.is_memory_write_tool(&original_tool_name)
+        || pushed_memory.as_ref().is_some_and(|m| {
+            m.enabled && tool_pattern_hit(&m.tool_patterns, &original_tool_name)
+        });
+    if memory_interceptor.is_enabled() && memory_write {
         // Extract content from args (assume there's a "content" field)
         let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -1402,6 +1408,22 @@ fn output_masking_skipped(tool_name: &str) -> bool {
     MemoryInterceptor::from_manifest().is_memory_read_tool(tool_name)
 }
 
+fn memory_interceptor_for(pipeline: &SecurityPipeline, tenant_id: &str) -> MemoryInterceptor {
+    let base = MemoryInterceptor::from_manifest();
+    match pipeline.memory_for(tenant_id) {
+        Some(mem) if mem.enabled => base.with_enabled(true).with_max_entry_size(mem.max_entry_size),
+        _ => base,
+    }
+}
+
+fn tool_pattern_hit(patterns: &[String], tool_name: &str) -> bool {
+    let lower = tool_name.to_lowercase();
+    patterns.iter().any(|p| {
+        let p = p.to_lowercase();
+        !p.is_empty() && (lower == p || lower.starts_with(&p))
+    })
+}
+
 /// Extract concatenated text from a JSON-RPC tool call response.
 ///
 /// Navigates `resp.result.content[]` and collects all `text`-type items.
@@ -1464,7 +1486,7 @@ async fn review_tool_output(
     tool_name: &str,
     pipeline: &SecurityPipeline,
 ) {
-    let cfg = pipeline.output_review_config();
+    let cfg = pipeline.output_review_for(&session.tenant_id);
     if !cfg.enabled {
         return;
     }
@@ -1475,7 +1497,7 @@ async fn review_tool_output(
     }
 
     // Conditional trigger: skip review for short, low-risk outputs
-    if !pipeline.should_review_output(&text, session.session_risk_score) {
+    if !pipeline.should_review_output_for(&session.tenant_id, &text, session.session_risk_score) {
         return;
     }
 
@@ -1678,8 +1700,13 @@ async fn intercept_memory_read(
     tool_name: &str,
     pipeline: &SecurityPipeline,
 ) {
-    let memory_interceptor = MemoryInterceptor::from_manifest();
-    if !memory_interceptor.is_enabled() || !memory_interceptor.is_memory_read_tool(tool_name) {
+    let memory_interceptor = memory_interceptor_for(pipeline, &session.tenant_id);
+    let pushed_memory = pipeline.memory_for(&session.tenant_id);
+    let memory_read = memory_interceptor.is_memory_read_tool(tool_name)
+        || pushed_memory
+            .as_ref()
+            .is_some_and(|m| m.enabled && tool_pattern_hit(&m.tool_patterns, tool_name));
+    if !memory_interceptor.is_enabled() || !memory_read {
         return;
     }
 

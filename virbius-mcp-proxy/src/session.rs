@@ -12,6 +12,8 @@ use base64::Engine;
 use dashmap::DashMap;
 use tracing::debug;
 
+use crate::policy::PolicyRegistry;
+
 /// Default session TTL: 30 minutes.
 const DEFAULT_TTL_SECS: u64 = 1800;
 
@@ -43,6 +45,8 @@ pub struct Session {
     pub step_seq: u32,
     /// Last step_id in the trace chain (for parent linking).
     pub last_step_id: Option<String>,
+    /// TTL captured when the session was created. Zero means use the manager default.
+    pub ttl: Duration,
 }
 
 impl Session {
@@ -110,6 +114,7 @@ impl Session {
             created_at: now,
             step_seq: 0,
             last_step_id: None,
+            ttl: Duration::ZERO,
         }
     }
 
@@ -257,6 +262,7 @@ fn extract_risk_quota_from_jwt(jwt: &str) -> u32 {
 pub struct SessionManager {
     sessions: DashMap<String, Session>,
     ttl: Duration,
+    policies: Arc<PolicyRegistry>,
 }
 
 impl SessionManager {
@@ -264,6 +270,7 @@ impl SessionManager {
         Self {
             sessions: DashMap::new(),
             ttl: Duration::from_secs(DEFAULT_TTL_SECS),
+            policies: Arc::new(PolicyRegistry::empty()),
         }
     }
 
@@ -271,7 +278,20 @@ impl SessionManager {
         Self {
             sessions: DashMap::new(),
             ttl,
+            policies: Arc::new(PolicyRegistry::empty()),
         }
+    }
+
+    pub fn use_policies(&mut self, policies: Arc<PolicyRegistry>) {
+        self.policies = policies;
+    }
+
+    /// TTL for a new session: pushed policy when present, otherwise the process default.
+    pub fn ttl_for(&self, tenant_id: &str) -> Duration {
+        self.policies
+            .get(tenant_id)
+            .map(|p| Duration::from_secs(p.session_ttl_secs))
+            .unwrap_or(self.ttl)
     }
 
     pub fn insert(&self, session_id: String, session: Session) {
@@ -303,12 +323,20 @@ impl SessionManager {
     /// also clean up corresponding upstream connections.
     pub fn cleanup_expired(&self) -> Vec<String> {
         let now = Instant::now();
+        let fallback = self.ttl;
         let mut expired = Vec::new();
 
         let to_remove: Vec<String> = self
             .sessions
             .iter()
-            .filter(|entry| now.duration_since(entry.value().last_active) > self.ttl)
+            .filter(|entry| {
+                let limit = if entry.value().ttl.is_zero() {
+                    fallback
+                } else {
+                    entry.value().ttl
+                };
+                now.duration_since(entry.value().last_active) > limit
+            })
             .map(|entry| entry.key().clone())
             .collect();
 

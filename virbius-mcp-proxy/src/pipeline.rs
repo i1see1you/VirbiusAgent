@@ -13,9 +13,11 @@ use virbius_core::precheck::{self, PrecheckResult, ToolCall};
 
 use crate::audit::{AuditEvent, SharedAuditSink};
 use crate::config::{
-    FailoverConfig, FallbackPolicy, FastPathConfig, OutputReviewConfig, HIGH_RISK_TOOLS,
+    FailoverConfig, FallbackPolicy, FastPathConfig, MemorySection, OutputReviewConfig,
+    HIGH_RISK_TOOLS,
 };
 use crate::error::VirbiusErrorCode;
+use crate::policy::PolicyRegistry;
 use crate::session::Session;
 
 /// Result of the security pipeline check.
@@ -151,7 +153,6 @@ pub(crate) struct MemoryCheckResponse {
 pub struct EngineClient {
     pub(crate) url: String,
     pub(crate) http: reqwest::Client,
-    pub(crate) timeout: Duration,
 }
 
 impl EngineClient {
@@ -163,16 +164,19 @@ impl EngineClient {
         Self {
             url: format!("{}/v1/evaluate", url.trim_end_matches('/')),
             http,
-            timeout: Duration::from_millis(timeout_ms),
         }
     }
 
-    async fn evaluate(&self, req: &EvaluateRequest<'_>) -> Result<EvaluateResponse, EngineError> {
+    async fn evaluate(
+        &self,
+        req: &EvaluateRequest<'_>,
+        timeout: Duration,
+    ) -> Result<EvaluateResponse, EngineError> {
         let resp = self
             .http
             .post(&self.url)
             .json(req)
-            .timeout(self.timeout)
+            .timeout(timeout)
             .send()
             .await
             .map_err(EngineError::Http)?;
@@ -213,6 +217,8 @@ pub struct SecurityPipeline {
     fallback_policy: FallbackPolicy,
     audit: SharedAuditSink,
     output_review: OutputReviewConfig,
+    /// Tenant overrides from Control. Empty until `use_policies` shares the registry.
+    policies: Arc<PolicyRegistry>,
 }
 
 impl SecurityPipeline {
@@ -234,7 +240,51 @@ impl SecurityPipeline {
             fallback_policy,
             audit,
             output_review,
+            policies: Arc::new(PolicyRegistry::empty()),
         }
+    }
+
+    /// Share the process-wide policy registry filled by the Redis subscriber.
+    pub fn use_policies(&mut self, policies: Arc<PolicyRegistry>) {
+        self.policies = policies;
+    }
+
+    fn fast_path_for(&self, tenant_id: &str) -> FastPathConfig {
+        self.policies
+            .get(tenant_id)
+            .map(|p| p.fast_path)
+            .unwrap_or_else(|| self.fast_path.clone())
+    }
+
+    fn failover_for(&self, tenant_id: &str) -> FailoverConfig {
+        self.policies
+            .get(tenant_id)
+            .map(|p| p.failover)
+            .unwrap_or_else(|| self.failover.clone())
+    }
+
+    fn fallback_for(&self, tenant_id: &str) -> FallbackPolicy {
+        self.policies
+            .get(tenant_id)
+            .map(|p| p.fallback())
+            .unwrap_or(self.fallback_policy)
+    }
+
+    fn timeout_for(&self, tenant_id: &str) -> Duration {
+        Duration::from_millis(self.failover_for(tenant_id).engine_timeout_ms)
+    }
+
+    /// Output-review settings for a tenant, or the process-local config.
+    pub fn output_review_for(&self, tenant_id: &str) -> OutputReviewConfig {
+        self.policies
+            .get(tenant_id)
+            .map(|p| p.output_review)
+            .unwrap_or_else(|| self.output_review.clone())
+    }
+
+    /// Memory section when Control has published one for this tenant.
+    pub fn memory_for(&self, tenant_id: &str) -> Option<MemorySection> {
+        self.policies.get(tenant_id).map(|p| p.memory)
     }
 
     /// Run the full security pipeline for a `tools/call` request.
@@ -268,7 +318,8 @@ impl SecurityPipeline {
                     }
 
                     // 3. Fast path check
-                    if self.is_fast_path(session, &pre, tool_name) {
+                    if self.is_fast_path(session, &pre, tool_name, &self.fast_path_for(&session.tenant_id))
+                    {
                         self.audit_tool_call(session, tool_name, "allow", None, Some("fast_path"))
                             .await;
                         return PipelineResult::allow("fast_path");
@@ -339,7 +390,9 @@ impl SecurityPipeline {
             vars,
         };
 
-        match self.engine.evaluate(&req).await {
+        let failover = self.failover_for(&session.tenant_id);
+        let timeout = Duration::from_millis(failover.engine_timeout_ms);
+        match self.engine.evaluate(&req, timeout).await {
             Ok(resp) => {
                 if resp.effective_action == "block" {
                     self.audit_tool_call(
@@ -417,7 +470,7 @@ impl SecurityPipeline {
             Err(e) => {
                 warn!("engine evaluate failed: {e}");
                 // Failover logic
-                if pre.sandbox_type == "none" && self.failover.low_risk_fail_open {
+                if pre.sandbox_type == "none" && failover.low_risk_fail_open {
                     self.audit_tool_call(
                         session,
                         tool_name,
@@ -427,7 +480,7 @@ impl SecurityPipeline {
                     )
                     .await;
                     PipelineResult::allow("fail_open")
-                } else if self.failover.high_risk_fail_closed {
+                } else if failover.high_risk_fail_closed {
                     self.audit_tool_call(
                         session,
                         tool_name,
@@ -462,7 +515,7 @@ impl SecurityPipeline {
         tool_name: &str,
         _args: &Value,
     ) -> PipelineResult {
-        match self.fallback_policy {
+        match self.fallback_for(&session.tenant_id) {
             FallbackPolicy::MinimumPrivilege => {
                 if HIGH_RISK_TOOLS.contains(&tool_name) {
                     self.audit_tool_call(
@@ -538,7 +591,7 @@ impl SecurityPipeline {
             .http
             .post(&url)
             .json(&req)
-            .timeout(self.engine.timeout)
+            .timeout(self.timeout_for(&session.tenant_id))
             .send()
             .await
             .map_err(EngineError::Http)?;
@@ -579,7 +632,7 @@ impl SecurityPipeline {
             .http
             .post(&url)
             .json(&verify_req)
-            .timeout(self.engine.timeout)
+            .timeout(self.timeout_for(&session.tenant_id))
             .send()
             .await
             .map_err(EngineError::Http)?;
@@ -596,12 +649,18 @@ impl SecurityPipeline {
     }
 
     /// Determine if this call qualifies for the fast path.
-    fn is_fast_path(&self, session: &Session, pre: &PrecheckResult, tool_name: &str) -> bool {
-        if !self.fast_path.enabled {
+    fn is_fast_path(
+        &self,
+        session: &Session,
+        pre: &PrecheckResult,
+        tool_name: &str,
+        fast_path: &FastPathConfig,
+    ) -> bool {
+        if !fast_path.enabled {
             return false;
         }
         // Cold start: first N calls always go through full pipeline
-        if session.tool_call_count < self.fast_path.warmup_calls {
+        if session.tool_call_count < fast_path.warmup_calls {
             return false;
         }
         // Fast path only for low-risk tools with sandbox_type=none
@@ -609,7 +668,7 @@ impl SecurityPipeline {
             return false;
         }
         // Check session risk
-        if session.session_risk_score >= self.fast_path.risk_threshold {
+        if session.session_risk_score >= fast_path.risk_threshold {
             return false;
         }
         debug!(
@@ -652,11 +711,20 @@ impl SecurityPipeline {
     /// - Text length >= `min_text_length` (default 512 chars), or
     /// - Session risk score >= `min_risk_score` (default 50)
     pub fn should_review_output(&self, text: &str, session_risk_score: u32) -> bool {
-        if !self.output_review.enabled {
+        self.should_review_output_for("", text, session_risk_score)
+    }
+
+    pub fn should_review_output_for(
+        &self,
+        tenant_id: &str,
+        text: &str,
+        session_risk_score: u32,
+    ) -> bool {
+        let cfg = self.output_review_for(tenant_id);
+        if !cfg.enabled {
             return false;
         }
-        text.len() >= self.output_review.min_text_length
-            || session_risk_score >= self.output_review.min_risk_score
+        text.len() >= cfg.min_text_length || session_risk_score >= cfg.min_risk_score
     }
 
     /// Review tool output content via the Engine (reuses `POST /v1/evaluate`).
@@ -690,7 +758,9 @@ impl SecurityPipeline {
             device_id: session.device_id.as_deref(),
             vars,
         };
-        self.engine.evaluate(&req).await
+        self.engine
+            .evaluate(&req, self.timeout_for(&session.tenant_id))
+            .await
     }
 
     /// Returns the output review configuration.
@@ -916,7 +986,7 @@ mod tests {
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
-        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file", &pipeline.fast_path));
     }
 
     #[test]
@@ -932,7 +1002,7 @@ mod tests {
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
-        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file", &pipeline.fast_path));
     }
 
     #[test]
@@ -949,7 +1019,7 @@ mod tests {
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
-        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file", &pipeline.fast_path));
     }
 
     #[test]
@@ -964,7 +1034,7 @@ mod tests {
             sandbox_type: "docker".to_string(),
             timeout_ms: 5000,
         };
-        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file", &pipeline.fast_path));
     }
 
     #[test]
@@ -979,7 +1049,7 @@ mod tests {
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
-        assert!(!pipeline.is_fast_path(&session, &pre, "read_file"));
+        assert!(!pipeline.is_fast_path(&session, &pre, "read_file", &pipeline.fast_path));
     }
 
     #[test]
@@ -996,7 +1066,7 @@ mod tests {
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
-        assert!(pipeline.is_fast_path(&session, &pre, "read_file"));
+        assert!(pipeline.is_fast_path(&session, &pre, "read_file", &pipeline.fast_path));
     }
 
     #[tokio::test]

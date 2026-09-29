@@ -566,3 +566,10 @@ CREATE TABLE IF NOT EXISTS tb_challenge_approvals (
 
 CREATE INDEX IF NOT EXISTS idx_challenge_approvals_tenant_status
     ON tb_challenge_approvals (tenant_id, status);
+
+-- Per-tenant MCP proxy policy pushed over Redis (hot-reloaded by virbius-mcp-proxy).
+CREATE TABLE IF NOT EXISTS tb_proxy_policy (
+    tenant_id   VARCHAR(64) PRIMARY KEY,
+    body        TEXT        NOT NULL,
+    updated_at  TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

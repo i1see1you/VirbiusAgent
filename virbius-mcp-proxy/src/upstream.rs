@@ -37,6 +37,7 @@ use tracing::{debug, warn};
 use futures_util::StreamExt;
 
 use crate::config::UpstreamEntry;
+use crate::policy::PolicyRegistry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamConfig {
@@ -289,8 +290,11 @@ impl UpstreamClient {
 /// tool names are prefixed with `{upstream_name}__`. `tools/call` resolves
 /// the tool name via `tool_routes` and forwards to the correct upstream.
 pub struct UpstreamManager {
-    /// Static upstream configurations.
+    /// Process-local upstreams from toml. Used when the tenant has no pushed policy.
     entries: Vec<UpstreamEntry>,
+    policies: Arc<PolicyRegistry>,
+    /// session_id → tenant_id, so a new connection picks that tenant's upstream list.
+    session_tenant: DashMap<String, String>,
     /// Shared HTTP client (connection pool reuse across sessions).
     http: reqwest::Client,
     timeout: Duration,
@@ -314,11 +318,51 @@ impl UpstreamManager {
 
         Self {
             entries,
+            policies: Arc::new(PolicyRegistry::empty()),
+            session_tenant: DashMap::new(),
             http,
             timeout,
             connections: DashMap::new(),
             tool_routes: DashMap::new(),
         }
+    }
+
+    /// Share the registry filled by the Redis policy subscriber.
+    pub fn use_policies(&mut self, policies: Arc<PolicyRegistry>) {
+        self.policies = policies;
+    }
+
+    /// Remember which tenant a session belongs to before the first upstream connect.
+    pub fn bind_session(&self, session_id: &str, tenant_id: &str) {
+        if !tenant_id.is_empty() {
+            self.session_tenant
+                .insert(session_id.to_string(), tenant_id.to_string());
+        }
+    }
+
+    fn entries_for(&self, session_id: &str) -> Vec<UpstreamEntry> {
+        let tenant = self
+            .session_tenant
+            .get(session_id)
+            .map(|t| t.clone())
+            .unwrap_or_default();
+        if let Some(policy) = self.policies.get(&tenant) {
+            return policy.upstreams;
+        }
+        self.entries.clone()
+    }
+
+    /// Single-upstream check against the session's tenant policy, else the local toml.
+    pub fn is_single_for(&self, session_id: &str) -> bool {
+        self.entries_for(session_id).len() == 1
+    }
+
+    /// Upstream names for this session's tenant policy, else the local toml.
+    pub fn names_for(&self, session_id: &str) -> Vec<String> {
+        self.entries_for(session_id)
+            .into_iter()
+            .map(|e| e.name)
+            .collect()
     }
 
     /// Backward-compatible constructor: create from a single `UpstreamConfig`.
@@ -343,11 +387,6 @@ impl UpstreamManager {
         self.entries.iter().map(|e| e.name.as_str()).collect()
     }
 
-    /// Get the sole upstream name (single-upstream mode only).
-    fn single_name(&self) -> &str {
-        &self.entries[0].name
-    }
-
     /// Get or create an upstream connection for a specific upstream.
     ///
     /// On first call for a (session, upstream) pair, creates a new
@@ -366,11 +405,13 @@ impl UpstreamManager {
             }
         }
 
-        // Find the upstream entry
-        let entry = self
-            .entries
+        // Find the upstream entry in the tenant policy (or local toml).
+        // An already-connected client above is left alone when the list changes.
+        let entries = self.entries_for(session_id);
+        let entry = entries
             .iter()
             .find(|e| e.name == upstream_name)
+            .cloned()
             .ok_or_else(|| UpstreamError::UnknownUpstream(upstream_name.to_string()))?;
 
         // Slow path: create or reconnect
@@ -398,10 +439,12 @@ impl UpstreamManager {
         &self,
         session_id: &str,
     ) -> Result<UpstreamClient, UpstreamError> {
-        if !self.is_single_upstream() {
+        let entries = self.entries_for(session_id);
+        if entries.len() != 1 {
             return Err(UpstreamError::MultiUpstreamMode);
         }
-        self.get_or_connect(session_id, self.single_name()).await
+        let name = entries[0].name.clone();
+        self.get_or_connect(session_id, &name).await
     }
 
     /// Connect to all upstreams concurrently for a session.
@@ -411,7 +454,7 @@ impl UpstreamManager {
         &self,
         session_id: &str,
     ) -> Vec<Result<UpstreamClient, UpstreamError>> {
-        let names: Vec<String> = self.entries.iter().map(|e| e.name.clone()).collect();
+        let names = self.names_for(session_id);
         let mut results = Vec::with_capacity(names.len());
         for name in &names {
             let r = self.get_or_connect(session_id, name).await;
@@ -440,8 +483,14 @@ impl UpstreamManager {
     /// In single-upstream mode, always returns the sole upstream with the
     /// tool name unchanged.
     pub fn route_tool(&self, displayed_name: &str) -> Option<(String, String)> {
-        if self.is_single_upstream() {
-            return Some((self.single_name().to_string(), displayed_name.to_string()));
+        self.route_tool_for("", displayed_name)
+    }
+
+    /// Like `route_tool`, but a pushed tenant policy can switch single/multi mode.
+    pub fn route_tool_for(&self, session_id: &str, displayed_name: &str) -> Option<(String, String)> {
+        let entries = self.entries_for(session_id);
+        if entries.len() == 1 {
+            return Some((entries[0].name.clone(), displayed_name.to_string()));
         }
         self.tool_routes.get(displayed_name).map(|r| r.clone())
     }
@@ -462,6 +511,7 @@ impl UpstreamManager {
             .map(|entry| entry.key().clone())
             .collect();
 
+        self.session_tenant.remove(session_id);
         for key in &keys_to_remove {
             self.connections.remove(key);
             debug!(

@@ -5,6 +5,7 @@
 /// and call `router::route_request` directly.
 pub mod audit;
 pub mod config;
+pub mod policy;
 pub mod egress;
 pub mod error;
 pub mod pipeline;

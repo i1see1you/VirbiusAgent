@@ -14,6 +14,17 @@ pub struct ProxyConfig {
     pub trace: TraceSection,
     #[serde(default)]
     pub memory: MemorySection,
+    /// Redis address used only to subscribe to Control's policy stream.
+    /// Falls back to `audit.redis_url` when empty.
+    #[serde(default)]
+    pub policy: PolicyRedisSection,
+}
+
+/// Where the proxy listens for hot-reloaded policy. Not itself hot-reloaded.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PolicyRedisSection {
+    #[serde(default)]
+    pub redis_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -335,6 +346,9 @@ impl ProxyConfig {
                 cfg.proxy.upstreams = entries;
             }
         }
+        if let Ok(v) = std::env::var("VIRBIUS_POLICY_REDIS_URL") {
+            cfg.policy.redis_url = v;
+        }
 
         // Normalize: if upstreams array is empty, synthesize from single upstream fields
         if cfg.proxy.upstreams.is_empty() && !cfg.proxy.upstream_url.is_empty() {
@@ -392,6 +406,15 @@ impl ProxyConfig {
     /// Check if trace should use Kafka backend.
     pub fn trace_use_kafka(&self) -> bool {
         self.trace.backend == "kafka" && !self.trace.kafka_brokers.is_empty()
+    }
+
+    /// Redis URL for the Control policy stream. Empty disables hot reload.
+    pub fn policy_redis_url(&self) -> &str {
+        if self.policy.redis_url.is_empty() {
+            &self.audit.redis_url
+        } else {
+            &self.policy.redis_url
+        }
     }
 }
 

@@ -8,6 +8,7 @@ use virbius_core::EdgeInitConfig;
 
 use virbius_mcp_proxy::audit::{AuditBackend, AuditSink};
 use virbius_mcp_proxy::config::ProxyConfig;
+use virbius_mcp_proxy::policy::{spawn_subscriber, PolicyRegistry};
 use virbius_mcp_proxy::egress::EgressClient;
 use virbius_mcp_proxy::pipeline::SecurityPipeline;
 use virbius_mcp_proxy::router;
@@ -43,10 +44,14 @@ async fn main() {
         info!("virbius-core bootstrap (non-fatal): {e}");
     }
 
+    let policies = Arc::new(PolicyRegistry::empty());
+
     // Create session manager with TTL from config
-    let session_mgr = Arc::new(SessionManager::with_ttl(Duration::from_secs(
+    let mut session_mgr_inner = SessionManager::with_ttl(Duration::from_secs(
         cfg.proxy.session_ttl_secs,
-    )));
+    ));
+    session_mgr_inner.use_policies(policies.clone());
+    let session_mgr = Arc::new(session_mgr_inner);
 
     // Create audit sink (Kafka only; Redis Stream has been removed)
     let audit_backend = if cfg.audit_use_kafka() {
@@ -78,7 +83,7 @@ async fn main() {
     }
 
     // Create security pipeline
-    let pipeline = Arc::new(SecurityPipeline::new(
+    let mut pipeline_inner = SecurityPipeline::new(
         pubkey_pem.clone(),
         &cfg.security.engine_url,
         cfg.security.fast_path.clone(),
@@ -86,10 +91,15 @@ async fn main() {
         cfg.fallback_policy(),
         audit.clone(),
         cfg.security.output_review.clone(),
-    ));
+    );
+    pipeline_inner.use_policies(policies.clone());
+    let pipeline = Arc::new(pipeline_inner);
 
     // Create upstream manager from normalized config (single or multi-upstream)
-    let upstream_mgr = Arc::new(UpstreamManager::new(cfg.proxy.upstreams.clone(), 30));
+    let mut upstream_inner = UpstreamManager::new(cfg.proxy.upstreams.clone(), 30);
+    upstream_inner.use_policies(policies.clone());
+    let upstream_mgr = Arc::new(upstream_inner);
+    spawn_subscriber(cfg.policy_redis_url().to_string(), policies);
     if upstream_mgr.is_single_upstream() {
         info!("single-upstream mode");
     } else {
