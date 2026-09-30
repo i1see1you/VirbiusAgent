@@ -147,16 +147,34 @@
             </div>
           </div>
           <div v-if="showToolNames" class="rules-field">
-            <label class="rules-field-label" for="rules-field-tools">{{ t('rules.label-tools') }}</label>
-            <el-input id="rules-field-tools" v-model="form.bind_tools" :disabled="isReadOnly" />
+            <span class="rules-field-label" id="rules-field-tools-label">{{ t('rules.label-tools') }}</span>
+            <el-select popper-class="rules-select-popper" v-model="toolSelection"
+              multiple filterable allow-create default-first-option collapse-tags collapse-tags-tooltip
+              :disabled="isReadOnly" :placeholder="t('rules.placeholder-tools')"
+              :aria-labelledby="'rules-field-tools-label'"
+              @change="rules.markDirty">
+              <el-option v-for="id in toolOptions" :key="id" :value="id" :label="id" />
+            </el-select>
           </div>
           <div v-if="showToolNames" class="rules-field">
-            <label class="rules-field-label" for="rules-field-mcp">{{ t('rules.label-mcp') }}</label>
-            <el-input id="rules-field-mcp" v-model="form.bind_mcp_servers" :disabled="isReadOnly" />
+            <span class="rules-field-label" id="rules-field-mcp-label">{{ t('rules.label-mcp') }}</span>
+            <el-select popper-class="rules-select-popper" v-model="mcpSelection"
+              multiple filterable allow-create default-first-option collapse-tags collapse-tags-tooltip
+              :disabled="isReadOnly" :placeholder="t('rules.placeholder-mcp')"
+              :aria-labelledby="'rules-field-mcp-label'"
+              @change="rules.markDirty">
+              <el-option v-for="id in mcpOptions" :key="id" :value="id" :label="id" />
+            </el-select>
           </div>
           <div v-if="showAppIds" class="rules-field">
-            <label class="rules-field-label" for="rules-field-apps">{{ t('rules.label-apps') }}</label>
-            <el-input id="rules-field-apps" v-model="form.bind_app_ids" :disabled="isReadOnly" />
+            <span class="rules-field-label" id="rules-field-apps-label">{{ t('rules.label-apps') }}</span>
+            <el-select popper-class="rules-select-popper" v-model="appIdSelection"
+              multiple filterable collapse-tags collapse-tags-tooltip
+              :disabled="isReadOnly" :placeholder="t('rules.placeholder-app-ids')"
+              :aria-labelledby="'rules-field-apps-label'"
+              @change="rules.markDirty">
+              <el-option v-for="o in appIdOptions" :key="o.id" :value="o.id" :label="o.label" />
+            </el-select>
           </div>
         </div>
       </section>
@@ -357,6 +375,9 @@ const drawerTitle = computed(() => {
 const editMeta = ref<any>(null);
 const saving = ref(false);
 const listCatalog = ref<string[]>([]);
+const appIdCatalog = ref<{ id: string; label: string }[]>([]);
+const toolCatalog = ref<string[]>([]);
+const mcpCatalog = ref<string[]>([]);
 const cumNames = ref<string[]>([]);
 const conditionLeaves = ref<any[]>([]);
 const validateMsg = ref('');
@@ -410,6 +431,28 @@ const bindScopeOptions = computed(() => {
 const isReadOnly = computed(() => !isNew.value && editMeta.value?.rollout_state === 'disabled');
 const showToolNames = computed(() => !isEdgeForm.value && form.bind_scope === 'tool');
 const showAppIds = computed(() => form.bind_scope === 'service' || (!isEdgeForm.value && form.bind_scope === 'tool'));
+function csvSelection(key: 'bind_tools' | 'bind_mcp_servers' | 'bind_app_ids') {
+  return computed<string[]>({
+    get() {
+      return String(form[key] || '').split(',').map(s => s.trim()).filter(Boolean);
+    },
+    set(ids: string[]) {
+      form[key] = ids.map(s => s.trim()).filter(Boolean).join(', ');
+    }
+  });
+}
+const toolSelection = csvSelection('bind_tools');
+const mcpSelection = csvSelection('bind_mcp_servers');
+const appIdSelection = csvSelection('bind_app_ids');
+const toolOptions = computed(() => mergeOptions(toolCatalog.value, toolSelection.value));
+const mcpOptions = computed(() => mergeOptions(mcpCatalog.value, mcpSelection.value));
+const appIdOptions = computed(() => {
+  const byId = new Map(appIdCatalog.value.map(o => [o.id, o]));
+  for (const id of appIdSelection.value) {
+    if (!byId.has(id)) byId.set(id, { id, label: id });
+  }
+  return [...byId.values()];
+});
 
 const editorLanguage = computed(() => {
   if (form.runtime === 'groovy') return 'groovy' as const;
@@ -543,6 +586,50 @@ function defaultBody(layer: string, runtime: string): string {
   if (runtime === 'landlock') return JSON.stringify({ tool_name: 'read_file', read_paths: ['/tmp/data/*'], write_paths: [], exec_paths: ['/usr/bin/cat'] }, null, 2);
   if (runtime === 'gvisor') return JSON.stringify({ runsc_path: '/usr/local/bin/runsc', rootfs_path: '/opt/virbius/rootfs', min_warm: 2 }, null, 2);
   return '';
+}
+
+function mergeOptions(catalog: string[], selected: string[]) {
+  return [...new Set([...catalog, ...selected])].sort((a, b) => a.localeCompare(b));
+}
+
+async function loadTools() {
+  try {
+    const list = await admin<any[]>('/tools');
+    const ids = (list || [])
+      .map((row: any) => String(field(row, 'tool_name', 'toolName') || '').trim())
+      .filter(Boolean);
+    toolCatalog.value = [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+  } catch { /* ignore */ }
+}
+
+async function loadMcpServers() {
+  try {
+    const data = await admin<any>('/trace/search?limit=200');
+    const rows = Array.isArray(data) ? data : (data?.items || []);
+    const ids: string[] = [];
+    for (const row of rows) {
+      const id = String(field(row, 'upstream_name', 'upstreamName') || '').trim();
+      if (id) ids.push(id);
+    }
+    mcpCatalog.value = [...new Set(ids)].sort((a, b) => a.localeCompare(b));
+  } catch { /* ignore */ }
+}
+
+async function loadAppIds() {
+  try {
+    const list = await admin<any[]>('/licenses/list');
+    const seen = new Set<string>();
+    const rows: { id: string; label: string }[] = [];
+    for (const l of list || []) {
+      const id = String(field(l, 'app_id', 'appId') || '').trim();
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      const name = String(field(l, 'agent_name', 'agentName') || '').trim();
+      rows.push({ id, label: name && name !== id ? id + ' · ' + name : id });
+    }
+    rows.sort((a, b) => a.id.localeCompare(b.id));
+    appIdCatalog.value = rows;
+  } catch { /* ignore */ }
 }
 
 async function loadListsAndCums() {
@@ -841,10 +928,17 @@ async function recover() {
   catch (e: any) { feedback.log(e.message, 'err'); }
 }
 
-onMounted(async () => { await loadListsAndCums(); await loadRules(); });
+onMounted(async () => {
+  await Promise.all([loadListsAndCums(), loadAppIds(), loadTools(), loadMcpServers()]);
+  await loadRules();
+});
 onUnmounted(() => window.removeEventListener('keydown', onEsc));
 watch(() => rules.currentLayer, () => { rules.resetDirty(); editorVisible.value = false; loadRules(); });
-watch(() => session.tenant, async () => { editorVisible.value = false; await loadListsAndCums(); await loadRules(); });
+watch(() => session.tenant, async () => {
+  editorVisible.value = false;
+  await Promise.all([loadListsAndCums(), loadAppIds(), loadTools(), loadMcpServers()]);
+  await loadRules();
+});
 watch([filterQ, filterState], () => { page.value = 1; });
 watch([selectedRuleId, editorVisible], () => { nextTick(syncTableHighlight); });
 watch(editorVisible, (open) => {

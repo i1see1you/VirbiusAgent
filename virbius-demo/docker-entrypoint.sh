@@ -26,5 +26,5 @@ if [ ! -f virbius-mcp-proxy.toml ]; then
   echo "[entrypoint] WARNING: virbius-mcp-proxy.toml not found; proxy will use defaults."
 fi
 
-echo "[entrypoint] starting demo app on port ${PORT:-8000} ..."
+echo "[entrypoint] starting demo app on port ${PORT:-8010} ..."
 exec python app.py

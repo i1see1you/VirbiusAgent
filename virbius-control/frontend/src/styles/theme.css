@@ -90,7 +90,7 @@ body {
 .v-nav-sublist { display: none; padding-left: 6px; }
 .v-nav-group.expanded .v-nav-sublist { display: block; }
 .v-sidebar.collapsed .v-nav-sublist { display: none !important; }
-.v-nav-sub { padding-left: 34px; font-size: 12px; }
+.v-nav-sub { padding-left: 22px; font-size: 12px; }
 
 .v-card { background: #fff; border: 1px solid var(--v-card-border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
 .v-card-title { margin: 0 0 8px; font-size: 16px; font-weight: 600; }

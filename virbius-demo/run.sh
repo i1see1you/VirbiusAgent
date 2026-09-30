@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键启动：建虚拟环境 → 装依赖 → 起服务（固定端口 8000）
+# 一键启动：建虚拟环境 → 装依赖 → 起服务（固定端口 8010）
 set -e
 cd "$(dirname "$0")"
 
@@ -15,7 +15,7 @@ fi
 source .venv/bin/activate
 pip install -q -r requirements.txt
 
-echo "🚀 启动 FastMCP SSE（9091-9097）与靶场（端口 8000）..."
+echo "🚀 启动 FastMCP SSE（9091-9097）与靶场（端口 8010）..."
 python -m mcp_runtime.serve &
 SSE_PID=$!
 sleep 1

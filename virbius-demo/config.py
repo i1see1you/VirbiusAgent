@@ -35,8 +35,8 @@ DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
 # Flask
 SECRET_KEY = os.environ.get("SECRET_KEY", secrets.token_hex(16))
 
-# Web 服务端口：固定为 8000（演示/联调时需要稳定地址），可用 PORT 环境变量覆盖
-PORT = int(os.environ.get("PORT", "8000"))
+# Web 服务端口：8010（本机 8000 常被其他服务占用），可用 PORT 环境变量覆盖
+PORT = int(os.environ.get("PORT", "8010"))
 
 # Agent 沙箱：是否走 Docker 容器执行（生产隔离）。本地快速体验可关。
 AGENT_USE_DOCKER = os.environ.get("AGENT_USE_DOCKER", "0") == "1"

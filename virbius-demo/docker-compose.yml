@@ -40,13 +40,13 @@ services:
         - "host.docker.internal:host-gateway"
     container_name: virbius-demo
     ports:
-      - "8000:8000"                # Browser: http://localhost:8000
+      - "8010:8010"                # Browser: http://localhost:8010
     env_file:
       # Inject API keys at runtime (see config.py's .env loader). The .env file is
       # excluded from the image via .dockerignore, so it can be rotated freely.
       - ./.env
     environment:
-      PORT: "8000"
+      PORT: "8010"
       # Same Docker network as the platform; IPv4 service DNS, no IPv6 hairpin.
       VIRBIUS_CONTROL_URL: http://virbius-control:8080
       VIRBIUS_ENGINE_URL: http://virbius-engine:8082
@@ -80,7 +80,7 @@ services:
       # Proxy timeout / engine_url 改 toml 后免重建镜像。
       - ./virbius-mcp-proxy.toml:/app/virbius-mcp-proxy.toml:ro
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8010/"]
       interval: 15s
       timeout: 5s
       retries: 5

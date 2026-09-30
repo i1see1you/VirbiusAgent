@@ -109,14 +109,14 @@ CTF / OWASP 每个对话页在聊天框**之外**都有一个检查器，逐轮�
 ```bash
 cd virbius-demo
 cp .env.example .env        # 编辑 .env 填入你的 DEEPSEEK_API_KEY
-bash run.sh                 # 自动建 venv、装依赖、起服务（固定端口 8000）
+bash run.sh                 # 自动建 venv、装依赖、起服务（固定端口 8010）
 ```
-启动后访问 `http://127.0.0.1:8000`。
+启动后访问 `http://127.0.0.1:8010`。
 
 ### 方式二：Docker Compose（推荐隔离部署）
 ```bash
 cp .env.example .env        # 填入 DEEPSEEK_API_KEY
-docker compose up -d        # 浏览器打开 http://localhost:8000
+docker compose up -d        # 浏览器打开 http://localhost:8010
 ```
 
 > **关于本地小模型（可选）**：demo 的 Docker 容器**不内置** Ollama 模型，而是**复用宿主机上已安装的 Ollama**（方案 B）。容器通过 `host.docker.internal:11434` 访问宿主，compose 里已配好 `OLLAMA_BASE_URL=http://host.docker.internal:11434/v1`。要用「本地·Qwen2.5 0.5B」等本地模型，需先在本机：
@@ -152,7 +152,7 @@ bash agent_sandbox/build.sh         # 构建沙箱镜像
 | `DEEPSEEK_BASE_URL` | API 地址 | `https://api.deepseek.com` |
 | `DEEPSEEK_MODEL` | 模型 | `deepseek-chat` |
 | `OLLAMA_BASE_URL` | 本地小模型地址（容器内指向宿主 Ollama） | `http://localhost:11434/v1` |
-| `PORT` | Web 端口（固定） | `8000` |
+| `PORT` | Web 端口（固定） | `8010` |
 | `AGENT_USE_DOCKER` | Agent 命令执行是否走 Docker | `0` |
 
 > 🔑 Key 只存在本地 `.env`（已 `.gitignore`），不会进入仓库。

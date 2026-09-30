@@ -183,12 +183,16 @@
               <el-button v-if="canUpgrade" type="primary" @click="drUpgrade">{{ t('rollout.btn-upgrade') }}</el-button>
               <el-button v-if="canPause" @click="drPause">{{ t('rollout.btn-pause') }}</el-button>
               <el-button v-if="canRollback" type="danger" @click="drRollback">{{ t('rollout.btn-rollback') }}</el-button>
+              <el-button v-if="canRollback" @click="drRedeploy">{{ t('rollout.btn-redeploy') }}</el-button>
               <el-button v-if="canFinalize" @click="drFinalize">{{ t('rollout.btn-finalize') }}</el-button>
               <el-button @click="drRefresh">{{ t('rollout.btn-refresh') }}</el-button>
               <el-checkbox v-model="autoRefresh">{{ t('rollout.auto-refresh-on') }}</el-checkbox>
             </div>
           </template>
-          <p v-if="drError" id="dr-action-error" class="ro-field-error" role="alert" tabindex="-1">{{ drError }}</p>
+          <p v-if="drError" id="dr-action-error" class="ro-field-error" role="alert" tabindex="-1">
+            {{ drError }}
+            <span v-if="canRollback">{{ t('dr.redeploy-after-fail') }}</span>
+          </p>
 
           <div v-if="active" style="margin-top:12px">
             <el-table :data="[active]" size="small" border stripe>
@@ -517,6 +521,16 @@ function upgradePreview(row: any) {
 function formatSkipList(steps: number[]) {
   return steps.map((s) => s + '%').join(t('dr.skip-join'));
 }
+function prepareScope(row: any) {
+  const events = Array.isArray(row?.events) ? row.events : [];
+  const prep = [...events].reverse().find((e: any) => String(e?.event_type || '').toLowerCase() === 'prepare');
+  const raw = String(prep?.layer || '');
+  if (raw === 'cloud') return { layer: 'cloud', labelKey: 'dr.prepare-engine' };
+  if (raw === 'gateway') return { layer: 'gateway', labelKey: 'dr.prepare-gateway' };
+  if (raw === 'edge') return { layer: 'edge', labelKey: 'dr.prepare-edge' };
+  if (raw === 'falco') return { layer: 'falco', labelKey: 'dr.prepare-falco' };
+  return { layer: '', labelKey: 'dr.prepare-all' };
+}
 function deployNote(fallbackKey: string) {
   return drDescription.value.trim() || t(fallbackKey);
 }
@@ -798,6 +812,20 @@ async function drPause() {
     });
     await drRefresh();
   } catch (e: any) { setDrError(t('dr.pause-fail', [e.message])); }
+}
+async function drRedeploy() {
+  if (!active.value) return;
+  const scope = prepareScope(active.value);
+  if (!await confirmAction(t('dr.redeploy-confirm'), 'warning')) return;
+  drError.value = '';
+  try {
+    await withActiveDid(async did => {
+      await admin('/deploy-rollout/' + did + '/rollback', { method: 'POST', body: JSON.stringify({ note: deployNote('dr.note-redeploy') }) });
+    });
+    await drRefresh();
+    feedback.log(t('dr.redeploy-rolled-back'), 'ok');
+    await openVersionModal(scope.layer, t(scope.labelKey));
+  } catch (e: any) { setDrError(t('dr.redeploy-fail', [e.message])); }
 }
 async function drRollback() {
   if (!await confirmAction(t('dr.rollback-confirm'), 'error')) return;

@@ -94,47 +94,97 @@
       "type": "node",
       "request": "launch",
       "name": "Virbius Control UI (Vite)",
-      "runtimeExecutable": "npm",
+      "runtimeExecutable": "/opt/homebrew/bin/npm",
       "runtimeArgs": ["run", "dev"],
       "cwd": "${workspaceFolder}/virbius-control/frontend",
       "console": "integratedTerminal",
+      "env": {
+        "PATH": "/opt/homebrew/bin:${env:PATH}"
+      },
       "preLaunchTask": "frontend: npm install",
       "serverReadyAction": {
         "pattern": "Local:\\s+http://localhost:([0-9]+)",
         "uriFormat": "http://localhost:%s/ui/",
         "action": "openExternally"
       }
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "name": "Virbius Demo MCP (9091-9097)",
+      "module": "mcp_runtime.serve",
+      "python": "${workspaceFolder}/virbius-demo/.venv/bin/python",
+      "cwd": "${workspaceFolder}/virbius-demo",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "preLaunchTask": "demo: prepare"
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "name": "Virbius Demo (:8010)",
+      "program": "${workspaceFolder}/virbius-demo/app.py",
+      "python": "${workspaceFolder}/virbius-demo/.venv/bin/python",
+      "cwd": "${workspaceFolder}/virbius-demo",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "preLaunchTask": "demo: prepare",
+      "env": {
+        "PORT": "8010",
+        "VIRBIUS_CONTROL_URL": "http://127.0.0.1:8080",
+        "VIRBIUS_ENGINE_URL": "http://127.0.0.1:8082"
+      },
+      "serverReadyAction": {
+        "pattern": "http://127\\.0\\.0\\.1:([0-9]+)",
+        "uriFormat": "http://127.0.0.1:%s/",
+        "action": "openExternally"
+      }
     }
   ],
   "compounds": [
     {
+      "name": "Virbius Demo",
+      "configurations": [
+        "Virbius Demo MCP (9091-9097)",
+        "Virbius Demo (:8010)"
+      ],
+      "stopAll": true,
+      "preLaunchTask": "demo: prepare"
+    },
+    {
       "name": "Virbius: Control + Engine (MySQL/Redis/Kafka/Ollama)",
       "configurations": [
         "Virbius Engine (MySQL/Redis/Kafka/Ollama)",
-        "Virbius Control (MySQL/Redis/Kafka/Ollama)"
+        "Virbius Control (MySQL/Redis/Kafka/Ollama)",
+        "Virbius Demo MCP (9091-9097)",
+        "Virbius Demo (:8010)"
       ],
       "stopAll": true,
-      "preLaunchTask": "prelaunch: infra and compile"
+      "preLaunchTask": "prelaunch: infra compile and demo"
     },
     {
       "name": "Virbius: Control + Engine + UI",
       "configurations": [
         "Virbius Engine (MySQL/Redis/Kafka/Ollama)",
         "Virbius Control (MySQL/Redis/Kafka/Ollama)",
-        "Virbius Control UI (Vite)"
+        "Virbius Control UI (Vite)",
+        "Virbius Demo MCP (9091-9097)",
+        "Virbius Demo (:8010)"
       ],
       "stopAll": true,
-      "preLaunchTask": "prelaunch: infra and compile"
+      "preLaunchTask": "prelaunch: infra compile and demo"
     },
     {
       "name": "Virbius: Control + Engine + Auth (operator JWT)",
       "configurations": [
         "Virbius Engine (MySQL/Redis/Kafka/Ollama)",
         "Virbius Control (operator JWT + Auth :8083)",
-        "Virbius Auth (SQLite :8083)"
+        "Virbius Auth (SQLite :8083)",
+        "Virbius Demo MCP (9091-9097)",
+        "Virbius Demo (:8010)"
       ],
       "stopAll": true,
-      "preLaunchTask": "prelaunch: infra and compile"
+      "preLaunchTask": "prelaunch: infra compile and demo"
     },
     {
       "name": "Virbius: Control + Engine + Auth + UI",
@@ -142,10 +192,12 @@
         "Virbius Engine (MySQL/Redis/Kafka/Ollama)",
         "Virbius Control (operator JWT + Auth :8083)",
         "Virbius Auth (SQLite :8083)",
-        "Virbius Control UI (Vite)"
+        "Virbius Control UI (Vite)",
+        "Virbius Demo MCP (9091-9097)",
+        "Virbius Demo (:8010)"
       ],
       "stopAll": true,
-      "preLaunchTask": "prelaunch: infra and compile"
+      "preLaunchTask": "prelaunch: infra compile and demo"
     }
   ]
 }
