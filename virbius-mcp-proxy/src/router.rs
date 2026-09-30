@@ -107,7 +107,8 @@ pub async fn route_request(
                 } else {
                     // Multi-upstream: forward to all (best-effort)
                     for name in upstream_mgr.names_for(&session_id) {
-                        if let Ok(upstream) = upstream_mgr.get_or_connect(&session_id, &name).await {
+                        if let Ok(upstream) = upstream_mgr.get_or_connect(&session_id, &name).await
+                        {
                             let _ = upstream.forward_notification(request).await;
                         }
                     }
@@ -751,9 +752,9 @@ async fn handle_tools_call(
     let memory_interceptor = memory_interceptor_for(pipeline, &session.tenant_id);
     let pushed_memory = pipeline.memory_for(&session.tenant_id);
     let memory_write = memory_interceptor.is_memory_write_tool(&original_tool_name)
-        || pushed_memory.as_ref().is_some_and(|m| {
-            m.enabled && tool_pattern_hit(&m.tool_patterns, &original_tool_name)
-        });
+        || pushed_memory
+            .as_ref()
+            .is_some_and(|m| m.enabled && tool_pattern_hit(&m.tool_patterns, &original_tool_name));
     if memory_interceptor.is_enabled() && memory_write {
         // Extract content from args (assume there's a "content" field)
         let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
@@ -1411,7 +1412,9 @@ fn output_masking_skipped(tool_name: &str) -> bool {
 fn memory_interceptor_for(pipeline: &SecurityPipeline, tenant_id: &str) -> MemoryInterceptor {
     let base = MemoryInterceptor::from_manifest();
     match pipeline.memory_for(tenant_id) {
-        Some(mem) if mem.enabled => base.with_enabled(true).with_max_entry_size(mem.max_entry_size),
+        Some(mem) if mem.enabled => base
+            .with_enabled(true)
+            .with_max_entry_size(mem.max_entry_size),
         _ => base,
     }
 }

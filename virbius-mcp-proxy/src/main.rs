@@ -8,9 +8,9 @@ use virbius_core::EdgeInitConfig;
 
 use virbius_mcp_proxy::audit::{AuditBackend, AuditSink};
 use virbius_mcp_proxy::config::ProxyConfig;
-use virbius_mcp_proxy::policy::{spawn_subscriber, PolicyRegistry};
 use virbius_mcp_proxy::egress::EgressClient;
 use virbius_mcp_proxy::pipeline::SecurityPipeline;
+use virbius_mcp_proxy::policy::{spawn_subscriber, PolicyRegistry};
 use virbius_mcp_proxy::router;
 use virbius_mcp_proxy::session::SessionManager;
 use virbius_mcp_proxy::trace_collector::{TraceBackend, TraceCollector};
@@ -47,9 +47,8 @@ async fn main() {
     let policies = Arc::new(PolicyRegistry::empty());
 
     // Create session manager with TTL from config
-    let mut session_mgr_inner = SessionManager::with_ttl(Duration::from_secs(
-        cfg.proxy.session_ttl_secs,
-    ));
+    let mut session_mgr_inner =
+        SessionManager::with_ttl(Duration::from_secs(cfg.proxy.session_ttl_secs));
     session_mgr_inner.use_policies(policies.clone());
     let session_mgr = Arc::new(session_mgr_inner);
 

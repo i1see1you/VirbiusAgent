@@ -318,8 +318,12 @@ impl SecurityPipeline {
                     }
 
                     // 3. Fast path check
-                    if self.is_fast_path(session, &pre, tool_name, &self.fast_path_for(&session.tenant_id))
-                    {
+                    if self.is_fast_path(
+                        session,
+                        &pre,
+                        tool_name,
+                        &self.fast_path_for(&session.tenant_id),
+                    ) {
                         self.audit_tool_call(session, tool_name, "allow", None, Some("fast_path"))
                             .await;
                         return PipelineResult::allow("fast_path");

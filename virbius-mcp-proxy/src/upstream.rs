@@ -487,7 +487,11 @@ impl UpstreamManager {
     }
 
     /// Like `route_tool`, but a pushed tenant policy can switch single/multi mode.
-    pub fn route_tool_for(&self, session_id: &str, displayed_name: &str) -> Option<(String, String)> {
+    pub fn route_tool_for(
+        &self,
+        session_id: &str,
+        displayed_name: &str,
+    ) -> Option<(String, String)> {
         let entries = self.entries_for(session_id);
         if entries.len() == 1 {
             return Some((entries[0].name.clone(), displayed_name.to_string()));

@@ -114,17 +114,15 @@ async fn run_subscriber(url: &str, registry: &PolicyRegistry) -> redis::RedisRes
             .xread_options(
                 &[STREAM_KEY],
                 &[last_id.as_str()],
-                &redis::streams::StreamReadOptions::default().block(5000).count(16),
+                &redis::streams::StreamReadOptions::default()
+                    .block(5000)
+                    .count(16),
             )
             .await?;
         for key in reply.keys {
             for id in key.ids {
                 last_id = id.id.clone();
-                let Some(tenant) = id
-                    .map
-                    .get("tenant_id")
-                    .and_then(redis_string)
-                else {
+                let Some(tenant) = id.map.get("tenant_id").and_then(redis_string) else {
                     continue;
                 };
                 apply_tenant(&mut conn, registry, &tenant).await;
@@ -222,7 +220,10 @@ mod tests {
             "acme".into(),
             serde_json::from_str(r#"{"fallback_policy":"audit_only"}"#).unwrap(),
         );
-        assert_eq!(reg.get("acme").unwrap().fallback(), FallbackPolicy::AuditOnly);
+        assert_eq!(
+            reg.get("acme").unwrap().fallback(),
+            FallbackPolicy::AuditOnly
+        );
         assert!(reg.get("other").is_none());
     }
 }
