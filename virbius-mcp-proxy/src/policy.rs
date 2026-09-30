@@ -143,7 +143,7 @@ async fn load_existing(conn: &mut redis::aio::MultiplexedConnection, registry: &
             continue;
         };
         if let Ok(raw) = conn.get::<_, String>(&key).await {
-            store_raw(registry, &tenant, &raw);
+            store_raw(registry, tenant, &raw);
         }
     }
 }

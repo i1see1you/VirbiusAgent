@@ -407,7 +407,7 @@ async fn handle_tools_list(
         }
     };
 
-    if upstream_mgr.is_single_for(&session_id) {
+    if upstream_mgr.is_single_for(session_id) {
         // ── Single-upstream mode (original behavior) ──
         let upstream = match upstream_mgr.get_or_connect_single(session_id).await {
             Ok(u) => u,
@@ -436,7 +436,7 @@ async fn handle_tools_list(
         }
     } else {
         // ── Multi-upstream mode ──
-        let upstream_names = upstream_mgr.names_for(&session_id);
+        let upstream_names = upstream_mgr.names_for(session_id);
 
         // Fetch tools/list from all upstreams, tracking which upstream
         // each tool came from.
@@ -444,7 +444,7 @@ async fn handle_tools_list(
         let mut last_err: Option<String> = None;
 
         for name in &upstream_names {
-            let upstream = match upstream_mgr.get_or_connect(session_id, &name).await {
+            let upstream = match upstream_mgr.get_or_connect(session_id, name).await {
                 Ok(u) => u,
                 Err(e) => {
                     warn!("upstream {} connect failed for tools/list: {}", name, e);
@@ -704,9 +704,9 @@ async fn handle_tools_call(
                 // Tool not in routes. In multi-upstream mode, this means tools/list
                 // wasn't called or the tool doesn't exist. Try to use the displayed
                 // name as-is and pick the first upstream as best-effort.
-                if upstream_mgr.is_single_for(&session_id) {
+                if upstream_mgr.is_single_for(session_id) {
                     (
-                        upstream_mgr.names_for(&session_id)[0].to_string(),
+                        upstream_mgr.names_for(session_id)[0].to_string(),
                         displayed_tool_name.to_string(),
                     )
                 } else {
@@ -716,7 +716,7 @@ async fn handle_tools_call(
                         // Has a prefix — try to find the upstream by the prefix
                         let prefix_end = displayed_tool_name.find(TOOL_PREFIX_SEP).unwrap_or(0);
                         let possible_upstream = &displayed_tool_name[..prefix_end];
-                        let names = upstream_mgr.names_for(&session_id);
+                        let names = upstream_mgr.names_for(session_id);
                         if names.iter().any(|n| n == possible_upstream) {
                             (possible_upstream.to_string(), stripped.to_string())
                         } else {
