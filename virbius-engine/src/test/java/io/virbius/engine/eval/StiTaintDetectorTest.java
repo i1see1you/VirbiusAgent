@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.virbius.engine.config.GuardDetectProperties;
 import io.virbius.engine.eval.PromptLlmClient.CompleteResult;
 import io.virbius.engine.eval.StiTaintDetector.TaintResult;
+import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -36,7 +37,15 @@ class StiTaintDetectorTest {
     @BeforeEach
     void setUp() {
         GuardDetectProperties props = new GuardDetectProperties(
-                true, true, SYS_PROMPT, SYS_PROMPT, 512, 8192, 5000, true);
+                true,
+                true,
+                SYS_PROMPT,
+                SYS_PROMPT,
+                512,
+                8192,
+                5000,
+                true,
+                List.of("Jailbreak", "Agent Tool Misuse"));
         llmClient = mock(PromptLlmClient.class);
         detector = new StiTaintDetector(props, llmClient, new PromptAuditJsonParser(new ObjectMapper()));
     }
@@ -63,6 +72,42 @@ class StiTaintDetectorTest {
         assertTrue(r.tainted());
         assertEquals("block", r.action());
         assertEquals("Jailbreak", r.detectedPattern());
+    }
+
+    @Test
+    void allowWhenCategoryIsNotInBlockList() {
+        // PII is a safety label but not indirect injection: allowed (DLP/masking's job).
+        when(llmClient.completeDetail(any(), any()))
+                .thenReturn(new CompleteResult("{\"hit_rule\": true, \"triggered_id\": \"PII\"}", null));
+
+        TaintResult r = detector.detect("http_get", LONG_RESULT, 0);
+
+        assertFalse(r.tainted());
+        assertEquals("allow", r.action());
+    }
+
+    @Test
+    void blocksOnlyConfiguredCategories() {
+        GuardDetectProperties custom = new GuardDetectProperties(
+                true,
+                true,
+                SYS_PROMPT,
+                SYS_PROMPT,
+                512,
+                8192,
+                5000,
+                true,
+                List.of("PII"));
+        StiTaintDetector customDetector =
+                new StiTaintDetector(custom, llmClient, new PromptAuditJsonParser(new ObjectMapper()));
+
+        when(llmClient.completeDetail(any(), any()))
+                .thenReturn(new CompleteResult("{\"hit_rule\": true, \"triggered_id\": \"Jailbreak\"}", null));
+        assertFalse(customDetector.detect("http_get", LONG_RESULT, 0).tainted());
+
+        when(llmClient.completeDetail(any(), any()))
+                .thenReturn(new CompleteResult("{\"hit_rule\": true, \"triggered_id\": \"PII\"}", null));
+        assertTrue(customDetector.detect("http_get", LONG_RESULT, 0).tainted());
     }
 
     @Test

@@ -80,3 +80,10 @@ scripts/falco-full-chain/falco-config-subscriber
 
 # /new-feature IDE workspace
 VirbiusAgent--*.code-workspace
+
+# Archive files and eval workspace
+*.tar.gz
+virbius-eval/
+
+# Intent workspace
+virbius-intent/

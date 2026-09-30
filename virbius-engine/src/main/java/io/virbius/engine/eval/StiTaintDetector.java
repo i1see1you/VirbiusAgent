@@ -19,9 +19,10 @@ import org.springframework.stereotype.Component;
  *   <li><b>LLM detection</b>: VirbiusGuard (virbiusguard) model for semantic injection detection</li>
  * </ol>
  *
- * <p>When injection is detected, the result is always <b>block</b> — no sanitize path.
- * Cost control is achieved by skipping LLM invocation for short, low-risk, non-external
- * tool results.
+ * <p>Only configured {@code taint-block-categories} (default Jailbreak, Agent Tool Misuse)
+ * block as indirect injection; the remaining safety labels (e.g. PII) are allowed — PII is
+ * DLP/masking's job. Cost control is achieved by skipping LLM invocation for short, low-risk,
+ * non-external tool results.
  */
 @Component
 public class StiTaintDetector {
@@ -103,10 +104,23 @@ public class StiTaintDetector {
         }
 
         String reason = audit.reason() != null ? audit.reason() : "llm_taint_detected";
+        if (!isBlockingCategory(audit)) {
+            log.info(
+                    "taint LLM hit ignored (category not in block list): tool={} reason={}",
+                    toolName,
+                    reason);
+            return TaintResult.allow();
+        }
         log.info("taint LLM hit: tool={} reason={}", toolName, reason);
 
-        // 3. LLM detected injection — block directly (no sanitize)
+        // 3. Configured indirect-injection category — block directly (no sanitize)
         return TaintResult.block(reason, "llm:" + reason);
+    }
+
+    /** A hit blocks only if its category is in {@code taint-block-categories}. */
+    private boolean isBlockingCategory(PromptAuditResult audit) {
+        var blocking = guardProps.taintBlockCategories();
+        return blocking.contains(audit.triggeredId()) || blocking.contains(audit.reason());
     }
 
     private boolean isExternalDataSource(String toolName) {

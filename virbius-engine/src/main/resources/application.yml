@@ -62,6 +62,9 @@ virbius:
   guard-detect:
     injection-enabled: ${VIRBIUS_INJECTION_DETECT_ENABLED:true}
     taint-enabled: ${VIRBIUS_TAINT_DETECT_ENABLED:true}
+    # Guard categories whose tool-return hits are treated as indirect injection
+    # and blocked (the rest, e.g. PII, are allowed; PII is DLP/masking's job).
+    taint-block-categories: ${VIRBIUS_TAINT_BLOCK_CATEGORIES:Jailbreak,Agent Tool Misuse}
     timeout-ms: ${VIRBIUS_GUARD_LLM_TIMEOUT_MS:5000}
     fail-open: true
     taint-min-content-length: 512
