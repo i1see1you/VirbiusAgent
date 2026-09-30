@@ -77,3 +77,6 @@ hindsight.toml
 .cursor/bug-evidence/
 .dev-worktree/
 scripts/falco-full-chain/falco-config-subscriber
+
+# /new-feature IDE workspace
+VirbiusAgent--*.code-workspace

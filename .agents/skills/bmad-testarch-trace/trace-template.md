@@ -63,6 +63,9 @@ Note: This workflow does not generate tests. If gaps exist, run `/bmad-testarch-
   - Missing: {MISSING_SCENARIO_1}
   - Missing: {MISSING_SCENARIO_2}
 
+- **Considered and rejected:** (if any test claims this criterion without establishing it)
+  - `{TEST_ID}` - {TEST_FILE}:{LINE}: {WHY_ITS_ASSERTIONS_DO_NOT_ESTABLISH_THE_CRITERION}
+
 - **Recommendation:** {RECOMMENDATION_TEXT}
 
 ---
@@ -71,11 +74,11 @@ Note: This workflow does not generate tests. If gaps exist, run `/bmad-testarch-
 
 - **Coverage:** FULL ✅
 - **Tests:**
-  - `1.3-E2E-001` - tests/e2e/auth.spec.ts:12
+  - `1.3-E2E-001` - `tests/e2e/auth.spec.ts:12`
     - **Given:** User has valid credentials
     - **When:** User submits login form
     - **Then:** User is redirected to dashboard
-  - `1.3-UNIT-001` - tests/unit/auth-service.spec.ts:8
+  - `1.3-UNIT-001` - `tests/unit/auth-service.spec.ts:8`
     - **Given:** Valid email and password hash
     - **When:** validateCredentials is called
     - **Then:** Returns user object
@@ -86,7 +89,7 @@ Note: This workflow does not generate tests. If gaps exist, run `/bmad-testarch-
 
 - **Coverage:** PARTIAL ⚠️
 - **Tests:**
-  - `1.3-E2E-003` - tests/e2e/auth.spec.ts:44
+  - `1.3-E2E-003` - `tests/e2e/auth.spec.ts:44`
     - **Given:** User requests password reset
     - **When:** User clicks reset link in email
     - **Then:** User can set new password
@@ -104,6 +107,8 @@ Note: This workflow does not generate tests. If gaps exist, run `/bmad-testarch-
 ### Gap Analysis
 
 #### Critical Gaps (BLOCKER) ❌
+
+Every P0 criterion below FULL coverage, whatever its status. Gate Rule 1 requires P0 coverage at 100% and counts only FULL, so each entry here fails the gate on its own.
 
 {CRITICAL_GAP_COUNT} gaps found. **Do not release until resolved.**
 
@@ -253,17 +258,17 @@ Note: This workflow does not generate tests. If gaps exist, run `/bmad-testarch-
 
 #### Example Recommendations
 
-**Immediate Actions (Before PR Merge)**
+##### Immediate Actions (Before PR Merge)
 
 1. **Add P1 Password Reset Tests** - Implement `1.3-API-001` for email service integration and `1.3-E2E-004` for error path validation. P1 coverage currently at 80%, target is 90%.
 2. **Optimize Slow E2E Test** - Refactor `1.3-E2E-001` to use faster fixture setup. Currently 145s, target is <90s.
 
-**Short-term Actions (This Milestone)**
+##### Short-term Actions (This Milestone)
 
 1. **Enhance P2 Coverage** - Add E2E validation for session timeout (`1.3-E2E-005`). Currently UNIT-ONLY coverage.
 2. **Split Large Test File** - Break `1.3-UNIT-005` (1020 lines) into multiple focused test files (≤1000 lines each).
 
-**Long-term Actions (Backlog)**
+##### Long-term Actions (Backlog)
 
 1. **Enrich P3 Coverage** - Add tests for edge cases in P3 criteria if time permits.
 
@@ -437,6 +442,31 @@ Note: This workflow does not generate tests. If gaps exist, run `/bmad-testarch-
 
 ---
 
+### Waiver Register Review
+
+Read from `{waiver_register_input}`. Every waiver filed against this gate is listed, whether or not it holds up. No waiver on this list changed the decision above: a waiver is a human override applied after the fact, and the workflow never derives one.
+
+**Waivers filed:** {WAIVER_COUNT} ({VALID_COUNT} valid, {INVALID_COUNT} invalid)
+
+| ID          | Covers         | Priority   | Valid | Failed checks      |
+| ----------- | -------------- | ---------- | ----- | ------------------ |
+| {WAIVER_ID} | {CRITERION_ID} | {PRIORITY} | ✅/❌ | {FAILED_CHECK_IDS} |
+
+Check ids are defined in the "Waiver Scenarios" section of `checklist.md`. A gap covered by a waiver stays in the gap analysis and stays in every coverage percentage.
+
+**Example:**
+
+| ID  | Covers | Priority | Valid | Failed checks                            |
+| --- | ------ | -------- | ----- | ---------------------------------------- |
+| W-4 | AC-12  | P2       | ✅    | none                                     |
+| W-5 | AC-6   | P1       | ❌    | `expiry_present`, `remediation_due_date` |
+
+> W-5 states no expiry date and its remediation plan carries no due date, so it is an open-ended acceptance of a P1 gap. AC-6 remains in the high-priority gap list.
+
+Delete this section when no waiver register exists.
+
+---
+
 ### {Section: Delete if not applicable}
 
 #### Residual Risks (For CONCERNS or WAIVED)
@@ -456,6 +486,8 @@ List unresolved P1/P2 issues that don't block release but should be tracked:
 ---
 
 #### Waiver Details (For WAIVED only)
+
+The fields below are the waiver contract: the `contract_complete` check in `checklist.md`'s "Waiver Scenarios" section requires every one of them. That section holds the validity rules; this one holds the fields.
 
 **Original Decision**: ❌ FAIL
 

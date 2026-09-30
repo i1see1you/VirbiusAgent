@@ -2,10 +2,12 @@
 name: /upgrade-dev-workflow
 id: upgrade-dev-workflow
 category: Workflow
-description: 拉取最新 dev-workflow 并刷新项目 rules/skills 模板（implementation-qa、dbhub、ponytail 等）
+description: 拉取最新 dev-workflow 并刷新项目 rules/skills 模板（implementation-qa、dbhub、ponytail、核心斜杠命令等）
 ---
 
 使用通用技能 **`dev-workflow`**：`~/.cursor/skills/dev-workflow/`
+
+**输出：** 先 Read `~/.cursor/skills/i-have-adhd/SKILL.md`（或项目 `.cursor/skills/i-have-adhd/SKILL.md`），按该 skill 简化对用户回复。缺则继续并提示 `/install-skills i-have-adhd`。详见 `conventions/adhd-output.md`。
 
 读取 `workflows/upgrade-dev-workflow.md` 并执行：
 

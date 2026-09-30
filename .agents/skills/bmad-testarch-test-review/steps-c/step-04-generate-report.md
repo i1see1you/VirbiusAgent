@@ -43,6 +43,20 @@ Use `test-review-template.md` to produce `{outputFile}` including:
 - Warnings and recommendations
 - Context references (story/test-design if available)
 - Coverage boundary note: `test-review` does not score coverage. Direct coverage findings to `trace`.
+- `**Execution Mode**:` in the Executive Summary, set to step 3F's `execution_mode`, which is the mode
+  step-03's capability probe actually resolved. Write `agent-team`, `subagent`, or `sequential`; never
+  `auto`, which is the request rather than the result. `cli/lib/parse-report.js` reads this line into
+  the verdict, so a headless run that silently fell back to `sequential` says so in its own artifact.
+
+Build `### Key Weaknesses` only from `reviewSummary.key_weaknesses`. Each
+rendered bullet must keep its `[row]` prefix and must have a matching scored
+finding under Critical Issues or Recommendations. Put useful unscored ideas from
+`reviewSummary.advisory_observations` under `### Advisory Observations`.
+
+Omit either subsection when its collection is empty. Never render an empty or
+literal `n/a` item. In particular, out-of-scope coverage, optional library
+adoption, and convention or applicability checks whose gate is closed are not
+Key Weaknesses.
 
 **Reproduce the `## Quality Score Breakdown` ledger in the template's exact line form**, inside its fenced block, with the bonus carrying a leading plus (`Total Bonus:             +0` for a zero bonus). Headless runners parse those lines to compute the authoritative score, so the rendering is contract rather than presentation.
 
@@ -54,7 +68,9 @@ Before finalizing, review the complete output document for quality:
 
 1. **Remove duplication**: Progressive-append workflow may have created repeated sections — consolidate
 2. **Verify consistency**: Ensure terminology, risk scores, and references are consistent throughout
-3. **Check completeness**: All template sections should be populated or explicitly marked N/A
+3. **Check completeness**: Required template sections should be populated.
+   Omit optional Key Weaknesses and Advisory Observations sections when empty;
+   never fill list items with N/A.
 4. **Format cleanup**: Ensure markdown formatting is clean (tables aligned, headers consistent, no orphaned references). **The `## Quality Score Breakdown` ledger is exempt from this pass** — leave its lines exactly as the template prints them, and never reflow it into a table to satisfy the alignment rule.
 
 ---

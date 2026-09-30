@@ -7,6 +7,8 @@ description: 启动 dev 服务 → 读取 requirement → 引导 OpenSpec（expl
 
 worktree 内 **`/new-feature`** / **`/auto-fix-bug`** 建仓后的标准入口。**硬触发**：先起服务，再 OpenSpec。
 
+**输出：** 先 Read `~/.cursor/skills/i-have-adhd/SKILL.md`（或项目 `.cursor/skills/i-have-adhd/SKILL.md`），按该 skill 简化对用户回复。缺则继续并提示 `/install-skills i-have-adhd`。详见 `conventions/adhd-output.md`。
+
 **自动（建仓打开新窗口）**：`open-worktree-in-ide.sh` 在存在 `.session-pending` 时默认 **后台** 跑 `run-opsx-bootstrap-services.sh`（子模块 + dev 服务）。  
 **仍须在 Agent 发送 `/opsx-bootstrap`**（或首条消息触发 bootstrap 规则）完成 OpenSpec 四选一 AskQuestion——Cursor 无法在无用户操作时自动执行 slash 命令。
 
@@ -19,18 +21,18 @@ SKILL_ROOT="$HOME/.cursor/skills/dev-workflow"
 
 ## 2. 启动 dev 服务（必须，除非已就绪）
 
-若 **`.dev-worktree/services.json`** 不存在或 `status` ≠ `ready`：
+若 **`dev_workflow/dev-worktree/services.json`** 不存在或 `status` ≠ `ready`：
 
 ```bash
 SKILL_ROOT="$HOME/.cursor/skills/dev-workflow"
 "$SKILL_ROOT/scripts/start-worktree-dev-services.sh" --worktree "$(pwd)"
 ```
 
-| exit | 动作 |
+| exit / status | 动作 |
 |------|------|
-| 0 | 读取 `services.json` 的 `backend_url` / `frontend_url`，**告知用户** |
+| 0 且 `status=ready` | 读取 `backend_url` / `frontend_url`，**告知用户** |
+| 0 且 `status=skipped`（无钩子） | 继续 OpenSpec，不追问重试 |
 | 2 | 日志疑似 **代码问题** → **AskQuestion radio**（排查代码 / 跳过启动 / 手动启动后继续），**不得擅自改业务代码** |
-| 3 | 无项目钩子 → 提示手动启动或添加 `.cursor/dev-worktree-start.sh` |
 | 1 | 环境/基础设施问题 → 报告日志路径，**AskQuestion radio** 是否重试 |
 
 非代码问题（端口、依赖、子模块）脚本会 **自动修复并重试**。
@@ -39,8 +41,8 @@ SKILL_ROOT="$HOME/.cursor/skills/dev-workflow"
 
 ## 3. 读取需求
 
-- `.new-feature/requirement.md`
-- `.new-feature/meta.yaml` → `change_id`（及 `source: auto-fix-bug` 时的 `bug_id`）
+- `dev_workflow/new-feature/requirement.md`
+- `dev_workflow/new-feature/meta.yaml` → `change_id`（及 `source: auto-fix-bug` 时的 `bug_id`）
 
 ## 4. OpenSpec 四选一
 
@@ -53,7 +55,7 @@ SKILL_ROOT="$HOME/.cursor/skills/dev-workflow"
 | `opsx-ff` | `/opsx-ff {requirement}` |
 | `opsx-continue` | `/opsx-continue {change_id}` |
 
-空选或多选 → 重问。用户选定后在 **本 worktree** 执行；删除 `.new-feature/.session-pending`（若存在）。
+空选或多选 → 重问。用户选定后在 **本 worktree** 执行；删除 `dev_workflow/new-feature/.session-pending`（若存在）。
 
 探索时更新 `openspec/changes/<change_id>/explore.md`。
 

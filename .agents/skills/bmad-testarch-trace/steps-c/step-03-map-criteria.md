@@ -40,7 +40,11 @@ Create the traceability matrix linking the resolved oracle items to tests.
 For each resolved oracle item (formal requirement, endpoint/spec item, or synthetic journey):
 
 - Map to matching tests
-- Mark coverage status: FULL / PARTIAL / NONE / UNIT-ONLY / INTEGRATION-ONLY
+- Mark coverage status: FULL / PARTIAL / NONE / UNIT-ONLY / INTEGRATION-ONLY. `checklist.md`'s "Coverage Classification" section is the definition; **read it before classifying anything**, and apply the rule it turns on:
+  - Classification is decided by what the evidence **establishes** about the criterion. The number of levels the evidence spans does not set the status.
+  - **FULL** whenever every scenario the criterion states is established, whether that took one level or several. A criterion that one appropriate level establishes in full is FULL, not UNIT-ONLY and not INTEGRATION-ONLY.
+  - **UNIT-ONLY** and **INTEGRATION-ONLY** are for the case where a _missing_ level is what leaves the criterion unestablished: unit tests only, against a criterion stating an HTTP status or a rendered state; or API/component tests only, against a criterion stating branch-level logic that needs unit proof. "The only evidence is API-level" is not by itself INTEGRATION-ONLY.
+- Cite every mapped test as a backticked `` `path:line` `` pair, the form `trace-template.md` and `resources/traceability-matrix.example.md` both use. The backticks are the delimiter, so a path holding a space survives whole. An undelimited pair written into prose has no boundary but the file extension, and a path with a space in it is then read only from its last space-free segment onward.
 - Record test level and priority
 - Preserve each mapped test's stable identity fields (`id`, `title`, `file`, `line`, `level`, status flags) so Phase 1 can deduplicate unique tests before JSON export
 - Record heuristic signals:
@@ -49,6 +53,32 @@ For each resolved oracle item (formal requirement, endpoint/spec item, or synthe
   - Error-path coverage present/missing (validation, timeout, network/server failures)
   - UI journey E2E coverage present/missing (for source-derived journeys)
   - UI state coverage present/missing (loading, empty, validation, error, permission-denied)
+
+---
+
+## 1a. Tests That Name a Criterion Without Establishing It
+
+A test earns its place in a criterion's `tests` array by establishing part of what the criterion states. A test that claims the criterion in its title, its test ID, or a comment, and whose assertions establish none of it, stays out of that array.
+
+That is the rule for this workflow, and it fixes what every count derived from `tests` means: `tests.cases`, `coverage.by_level.*.tests`, and Step 4's live-only derivation all count test cases this trace accepted as evidence. The other answer, admitting the test and leaving the criterion at NONE, would have made the same numbers mean "test cases considered", so a suite full of mistitled tests would report level counts a reader could not use to judge where coverage actually sits.
+
+Record every such test in `rejectedEvidence` against the criterion it claims, with the reason its assertions fall short. Carry the list forward for Step 4 and persist it into the progress document so a resumed Step 4 can read it. A reader needs to see that the test was read and turned down: a test that claims a criterion and then vanishes from the report is indistinguishable from a test nobody found.
+
+```javascript
+// One entry per test whose name claims a criterion its assertions do not establish.
+// Shape only; the entries come from reading the tests against the criterion text.
+const rejectedEvidence = [
+  // {
+  //   requirement_id: 'AC-7',
+  //   test_id: '9-UNIT-014',
+  //   file: 'tests/unit/pricing-rules.spec.ts',
+  //   line: 112,
+  //   level: 'unit',
+  //   title: 'AC-7 applies the loyalty discount before tax',
+  //   reason: 'Builds a cart and asserts the subtotal is a number. Never asserts the discount was applied, and never asserts the ordering against tax.',
+  // },
+];
+```
 
 ---
 

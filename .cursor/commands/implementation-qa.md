@@ -7,6 +7,8 @@ description: 实现完成门禁 — BMAD TEA（测试设计+自动化+执行）+
 
 使用通用技能 **`dev-workflow`**：`~/.cursor/skills/dev-workflow/workflows/implementation-qa.md`
 
+**输出：** 先 Read `~/.cursor/skills/i-have-adhd/SKILL.md`（或项目 `.cursor/skills/i-have-adhd/SKILL.md`），按该 skill 简化对用户回复。缺则继续并提示 `/install-skills i-have-adhd`。详见 `conventions/adhd-output.md`。
+
 **硬触发**：用户执行本命令时，必须跑完整 QA 流程，不可直接宣称「完成」。
 
 `/qa` 留给 mattpocock/skills 的 QA 会话（报现象 → 开 GitHub issue）。本命令是实现门禁，不要走那套开场。
@@ -22,7 +24,7 @@ description: 实现完成门禁 — BMAD TEA（测试设计+自动化+执行）+
 
 ## 助手必做（按 workflows/implementation-qa.md 顺序）
 
-1. **解析 change-id**（参数 → `.new-feature/meta.yaml` → `openspec/changes/` → `feature/*` 分支 → AskQuestion）
+1. **解析 change-id**（参数 → `dev_workflow/new-feature/meta.yaml` → `openspec/changes/` → `feature/*` 分支 → AskQuestion）
 2. **确定 diff 范围**（本 feature 改动文件）
 3. **BMAD TEA**（除非 `--review-only`）：
    - 读并执行 `bmad-testarch-test-design` → `docs/test/bmad-tea/<change-id>/test-design.md`

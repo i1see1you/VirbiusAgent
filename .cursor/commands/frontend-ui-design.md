@@ -7,6 +7,8 @@ description: 前端动手前 UI/UE 设计门禁 — ui-ux-pro-max + 现有风格
 
 使用通用技能 **`dev-workflow`**：`~/.cursor/skills/dev-workflow/workflows/frontend-ui-design.md`
 
+**输出：** 先 Read `~/.cursor/skills/i-have-adhd/SKILL.md`（或项目 `.cursor/skills/i-have-adhd/SKILL.md`），按该 skill 简化对用户回复。缺则继续并提示 `/install-skills i-have-adhd`。详见 `conventions/adhd-output.md`。
+
 **硬触发**：用户执行本命令时，必须完成 UI/UE 设计产出，**不可**直接写页面/组件代码。
 
 ## Input

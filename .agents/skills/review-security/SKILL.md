@@ -39,19 +39,11 @@ Each pattern file contains:
 
 ---
 
-## Step 1: Scope the review
+## Step 1: Pin the requested scope
 
-Determine what is being reviewed.
+For a branch, verify its target ref, record base SHA, HEAD and merge-base, and review `git diff <merge-base> <head>`. The optional `../../../scripts/review-scope.py --base <verified-ref>` helper records this evidence. Include local changes only when requested and snapshot them separately; a file-specific request limits the subject but may require tracing its callers. Resolve paths from this loaded package on either runtime. Stop and re-pin if scoped files change.
 
-1. If the user named specific files/paths — review those.
-2. Otherwise detect the base branch and take the diff:
-   - `gh pr view --json baseRefName -q .baseRefName` (falls back to `gh repo view --json defaultBranchRef -q .defaultBranchRef.name`, then to `main`).
-   - `git fetch origin <base> --quiet && git diff origin/<base>`
-3. If there is no diff and no named target, ask the user what they want audited.
-
-Print the target (e.g. "Reviewing branch `feature/x` against `main` — 347 lines across 8 files").
-
----
+Default to report-only; applying a fix requires a fix request or existing authorization. Missing evidence limits the verdict.
 
 ## Step 2: Pick the relevant pattern files
 
@@ -107,14 +99,16 @@ For each selected pattern:
 
 ## Step 4: Adversarial pass (for non-trivial diffs)
 
-Dispatch an adversarial subagent via Agent when any of:
+Use the runtime’s available native delegation tool for an independent read-only pass when any of (and report unavailable coverage when delegation is unavailable):
 - More than 200 lines changed
 - Touches crypto, auth, parsers, deserialization, or CI/CD workflows
 - Introduces a new external service / new dependency
 - User explicitly requested deep review
 
+When already assigned as the independent reviewer, complete that pass and return evidence to the parent without recursively delegating.
+
 Subagent prompt:
-"Read the diff for this branch with `git diff origin/<base>`. You are a security auditor. Assume the author wrote the happy path and missed at least one attack vector. Find it. Consider: authentication bypasses, injection via non-obvious channels (logs, filenames, headers, template engines), integer overflow in size arithmetic, race conditions between check and use, error paths that fail open, trust-boundary violations where user input reaches a privileged context, and regression-introducing refactors. For each finding, cite the CVE or public incident it pattern-matches to, and classify as FIXABLE or INVESTIGATE."
+"Review the supplied pinned base/head or local snapshot in the specified absolute checkout, without changing files. You are a security auditor. Look for reachable attack paths and verify the assumptions needed to exploit them. No findings is a valid result; mark incomplete coverage explicitly. Consider: authentication bypasses, injection via non-obvious channels (logs, filenames, headers, template engines), integer overflow in size arithmetic, race conditions between check and use, error paths that fail open, trust-boundary violations where user input reaches a privileged context, and regression-introducing refactors. For each finding, cite the local trigger, reachability and impact; a related CVE is supporting context rather than proof, and classify as FIXABLE or INVESTIGATE."
 
 Fold FIXABLE findings into the Fix-First pipeline in Step 6. INVESTIGATE findings are informational.
 
@@ -131,9 +125,9 @@ If a finding matches a cataloged pattern, cite it: "IDOR on `/orders/:id` — sa
 
 ---
 
-## Step 6: Fix-First output
+## Step 6: Findings and authorized fixes
 
-Every finding gets action.
+Every finding gets a disposition. In report-only mode, propose corrections without changing files. The following fix classification applies only when fixes are authorized.
 
 Output header: `Security Review: N findings (X critical, Y high, Z informational)`
 
@@ -152,7 +146,7 @@ Output header: `Security Review: N findings (X critical, Y high, Z informational
 
 **Classify AUTO-FIX vs ASK** with the same Fix-First heuristic as `/review`: mechanical fixes (missing `Secure`/`HttpOnly` flags, missing timeout, algorithm allowlist, constant-time compare, parameterized query) are AUTO-FIX. Anything requiring a design decision (change auth model, rework error path, add rate limiter) is ASK.
 
-Auto-fix AUTO-FIX items directly. Batch ASK items into one `AskUserQuestion`:
+In authorized fix mode, apply scoped AUTO-FIX items and verify the changed behavior. Batch ASK items into one `AskUserQuestion`:
 - Each item: severity label, pattern reference, problem, recommended fix
 - Options A) Fix  B) Skip
 - Include overall RECOMMENDATION
@@ -163,9 +157,10 @@ Apply user-approved fixes.
 
 ## Step 7: Verdict
 
-Issue one of:
-- **PASS** — no CRITICAL or HIGH findings unresolved. Informational findings noted.
-- **PASS WITH REMEDIATIONS** — CRITICAL/HIGH findings existed but were all fixed (auto-fixed or user-approved). Summarize what was fixed.
+Record findings, verification coverage and user risk acceptance separately. A skipped blocker remains unresolved. Issue one of:
+- **PASS** — required coverage is complete and no CRITICAL or HIGH findings unresolved. Informational findings noted.
+- **PASS WITH REMEDIATIONS** — required coverage is complete and CRITICAL/HIGH findings existed but were all fixed and verified (auto-fixed or user-approved). Summarize what was fixed.
+- **INCOMPLETE** — required evidence or independent review unavailable; do not claim readiness.
 - **FAIL** — unresolved CRITICAL or HIGH findings. List each: pattern reference, what's broken, what's needed to fix it. Do NOT merge.
 
 ---

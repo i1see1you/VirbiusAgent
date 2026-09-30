@@ -7,6 +7,8 @@ description: 拉 bug → 粗分 cluster → 建 worktree → bootstrap 后深度
 
 使用通用技能 **`dev-workflow`**：`~/.cursor/skills/dev-workflow/workflows/auto-fix-bug.md`
 
+**输出：** 先 Read `~/.cursor/skills/i-have-adhd/SKILL.md`（或项目 `.cursor/skills/i-have-adhd/SKILL.md`），按该 skill 简化对用户回复。缺则继续并提示 `/install-skills i-have-adhd`。详见 `conventions/adhd-output.md`。
+
 **硬触发**：主 checkout **禁止具体实施**（禁止深度根因 / 复现 / 改代码）；只做到 **粗分 cluster + 选 cluster + 建 worktree**。实施一律在 worktree：`/opsx-bootstrap` → **2.5w 深度根因** → 5b-repro → OpenSpec。
 
 **顺序（强制）**：拉列表 →（可选本地搜索）→ **多选 bug** → `record-bug-picker-selection.sh` → **2.5 粗分 cluster** → **勾选 cluster** → **依赖分析** → **建 worktree** → **`/opsx-bootstrap`** → **2.5w 深度根因** → **5b-repro** → OpenSpec → 验证。  
@@ -26,7 +28,7 @@ description: 拉 bug → 粗分 cluster → 建 worktree → bootstrap 后深度
 /auto-fix-bug [参数…] {description}
 ```
 
-**`{description}`（可选）**：同条消息里除参数外的自由文本（可多行），写入对话并保存到 `.cursor/bug-evidence/_session/user-context.md`，供根因分析 / worktree requirement 引用。无则跳过。
+**`{description}`（可选）**：同条消息里除参数外的自由文本（可多行），写入对话并保存到 `dev_workflow/bug-evidence/_session/user-context.md`，供根因分析 / worktree requirement 引用。无则跳过。
 
 **负责人范围（默认本人）**：拉列表时只取 **当前登录用户负责**、且缺陷状态为 **未完成、未验证、未取消、非无法复现** 的 bug。要看全部负责人须 **明确** 加 `--all` 或说「所有人的 bug」。
 
@@ -51,9 +53,9 @@ description: 拉 bug → 粗分 cluster → 建 worktree → bootstrap 后深度
 
 1. **`/opsx-bootstrap`**（先起服务）
 2. **2.5w**：写满 `root-cause.md`（主仓未做）
-3. **5b-repro**：组内每 bug 一 subagent；`before/` + replay
+3. **5b-repro**：组内每 bug 一 subagent；suying `run_case`（Oxi + webreel）+ `before/`
 4. `check-bug-evidence.sh --phase before` → OpenSpec 四选一
-5. 修完后全程录屏（`start --name verify` 包住回放）→ after（主拍 web/H5/小程序/App 交互；接口/日志为附加）
+5. 修完后再跑同一组 `steps` → after 截图（主拍 web/H5/小程序/App）。录屏走 webreel。
 
 ## 主 checkout（选定后）
 

@@ -60,10 +60,10 @@ lastSaved: ''
 
 ### Low-Priority Risks (Score 1-2)
 
-| Risk ID | Category | Description   | Probability | Impact | Score | Action  |
-| ------- | -------- | ------------- | ----------- | ------ | ----- | ------- |
-| R-005   | OPS      | {description} | 1           | 2      | 2     | Monitor |
-| R-006   | BUS      | {description} | 1           | 1      | 1     | Monitor |
+| Risk ID | Category | Description   | Probability | Impact | Score | Action   |
+| ------- | -------- | ------------- | ----------- | ------ | ----- | -------- |
+| R-005   | OPS      | {description} | 1           | 2      | 2     | Document |
+| R-006   | BUS      | {description} | 1           | 1      | 1     | Document |
 
 ### Risk Category Legend
 
@@ -131,6 +131,8 @@ workaround. Risk score is supporting evidence and is not a required condition.
 | {requirement} | E2E        | R-001     | 3          | QA    | {notes} |
 | {requirement} | API        | R-002     | 5          | QA    | {notes} |
 
+Use the exact `Risk ID` from the risk assessment in `Risk Link`. Select `Test Level` using `test-levels-framework.md`; explain the suitability in `Notes` when the level is not obvious. Every material risk must appear in at least one coverage row at a test level that can establish it.
+
 **Total P0**: {p0_count} tests, {p0_hours} hours
 
 ### P1 (High)
@@ -162,54 +164,27 @@ is supporting evidence and is not a required condition.
 **Criteria**: Rare, cosmetic, or experimental behavior with minimal impact and an easy workaround.
 Risk score is supporting evidence and is not a required condition.
 
-| Requirement   | Test Level | Test Count | Owner | Notes   |
-| ------------- | ---------- | ---------- | ----- | ------- |
-| {requirement} | E2E        | 2          | QA    | {notes} |
-| {requirement} | Unit       | 8          | DEV   | {notes} |
+| Requirement   | Test Level | Risk Link | Test Count | Owner | Notes   |
+| ------------- | ---------- | --------- | ---------- | ----- | ------- |
+| {requirement} | E2E        | R-005     | 2          | QA    | {notes} |
+| {requirement} | Unit       | -         | 8          | DEV   | {notes} |
 
 **Total P3**: {p3_count} tests, {p3_hours} hours
 
 ---
 
-## Execution Order
+## Execution Strategy
 
-### Smoke Tests (<5 min)
+**Philosophy:** Run every functional scenario in pull requests while the suite stays under 15 minutes.
+Defer only work with material infrastructure or duration cost. P0 through P3 are priority and are not
+execution timing; this section decides when tests run and the coverage plan above decides what they are.
 
-**Purpose**: Fast feedback, catch build-breaking issues
+- **Pull request:** {scenario classes that run on every pull request}. Playwright runs in parallel with
+  a target duration below 15 minutes.
+- **Nightly:** {long-running or expensive suites, for example burn-in and provider retry}.
+- **Weekly:** {the most expensive work, for example k6 baselines and exploratory sessions}.
 
-- [ ] {scenario} (30s)
-- [ ] {scenario} (45s)
-- [ ] {scenario} (1min)
-
-**Total**: {smoke_count} scenarios
-
-### P0 Tests (<10 min)
-
-**Purpose**: Critical path validation
-
-- [ ] {scenario} (E2E)
-- [ ] {scenario} (API)
-- [ ] {scenario} (API)
-
-**Total**: {p0_count} scenarios
-
-### P1 Tests (<30 min)
-
-**Purpose**: Important feature coverage
-
-- [ ] {scenario} (API)
-- [ ] {scenario} (Component)
-
-**Total**: {p1_count} scenarios
-
-### P2/P3 Tests (<60 min)
-
-**Purpose**: Full regression coverage
-
-- [ ] {scenario} (Unit)
-- [ ] {scenario} (API)
-
-**Total**: {p2p3_count} scenarios
+Do not re-list the individual tests here. They are already in the coverage plan.
 
 ---
 

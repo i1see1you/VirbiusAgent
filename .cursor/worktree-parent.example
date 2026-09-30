@@ -1,0 +1,10 @@
+# Worktree 父目录（/new-feature 创建的 feature 检出放这里）
+# 复制为 worktree-parent 生效；也可设环境变量 DEV_WORKFLOW_WORKTREE_PARENT
+#
+# 默认（不写本文件）：与 VirbiusAgent 同级 → ../VirbiusAgent-worktree
+# 下面为显式默认（相对仓库根的父目录）：
+
+../VirbiusAgent-worktree
+
+# 或使用绝对路径，例如：
+# /Users/you/dev/VirbiusAgent-worktree

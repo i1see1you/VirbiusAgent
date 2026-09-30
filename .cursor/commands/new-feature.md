@@ -7,6 +7,8 @@ description: 写入需求 → 自动生成 change-id 与 worktree → 新窗口 
 
 使用通用技能 **`dev-workflow`**：`~/.cursor/skills/dev-workflow/workflows/new-feature.md`
 
+**输出：** 先 Read `~/.cursor/skills/i-have-adhd/SKILL.md`（或项目 `.cursor/skills/i-have-adhd/SKILL.md`），按该 skill 简化对用户回复。缺则继续并提示 `/install-skills i-have-adhd`。详见 `conventions/adhd-output.md`。
+
 ## Input
 
 `/new-feature` 后**整段文字**为 **`{requirement}`**（必填）。
@@ -30,19 +32,37 @@ description: 写入需求 → 自动生成 change-id 与 worktree → 新窗口 
 
 ```
 A  由助手根据 {requirement} 生成 change-id（kebab-case，检查目录不冲突）
-B  init-new-feature-worktree.sh（建 worktree、写需求文件、开新 Cursor）
-C  本窗口结束，不执行 opsx
+A2 analyze-worktree-deps.sh（按因子消费/改写对照已有需求；有先后则 AskQuestion，禁止盲建仓）
+B  init-new-feature-worktree.sh（建 worktree、写需求、开新 Cursor）
+C  新窗口 **/opsx-bootstrap**（**启动 dev 服务** → OpenSpec）— 本窗口结束
 ```
 
 ## 需求文件（在 worktree 检出根内）
 
 ```
-<worktree-parent>/<change-id>/.new-feature/
+<worktree-parent>/<change-id>/dev_workflow/new-feature/
 ├── requirement.md
 ├── meta.yaml
 ├── AGENT_START.md
 └── .session-pending
 ```
+
+## 阶段 A2（强制）
+
+```bash
+SKILL_ROOT="$HOME/.cursor/skills/dev-workflow"
+WT_ROOT="$("$SKILL_ROOT/scripts/resolve-openspec-git-root.sh")"
+printf '%s' "<requirement>" > /tmp/new-feature-req.md
+"$SKILL_ROOT/scripts/analyze-worktree-deps.sh" --root "$WT_ROOT" \
+  --change-id "<change-id>" \
+  --requirement-file /tmp/new-feature-req.md \
+  --write --gate
+```
+
+| 结果 | 动作 |
+|------|------|
+| exit 0 | 继续 Phase B |
+| exit 2 | 贴 `_session/worktree-deps.md`。**AskQuestion radio**：按序完成依赖 / 合并已有 worktree / 仍并行。选「仍并行」则 Phase B 加 `--force-deps`。空选重问。 |
 
 ## 阶段 B 脚本
 
@@ -51,6 +71,7 @@ SKILL_ROOT="$HOME/.cursor/skills/dev-workflow"
 WT_ROOT="$("$SKILL_ROOT/scripts/resolve-openspec-git-root.sh")"
 cd "$WT_ROOT"
 "$SKILL_ROOT/scripts/init-new-feature-worktree.sh" "<change-id>" --requirement-text "<requirement>"
+# 若 A2 用户确认「仍并行」：追加 --force-deps
 ```
 
 含子模块时自动 init，并为 **monorepo 下所有工程**（父仓库 + 各子模块）创建/切到同一分支 **`feature/<change-id>`**。
@@ -61,9 +82,9 @@ cd "$WT_ROOT"
 "$SKILL_ROOT/scripts/init-worktree-submodules.sh" "/path/to/worktree/<change-id>"
 ```
 
-新窗口：打开 Agent 或 `/opsx-bootstrap`，需求从 `requirement.md` 自动带入。
+新窗口：打开 Agent 或 **`/opsx-bootstrap`**（先起服务，再 OpenSpec）。URL 见 **`dev_workflow/dev-worktree/services.json`**。
 
-Cursor 会以 **`VirbiusAgent--<change-id>.code-workspace`** 打开（窗口标题可区分）；**不会修改**主目录的 workspace。已有 worktree 可补生成：
+Cursor 会以 **`VirbiusAgent--<change-id>.code-workspace`** 打开（窗口标题可区分）；**不会修改**主目录 workspace。已有 worktree 可补生成：
 
 ```bash
 "$SKILL_ROOT/scripts/write-worktree-code-workspace.sh" "<change-id>" "/path/to/worktree/<change-id>"

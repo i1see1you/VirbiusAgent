@@ -106,9 +106,9 @@ inputDocuments: []
 
 #### Low-Priority Risks (Score 1-2)
 
-| Risk ID | Category | Description   | Probability | Impact | Score   | Action  |
-| ------- | -------- | ------------- | ----------- | ------ | ------- | ------- |
-| {R-ID}  | {CAT}    | {Description} | {1-3}       | {1-3}  | {Score} | Monitor |
+| Risk ID | Category | Description   | Probability | Impact | Score   | Action   |
+| ------- | -------- | ------------- | ----------- | ------ | ------- | -------- |
+| {R-ID}  | {CAT}    | {Description} | {1-3}       | {1-3}  | {Score} | Document |
 
 #### Risk Category Legend
 
@@ -140,7 +140,7 @@ inputDocuments: []
 
 ### Testability Concerns and Architectural Gaps
 
-**🚨 ACTIONABLE CONCERNS - Architecture Team Must Address**
+**🚨 ACTIONABLE CONCERNS - Architecture Team Must Address.**
 
 {If system has critical testability concerns, list them here. If architecture supports testing well, state "No critical testability concerns identified" and skip to Testability Assessment Summary}
 
@@ -169,7 +169,7 @@ inputDocuments: []
 
 ### Testability Assessment Summary
 
-**📊 CURRENT STATE - FYI**
+**📊 CURRENT STATE - FYI.**
 
 {Only include this section if there are passing items worth mentioning. Otherwise omit.}
 
@@ -234,7 +234,7 @@ For {Feature} Phase 1, the following trade-offs are acceptable:
 
 ---
 
-**End of Architecture Document**
+**End of Architecture Document.**
 
 **Next Steps for Architecture Team:**
 
