@@ -47,6 +47,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     private final boolean operatorJwtEnabled;
     private final JwksJwtVerifier jwtVerifier;
     private final OperatorJwtProperties jwtProperties;
+    /** Implicit dev principal is only granted when the dev profile is active. */
+    private final boolean devImplicitPrincipal;
     private final SecureRandom random = new SecureRandom();
 
     @Autowired
@@ -56,13 +58,15 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
             @Value("${virbius.security.api-key.enabled:false}") boolean apiKeyEnabled,
             @Value("${virbius.security.operator-jwt.enabled:false}") boolean operatorJwtEnabled,
             ObjectProvider<JwksJwtVerifier> jwtVerifier,
-            ObjectProvider<OperatorJwtProperties> jwtProperties) {
+            ObjectProvider<OperatorJwtProperties> jwtProperties,
+            org.springframework.core.env.Environment environment) {
         this.credentialService = credentialService;
         this.objectMapper = objectMapper;
         this.apiKeyEnabled = apiKeyEnabled;
         this.operatorJwtEnabled = operatorJwtEnabled;
         this.jwtVerifier = jwtVerifier == null ? null : jwtVerifier.getIfAvailable();
         this.jwtProperties = jwtProperties == null ? null : jwtProperties.getIfAvailable();
+        this.devImplicitPrincipal = environment == null || environment.matchesProfiles("dev");
     }
 
     /** Test helper: API-key-only, operator JWT off. */
@@ -74,6 +78,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         this.operatorJwtEnabled = false;
         this.jwtVerifier = null;
         this.jwtProperties = null;
+        this.devImplicitPrincipal = true;
     }
 
     public ApiKeyAuthFilter(
@@ -89,6 +94,7 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         this.operatorJwtEnabled = operatorJwtEnabled;
         this.jwtVerifier = jwtVerifier;
         this.jwtProperties = jwtProperties;
+        this.devImplicitPrincipal = true;
     }
 
     @Override
@@ -127,6 +133,17 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         }
 
         if (!apiKeyEnabled && !operatorJwtEnabled) {
+            if (!devImplicitPrincipal) {
+                // Defense in depth: SecretPolicyValidator already fails startup for
+                // strict profiles with all auth disabled; never grant admin here.
+                try {
+                    reject(request, response, HttpServletResponse.SC_SERVICE_UNAVAILABLE,
+                            "unavailable", "authentication is disabled; refusing implicit principal in non-dev profile");
+                } catch (IOException e) {
+                    throw new ServletException("failed to write auth rejection", e);
+                }
+                return;
+            }
             ApiKeyAuthContext.set(request, DEV_PRINCIPAL);
             filterChain.doFilter(request, response);
             return;

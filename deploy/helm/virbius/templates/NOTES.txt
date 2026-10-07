@@ -19,7 +19,10 @@ Health checks:
 
 Before production use:
 
-  - Set secrets.licenseMasterKey (do not leave the chart default)
+  - Set secrets.licenseMasterKey (>= 32 chars; do not leave the chart default)
+  - Set secrets.apiKeyPepper (>= 32 chars; required because control.apiKeyEnabled=true)
+  - Set secrets.redisPassword (Redis requires auth by default, redis.authEnabled=true)
+  - Set secrets.kafkaSaslUsername / kafkaSaslPassword (Kafka SASL/SCRAM is on by default)
   - Set secrets.authBootstrapPassword (ops console login; default username {{ .Values.auth.bootstrapUsername }})
   - Set global.imageRegistry and docker login / imagePullSecrets
   - Cluster must already have an Ingress Controller (class {{ .Values.ingress.className }})
@@ -29,6 +32,25 @@ Before production use:
   - engine.promptLlm.baseUrl must point at an external Ollama/gateway
 {{- end }}
   - In-cluster gRPC evaluate is {{ include "virbius.fullname" . }}-engine:{{ .Values.engine.grpc.port | default 50051 }}
+
+P0 security notes:
+
+{{- if .Values.mysql.tls.enabled }}
+  - MySQL TLS is ENABLED: control verifies the server certificate
+    (sslMode=VERIFY_IDENTITY, CA at /certs/mysql-ca.pem). Track certificate
+    expiry and rotate via mysql.tls.existingSecret before it lapses.
+{{- else }}
+  - MySQL TLS is DISABLED (mysql.tls.enabled=false). For production set it to
+    true and provide server cert/key + CA (see values.example.yaml).
+{{- end }}
+{{- if .Values.kafka.saslEnabled }}
+  - Kafka uses SASL/SCRAM-SHA-256 over PLAINTEXT. Accepted risk (P0): audit
+    payloads traverse the cluster network unencrypted. Upgrade to SASL_SSL
+    (P1) when Kafka spans hosts/networks or compliance requires it.
+{{- end }}
+  - Control starts with strict secret policy in the prod profile: missing or
+    weak secrets / open datastore transports fail startup with an explicit
+    violation list.
 
 Demo Agent labs still spawn an in-pod stdio mcp-proxy. Ingress proxy.* is the cluster TCP MCP entry.
 The cluster proxy upstream defaults to http://{{ include "virbius.fullname" . }}-demo:9091.

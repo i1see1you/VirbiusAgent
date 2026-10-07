@@ -25,6 +25,18 @@ mysql:
   image: hb.grainmind.cn/library/mysql:8.0
   # Required when enabled=false (external MySQL).
   jdbcUrl: ""
+  # P0 TLS baseline. When true, provide PEM material via values (plaintext in
+  # your gitignored values file — prefer an existingSecret with keys
+  # mysql-server-cert / mysql-server-key / mysql-ca for production) or a
+  # cert-manager-issued secret referenced via mysql.tls.existingSecret.
+  tls:
+    enabled: false
+    # Optional: name of a pre-created Secret holding the three keys above.
+    # When set, the chart does not generate them from values.
+    existingSecret: ""
+    serverCert: ""
+    serverKey: ""
+    caPem: ""
   persistence:
     size: 10Gi
   resources:
@@ -37,8 +49,11 @@ mysql:
 redis:
   enabled: true
   image: hb.grainmind.cn/library/redis:7-alpine
-  # Required when enabled=false (external Redis), e.g. redis://redis.example:6379
+  # Required when enabled=false (external Redis), e.g. redis://:pass@redis.example:6379
   url: ""
+  # P0 baseline: require a password (secrets.redisPassword). With an
+  # existingSecret + in-cluster Redis, set redis.url explicitly instead.
+  authEnabled: true
   persistence:
     size: 5Gi
   resources:
@@ -54,6 +69,10 @@ kafka:
   # Required when enabled=false (external Kafka), e.g. kafka.example:9092
   bootstrapServers: ""
   clusterId: MkUjOEJhQjY1QUY1NDQ2Nk1BODI
+  # P0 baseline: SASL/SCRAM-SHA-256 on the client listener (PLAINTEXT transport —
+  # TLS is a P1 item; accepted risk documented in DEPLOYMENT.md).
+  # Credentials come from secrets.kafkaSaslUsername / kafkaSaslPassword.
+  saslEnabled: true
   persistence:
     size: 10Gi
   resources:
@@ -70,8 +89,8 @@ ollama:
   # Ollama name after import. Engine /v1/memory/check uses engine.promptLlm.model (defaults to this).
   model: virbiusguard
   # HuggingFace V15 F16 (~1.5GB). For China, switch to ModelScope:
-  # https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v15-f16.gguf
-  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf
+  # https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v2.0-f16.gguf
+  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v2.0-f16.gguf
   persistence:
     size: 10Gi
     importSize: 4Gi
@@ -155,6 +174,14 @@ secrets:
   mysqlRootPassword: ""
   mysqlPassword: ""
   licenseMasterKey: ""
+  # Server-side HMAC pepper for tenant API keys (required when control.apiKeyEnabled).
+  apiKeyPepper: ""
+  # Redis password (required when redis.authEnabled and no existingSecret).
+  redisPassword: ""
+  # Kafka SCRAM credentials (required when kafka.saslEnabled and no existingSecret).
+  kafkaSaslUsername: ""
+  kafkaSaslPassword: ""
   deepseekApiKey: ""
   openrouterApiKey: ""
-  authBootstrapPassword: "admin"
+  # virbius-auth bootstrap (test environments only; production uses SSO).
+  authBootstrapPassword: ""

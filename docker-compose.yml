@@ -3,7 +3,7 @@
 #
 #  Starts the full stack: Redis + Kafka + Ollama (VirbiusGuard GGUF) → engine + control + auth (+ proxy)
 #  First start downloads ~1.5GB from HuggingFace (V15 F16). China:
-#    VIRBIUS_GUARD_GGUF_URL=https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v15-f16.gguf
+#    VIRBIUS_GUARD_GGUF_URL=https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v2.0-f16.gguf
 #
 #  Usage:
 #    docker compose build         # Build all images
@@ -14,6 +14,10 @@
 #
 #  To run only core services (no proxy):
 #    docker compose up -d redis kafka ollama ollama-download ollama-init virbius-engine virbius-auth virbius-control
+#
+#  NOTE — dev-only security posture: Redis/Kafka run unauthenticated on the
+#  internal network and MySQL TLS is not used. Production-like deployments must
+#  use docker-compose.prod.yml (P0 baseline: Redis auth, MySQL TLS, Kafka SCRAM).
 # =============================================================================
 
 services:
@@ -80,7 +84,7 @@ services:
     image: ${CURL_IMAGE:-curlimages/curl:8.12.1}
     user: "0"
     environment:
-      VIRBIUS_GUARD_GGUF_URL: ${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf}
+      VIRBIUS_GUARD_GGUF_URL: ${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v2.0-f16.gguf}
       VIRBIUS_GUARD_GGUF_PATH: /models/model.gguf
     volumes:
       - ollama-import:/models
@@ -169,6 +173,9 @@ services:
       VIRBIUS_AUTH_ISSUER: http://virbius-auth:8083
       VIRBIUS_AUTH_RETURN_URI: ${VIRBIUS_AUTH_RETURN_URI:-http://127.0.0.1:8080/ui/callback}
       VIRBIUS_AUTH_RETURN_URI_TLS: ${VIRBIUS_AUTH_RETURN_URI_TLS:-https://127.0.0.1:8080/ui/callback}
+      # virbius-auth is a TEST-ONLY module (production integrates user SSO and
+      # does not deploy it). admin/admin is a local-dev convenience default —
+      # never set these in any non-dev deployment.
       VIRBIUS_AUTH_BOOTSTRAP_USERNAME: ${VIRBIUS_AUTH_BOOTSTRAP_USERNAME:-admin}
       VIRBIUS_AUTH_BOOTSTRAP_PASSWORD: ${VIRBIUS_AUTH_BOOTSTRAP_PASSWORD:-admin}
     volumes:
@@ -195,8 +202,11 @@ services:
       VIRBIUS_DATA_DIR: /data
       SPRING_PROFILES_ACTIVE: dev
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      # Dev compose supplies a fixed dev-only master key (>=32 chars, not a
+      # denylisted value). Override for real deployments.
+      VIRBIUS_LICENSE_MASTER_KEY: ${VIRBIUS_LICENSE_MASTER_KEY:-local-dev-compose-master-key-6f2a9c4e8b1d3f7a}
       VIRBIUS_OPERATOR_JWT_ENABLED: ${VIRBIUS_OPERATOR_JWT_ENABLED:-false}
-      VIRBIUS_API_KEY_ENABLED: ${VIRBIUS_API_KEY_ENABLED:-false}
+      VIRBIUS_SECURITY_API_KEY_ENABLED: ${VIRBIUS_SECURITY_API_KEY_ENABLED:-false}
       VIRBIUS_AUTH_JWKS_URL: ${VIRBIUS_AUTH_JWKS_URL:-http://virbius-auth:8083/.well-known/jwks.json}
       VIRBIUS_AUTH_ISSUER: ${VIRBIUS_AUTH_ISSUER:-http://virbius-auth:8083}
       VIRBIUS_AUTH_LOGIN_URL: ${VIRBIUS_AUTH_LOGIN_URL:-http://127.0.0.1:8083/login}

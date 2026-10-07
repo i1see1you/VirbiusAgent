@@ -11,6 +11,7 @@ pub mod pipeline;
 pub mod policy;
 pub mod router;
 pub mod session;
+pub mod sink_common;
 pub mod trace_collector;
 pub mod transport;
 pub mod upstream;

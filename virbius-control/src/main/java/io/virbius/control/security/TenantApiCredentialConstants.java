@@ -7,5 +7,9 @@ public final class TenantApiCredentialConstants {
     public static final int RANDOM_BYTES = 24;
     public static final int KEY_PREFIX_LEN = 12;
 
+    /** Hash algorithms for tb_tenant_api_credential.hash_algo. */
+    public static final String HASH_ALGO_LEGACY = "legacy-sha256";
+    public static final String HASH_ALGO_HMAC = "hmac-sha256-pepper";
+
     private TenantApiCredentialConstants() {}
 }

@@ -430,3 +430,72 @@ Gateway Layer Higress effective JSON configuration:
 | **Existing Agent In-Cluster Deployment** | ⚠️ Optional | Mode 1 already covers 3 layers, add Gateway Layer as needed |
 
 ---
+
+## 9. P0 Credential & Datastore Security Baseline
+
+Applies to `docker-compose.prod.yml` and the Helm chart (prod/staging profiles).
+The control plane runs `SecretPolicyValidator` at startup and **fails fast**
+on any violation below.
+
+### 9.1 Required environment variables
+
+| Variable | Scope | Notes |
+|---|---|---|
+| `VIRBIUS_LICENSE_MASTER_KEY` | always, every profile | ≥32 chars; blanks/known defaults fail startup |
+| `VIRBIUS_API_KEY_PEPPER` | when API-key auth is on (prod default) | ≥32 chars; HMAC pepper for tenant API keys |
+| `REDIS_PASSWORD` | compose prod / Helm (`secrets.redisPassword`) | embedded in `VIRBIUS_REDIS_URL` as `redis://:<password>@host:port` |
+| `KAFKA_SASL_USERNAME` / `KAFKA_SASL_PASSWORD` | prod | SCRAM-SHA-256 credentials (`KAFKA_SECURITY_PROTOCOL=SASL_PLAINTEXT`) |
+| `MYSQL_PASSWORD` / `MYSQL_ROOT_PASSWORD` | prod | |
+| `VIRBIUS_STRICT_SECRETS` | optional | `false` only for local prod-profile dev setups (e.g. `.vscode/launch.json`) |
+
+`run-local.sh` auto-generates a dev master key into the gitignored data dir.
+
+### 9.2 MySQL TLS (self-signed, compose-generated)
+
+`docker-compose.prod.yml` runs a one-shot `cert-gen` service
+(`deploy/certs/gen-mysql-certs.sh`) that generates a CA + server certificate
+(SAN `DNS:mysql`) into the `mysql-certs` volume. Control connects with
+`sslMode=VERIFY_IDENTITY&serverSslCert=/certs/ca.pem`. In Helm, set
+`mysql.tls.enabled=true` and provide `mysql-server-cert` / `mysql-server-key`
+/ `mysql-ca` (values or `mysql.tls.existingSecret`).
+
+**Rotation runbook**: delete `server-cert.pem`/`server-key.pem` (keep the CA),
+restart `cert-gen` + `mysql`, then roll `virbius-control` (CA unchanged →
+clients keep working). Full CA rotation requires rolling both together.
+Track expiry (default 825 days; alert 30 days ahead).
+
+### 9.3 Kafka SASL (SCRAM-SHA-256 + PLAINTEXT) — accepted risk
+
+Clients authenticate with SCRAM (challenge-response; the password never
+crosses the wire in clear). The client listener transport is PLAINTEXT, which
+means **audit/trace payloads are unencrypted inside the cluster network**.
+Accepted for P0 with these conditions:
+
+1. Kafka reachable only inside the trust domain (NetworkPolicy / compose
+   internal network; the loopback `INTERNAL` listener is for broker internals
+   and SCRAM provisioning only).
+2. Payload redaction stays effective (no credentials in audit events by design).
+3. **Upgrade triggers** (whichever comes first): Kafka spans hosts/segments,
+   or a compliance audit requires transport encryption → switch to
+   `SASL_SSL` (P1; reuse the MySQL CA or a dedicated one).
+
+### 9.4 Auth defaults
+
+- `VIRBIUS_SECURITY_API_KEY_ENABLED` is the canonical env name
+  (`VIRBIUS_API_KEY_ENABLED` still works, deprecated).
+- Prod/staging start with API-key auth **on**; running with every auth
+  mechanism disabled fails startup (the implicit dev admin principal is
+  dev-profile only).
+- `virbius-auth` is test-only: the dev compose keeps a commented `admin/admin`
+  convenience default (test environments only — never set these in non-dev
+  deployments); production integrates user SSO and does not deploy the module
+  (see SSO_INTEGRATION.md).
+
+### 9.5 Upgrade notes
+
+- Existing API keys keep working: legacy SHA-256 rows upgrade to
+  peppered HMAC on first use (`hash_algo` column, Flyway `V8`).
+- Existing `private_key_enc` rows decrypt via the legacy derivation;
+  re-issued keys use the `v1:` HKDF envelope.
+- Legacy local dev databases may set `virbius.license.allow-insecure-dev-key=true`
+  (**dev profile only**) to keep booting with a weak master key while rotating.

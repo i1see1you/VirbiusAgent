@@ -189,6 +189,20 @@ ensure_kafka
 ensure_ollama
 ensure_ollama
 
+# ─── License master key (required in every profile) ───
+# Generated once into the gitignored data dir; export VIRBIUS_LICENSE_MASTER_KEY
+# to reuse an existing key (e.g. for legacy local databases).
+LICENSE_KEY_FILE="$VIRBIUS_DATA_DIR/.license-master-key"
+if [[ -z "${VIRBIUS_LICENSE_MASTER_KEY:-}" ]]; then
+  if [[ ! -s "$LICENSE_KEY_FILE" ]]; then
+    mkdir -p "$(dirname "$LICENSE_KEY_FILE")"
+    (umask 077 && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$LICENSE_KEY_FILE")
+    info "Generated new license master key at $LICENSE_KEY_FILE"
+  fi
+  VIRBIUS_LICENSE_MASTER_KEY="$(cat "$LICENSE_KEY_FILE")"
+  export VIRBIUS_LICENSE_MASTER_KEY
+fi
+
 APP_VER=$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
 CONTROL_JAR="$ROOT/virbius-control/target/virbius-control-${APP_VER}.jar"
 ENGINE_JAR="$ROOT/virbius-engine/target/virbius-engine-${APP_VER}.jar"
@@ -196,6 +210,7 @@ ENGINE_JAR="$ROOT/virbius-engine/target/virbius-engine-${APP_VER}.jar"
 if command -v java >/dev/null 2>&1 && [[ -f "$CONTROL_JAR" ]]; then
   info "Starting virbius-control (port 8080) from $CONTROL_JAR..."
   nohup env VIRBIUS_DATA_DIR="$VIRBIUS_DATA_DIR" VIRBIUS_REDIS_URL="$VIRBIUS_REDIS_URL" \
+    VIRBIUS_LICENSE_MASTER_KEY="$VIRBIUS_LICENSE_MASTER_KEY" \
     KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
     java -jar "$CONTROL_JAR" \
@@ -224,7 +239,7 @@ echo "  virbius-core    $(cargo metadata --format-version 1 --no-deps 2>/dev/nul
 echo "  virbius-kernel  $(cargo metadata --format-version 1 --no-deps 2>/dev/null | python3 -c 'import sys,json; d=json.load(sys.stdin); print([p for p in d["packages"] if p["name"]=="virbius-kernel"][0]["version"])' 2>/dev/null || echo '0.1.0')"
 echo "  virbius-control http://127.0.0.1:8080"
 echo "  virbius-engine  http://127.0.0.1:8082"
-echo "  Redis           $VIRBIUS_REDIS_URL"
+echo "  Redis           $(echo "$VIRBIUS_REDIS_URL" | sed -E 's#(://)[^/@]*@#\1***@#')"
 echo "  Kafka           ${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}"
 echo "  Logs:           $LOG_DIR"
 echo ""

@@ -36,7 +36,8 @@ public class JdbcTenantApiCredentialRepository implements TenantApiCredentialRep
                 rs.getString("created_by"),
                 rs.getTimestamp("created_at").toInstant(),
                 timestampToInstant(rs.getTimestamp("revoked_at")),
-                timestampToInstant(rs.getTimestamp("last_used_at")));
+                timestampToInstant(rs.getTimestamp("last_used_at")),
+                rs.getString("hash_algo"));
     }
 
     private static Instant timestampToInstant(Timestamp ts) {
@@ -48,7 +49,7 @@ public class JdbcTenantApiCredentialRepository implements TenantApiCredentialRep
         List<TenantApiCredential> rows = jdbc.query(
                 """
                 SELECT credential_id, tenant_id, `role`, key_hash, key_prefix, label, status,
-                       created_by, created_at, revoked_at, last_used_at
+                       created_by, created_at, revoked_at, last_used_at, hash_algo
                 FROM tb_tenant_api_credential
                 WHERE key_hash = ? AND status = ?
                 """,
@@ -63,7 +64,7 @@ public class JdbcTenantApiCredentialRepository implements TenantApiCredentialRep
         return jdbc.query(
                 """
                 SELECT credential_id, tenant_id, `role`, key_hash, key_prefix, label, status,
-                       created_by, created_at, revoked_at, last_used_at
+                       created_by, created_at, revoked_at, last_used_at, hash_algo
                 FROM tb_tenant_api_credential
                 WHERE tenant_id = ?
                 ORDER BY created_at DESC
@@ -83,8 +84,8 @@ public class JdbcTenantApiCredentialRepository implements TenantApiCredentialRep
                 """
                 INSERT INTO tb_tenant_api_credential
                     (credential_id, tenant_id, `role`, key_hash, key_prefix, label, status,
-                     created_by, created_at, revoked_at, last_used_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     created_by, created_at, revoked_at, last_used_at, hash_algo)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 credential.credentialId(),
                 credential.tenantId(),
@@ -96,7 +97,22 @@ public class JdbcTenantApiCredentialRepository implements TenantApiCredentialRep
                 credential.createdBy(),
                 Timestamp.from(credential.createdAt()),
                 credential.revokedAt() != null ? Timestamp.from(credential.revokedAt()) : null,
-                credential.lastUsedAt() != null ? Timestamp.from(credential.lastUsedAt()) : null);
+                credential.lastUsedAt() != null ? Timestamp.from(credential.lastUsedAt()) : null,
+                credential.hashAlgoOrLegacy());
+    }
+
+    @Override
+    public int updateKeyHash(String credentialId, String keyHash, String hashAlgo) {
+        return jdbc.update(
+                """
+                UPDATE tb_tenant_api_credential
+                SET key_hash = ?, hash_algo = ?
+                WHERE credential_id = ? AND status = ?
+                """,
+                keyHash,
+                hashAlgo,
+                credentialId,
+                TenantApiCredential.STATUS_ACTIVE);
     }
 
     @Override

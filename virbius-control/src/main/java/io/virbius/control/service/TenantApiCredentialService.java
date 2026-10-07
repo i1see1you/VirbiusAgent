@@ -28,20 +28,54 @@ public class TenantApiCredentialService {
 
     private final TenantApiCredentialRepository repository;
     private final TenantRepository tenantRepository;
+    private final String apiKeyPepper;
     private final SecureRandom secureRandom = new SecureRandom();
 
     public TenantApiCredentialService(
             TenantApiCredentialRepository repository, TenantRepository tenantRepository) {
-        this.repository = repository;
-        this.tenantRepository = tenantRepository;
+        this(repository, tenantRepository, "");
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
+    public TenantApiCredentialService(
+            TenantApiCredentialRepository repository,
+            TenantRepository tenantRepository,
+            @org.springframework.beans.factory.annotation.Value(
+                    "${virbius.security.api-key.pepper:}") String apiKeyPepper) {
+        this.repository = repository;
+        this.tenantRepository = tenantRepository;
+        this.apiKeyPepper = apiKeyPepper == null ? "" : apiKeyPepper;
+    }
+
+    /**
+     * Authenticate a raw token. Prefers the peppered HMAC; falls back to the legacy
+     * unkeyed SHA-256 and transparently upgrades the row on first use, so keys
+     * issued before the pepper keep working without re-issuance.
+     */
     public Optional<TenantApiCredential> findActiveByToken(String rawToken) {
         if (rawToken == null || rawToken.isBlank()) {
             return Optional.empty();
         }
-        String hash = ApiKeyHasher.sha256Hex(rawToken.trim());
-        return repository.findActiveByKeyHash(hash);
+        String trimmed = rawToken.trim();
+
+        if (!apiKeyPepper.isBlank()) {
+            String hmac = ApiKeyHasher.hmacSha256Hex(apiKeyPepper, trimmed);
+            Optional<TenantApiCredential> byHmac = repository.findActiveByKeyHash(hmac);
+            if (byHmac.isPresent()) {
+                return byHmac;
+            }
+            String legacyHash = ApiKeyHasher.sha256Hex(trimmed);
+            Optional<TenantApiCredential> byLegacy = repository.findActiveByKeyHash(legacyHash);
+            if (byLegacy.isPresent() && TenantApiCredentialConstants.HASH_ALGO_LEGACY
+                    .equals(byLegacy.get().hashAlgoOrLegacy())) {
+                repository.updateKeyHash(
+                        byLegacy.get().credentialId(), hmac, TenantApiCredentialConstants.HASH_ALGO_HMAC);
+            }
+            return byLegacy;
+        }
+
+        // No pepper configured (dev): keep the legacy lookup semantics.
+        return repository.findActiveByKeyHash(ApiKeyHasher.sha256Hex(trimmed));
     }
 
     public void touchLastUsed(String credentialId) {
@@ -89,7 +123,13 @@ public class TenantApiCredentialService {
 
     private Map<String, Object> issueInternal(String tenantId, ApiRole role, String label, String createdBy) {
         String apiKey = generateApiKey();
-        String hash = ApiKeyHasher.sha256Hex(apiKey);
+        boolean peppered = !apiKeyPepper.isBlank();
+        String hash = peppered
+                ? ApiKeyHasher.hmacSha256Hex(apiKeyPepper, apiKey)
+                : ApiKeyHasher.sha256Hex(apiKey);
+        String hashAlgo = peppered
+                ? TenantApiCredentialConstants.HASH_ALGO_HMAC
+                : TenantApiCredentialConstants.HASH_ALGO_LEGACY;
         String credentialId = UUID.randomUUID().toString();
         Instant now = Instant.now();
         String safeLabel = label != null && !label.isBlank() ? label.trim() : null;
@@ -104,7 +144,8 @@ public class TenantApiCredentialService {
                 createdBy,
                 now,
                 null,
-                null);
+                null,
+                hashAlgo);
         repository.insert(stored);
         Map<String, Object> out = new LinkedHashMap<>(toPublicView(stored));
         out.put("api_key", apiKey);

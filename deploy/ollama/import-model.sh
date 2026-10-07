@@ -37,6 +37,7 @@ TEMPLATE """{{ if .System }}<|im_start|>system
 {{ end }}{{ end }}"""
 PARAMETER stop "<|im_start|>"
 PARAMETER stop "<|im_end|>"
+PARAMETER temperature 0
 PARAMETER num_ctx 4096
 EOF
 

@@ -59,6 +59,11 @@ spec:
             - --character-set-server=utf8mb4
             - --collation-server=utf8mb4_unicode_ci
             - --sql_mode=NO_ENGINE_SUBSTITUTION
+            {{- if .Values.mysql.tls.enabled }}
+            - --ssl-ca=/certs/mysql/mysql-ca.pem
+            - --ssl-cert=/certs/mysql/mysql-server-cert.pem
+            - --ssl-key=/certs/mysql/mysql-server-key.pem
+            {{- end }}
           readinessProbe:
             exec:
               command:
@@ -82,6 +87,28 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/mysql
+            {{- if .Values.mysql.tls.enabled }}
+            - name: mysql-tls
+              mountPath: /certs/mysql
+              readOnly: true
+            {{- end }}
+      {{- if .Values.mysql.tls.enabled }}
+      volumes:
+        - name: mysql-tls
+          secret:
+            {{- if .Values.mysql.tls.existingSecret }}
+            secretName: {{ .Values.mysql.tls.existingSecret }}
+            {{- else }}
+            secretName: {{ include "virbius.secretName" . }}
+            {{- end }}
+            items:
+              - key: mysql-server-cert
+                path: mysql-server-cert.pem
+              - key: mysql-server-key
+                path: mysql-server-key.pem
+              - key: mysql-ca
+                path: mysql-ca.pem
+      {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data

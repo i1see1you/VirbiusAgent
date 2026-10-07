@@ -264,6 +264,7 @@ CREATE TABLE IF NOT EXISTS tb_tenant_api_credential (
     created_at      TIMESTAMP    NOT NULL,
     revoked_at      TIMESTAMP,
     last_used_at    TIMESTAMP,
+    hash_algo       VARCHAR(24)  NOT NULL DEFAULT 'legacy-sha256',
     PRIMARY KEY (credential_id),
     UNIQUE (key_hash),
     CHECK (`role` IN ('tenant_viewer', 'tenant_admin', 'platform_admin')),

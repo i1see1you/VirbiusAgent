@@ -61,6 +61,9 @@ dependency-reduced-pom.xml
 # Backup files
 *.bak
 
+# License JWT material — must never be committed (test fixtures are generated at runtime)
+*.license.jwt
+
 # LLM fine-tuning workspace (model weights, training data, checkpoints)
 virbius-guard/
 

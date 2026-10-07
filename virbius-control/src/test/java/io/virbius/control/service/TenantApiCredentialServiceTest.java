@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -101,6 +104,89 @@ class TenantApiCredentialServiceTest {
         when(repository.findActiveByKeyHash(hash)).thenReturn(Optional.of(cred));
 
         assertTrue(service.findActiveByToken(apiKey).isPresent());
+    }
+
+    @Test
+    void issueWithPepperStoresHmacNotSha256() {
+        bindIssuer(new ApiKeyPrincipal("issuer-1", "default", ApiRole.TENANT_ADMIN, null));
+        when(tenantRepository.exists("default")).thenReturn(true);
+        String pepper = "unit-test-pepper-0123456789abcdef0123456789abcdef";
+
+        TenantApiCredentialService service =
+                new TenantApiCredentialService(repository, tenantRepository, pepper);
+        var issued = service.issueForTenant("default", ApiRole.TENANT_VIEWER, "edge");
+        String apiKey = (String) issued.get("api_key");
+
+        ArgumentCaptor<TenantApiCredential> captor = ArgumentCaptor.forClass(TenantApiCredential.class);
+        verify(repository).insert(captor.capture());
+        TenantApiCredential stored = captor.getValue();
+        assertEquals(ApiKeyHasher.hmacSha256Hex(pepper, apiKey), stored.keyHash());
+        assertEquals(TenantApiCredentialConstants.HASH_ALGO_HMAC, stored.hashAlgo());
+    }
+
+    @Test
+    void legacyKeyUpgradesToHmacOnFirstUse() {
+        String pepper = "unit-test-pepper-0123456789abcdef0123456789abcdef";
+        TenantApiCredentialService service =
+                new TenantApiCredentialService(repository, tenantRepository, pepper);
+        String apiKey = "vrb_tk_legacy_key";
+        String legacyHash = ApiKeyHasher.sha256Hex(apiKey);
+        TenantApiCredential legacyRow = new TenantApiCredential(
+                "id-legacy",
+                "default",
+                ApiRole.TENANT_VIEWER,
+                legacyHash,
+                "vrb_tk_leg",
+                null,
+                TenantApiCredential.STATUS_ACTIVE,
+                "seed",
+                Instant.now(),
+                null,
+                null,
+                TenantApiCredentialConstants.HASH_ALGO_LEGACY);
+
+        // HMAC lookup misses; legacy lookup hits → row is upgraded in place.
+        when(repository.findActiveByKeyHash(ApiKeyHasher.hmacSha256Hex(pepper, apiKey)))
+                .thenReturn(Optional.empty());
+        when(repository.findActiveByKeyHash(legacyHash)).thenReturn(Optional.of(legacyRow));
+        when(repository.updateKeyHash(
+                eq("id-legacy"),
+                eq(ApiKeyHasher.hmacSha256Hex(pepper, apiKey)),
+                eq(TenantApiCredentialConstants.HASH_ALGO_HMAC)))
+                .thenReturn(1);
+
+        var found = service.findActiveByToken(apiKey);
+        assertTrue(found.isPresent());
+        verify(repository).updateKeyHash(
+                eq("id-legacy"),
+                eq(ApiKeyHasher.hmacSha256Hex(pepper, apiKey)),
+                eq(TenantApiCredentialConstants.HASH_ALGO_HMAC));
+    }
+
+    @Test
+    void alreadyUpgradedKeySkipsSecondUpgrade() {
+        String pepper = "unit-test-pepper-0123456789abcdef0123456789abcdef";
+        TenantApiCredentialService service =
+                new TenantApiCredentialService(repository, tenantRepository, pepper);
+        String apiKey = "vrb_tk_hmac_key";
+        TenantApiCredential hmacRow = new TenantApiCredential(
+                "id-hmac",
+                "default",
+                ApiRole.TENANT_VIEWER,
+                ApiKeyHasher.hmacSha256Hex(pepper, apiKey),
+                "vrb_tk_hma",
+                null,
+                TenantApiCredential.STATUS_ACTIVE,
+                "seed",
+                Instant.now(),
+                null,
+                null,
+                TenantApiCredentialConstants.HASH_ALGO_HMAC);
+        when(repository.findActiveByKeyHash(ApiKeyHasher.hmacSha256Hex(pepper, apiKey)))
+                .thenReturn(Optional.of(hmacRow));
+
+        assertTrue(service.findActiveByToken(apiKey).isPresent());
+        verify(repository, never()).updateKeyHash(anyString(), anyString(), anyString());
     }
 
     private static void bindIssuer(ApiKeyPrincipal principal) {

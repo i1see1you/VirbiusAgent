@@ -489,12 +489,71 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 
 靶场 Agent 关卡仍在 Pod 内用 stdio 拉起 `virbius-mcp-proxy`。Ingress 上的端侧是给集群外 MCP 客户端的 TCP 入口，upstream 默认 `http://virbius-demo:9091`。
 
-默认启用集群内 Ollama：Job 从 HuggingFace 下载 VirbiusGuard GGUF（V15 F16，约 1.5GB，PVC 缓存，升级不重复下）并 `ollama create virbiusguard`。`engine.promptLlm.baseUrl` 留空即指向 `http://{release}-ollama:11434`。国内把 `ollama.ggufUrl` 换成 ModelScope：
+默认启用集群内 Ollama：Job 从 HuggingFace 下载 VirbiusGuard GGUF（V2.0 F16，约 1.5GB，PVC 缓存，升级不重复下）并 `ollama create virbiusguard`。`engine.promptLlm.baseUrl` 留空即指向 `http://{release}-ollama:11434`。国内把 `ollama.ggufUrl` 换成 ModelScope：
 
-`https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v15-f16.gguf`
+`https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v2.0-f16.gguf`
 
 设 `ollama.enabled=false` 时必须填写 `engine.promptLlm.baseUrl`，否则 `helm` 会直接失败。关掉集群内 MySQL / Kafka / Redis 时分别填 `mysql.jdbcUrl`、`kafka.bootstrapServers`、`redis.url`，engine/control 不会再死等集群内 Service。GPU 默认关；有 NVIDIA 设备时设 `ollama.gpu.enabled=true`。
 
 `helm uninstall virbius -n virbius` **不会**删除 PVC。
 
 ---
+
+## 9. P0 凭证与数据通道安全基线
+
+适用于 `docker-compose.prod.yml` 与 Helm（prod/staging profile）。控制面启动时执行
+`SecretPolicyValidator`，出现下列任一违规即**启动失败**。
+
+### 9.1 必填环境变量
+
+| 变量 | 范围 | 说明 |
+|---|---|---|
+| `VIRBIUS_LICENSE_MASTER_KEY` | 所有 profile | ≥32 字符；空值/已知默认值直接失败 |
+| `VIRBIUS_API_KEY_PEPPER` | 开启 API-Key 认证时（prod 默认开） | ≥32 字符；租户 API Key 的 HMAC pepper |
+| `REDIS_PASSWORD` | compose prod / Helm（`secrets.redisPassword`） | 写进 `VIRBIUS_REDIS_URL`：`redis://:<password>@host:port` |
+| `KAFKA_SASL_USERNAME` / `KAFKA_SASL_PASSWORD` | prod | SCRAM-SHA-256 凭证（`KAFKA_SECURITY_PROTOCOL=SASL_PLAINTEXT`） |
+| `MYSQL_PASSWORD` / `MYSQL_ROOT_PASSWORD` | prod | |
+| `VIRBIUS_STRICT_SECRETS` | 可选 | 仅本地 prod-profile 开发环境设 `false`（如 `.vscode/launch.json`） |
+
+`run-local.sh` 会自动在 gitignore 的数据目录生成开发用 master key。
+
+### 9.2 MySQL TLS（自签证书，compose 生成）
+
+`docker-compose.prod.yml` 的 `cert-gen` 一次性服务（`deploy/certs/gen-mysql-certs.sh`）
+生成 CA + 服务端证书（SAN 含 `DNS:mysql`）到 `mysql-certs` 卷；control 以
+`sslMode=VERIFY_IDENTITY&serverSslCert=/certs/ca.pem` 连接。Helm 侧设
+`mysql.tls.enabled=true` 并提供 `mysql-server-cert` / `mysql-server-key` /
+`mysql-ca`（values 或 `mysql.tls.existingSecret`）。
+
+**证书轮换 runbook**：只删 `server-cert.pem`/`server-key.pem`（保留 CA），重启
+`cert-gen` + `mysql`，再滚动重启 `virbius-control`（CA 不变，客户端无感）。CA 轮换
+需两者同步滚动。默认有效期 825 天，到期前 30 天告警。
+
+### 9.3 Kafka SASL（SCRAM-SHA-256 + PLAINTEXT）——已接受风险
+
+客户端用 SCRAM（挑战-响应，口令不明文过网）；但客户端 listener 传输层为
+PLAINTEXT，即 **审计/trace 载荷在集群内网明文传输**。P0 接受该风险的条件：
+
+1. Kafka 仅在可信域内可达（NetworkPolicy / compose 内部网络；loopback 的
+   `INTERNAL` listener 仅用于 broker 内部与 SCRAM  provisioning）。
+2. 载荷脱敏持续有效（设计上审计事件不含凭证）。
+3. **升级触发条件**（先到先触发）：Kafka 跨主机/跨网段部署，或合规审计要求
+   传输加密 → 切换 `SASL_SSL`（P1，可复用 MySQL CA 或独立 CA）。
+
+### 9.4 认证默认值
+
+- 规范 env 名为 `VIRBIUS_SECURITY_API_KEY_ENABLED`（旧名
+  `VIRBIUS_API_KEY_ENABLED` 兼容一版，已标记废弃）。
+- prod/staging 默认开启 API-Key 认证；全部认证机制关闭时启动失败
+  （隐式 dev 管理员仅限 dev profile）。
+- `virbius-auth` 仅测试环境使用：dev compose 保留带注释的 `admin/admin`
+  便利默认值（仅限测试环境——任何非 dev 部署都不要设置）；线上接用户 SSO
+  且不部署该模块（见 SSO_INTEGRATION.md）。
+
+### 9.5 升级说明
+
+- 存量 API Key 无需重发：legacy SHA-256 行在首次认证时透明升级为
+  peppered HMAC（`hash_algo` 列，Flyway `V8`）。
+- 存量 `private_key_enc` 仍按旧派生解密；新签发密钥使用 `v1:` HKDF 信封。
+- 旧本地开发库可用 `virbius.license.allow-insecure-dev-key=true`
+  （**仅 dev profile**）在换强密钥前继续启动。

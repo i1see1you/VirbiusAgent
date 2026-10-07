@@ -15,7 +15,7 @@ spring:
 virbius:
   security:
     api-key:
-      enabled: ${VIRBIUS_API_KEY_ENABLED:false}
+      enabled: ${VIRBIUS_SECURITY_API_KEY_ENABLED:${VIRBIUS_API_KEY_ENABLED:false}}
     operator-jwt:
       enabled: ${VIRBIUS_OPERATOR_JWT_ENABLED:false}
 

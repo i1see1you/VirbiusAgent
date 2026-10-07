@@ -65,6 +65,7 @@ spec:
               value: {{ .Values.engine.grpc.port | default 50051 | quote }}
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: {{ include "virbius.kafkaBootstrap" . | quote }}
+            {{- include "virbius.kafkaSaslEnv" . | nindent 12 }}
             - name: VIRBIUS_REDIS_URL
               value: {{ include "virbius.redisUrl" . | quote }}
             - name: VIRBIUS_CONTROL_BASE_URL

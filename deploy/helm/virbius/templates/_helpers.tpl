@@ -95,22 +95,58 @@ In-cluster Kafka bootstrap, or kafka.bootstrapServers when kafka.enabled=false.
 {{- end }}
 
 {{/*
-In-cluster Redis URL, or redis.url when redis.enabled=false.
+In-cluster Redis URL (with password when redis.authEnabled), or redis.url
+when redis.enabled=false. With an existingSecret + in-cluster Redis, set
+redis.url explicitly (the chart cannot read the password out of your secret).
 */}}
 {{- define "virbius.redisUrl" -}}
 {{- if .Values.redis.enabled -}}
+{{- if .Values.redis.authEnabled -}}
+redis://:{{ required "redis.authEnabled=true: set secrets.redisPassword (or, with an existingSecret, set redis.url to a password-embedded URL)" .Values.secrets.redisPassword }}@{{ include "virbius.fullname" . }}-redis:6379
+{{- else -}}
 redis://{{ include "virbius.fullname" . }}-redis:6379
+{{- end -}}
 {{- else -}}
 {{- required "redis.enabled is false; set redis.url" .Values.redis.url -}}
 {{- end -}}
 {{- end }}
 
 {{/*
-In-cluster MySQL JDBC URL, or mysql.jdbcUrl when mysql.enabled=false.
+Kafka SASL client env block (empty when kafka.saslEnabled=false).
+Emits 0-indent entries; include with:
+  {{- include "virbius.kafkaSaslEnv" . | nindent 12 }}
+Expects secret keys kafka-sasl-username / kafka-sasl-password.
+*/}}
+{{- define "virbius.kafkaSaslEnv" -}}
+{{- if .Values.kafka.saslEnabled }}
+- name: KAFKA_SECURITY_PROTOCOL
+  value: SASL_PLAINTEXT
+- name: KAFKA_SASL_MECHANISM
+  value: SCRAM-SHA-256
+- name: KAFKA_SASL_USERNAME
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "virbius.secretName" . }}
+      key: kafka-sasl-username
+- name: KAFKA_SASL_PASSWORD
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "virbius.secretName" . }}
+      key: kafka-sasl-password
+{{- end }}
+{{- end }}
+
+{{/*
+In-cluster MySQL JDBC URL (TLS-verified when mysql.tls.enabled), or
+mysql.jdbcUrl when mysql.enabled=false.
 */}}
 {{- define "virbius.jdbcUrl" -}}
 {{- if .Values.mysql.enabled -}}
+{{- if .Values.mysql.tls.enabled -}}
+jdbc:mariadb://{{ include "virbius.fullname" . }}-mysql:3306/virbius?sslMode=VERIFY_IDENTITY&serverSslCert=/certs/mysql-ca.pem&serverTimezone=UTC&sessionVariables=sql_mode='ALLOW_INVALID_DATES,NO_ENGINE_SUBSTITUTION'
+{{- else -}}
 jdbc:mariadb://{{ include "virbius.fullname" . }}-mysql:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&sessionVariables=sql_mode='ALLOW_INVALID_DATES,NO_ENGINE_SUBSTITUTION'
+{{- end -}}
 {{- else -}}
 {{- required "mysql.enabled is false; set mysql.jdbcUrl" .Values.mysql.jdbcUrl -}}
 {{- end -}}

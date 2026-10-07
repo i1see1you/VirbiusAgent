@@ -14,6 +14,12 @@ public interface TenantApiCredentialRepository {
 
     void insert(TenantApiCredential credential);
 
+    /**
+     * Upgrade a credential's stored hash (legacy-sha256 → hmac-sha256-pepper).
+     * Returns the number of rows updated.
+     */
+    int updateKeyHash(String credentialId, String keyHash, String hashAlgo);
+
     void revoke(String tenantId, String credentialId);
 
     void touchLastUsed(String credentialId);

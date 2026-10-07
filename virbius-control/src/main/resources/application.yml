@@ -20,6 +20,12 @@ spring:
       max-request-size: ${VIRBIUS_UPLOAD_MAX_REQUEST_SIZE:25MB}
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    # SASL client config (ignored when KAFKA_SECURITY_PROTOCOL is PLAINTEXT/unset).
+    # Template builds the JAAS line from the SCRAM credentials below.
+    properties:
+      security.protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+      sasl.mechanism: ${KAFKA_SASL_MECHANISM:SCRAM-SHA-256}
+      sasl.jaas.config: org.apache.kafka.common.security.scram.ScramLoginModule required username="${KAFKA_SASL_USERNAME:}" password="${KAFKA_SASL_PASSWORD:}";
     consumer:
       group-id: virbius-audit-ingest
       auto-offset-reset: earliest
@@ -29,7 +35,10 @@ spring:
 virbius:
   security:
     api-key:
-      enabled: ${VIRBIUS_API_KEY_ENABLED:false}
+      # Canonical env: VIRBIUS_SECURITY_API_KEY_ENABLED (VIRBIUS_API_KEY_ENABLED kept
+      # as a deprecated alias for one release).
+      enabled: ${VIRBIUS_SECURITY_API_KEY_ENABLED:${VIRBIUS_API_KEY_ENABLED:false}}
+      pepper: ${VIRBIUS_API_KEY_PEPPER:}
     operator-jwt:
       enabled: ${VIRBIUS_OPERATOR_JWT_ENABLED:false}
       jwks-url: ${VIRBIUS_AUTH_JWKS_URL:http://127.0.0.1:8082/.well-known/jwks.json}
@@ -37,6 +46,13 @@ virbius:
       audience: virbius-control
       login-url: ${VIRBIUS_AUTH_LOGIN_URL:http://127.0.0.1:8082/login}
       token-url: ${VIRBIUS_AUTH_TOKEN_URL:http://127.0.0.1:8082/oauth/token}
+    # Empty = auto: strict for prod/staging profiles. Set VIRBIUS_STRICT_SECRETS=false
+    # only for local, prod-profile-like dev environments.
+    strict-secrets: ${VIRBIUS_STRICT_SECRETS:}
+  license:
+    master-key: ${VIRBIUS_LICENSE_MASTER_KEY:}
+    # Dev-only escape hatch for legacy local databases with weak/denylisted keys.
+    allow-insecure-dev-key: ${VIRBIUS_LICENSE_ALLOW_INSECURE_DEV_KEY:false}
   data-dir: ${VIRBIUS_DATA_DIR:./data}
   redis:
     url: ${VIRBIUS_REDIS_URL:redis://127.0.0.1:6379}

@@ -13,14 +13,32 @@
 #
 #  Prerequisites:
 #    - Create a .env file (or export env vars) with required secrets:
-#      MYSQL_ROOT_PASSWORD, MYSQL_PASSWORD, VIRBIUS_LICENSE_MASTER_KEY
+#      MYSQL_ROOT_PASSWORD, MYSQL_PASSWORD, VIRBIUS_LICENSE_MASTER_KEY,
+#      VIRBIUS_API_KEY_PEPPER, REDIS_PASSWORD,
+#      KAFKA_SASL_USERNAME, KAFKA_SASL_PASSWORD
 #    - Optional: VIRBIUS_GUARD_GGUF_URL (default HuggingFace V15 F16)
 #      China: https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v15-f16.gguf
+#
+#  P0 security baseline (see DEPLOYMENT.md):
+#    - Redis requires a password; MySQL uses self-signed TLS (VERIFY_IDENTITY)
+#    - Kafka clients use SASL/SCRAM-SHA-256 over PLAINTEXT (TLS is a P1 item;
+#      accepted risk: audit payloads traverse the internal network unencrypted —
+#      upgrade to SASL_SSL when Kafka spans hosts/networks or compliance requires)
+#    - Control runs with strict secret policy: missing/weak secrets fail startup
 # =============================================================================
 
 services:
 
-  # ── MySQL 8 (production database) ──────────────────────────────────────
+  # ── MySQL TLS certificates (self-signed CA, generated once) ────────────
+  cert-gen:
+    image: ${OPENSSL_IMAGE:-alpine/openssl:3.3}
+    volumes:
+      - mysql-certs:/certs
+      - ./deploy/certs/gen-mysql-certs.sh:/gen-mysql-certs.sh:ro
+    entrypoint: ["sh", "/gen-mysql-certs.sh"]
+    restart: "no"
+
+  # ── MySQL 8 (production database, TLS enabled) ──────────────────────────
   mysql:
     image: mysql:8.0
     ports:
@@ -32,51 +50,88 @@ services:
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env or environment}
     volumes:
       - mysql-data:/var/lib/mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --sql_mode=NO_ENGINE_SUBSTITUTION
+      - mysql-certs:/certs:ro
+    command: >
+      --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+      --sql_mode=NO_ENGINE_SUBSTITUTION
+      --ssl-ca=/certs/ca.pem
+      --ssl-cert=/certs/server-cert.pem
+      --ssl-key=/certs/server-key.pem
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p$$MYSQL_ROOT_PASSWORD"]
       interval: 5s
       timeout: 5s
       retries: 10
+    depends_on:
+      cert-gen:
+        condition: service_completed_successfully
     restart: unless-stopped
 
-  # ── Kafka (production message queue, KRaft mode — no Zookeeper) ────────
+  # ── Kafka (audit + trace; KRaft, SCRAM-SHA-256 on the client listener) ──
   kafka:
     image: apache/kafka:3.7.0
     ports:
       - "9092:9092"
     environment:
-      # KRaft mode (no Zookeeper needed)
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: controller,broker
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      # CLIENT: SASL/SCRAM for in-network producers/consumers.
+      # INTERNAL: loopback-only PLAINTEXT used by inter-broker traffic and the
+      # SCRAM provisioning sidecar (not reachable from other containers).
+      KAFKA_LISTENERS: CLIENT://0.0.0.0:9092,INTERNAL://localhost:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: CLIENT://kafka:9092,INTERNAL://localhost:29092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      # Auto-create topics
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CLIENT:SASL_PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_SASL_ENABLED_MECHANISMS: SCRAM-SHA-256
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: "3"
       KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
       # Required cluster ID for KRaft mode
       CLUSTER_ID: MkUjOEJhQjY1QUY1NDQ2Nk1BODI
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 10
     restart: unless-stopped
 
-  # ── Redis (still needed for counters, cache, session state) ────────────
+  # One-shot: create the SCRAM user via the loopback listener (shares the
+  # kafka container's network namespace, so localhost:29092 is reachable).
+  kafka-provision:
+    image: apache/kafka:3.7.0
+    network_mode: "service:kafka"
+    environment:
+      KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:?set KAFKA_SASL_USERNAME in .env or environment}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:?set KAFKA_SASL_PASSWORD in .env or environment}
+    entrypoint:
+      - "/bin/bash"
+      - "-c"
+      - >-
+        for i in $$(seq 1 60); do
+        /opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:29092 --alter
+        --add-config "SCRAM-SHA-256=[iterations=8192,password=$${KAFKA_SASL_PASSWORD}]"
+        --entity-type users --entity-name "$${KAFKA_SASL_USERNAME}" >/dev/null 2>&1 && exit 0;
+        sleep 2; done;
+        echo "kafka-provision: failed to create SCRAM user"; exit 1
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  # ── Redis (counters, cache, session state — password required) ─────────
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env or environment}
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD}"]
     volumes:
       - redis-data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -103,7 +158,7 @@ services:
     image: ${CURL_IMAGE:-curlimages/curl:8.12.1}
     user: "0"
     environment:
-      VIRBIUS_GUARD_GGUF_URL: ${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf}
+      VIRBIUS_GUARD_GGUF_URL: ${VIRBIUS_GUARD_GGUF_URL:-https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v2.0-f16.gguf}
       VIRBIUS_GUARD_GGUF_PATH: /models/model.gguf
     volumes:
       - ollama-import:/models
@@ -156,14 +211,18 @@ services:
       https_proxy: ""
       NO_PROXY: "*"
       no_proxy: "*"
-      # ── Kafka ──
+      # ── Kafka (SASL/SCRAM) ──
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_SASL_MECHANISM: SCRAM-SHA-256
+      KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:?set KAFKA_SASL_USERNAME in .env or environment}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:?set KAFKA_SASL_PASSWORD in .env or environment}
       # ── LLM (in-stack Ollama) ──
       VIRBIUS_PROMPT_LLM_BASE_URL: http://ollama:11434
       VIRBIUS_PROMPT_LLM_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-virbiusguard}
       VIRBIUS_PROMPT_LLM_TIMEOUT_MS: "30000"
-      # ── Redis (still needed for session risk, cache) ──
-      VIRBIUS_REDIS_URL: redis://redis:6379
+      # ── Redis (authenticated) ──
+      VIRBIUS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379
       VIRBIUS_CONTROL_BASE_URL: http://virbius-control:8080
       # ── Logging ──
       VIRBIUS_LOG_DIR: /var/log/virbius
@@ -172,8 +231,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+      kafka-provision:
+        condition: service_completed_successfully
       ollama-init:
         condition: service_healthy
     extra_hosts:
@@ -201,29 +260,34 @@ services:
       https_proxy: ""
       NO_PROXY: "*"
       no_proxy: "*"
-      # ── MySQL ──
-      VIRBIUS_JDBC_URL: jdbc:mariadb://mysql:3306/virbius?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+      # ── MySQL (TLS, self-signed CA from cert-gen) ──
+      VIRBIUS_JDBC_URL: jdbc:mariadb://mysql:3306/virbius?sslMode=VERIFY_IDENTITY&serverSslCert=/certs/ca.pem&serverTimezone=UTC
       VIRBIUS_JDBC_USER: virbius
       VIRBIUS_JDBC_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env or environment}
-      # ── Kafka ──
+      # ── Kafka (SASL/SCRAM) ──
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      # ── Redis ──
-      VIRBIUS_REDIS_URL: redis://redis:6379
+      KAFKA_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_SASL_MECHANISM: SCRAM-SHA-256
+      KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:?set KAFKA_SASL_USERNAME in .env or environment}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:?set KAFKA_SASL_PASSWORD in .env or environment}
+      # ── Redis (authenticated) ──
+      VIRBIUS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379
       VIRBIUS_ENGINE_URL: http://virbius-engine:8082
-      # ── Security ──
+      # ── Security (strict policy enforced in prod profile) ──
       VIRBIUS_LICENSE_MASTER_KEY: ${VIRBIUS_LICENSE_MASTER_KEY:?set VIRBIUS_LICENSE_MASTER_KEY in .env or environment}
-      VIRBIUS_SECURITY_API_KEY_ENABLED: "false"  # disable API key auth for local testing
+      VIRBIUS_API_KEY_PEPPER: ${VIRBIUS_API_KEY_PEPPER:?set VIRBIUS_API_KEY_PEPPER in .env or environment}
       # ── Logging ──
       VIRBIUS_LOG_DIR: /var/log/virbius
     volumes:
       - control-logs:/var/log/virbius
+      - mysql-certs:/certs:ro
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
-      kafka:
-        condition: service_healthy
+      kafka-provision:
+        condition: service_completed_successfully
       virbius-engine:
         condition: service_healthy
     healthcheck:
@@ -235,6 +299,7 @@ services:
 
 volumes:
   mysql-data:
+  mysql-certs:
   kafka-data:
   redis-data:
   engine-logs:

@@ -65,6 +65,40 @@ class ApiKeyAuthFilterTest {
         org.junit.jupiter.api.Assertions.assertEquals(403, response.getStatus());
     }
 
+    @Test
+    void nonDevProfileWithAllAuthDisabledRejectsImplicitPrincipal() throws Exception {
+        org.springframework.mock.env.MockEnvironment prod = new org.springframework.mock.env.MockEnvironment();
+        prod.setActiveProfiles("prod");
+        ApiKeyAuthFilter filter = new ApiKeyAuthFilter(
+                credentialService, objectMapper(), false, false, null, null, prod);
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/api/v1/admin/tenants/default/rules");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(filterChain, never()).doFilter(request, response);
+        org.junit.jupiter.api.Assertions.assertEquals(503, response.getStatus());
+        org.junit.jupiter.api.Assertions.assertNull(
+                request.getAttribute(io.virbius.control.security.ApiKeyAuthContext.REQUEST_ATTR),
+                "no implicit platform_admin principal may be granted outside the dev profile");
+    }
+
+    @Test
+    void devProfileWithAllAuthDisabledStillGrantsDevPrincipal() throws Exception {
+        org.springframework.mock.env.MockEnvironment dev = new org.springframework.mock.env.MockEnvironment();
+        dev.setActiveProfiles("dev");
+        ApiKeyAuthFilter filter = new ApiKeyAuthFilter(
+                credentialService, objectMapper(), false, false, null, null, dev);
+        MockHttpServletRequest request = new MockHttpServletRequest(
+                "GET", "/api/v1/admin/tenants/default/rules");
+        MockHttpServletResponse response = new MockHttpServletResponse();
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(filterChain).doFilter(request, response);
+    }
+
     private static TenantApiCredential credential(String tenantId, ApiRole role) {
         return new TenantApiCredential(
                 "cred-1",

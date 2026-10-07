@@ -36,19 +36,37 @@ engine:
 mysql:
   enabled: true
   # jdbcUrl: jdbc:mariadb://mysql.example:3306/virbius?...   # required if enabled=false
+  # P0 TLS baseline (recommended for production):
+  tls:
+    enabled: true
+    # Prefer a pre-created Secret (cert-manager etc.) with keys
+    # mysql-server-cert / mysql-server-key / mysql-ca:
+    existingSecret: ""
+    # PEM material — only used when existingSecret is empty. Place real PEMs in
+    # the gitignored values-prod.yaml, never in this example file.
+    serverCert: ""
+    serverKey: ""
+    caPem: ""
 
 redis:
   enabled: true
-  # url: redis://redis.example:6379   # required if enabled=false
+  # url: redis://:password@redis.example:6379   # required if enabled=false
+  authEnabled: true   # Redis requires secrets.redisPassword
 
 kafka:
   enabled: true
   # bootstrapServers: kafka.example:9092   # required if enabled=false
+  saslEnabled: true    # SCRAM credentials: secrets.kafkaSaslUsername / kafkaSaslPassword
+
+# virbius-auth is test-environment only; production integrates user SSO.
+# For a prod-like deployment set auth.enabled: false and use operator JWT/SSO.
+auth:
+  enabled: true
 
 ollama:
   enabled: true
-  # China: set ggufUrl to the ModelScope resolve URL for gguf/virbiusguard-v15-f16.gguf
-  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v15-f16.gguf
+  # China: set ggufUrl to the ModelScope resolve URL for gguf/virbiusguard-v2.0-f16.gguf
+  ggufUrl: https://huggingface.co/i1see1you/VirbiusGuard/resolve/main/gguf/virbiusguard-v2.0-f16.gguf
   gpu:
     enabled: false
 
@@ -56,7 +74,16 @@ secrets:
   existingSecret: ""
   mysqlRootPassword: "change-me-root"
   mysqlPassword: "change-me-virbius"
-  licenseMasterKey: "change-me-license-master-key"
+  # >= 32 chars; strong random value. Required in every profile.
+  licenseMasterKey: "change-me-license-master-key-0123456789abcdef"
+  # >= 32 chars; HMAC pepper for tenant API keys (required: control.apiKeyEnabled=true).
+  apiKeyPepper: "change-me-api-key-pepper-0123456789abcdef"
+  # Redis password (required: redis.authEnabled=true).
+  redisPassword: "change-me-redis-password"
+  # Kafka SCRAM credentials (required: kafka.saslEnabled=true).
+  kafkaSaslUsername: "virbius"
+  kafkaSaslPassword: "change-me-kafka-password"
+  # virbius-auth bootstrap (test environments only; empty = no bootstrap user).
   authBootstrapPassword: "change-me-ops-login"
   deepseekApiKey: "sk-REPLACE-ME"
   openrouterApiKey: ""

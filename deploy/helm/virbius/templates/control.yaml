@@ -94,8 +94,16 @@ spec:
                 secretKeyRef:
                   name: {{ include "virbius.secretName" . }}
                   key: license-master-key
+            {{- if .Values.control.apiKeyEnabled }}
+            - name: VIRBIUS_API_KEY_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: api-key-pepper
+            {{- end }}
             - name: VIRBIUS_SECURITY_API_KEY_ENABLED
               value: {{ .Values.control.apiKeyEnabled | quote }}
+            {{- include "virbius.kafkaSaslEnv" . | nindent 12 }}
             {{- if .Values.auth.enabled }}
             - name: VIRBIUS_OPERATOR_JWT_ENABLED
               value: "true"
@@ -145,9 +153,26 @@ spec:
               mountPath: /data
             - name: logs
               mountPath: /var/log/virbius
+            {{- if .Values.mysql.tls.enabled }}
+            - name: mysql-ca
+              mountPath: /certs
+              readOnly: true
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "virbius.fullname" . }}-control-data
         - name: logs
           emptyDir: {}
+        {{- if .Values.mysql.tls.enabled }}
+        - name: mysql-ca
+          secret:
+            {{- if .Values.mysql.tls.existingSecret }}
+            secretName: {{ .Values.mysql.tls.existingSecret }}
+            {{- else }}
+            secretName: {{ include "virbius.secretName" . }}
+            {{- end }}
+            items:
+              - key: mysql-ca
+                path: mysql-ca.pem
+        {{- end }}

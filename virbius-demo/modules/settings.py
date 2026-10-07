@@ -31,7 +31,7 @@ _DEFAULTS = {
     "VIRBIUS_EDGE_TENANT_ID": "owasp",
     "VIRBIUS_EDGE_APP_ID": "owasp-app",
     "VIRBIUS_EDGE_API_KEY": "",
-    "DEEPSEEK_API_KEY": "sk-REPLACE-ME",
+    "DEEPSEEK_API_KEY": "",
     "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
     "DEEPSEEK_MODEL": "deepseek-chat",
     "OPENROUTER_API_KEY": "",

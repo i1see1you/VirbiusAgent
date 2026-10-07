@@ -2,6 +2,11 @@ spring:
   # Required env: KAFKA_BOOTSTRAP_SERVERS, VIRBIUS_PROMPT_LLM_BASE_URL, VIRBIUS_PROMPT_LLM_MODEL
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    # SASL client config (ignored when KAFKA_SECURITY_PROTOCOL is PLAINTEXT/unset).
+    properties:
+      security.protocol: ${KAFKA_SECURITY_PROTOCOL:PLAINTEXT}
+      sasl.mechanism: ${KAFKA_SASL_MECHANISM:SCRAM-SHA-256}
+      sasl.jaas.config: org.apache.kafka.common.security.scram.ScramLoginModule required username="${KAFKA_SASL_USERNAME:}" password="${KAFKA_SASL_PASSWORD:}";
     producer:
       acks: all
       retries: 3

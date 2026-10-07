@@ -190,6 +190,21 @@ export VIRBIUS_UPSTREAMS='[{"name":"fs","url":"http://localhost:8001","sse_path"
 | `VIRBIUS_AUDIT_KAFKA_BROKERS` | `audit.kafka_brokers` |
 | `VIRBIUS_AUDIT_KAFKA_TOPIC` | `audit.kafka_topic` |
 
+#### Kafka SASL (P0)
+
+The audit/trace Kafka producers honor these environment variables
+(applied to both backends, read at producer creation):
+
+| Variable | Default | Notes |
+|---|---|---|
+| `VIRBIUS_KAFKA_SECURITY_PROTOCOL` | *(empty = PLAINTEXT)* | `SASL_PLAINTEXT` or `SASL_SSL` (anything else aborts) |
+| `VIRBIUS_KAFKA_SASL_MECHANISM` | `SCRAM-SHA-256` | |
+| `VIRBIUS_KAFKA_SASL_USERNAME` / `VIRBIUS_KAFKA_SASL_PASSWORD` | *(empty)* | required for SASL modes |
+| `VIRBIUS_KAFKA_SSL_CA` | *(empty)* | CA bundle path, only used with `SASL_SSL` |
+
+Redis URLs with an embedded password are accepted everywhere the proxy reads
+a Redis URL (audit, trace, policy subscription): `redis://:<password>@host:port`.
+
 ### Trace
 
 | Environment Variable | Maps To |
@@ -268,7 +283,9 @@ redis-cli XREAD COUNT 10 STREAMS virbius:audit:stream 0
 redis-cli XREAD COUNT 10 STREAMS virbius:trace:stream 0
 ```
 
-> **Note:** The Redis backend uses raw TCP connections and does not support password authentication or TLS. For local development only.
+> **Note:** The Redis backend uses raw TCP connections. Password authentication
+> is supported (URL form `redis://:<password>@host:port` — RESP AUTH handshake,
+> binary-safe); TLS is not supported (use Kafka for TLS-transported audit).
 
 ---
 

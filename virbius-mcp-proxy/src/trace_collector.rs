@@ -238,14 +238,35 @@ pub type SharedTraceCollector = Arc<TraceCollector>;
 
 async fn redis_trace_worker(url: String, mut rx: mpsc::Receiver<TraceEvent>) {
     debug!("trace redis worker started");
-    let addr = parse_redis_addr(&url);
+    let target = crate::sink_common::parse_redis_target(&url);
     loop {
-        match tokio::net::TcpStream::connect(addr).await {
+        match tokio::net::TcpStream::connect(target.addr).await {
             Ok(stream) => {
                 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
                 let (reader, mut writer) = stream.into_split();
                 let mut reader = BufReader::new(reader);
                 let mut line = String::new();
+
+                // AUTH handshake when the URL carries a password
+                // (redis://:password@host:port). RESP-encoded so passwords may
+                // contain any bytes (the inline protocol is not binary-safe).
+                if let Some(password) = &target.password {
+                    let auth = crate::sink_common::resp_command("AUTH", &[password]);
+                    if writer.write_all(&auth).await.is_err() {
+                        warn!("trace redis auth write failed, reconnecting...");
+                        continue;
+                    }
+                    line.clear();
+                    match reader.read_line(&mut line).await {
+                        Ok(_) if line.starts_with('+') => {}
+                        _ => {
+                            warn!("trace redis auth rejected, retrying in 5s...");
+                            while rx.try_recv().is_ok() {}
+                            tokio::time::sleep(Duration::from_secs(5)).await;
+                            continue;
+                        }
+                    }
+                }
 
                 while let Some(event) = rx.recv().await {
                     let json = match serde_json::to_string(&event) {
@@ -282,12 +303,12 @@ async fn redis_trace_worker(url: String, mut rx: mpsc::Receiver<TraceEvent>) {
 async fn kafka_trace_worker(brokers: String, topic: String, mut rx: mpsc::Receiver<TraceEvent>) {
     debug!("trace kafka worker started, brokers={}", brokers);
 
-    let producer: rdkafka::producer::FutureProducer = match rdkafka::config::ClientConfig::new()
-        .set("bootstrap.servers", &brokers)
+    let mut cfg = rdkafka::config::ClientConfig::new();
+    cfg.set("bootstrap.servers", &brokers)
         .set("message.timeout.ms", "5000")
-        .set("queue.buffering.max.ms", "10")
-        .create()
-    {
+        .set("queue.buffering.max.ms", "10");
+    crate::sink_common::apply_kafka_security(&mut cfg);
+    let producer: rdkafka::producer::FutureProducer = match cfg.create() {
         Ok(p) => p,
         Err(e) => {
             warn!("trace kafka producer creation failed: {e}, disabling trace");
@@ -323,17 +344,9 @@ async fn kafka_trace_worker(brokers: String, topic: String, mut rx: mpsc::Receiv
 ///
 /// Accepts both `host:port` and `redis://host:port` formats.
 /// Uses DNS resolution to support hostnames (e.g. Docker service names).
+#[cfg(test)]
 fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
-    use std::net::ToSocketAddrs;
-    let raw = url.strip_prefix("redis://").unwrap_or(url);
-    raw.to_socket_addrs()
-        .ok()
-        .and_then(|mut addrs| addrs.next())
-        .unwrap_or_else(|| {
-            panic!(
-                "invalid Redis address '{url}': cannot resolve. Expected 'host:port' or 'redis://host:port'"
-            )
-        })
+    crate::sink_common::parse_redis_target(url).addr
 }
 
 fn sha256_hex(input: &str) -> String {

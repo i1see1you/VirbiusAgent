@@ -56,16 +56,32 @@ spec:
               value: 1@localhost:9093
             - name: KAFKA_LOG_DIRS
               value: /var/lib/kafka/data
+            {{- if .Values.kafka.saslEnabled }}
+            # CLIENT: SASL/SCRAM for in-cluster producers/consumers.
+            # INTERNAL: loopback-only PLAINTEXT for inter-broker traffic and
+            # the SCRAM provisioning sidecar (not reachable from other pods).
+            - name: KAFKA_LISTENERS
+              value: CLIENT://0.0.0.0:9092,INTERNAL://localhost:29092,CONTROLLER://0.0.0.0:9093
+            - name: KAFKA_ADVERTISED_LISTENERS
+              value: CLIENT://{{ include "virbius.fullname" . }}-kafka:9092,INTERNAL://localhost:29092
+            - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+              value: CLIENT:SASL_PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+            - name: KAFKA_INTER_BROKER_LISTENER_NAME
+              value: INTERNAL
+            - name: KAFKA_SASL_ENABLED_MECHANISMS
+              value: SCRAM-SHA-256
+            {{- else }}
             - name: KAFKA_LISTENERS
               value: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
             - name: KAFKA_ADVERTISED_LISTENERS
               value: PLAINTEXT://{{ include "virbius.fullname" . }}-kafka:9092
-            - name: KAFKA_CONTROLLER_LISTENER_NAMES
-              value: CONTROLLER
             - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
               value: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
             - name: KAFKA_INTER_BROKER_LISTENER_NAME
               value: PLAINTEXT
+            {{- end }}
+            - name: KAFKA_CONTROLLER_LISTENER_NAMES
+              value: CONTROLLER
             - name: KAFKA_AUTO_CREATE_TOPICS_ENABLE
               value: "true"
             - name: KAFKA_NUM_PARTITIONS
@@ -74,6 +90,20 @@ spec:
               value: "1"
             - name: CLUSTER_ID
               value: {{ .Values.kafka.clusterId | quote }}
+          {{- if .Values.kafka.saslEnabled }}
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          {{- else }}
           readinessProbe:
             exec:
               command:
@@ -92,11 +122,45 @@ spec:
             initialDelaySeconds: 60
             periodSeconds: 30
             timeoutSeconds: 10
+          {{- end }}
           resources:
             {{- toYaml .Values.kafka.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/kafka
+        {{- if .Values.kafka.saslEnabled }}
+        # One-shot: create the SCRAM user via the loopback INTERNAL listener
+        # (same pod network namespace → localhost:29092 reachable).
+        - name: kafka-scram-provision
+          image: {{ .Values.kafka.image }}
+          env:
+            - name: KAFKA_SASL_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: kafka-sasl-username
+            - name: KAFKA_SASL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: kafka-sasl-password
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              for i in $(seq 1 120); do
+                /opt/kafka/bin/kafka-configs.sh --bootstrap-server localhost:29092 --alter \
+                  --add-config "SCRAM-SHA-256=[iterations=8192,password=${KAFKA_SASL_PASSWORD}]" \
+                  --entity-type users --entity-name "${KAFKA_SASL_USERNAME}" && exit 0
+                sleep 2
+              done
+              echo "kafka-scram-provision: failed to create SCRAM user"; exit 1
+          resources:
+            requests:
+              cpu: 10m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+        {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data

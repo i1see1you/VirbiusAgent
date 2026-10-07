@@ -188,6 +188,20 @@ export VIRBIUS_UPSTREAMS='[{"name":"fs","url":"http://localhost:8001","sse_path"
 | `VIRBIUS_AUDIT_KAFKA_BROKERS` | `audit.kafka_brokers` |
 | `VIRBIUS_AUDIT_KAFKA_TOPIC` | `audit.kafka_topic` |
 
+#### Kafka SASL（P0）
+
+审计/trace 的 Kafka 生产者读取以下环境变量（两个后端共用，producer 创建时生效）：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `VIRBIUS_KAFKA_SECURITY_PROTOCOL` | *(空 = PLAINTEXT)* | `SASL_PLAINTEXT` 或 `SASL_SSL`（其他值直接终止） |
+| `VIRBIUS_KAFKA_SASL_MECHANISM` | `SCRAM-SHA-256` | |
+| `VIRBIUS_KAFKA_SASL_USERNAME` / `VIRBIUS_KAFKA_SASL_PASSWORD` | *(空)* | SASL 模式必填 |
+| `VIRBIUS_KAFKA_SSL_CA` | *(空)* | CA 证书路径，仅 `SASL_SSL` 使用 |
+
+代理读取 Redis URL 的所有位置（审计、trace、策略订阅）均接受带密码形式：
+`redis://:<password>@host:port`。
+
 ### 链路追踪
 
 | 环境变量 | 对应配置项 |
@@ -266,7 +280,9 @@ redis-cli XREAD COUNT 10 STREAMS virbius:audit:stream 0
 redis-cli XREAD COUNT 10 STREAMS virbius:trace:stream 0
 ```
 
-> **注意：** Redis 后端使用裸 TCP 连接，不支持密码认证和 TLS。仅适用于本地开发环境。
+> **注意：** Redis 后端使用裸 TCP 连接。支持密码认证（URL 形如
+> `redis://:<password>@host:port`，RESP AUTH 握手，二进制安全）；不支持 TLS
+> （需要传输加密的审计请用 Kafka）。
 
 ---
 
