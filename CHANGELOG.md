@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Delegated credential plane (v2.5)**: proxy-side injection of tenant-scoped third-party API credentials into outbound egress for exact-host matches. Plaintext never leaves the proxy process; tenant authorization only (no per-subject). New proxy module `delegated.rs` (vault cold/loaded, AES-256-GCM envelope with all-field AAD, uniform opaque deny `-32014`, byte-exact redaction funnel for 2xx plaintext responses, local-exec ban `-32015` while enabled, loopback bind startup check, Redis snapshot polling with TTL clear); Control adds `V11__delegated_cred_plane.sql` (single table), `DelegatedCredEnvelope` (HKDF tenant KEK), CRUD + snapshot publish (retry + 60s self-heal republish) + one-time KEK reveal with request-scoped redaction. Config-data flow (B1): not part of the rule rollout pipeline. Java↔Rust interop test vector pinned byte-identical; 10 end-to-end hit-branch tests. Snapshot polling uses exponential backoff (30s→10min, ±10% jitter, reset on success) with the TTL-clear check on every loop; KEK reveal responds `Cache-Control: no-store`. See PROTOCOL.zh.md §2.6.1 and DEPLOYMENT.zh.md §9.6.
+
 ## [0.2.0] - 2026-09-15
 
 ### Changed

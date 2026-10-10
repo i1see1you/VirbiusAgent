@@ -94,6 +94,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "virbius.secretName" . }}
                   key: license-master-key
+            - name: VIRBIUS_DELEGATED_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: delegated-master-key
             {{- if .Values.control.apiKeyEnabled }}
             - name: VIRBIUS_API_KEY_PEPPER
               valueFrom:

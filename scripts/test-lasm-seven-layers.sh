@@ -102,12 +102,13 @@ restart_engine() {
   lsof -ti :8082 2>/dev/null | xargs kill -9 2>/dev/null || true
   sleep 1
   ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  ENGINE_JAR="$ROOT/virbius-engine/target/virbius-engine-$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/').jar"
   mkdir -p /tmp/virbius-agent/logs
   nohup env VIRBIUS_DATA_DIR="$ROOT/data" VIRBIUS_REDIS_URL="redis://127.0.0.1:${REDIS_PORT}" \
     VIRBIUS_PROMPT_LLM_BASE_URL="$OLLAMA_URL" \
     VIRBIUS_PROMPT_LLM_MODEL="$LLM_MODEL" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
-    java -jar "$ROOT/virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar" \
+    java -jar "$ENGINE_JAR" \
     >/tmp/virbius-agent/logs/engine.log 2>&1 &
   for _ in $(seq 1 30); do
     if curl -sf http://127.0.0.1:8082/admin/health >/dev/null 2>&1; then
@@ -325,6 +326,11 @@ ok "pidmap seeded (pid=$FALCO_PID, cgroup=$FALCO_CGROUP → sess-lasm-falco)"
 # Child process: pid=23457, ppid=23456 — NOT in pidmap (test ppid fallback)
 FALCO_CHILD_PID=23457
 ok "child pid=$FALCO_CHILD_PID not seeded (will test ppid fallback to $FALCO_PID)"
+# Child's own cgroup must ALSO be unregistered: correlation order is pid → cgroup → ppid,
+# so a cgroup hit (e.g. stale cgroup_trace:777 seeded by test-falco-cross-layer.sh with EX 1h
+# on the shared dev Redis) would shadow the ppid fallback this case exists to test.
+# 999 = non-Agent sentinel, never seeded by any script.
+FALCO_CHILD_CGROUP=999
 
 # Grandchild process: pid=23458, ppid=23457 — NOT in pidmap, ppid also not in pidmap
 # but cgroup=888 is in cgroup_trace (test cgroup correlation)
@@ -870,7 +876,7 @@ info "测试 K5: Child process outbound — ppid fallback (pid=$FALCO_CHILD_PID 
 info "  Falco rule: builtin_agent_outbound_connection  |  proc.pid=$FALCO_CHILD_PID  proc.ppid=$FALCO_PID"
 info "  expected: resolved_by=ppid (child pid not registered, ppid points to Agent main)"
 K5_JSON=$(do_falco_alert "builtin_agent_outbound_connection" "Warning" \
-  "$FALCO_CHILD_PID" "$FALCO_PID" "777" "198.51.100.2" \
+  "$FALCO_CHILD_PID" "$FALCO_PID" "$FALCO_CHILD_CGROUP" "198.51.100.2" \
   "curl" "curl http://198.51.100.2/payload" 80)
 K5_SESSION=$(parse_falco_resp "$K5_JSON" session)
 K5_RESOLVED=$(parse_falco_resp "$K5_JSON" resolved)

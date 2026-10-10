@@ -26,6 +26,8 @@ base64 = "0.22"
 sha2 = "0.10"
 rdkafka = { version = "0.37", features = ["tokio"] }
 redis = { version = "0.25", features = ["tokio-comp"] }
+aes-gcm = "0.10"
+zeroize = "1"
 
 [dev-dependencies]
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem", "rand_core"] }

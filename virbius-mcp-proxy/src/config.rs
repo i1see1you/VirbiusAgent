@@ -18,6 +18,50 @@ pub struct ProxyConfig {
     /// Falls back to `audit.redis_url` when empty.
     #[serde(default)]
     pub policy: PolicyRedisSection,
+    /// Delegated credential plane (v2.5-min). Disabled by default; not
+    /// hot-reloadable (restart to change).
+    #[serde(default)]
+    pub delegated: DelegatedSection,
+}
+
+/// Delegated credential plane configuration (v2.5-min, A+B1 contract).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DelegatedSection {
+    /// Master switch. Default false = byte-identical behavior (except the
+    /// local-exec ban below, which applies whenever enabled).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Deployment-pinned tenant. Must be non-empty and not "default".
+    #[serde(default)]
+    pub tenant_id: String,
+    /// Tenant KEK, base64 (standard, padded) of exactly 32 bytes.
+    /// Prefer `kek_file` (0400) over inline config.
+    #[serde(default)]
+    pub kek: String,
+    #[serde(default)]
+    pub kek_file: String,
+    /// Snapshot Redis URL; falls back to `audit.redis_url` when empty.
+    #[serde(default)]
+    pub redis_url: String,
+    #[serde(default = "default_delegated_poll")]
+    pub poll_interval_secs: u64,
+    #[serde(default = "default_delegated_ttl")]
+    pub ttl_secs: u64,
+    #[serde(default = "default_delegated_max_body_mb")]
+    pub max_body_mb: usize,
+    /// Explicit, audited acknowledgement of a non-loopback bind.
+    #[serde(default)]
+    pub allow_external_bind: bool,
+}
+
+fn default_delegated_poll() -> u64 {
+    30
+}
+fn default_delegated_ttl() -> u64 {
+    300
+}
+fn default_delegated_max_body_mb() -> usize {
+    4
 }
 
 /// Where the proxy listens for hot-reloaded policy. Not itself hot-reloaded.
@@ -349,6 +393,39 @@ impl ProxyConfig {
         if let Ok(v) = std::env::var("VIRBIUS_POLICY_REDIS_URL") {
             cfg.policy.redis_url = v;
         }
+        if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_ENABLED") {
+            cfg.delegated.enabled = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_TENANT_ID") {
+            cfg.delegated.tenant_id = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_KEK") {
+            cfg.delegated.kek = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_KEK_FILE") {
+            cfg.delegated.kek_file = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_REDIS_URL") {
+            cfg.delegated.redis_url = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_POLL_INTERVAL_SECS") {
+            if let Ok(n) = v.parse::<u64>() {
+                cfg.delegated.poll_interval_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_TTL_SECS") {
+            if let Ok(n) = v.parse::<u64>() {
+                cfg.delegated.ttl_secs = n;
+            }
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_MAX_BODY_MB") {
+            if let Ok(n) = v.parse::<usize>() {
+                cfg.delegated.max_body_mb = n;
+            }
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_ALLOW_EXTERNAL_BIND") {
+            cfg.delegated.allow_external_bind = v == "1" || v.eq_ignore_ascii_case("true");
+        }
 
         // Normalize: if upstreams array is empty, synthesize from single upstream fields
         if cfg.proxy.upstreams.is_empty() && !cfg.proxy.upstream_url.is_empty() {
@@ -414,6 +491,16 @@ impl ProxyConfig {
             &self.audit.redis_url
         } else {
             &self.policy.redis_url
+        }
+    }
+
+    /// Redis URL for the delegated credential snapshot. Empty falls back to
+    /// `audit.redis_url` (same default as the policy stream).
+    pub fn delegated_redis_url(&self) -> &str {
+        if self.delegated.redis_url.is_empty() {
+            &self.audit.redis_url
+        } else {
+            &self.delegated.redis_url
         }
     }
 }

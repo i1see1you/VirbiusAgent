@@ -6,9 +6,16 @@
 #   node B: VIRBIUS_NODE_ID=node-b         → bucket 93
 #
 #   Phase 1 baseline:  rule v1 → full gray (5→20→50→100) + finalize → both nodes stable@rev1
-#   Phase 2 gray v2:   new rule → prepare+upgrade to 20% → A runs canary@rev2, B stays rev1
-#   Phase 3 to 100%:   upgrades to 100% + finalize → both nodes on rev2
-#   Phase 4 rollback:  new rule → gray to 20% → rollback → both nodes fall back to rev2
+#   Phase 2 gray v2:   new rule → prepare+upgrade to 20% (5% skipped) → A canary / B stable
+#   Phase 3 to 100%:   upgrade to 100% (50% skipped) + finalize → both nodes on rev2
+#   Phase 4 rollback:  new rule → gray to 20% (5% skipped) → rollback → both fall back to rev2
+#
+# Ladder-skip semantics (DeployRolloutService.computeNextEffectiveStep): an
+# upgrade skips a ladder step when it would not move any NEW live node into
+# the canary pool. With live buckets A=15 / B=93 that means 0%→20% (5% skipped)
+# and 20%→100% (50% skipped). Phase 1 runs before subscribers start (no live
+# buckets → plain ladder fallback), so its 4-step walk still applies.
+# Falco canary→stable promotion happens at finalize, NOT when reaching 100%.
 #
 # Uses isolated ports (control 8090, redis 6380) and temp dirs so it never touches dev state.
 set -euo pipefail
@@ -30,6 +37,14 @@ RULES_A="$WORK/rules-a"
 RULES_B="$WORK/rules-b"
 LOG_DIR="$WORK/logs"
 mkdir -p "$DATA_DIR" "$RULES_A" "$RULES_B" "$LOG_DIR"
+
+# Current control requires a license master key at boot (SecretPolicyValidator).
+# Generate a throwaway dev key inside the temp workdir (umask 077, never echoed).
+LICENSE_KEY_FILE="$DATA_DIR/.license-master-key"
+if [[ ! -s "$LICENSE_KEY_FILE" ]]; then
+  (umask 077 && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$LICENSE_KEY_FILE")
+fi
+LICENSE_KEY="$(cat "$LICENSE_KEY_FILE")"
 
 CONTROL_PID=""
 SUB_A_PID=""
@@ -76,19 +91,22 @@ SUB_BIN="${CARGO_TARGET:-$ROOT/target}/debug/falco-config-subscriber"
 [[ -x "$SUB_BIN" ]] || err "subscriber binary missing at $SUB_BIN"
 ok "subscriber built"
 
-if [[ ! -f virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar ]] || \
-   [[ -n "$(find virbius-control/src/main -newer virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar -print -quit 2>/dev/null)" ]]; then
+APP_VER=$(grep -m1 '<version>' pom.xml | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+CONTROL_JAR="virbius-control/target/virbius-control-${APP_VER}.jar"
+if [[ ! -f "$CONTROL_JAR" ]] || \
+   [[ -n "$(find virbius-control/src/main -newer "$CONTROL_JAR" -print -quit 2>/dev/null)" ]]; then
   info "building virbius-control..."
   mvn -q -pl virbius-control -am package -DskipTests -Dskip.installnodenpm -Dskip.npm
 fi
-ok "control jar ready"
+ok "control jar ready ($CONTROL_JAR)"
 
 info "starting control on :$CONTROL_PORT ..."
 env VIRBIUS_DATA_DIR="$DATA_DIR" \
     VIRBIUS_REDIS_URL="redis://127.0.0.1:${REDIS_PORT}" \
+    VIRBIUS_LICENSE_MASTER_KEY="$LICENSE_KEY" \
     SPRING_PROFILES_ACTIVE=dev \
     SERVER_PORT="$CONTROL_PORT" \
-    java -jar virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar \
+    java -jar "$CONTROL_JAR" \
     >"$LOG_DIR/control.log" 2>&1 &
 CONTROL_PID=$!
 for _ in $(seq 1 60); do
@@ -211,8 +229,7 @@ create_falco_rule "r-falco-e2e-2" "e2e canary rule v2"
 rule_dry_run "r-falco-e2e-2"
 
 D2=$(deploy_prepare)
-deploy_op "$D2" upgrade            # 5%
-deploy_op "$D2" upgrade            # 20%
+deploy_op "$D2" upgrade            # ladder-skip: 5% has no live bucket → 20% (A enters)
 P=$(deploy_percent "$D2")
 [[ "$P" == "20" ]] || err "expected 20%, got $P"
 
@@ -223,14 +240,13 @@ ok "node B still has v1 content — node-level isolation holds"
 
 # ─── 3. advance to 100% + finalize ──────────────────────────────────────────
 info "3. advance 20→100 → finalize"
-deploy_op "$D2" upgrade            # 50%
-deploy_op "$D2" upgrade            # 100% (promotes falco)
+deploy_op "$D2" upgrade            # ladder-skip: 50% adds no NEW node → 100% (B enters)
 P=$(deploy_percent "$D2")
 [[ "$P" == "100" ]] || err "expected 100%, got $P"
-REV2=$(falco_stable_rev)
-[[ "$REV2" -gt "$REV1" ]] || err "promote at 100% did not bump stable_revision ($REV1 → $REV2)"
 
-deploy_op "$D2" finalize
+deploy_op "$D2" finalize           # canary→stable promotion happens HERE (not at 100%)
+REV2=$(falco_stable_rev)
+[[ "$REV2" -gt "$REV1" ]] || err "finalize did not bump stable_revision ($REV1 → $REV2)"
 wait_file_contains "$RULES_A" "r-falco-e2e-2" 20 "node A converges to promoted stable@$REV2"
 wait_file_contains "$RULES_B" "r-falco-e2e-2" 20 "node B converges to promoted stable@$REV2"
 
@@ -240,8 +256,9 @@ create_falco_rule "r-falco-e2e-3" "e2e rollback rule v3"
 rule_dry_run "r-falco-e2e-3"
 
 D3=$(deploy_prepare)
-deploy_op "$D3" upgrade            # 5%
-deploy_op "$D3" upgrade            # 20%
+deploy_op "$D3" upgrade            # ladder-skip: 5% has no live bucket → 20% (A enters)
+P=$(deploy_percent "$D3")
+[[ "$P" == "20" ]] || err "expected 20%, got $P"
 wait_file_contains     "$RULES_A" "r-falco-e2e-3" 20 "node A runs CANARY with v3"
 wait_file_not_contains "$RULES_B" "r-falco-e2e-3" 20 "node B still stable (no v3)"
 

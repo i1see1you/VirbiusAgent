@@ -662,6 +662,48 @@ sample_rate = 1.0                   # Audit sample rate
 > | 重定向跟随 | ✅（最多 5 跳） | — | 防止通过重定向进行 SSRF |
 > | HTTPS | ✅ | — | 代理发起 TLS，Agent 不接触证书 |
 
+#### Egress 代客凭证注入（Delegated Credential Plane，v2.5）
+
+> 状态：**一期已实现**（proxy `delegated.rs` + Control `DelegatedCredEnvelope`/`DelegatedCredentialService`）。租户第三方 API 凭据在 proxy 出口按**精确主机**注入，明文永不出 proxy 进程；授权粒度=租户（无 per-subject）。同步走 Control→Redis 全量快照，KEK 为部署静态值。与规则上线流程解耦（**B1 配置数据**：CRUD+变更审计，不进 PublishOrchestrator/灰度）。
+
+**数据流**：
+
+```
+[Control] 凭据 CRUD（写时校验+请求域脱敏）+ admin 输出租户 KEK
+    │ 变更后 SET Redis virbius:delegated:snapshot:{tenant}（全量 active 行，密文）
+    ▼
+[Proxy，单租户] 部署固定 tenant + 静态 KEK；vault 状态 {cold, loaded}
+  egress：既有过滤（白名单/URL 提取）→ 归一 → 命中？
+    → 命中：快照→tenant 断言→https/443→剥/滤头→注入恰一→no-follow→统一 finalize
+    → 未命中：今天行为（逐字节不变）
+```
+
+**线格式契约（Java/Rust 逐字节一致，互操作向量钉死）**：
+
+- 表 `tb_delegated_credentials`（迁移 `V11__delegated_cred_plane.sql`，单表）：`tenant_id, handle, host, header_name, header_prefix, ciphertext, status, created_at, updated_at`；`PK(tenant_id,handle)`、`UNIQUE(tenant_id,host)`；吊销=状态翻转，同 host 重建=DELETE 后 INSERT。
+- 信封：`dcv1:1:<b64标准含padding(iv12‖ct‖tag16)>`，AES-256-GCM；租户 KEK=`HKDF-SHA256(master, salt=lenprefix("virbius/delegated/kek/v1"), info=lenprefix("tenant-kek-v1")‖lenprefix(tenant)‖u64be(1))`，一期 `kek_version=1` 不轮换；**AAD=lenprefix(tenant)‖lenprefix(handle)‖lenprefix(host)‖lenprefix(header_name)‖lenprefix(header_prefix)**（`lenprefix(x)=u32_be(len)‖x`，任一字段变更即重加密）。
+- 快照 JSON：`{"v":1,"tenant_id","gen","rows":[{tenant_id,handle,host,header_name,header_prefix,ciphertext}]}`；proxy 每 30s `GET`，staging 校验后**原子整体替换** vault；key 缺失=保留旧值+告警（计入 TTL）；`rows:[]`=权威清空→cold；异租户行硬丢弃。Control 侧发布失败重试+60s 定时兜底重发（自愈）。
+
+**proxy 行为（命中分支，任何失败=统一不透明 deny `-32014 delegated_egress_denied`）**：
+
+1. 顺序（§5-0）：既有 URL 提取/白名单校验先行（命中 host ∉ 白名单 → vault 应用时告警 `host_not_in_allowlist`）；miss 路径零改动。
+2. 断言会话 tenant==部署 tenant（仅检错配，非身份验证；部署 tenant 空/"default" 启动 fail-fast）。
+3. 仅 https+443；剥 Agent `Authorization`/同名头/inbound framing 头（Host/Content-Length/Transfer-Encoding/Connection/Keep-Alive/Proxy-*/TE/Trailer/Upgrade）；钉 `Accept-Encoding: identity`；注入恰一个 `header_name: prefix+value`（自持 HeaderMap 断言 `get_all==1`）。
+4. 不跟跳（专用 no-follow client）：3xx 仅返回 `{status, location}`（location 经清洗，body 丢弃）；**非 2xx 一律 deny、不读 body**。
+5. 统一 finalize：整体缓冲 ≤4MiB（超限 deny）；`Content-Encoding` 缺省放行、存在须逐值 `identity`；body 首两字节 `1f 8b` 拒；**字节精确清洗**（`prefix+value` 与 `value` → `[REDACTED]`）在字节成型点执行一次，其后一切 sink（工具回传/错误/日志/trace/engine）只消费清洗后缓冲。
+6. **D-I**：开关开 ⇒ `LOCAL_EXEC_TOOLS`（shell/execute_python/execute_code/execute_node/exec_cmd）一律 deny（共享守卫置于两个 `execute_in_sandbox` cfg 变体顶部，与沙箱配置无关）。
+7. 状态机：cold=面不生效（可用性 fail-open，密钥面 fail-closed）；连续超 TTL（默认 300s）未成功读取 → 清库→cold+告警；重启=cold。
+
+**Control 接口**（`/api/v1/admin/tenants/{tenantId}/delegated-credentials`，admin 鉴权，tenant 写入统一小写归一）：`GET` 列表（永不含 value）/`POST` 新建/`PUT /{handle}` 全量重录（AAD 绑全字段）/`POST /{handle}/revoke` 吊销/`DELETE /{handle}` 删除/`POST /kek/reveal` 一次性输出租户 KEK（审计）。写路径请求域脱敏：值注册先于校验（原始/base64/urlencode 三形态），异常 Advice 零回显。写入校验与 proxy 镜像：host 规范形（小写 ASCII、单标签允许、拒 IP 形态/Unicode）、header_name 拒绝清单（hop-by-hop/framing/`Content-*`/`Accept-Encoding`）、value ≥16B、`prefix+value` ≤4096B、CR/LF/NUL 拒。
+
+**接受半径（D1，10 项，Owner 待签）**：① T7 proxy 明文内存（不可清零面：HeaderMap/reqwest 内部副本）② T8 Control 可解密+CRUD 瞬时明文 ③ T-STALE 吊销时延=轮询 30s+在途+离线≤TTL ④ T-CLEAN 编码变体（JSON 转义/HTML 实体/百分号）不清洗 ⑤ T-SHARE 同租户共享 ⑥ T-ADM 任意可达会话可触发注入（前提=proxy 仅租户可达，启动绑定校验落地）⑦ T-REDIR 非命中→命中落地腿不注入、无凭据在场 ⑧ T-ORACLE 统一 deny 后残余=3xx 行为差 ⑨ T-SSRF 无运行时解析判定（重绑定/私网残余；写入侧拒 IP 形态）⑩ KEK/主密钥静态不轮换（轮换=重部署）。
+
+**测试基线**（合并门槛）：Java/Rust 互操作向量（固定 KEK/IV 三向一致）；miss 黄金字节等价；命中分支 10 项端到端（2xx 回显清洗/头恰一/剥 Auth/钉 identity/丢 framing、gzip magic、CE gzip、5xx 无 body、302 脱敏不跟跳、miss/cold Fallthrough、tenant 错配）。
+
+**运维注记**：LLM 流量（llm-proxy/厂商域名）**不入 vault**——一期命中分支无流式，LLM 场景由网关/key proxy 代持承接；KEK 走 0400 文件（`kek_file` 优先）；Redis 写权限=平面边界；部署细节见 [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) §9.6。
+
+**二期回归条件**：需 per-agent 隔离→AGT CredentialProfile+短证书路线；需共享多租户 proxy→重做准入/租户面；需任意主机/占位符→credential_host+`allowed_handles`；需流式/SSE→有界窗清洗；需轮换→版本化 KEK+宽限窗。设计沿革与 13 轮 Gate 评审记录已按 Owner 指示从 `docs/memory/` 清除（2026-10-10），本节为一期权威描述。
+
 Sidecar 部署（K8s）— 单上游：
 
 ```yaml

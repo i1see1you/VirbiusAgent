@@ -65,7 +65,9 @@ command -v jq >/dev/null || err "jq not found"
 command -v python3 >/dev/null || err "python3 not found"
 docker info >/dev/null 2>&1 || err "docker daemon not running"
 
-JAR="$ROOT/virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar"
+APP_VER=$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+export APP_VER
+JAR="$ROOT/virbius-control/target/virbius-control-${APP_VER}.jar"
 need_build=false
 if [[ ! -f "$JAR" ]] || [[ -n $(find "$ROOT/virbius-control/src" -newer "$JAR" -name '*.java' -print -quit 2>/dev/null) ]]; then
   need_build=true

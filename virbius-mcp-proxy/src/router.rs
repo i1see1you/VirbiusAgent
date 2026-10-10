@@ -868,6 +868,7 @@ async fn handle_tools_call(
                     let mut resp = proxy_egress_tool(
                         id,
                         &original_tool_name,
+                        &session.tenant_id,
                         &args,
                         egress_client,
                         egress_hosts,
@@ -1048,9 +1049,15 @@ async fn handle_tools_call(
             // Egress tools: Proxy HTTP request directly with streaming response.
             // Check against the original tool name.
             if crate::egress::is_egress_tool(&original_tool_name) {
-                let mut resp =
-                    proxy_egress_tool(id, &original_tool_name, &args, egress_client, egress_hosts)
-                        .await;
+                let mut resp = proxy_egress_tool(
+                    id,
+                    &original_tool_name,
+                    &session.tenant_id,
+                    &args,
+                    egress_client,
+                    egress_hosts,
+                )
+                .await;
                 // ── Output PII masking ──
                 mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
                 // ── Trust boundary tagging (high/network risk only) ──
@@ -1268,6 +1275,7 @@ async fn handle_tools_call(
 async fn proxy_egress_tool(
     id: &Value,
     tool_name: &str,
+    session_tenant: &str,
     args: &Value,
     egress_client: &EgressClient,
     egress_hosts: &[String],
@@ -1299,6 +1307,23 @@ async fn proxy_egress_tool(
                 .collect()
         });
     let headers_ref = headers.as_deref();
+
+    // Delegated credential plane (v2.5-min): the hit branch is handled here
+    // (uniform opaque deny or cleaned 2xx response); miss / plane-off / cold
+    // fall through to the existing path, which stays byte-identical.
+    if let crate::delegated::HitOutcome::Handled(resp) = crate::delegated::try_handle(
+        id,
+        &url,
+        method,
+        body,
+        headers_ref,
+        session_tenant,
+        egress_client.nofollow(),
+    )
+    .await
+    {
+        return resp;
+    }
 
     // 5. Proxy the request with streaming response
     match egress_client
@@ -1854,6 +1879,16 @@ async fn execute_in_sandbox(
         SandboxType,
     };
 
+    // D-I (v2.5-min): while the delegated credential plane is enabled,
+    // local-exec tools are denied outright regardless of sandbox config.
+    if !crate::delegated::local_exec_allowed() {
+        return crate::error::jsonrpc_error(
+            crate::error::VirbiusErrorCode::DelegatedLocalExecDisabled,
+            id.clone(),
+            serde_json::json!({ "tool_name": tool_name }),
+        );
+    }
+
     // 1. Extract code
     let code = match args.get(code_arg).and_then(|v| v.as_str()) {
         Some(c) => c.to_string(),
@@ -2058,6 +2093,16 @@ async fn execute_in_sandbox(
 ) -> Value {
     use virbius_core::manifest;
     use virbius_core::sandbox::{mcp_wall, run_unsandboxed, Language};
+
+    // D-I (v2.5-min): while the delegated credential plane is enabled,
+    // local-exec tools are denied outright regardless of sandbox config.
+    if !crate::delegated::local_exec_allowed() {
+        return crate::error::jsonrpc_error(
+            crate::error::VirbiusErrorCode::DelegatedLocalExecDisabled,
+            id.clone(),
+            serde_json::json!({ "tool_name": tool_name }),
+        );
+    }
 
     let code = match args.get(code_arg).and_then(|v| v.as_str()) {
         Some(c) => c.to_string(),

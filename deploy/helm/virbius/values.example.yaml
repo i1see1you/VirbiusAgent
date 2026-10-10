@@ -76,6 +76,8 @@ secrets:
   mysqlPassword: "change-me-virbius"
   # >= 32 chars; strong random value. Required in every profile.
   licenseMasterKey: "change-me-license-master-key-0123456789abcdef"
+  # >= 32 chars; delegated credential plane (separate from license). Optional.
+  delegatedMasterKey: "change-me-delegated-master-key-0123456789abcdef"
   # >= 32 chars; HMAC pepper for tenant API keys (required: control.apiKeyEnabled=true).
   apiKeyPepper: "change-me-api-key-pepper-0123456789abcdef"
   # Redis password (required: redis.authEnabled=true).

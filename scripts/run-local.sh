@@ -16,9 +16,10 @@ REDIS_PID_FILE="${REDIS_PID_FILE:-/tmp/virbius-agent/redis.pid}"
 mkdir -p "$LOG_DIR" "$VIRBIUS_DATA_DIR" "$(dirname "$REDIS_PID_FILE")"
 
 # ─── Colors ───
-RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; NC='\033[0m'
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; CYAN='\033[0;36m'; NC='\033[0m'
 info()  { echo -e "${CYAN}[INFO]${NC}  $*"; }
 ok()    { echo -e "${GREEN}[OK]${NC}    $*"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 err()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
 # ─── Cleanup ───
@@ -159,7 +160,9 @@ if command -v "$MVN" >/dev/null 2>&1; then
       -Dskip.installnodenpm -Dskip.npm 2>&1 | tail -3; then
     ok "Java components built"
   else
-    info "Java build skipped (dependencies may need parent POM setup)"
+    # Not fatal (offline/first-build/unrelated parent module), but loud: the
+    # stale-jar check below will flag if the started jar predates the sources.
+    warn "Java build failed — will fall back to existing jars (may be stale!)"
   fi
 else
   info "Maven not found; Java build skipped. Install Maven 3.9+ or set MVN=/path/to/mvn"
@@ -203,14 +206,43 @@ if [[ -z "${VIRBIUS_LICENSE_MASTER_KEY:-}" ]]; then
   export VIRBIUS_LICENSE_MASTER_KEY
 fi
 
+# ─── Delegated credential plane master key (dev-only, Control side) ───
+# Separate from the license master key (domain separation). Generated once
+# into the gitignored data dir with umask 077; export VIRBIUS_DELEGATED_MASTER_KEY
+# to reuse an existing key. Never echoed. This only enables Control CRUD — the
+# proxy plane itself stays off unless its own [delegated] config enables it.
+DELEGATED_KEY_FILE="$VIRBIUS_DATA_DIR/.delegated-master-key"
+if [[ -z "${VIRBIUS_DELEGATED_MASTER_KEY:-}" ]]; then
+  if [[ ! -s "$DELEGATED_KEY_FILE" ]]; then
+    mkdir -p "$(dirname "$DELEGATED_KEY_FILE")"
+    (umask 077 && od -An -tx1 -N32 /dev/urandom | tr -d ' \n' > "$DELEGATED_KEY_FILE")
+    info "Generated new delegated credential master key at $DELEGATED_KEY_FILE (dev-only)"
+  fi
+  VIRBIUS_DELEGATED_MASTER_KEY="$(cat "$DELEGATED_KEY_FILE")"
+  export VIRBIUS_DELEGATED_MASTER_KEY
+fi
+
 APP_VER=$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
 CONTROL_JAR="$ROOT/virbius-control/target/virbius-control-${APP_VER}.jar"
 ENGINE_JAR="$ROOT/virbius-engine/target/virbius-engine-${APP_VER}.jar"
+
+# Stale-jar guard: warn (don't block) when a jar predates its sources — catches
+# a failed/skipped Maven build silently serving an old artifact.
+stale_jar_warn() {
+  local name=$1 jar=$2 src=$3
+  [[ -f "$jar" ]] || return 0
+  if [[ -d "$src" ]] && [[ -n "$(find "$src" -type f -newer "$jar" -print -quit 2>/dev/null)" ]]; then
+    warn "$name jar is OLDER than sources: $jar — rebuild (mvn package) before trusting it"
+  fi
+}
+stale_jar_warn "virbius-control" "$CONTROL_JAR" "$ROOT/virbius-control/src/main"
+stale_jar_warn "virbius-engine" "$ENGINE_JAR" "$ROOT/virbius-engine/src/main"
 
 if command -v java >/dev/null 2>&1 && [[ -f "$CONTROL_JAR" ]]; then
   info "Starting virbius-control (port 8080) from $CONTROL_JAR..."
   nohup env VIRBIUS_DATA_DIR="$VIRBIUS_DATA_DIR" VIRBIUS_REDIS_URL="$VIRBIUS_REDIS_URL" \
     VIRBIUS_LICENSE_MASTER_KEY="$VIRBIUS_LICENSE_MASTER_KEY" \
+    VIRBIUS_DELEGATED_MASTER_KEY="$VIRBIUS_DELEGATED_MASTER_KEY" \
     KAFKA_BOOTSTRAP_SERVERS="${KAFKA_BOOTSTRAP_SERVERS:-localhost:9092}" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
     java -jar "$CONTROL_JAR" \
@@ -249,5 +281,5 @@ echo "    curl http://127.0.0.1:8080/api/v1/health"
 echo "    curl http://127.0.0.1:8082/admin/health"
 echo ""
 echo "  Example MCP proxy:"
-echo "    cargo run --example mcp_proxy"
+echo "    cargo run -p virbius-mcp-proxy    # needs transport/upstream config (VIRBIUS_* env or virbius-mcp-proxy.toml)"
 echo ""

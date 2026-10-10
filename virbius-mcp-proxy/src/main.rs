@@ -33,6 +33,41 @@ async fn main() {
         cfg.proxy.listen
     );
 
+    // Egress allowed hosts. License allowed_hosts is not wired yet; demo sets
+    // VIRBIUS_EGRESS_HOSTS=wiki.internal,mail.internal. Empty list denies all.
+    // Parsed BEFORE delegated init so the plane can consistency-check its
+    // vault hosts against the same allowlist (§5-0).
+    let egress_hosts: Vec<String> = std::env::var("VIRBIUS_EGRESS_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if egress_hosts.is_empty() {
+        info!("egress allowlist empty — all egress hosts will be denied");
+    } else {
+        info!("egress allowlist hosts={:?}", egress_hosts);
+    }
+
+    // Delegated credential plane (v2.5-min): fail-fast startup validation,
+    // global init, snapshot poller. Disabled by default; not hot-reloadable.
+    if let Err(e) = virbius_mcp_proxy::delegated::init(
+        cfg.delegated.enabled,
+        &cfg.delegated.tenant_id,
+        &cfg.delegated.kek,
+        &cfg.delegated.kek_file,
+        cfg.delegated_redis_url(),
+        cfg.delegated.poll_interval_secs,
+        cfg.delegated.ttl_secs,
+        cfg.delegated.max_body_mb,
+        cfg.delegated.allow_external_bind,
+        &cfg.proxy.listen,
+        &egress_hosts,
+    ) {
+        error!("delegated credential plane init failed: {e}");
+        std::process::exit(1);
+    }
+
     // Load License public key
     let pubkey_pem = load_public_key(&cfg.security.license_public_key);
 
@@ -112,19 +147,7 @@ async fn main() {
     // to external APIs with streaming response support
     let egress_client = EgressClient::new(30, 50);
 
-    // Egress allowed hosts. License allowed_hosts is not wired yet; demo sets
-    // VIRBIUS_EGRESS_HOSTS=wiki.internal,mail.internal. Empty list denies all.
-    let egress_hosts: Vec<String> = std::env::var("VIRBIUS_EGRESS_HOSTS")
-        .unwrap_or_default()
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-    if egress_hosts.is_empty() {
-        info!("egress allowlist empty — all egress hosts will be denied");
-    } else {
-        info!("egress allowlist hosts={:?}", egress_hosts);
-    }
+    // Egress allowed hosts parsed above (before delegated init) — reused here.
 
     // Transport connection ID -> logical session ID mapping
     let conn_to_session: Arc<DashMap<String, String>> = Arc::new(DashMap::new());

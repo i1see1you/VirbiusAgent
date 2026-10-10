@@ -8,6 +8,7 @@ const routes = [
   { path: '/cumulatives', name: 'cumulatives', component: () => import('@/views/CumulativesView.vue') },
   { path: '/tools', name: 'tools', component: () => import('@/views/ToolsView.vue') },
   { path: '/proxy', name: 'proxy', component: () => import('@/views/ProxyPolicyView.vue') },
+  { path: '/delegated-credentials', name: 'delegated', component: () => import('@/views/DelegatedCredentialsView.vue') },
   { path: '/license', name: 'license', component: () => import('@/views/LicenseView.vue') },
   { path: '/rules', name: 'rules', component: () => import('@/views/RulesView.vue') },
   { path: '/rollout', name: 'rollout', component: () => import('@/views/RolloutView.vue') },

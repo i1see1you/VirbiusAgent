@@ -42,6 +42,13 @@ if ! redis-cli -p "$REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
   exit 1
 fi
 ok "Redis reachable"
+
+# Remove our own seeds on exit so stale pid_trace/cgroup keys can't leak into other
+# test scripts sharing this Redis (e.g. lasm K5 needs an unregistered child cgroup).
+cleanup_seeds() {
+  redis-cli -p "$REDIS_PORT" DEL "pid_trace:12345" "cgroup_trace:777" >/dev/null 2>&1 || true
+}
+trap cleanup_seeds EXIT
 echo ""
 
 # ─── 1. Seed pidmap + cgroup data ───

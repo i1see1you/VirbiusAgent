@@ -118,6 +118,7 @@ const icons: Record<string, string> = {
   cumulatives: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.2h13"/><path d="M5.5 16.2V12M9 16.2V9.2M12.5 16.2V4.6M16 16.2V10.5"/></svg>',
   tools: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="10" cy="10" r="3"/><path d="M10 7V3m0 14v-4m3-3h4M3 10h4"/></svg>',
   proxy: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h12M4 10h12M4 14h8"/><path d="M14.5 12.5 17 15l-2.5 2.5"/></svg>',
+  delegated: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="8" r="3.2"/><path d="M9.6 10.4 16.5 17.3m-2.3-2.3 1.7-1.7m-3.7 0 1.7-1.7"/></svg>',
   license: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 18V3h10v15l-5-3-5 3z"/></svg>',
   rules: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 3h12v14H4z"/><path d="M7 7h6M7 11h6"/></svg>',
   rollout: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3v12M6 11l4 4 4-4"/><path d="M3 17h14"/></svg>',
@@ -145,6 +146,7 @@ const assetItems = [
   { to: '/cumulatives', name: 'cumulatives', label: 'nav.cumulatives' },
   { to: '/tools', name: 'tools', label: 'nav.tools' },
   { to: '/proxy', name: 'proxy', label: 'nav.proxy' },
+  { to: '/delegated-credentials', name: 'delegated', label: 'nav.delegated' },
   { to: '/license', name: 'license', label: 'nav.license' }
 ];
 const platformItems = [

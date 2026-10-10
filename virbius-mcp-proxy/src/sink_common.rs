@@ -201,15 +201,18 @@ mod tests {
 
     #[test]
     fn kafka_security_sasl_plaintext() {
-        let s = kafka_security_settings(
-            "SASL_PLAINTEXT",
-            "SCRAM-SHA-256",
-            "u",
-            "p",
-            "/ignored.pem",
-        );
+        let s =
+            kafka_security_settings("SASL_PLAINTEXT", "SCRAM-SHA-256", "u", "p", "/ignored.pem");
         let keys: Vec<&str> = s.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, vec!["security.protocol", "sasl.mechanism", "sasl.username", "sasl.password"]);
+        assert_eq!(
+            keys,
+            vec![
+                "security.protocol",
+                "sasl.mechanism",
+                "sasl.username",
+                "sasl.password"
+            ]
+        );
         // CA path is only meaningful for SASL_SSL.
         assert!(!s.iter().any(|(k, _)| k == "ssl.ca.location"));
     }

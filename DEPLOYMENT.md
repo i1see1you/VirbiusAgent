@@ -499,3 +499,40 @@ Accepted for P0 with these conditions:
   re-issued keys use the `v1:` HKDF envelope.
 - Legacy local dev databases may set `virbius.license.allow-insecure-dev-key=true`
   (**dev profile only**) to keep booting with a weak master key while rotating.
+
+### 9.6 Delegated credential plane (v2.5) deployment & operations
+
+See [PROTOCOL.md](PROTOCOL.md) §2.6.1 "Egress Delegated Credential Injection" for the full spec. Highlights:
+
+**Control side**:
+
+| Env var | Description |
+|---------|------|
+| `VIRBIUS_DELEGATED_MASTER_KEY` | ≥32B, separated from the license master key (domain separation), fail-fast |
+| `VIRBIUS_REDIS_URL` | Snapshot publish channel (reuses the existing one) |
+
+- Migration: `V11__delegated_cred_plane.sql` (single table). **Builds must be clean**: the stale slice artifact `target/classes/db/migration/V10__delegated_creds.sql` conflicts with the new migration; environments that applied the old V10 run `flyway repair` + manually DROP the three legacy tables.
+- Issuance flow: `POST /api/v1/admin/tenants/{t}/delegated-credentials` (handle/host/header_name/header_prefix/value) → `POST /kek/reveal` to obtain the KEK once.
+
+**Proxy side** (`[delegated]` config section, all overridable via `VIRBIUS_DELEGATED_*` env vars; not hot-reloadable — restart to change):
+
+| Key | Default | Description |
+|----|------|------|
+| `enabled` | `false` | Master switch; off = non-local egress byte-identical + local-exec unrestricted |
+| `tenant_id` | — | Deploy-pinned tenant (trim+lowercase; empty/"default" refuses startup) |
+| `kek` / `kek_file` | — | Tenant KEK (b64 32B); **prefer a 0400 file**; never in argv/logs/shell history |
+| `redis_url` | audit fallback | Snapshot polling channel |
+| `poll_interval_secs` | `30` | Must be < ttl |
+| `ttl_secs` | `300` | Continuous failure beyond TTL → clear vault → cold (injection stops) |
+| `max_body_mb` | `4` | Hit-branch response buffer cap |
+| `allow_external_bind` | `false` | Explicit waiver for non-loopback binds (startup warn + audit) |
+
+**Go-live checklist**:
+
+1. `VIRBIUS_EGRESS_HOSTS` must contain every credential host (vault apply alerts `host_not_in_allowlist` for misses).
+2. **LLM traffic must not enter the vault** (no credentials for llm-proxy / LLM vendor domains): the phase-1 hit branch has no streaming (SSE buffers up to the cap and is then denied).
+3. Startup premise check: binds must be stdio/loopback (both families + hostname resolution), otherwise startup is refused — this is the only local enforcement of the D1⑥ "tenant-only reachable" premise.
+4. Revocation latency: effective on the next snapshot poll (≤30s); a Control-side authoritative clear (rows=[]) clears the proxy vault → cold.
+5. Alerts: `tracing::error` (`delegated_cred_alert{code,state}`, 60s throttle) is always available, independent of Kafka; watch `snapshot_key_missing`, `snapshot_unreadable_rows`, `host_not_in_allowlist`, `ttl_breach_cleared`, `tenant_mismatch`.
+6. Poll backoff: read failures back off exponentially `30s → 60s → … → 600s` (10min cap, ±10% jitter) and reset on success; the **TTL clear check runs every loop**, so backoff never weakens the offline fallback.
+7. KEK delivery: `POST /kek/reveal` responds with `Cache-Control: no-store` + `Pragma: no-cache` (no intermediate caching); Control logs no request/response bodies, so the KEK never reaches the access log — still land it in a 0400 file, never echo it through a terminal/CI log.

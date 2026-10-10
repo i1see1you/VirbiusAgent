@@ -662,6 +662,48 @@ sample_rate = 1.0                   # Audit sample rate
 > | Redirect following | ✅ (max 5 hops) | — | Prevent SSRF via redirect |
 > | HTTPS | ✅ | — | Proxy initiates TLS, Agent does not touch certificates |
 
+#### Egress Delegated Credential Injection (Delegated Credential Plane, v2.5)
+
+> Status: **phase 1 implemented** (proxy `delegated.rs` + Control `DelegatedCredEnvelope`/`DelegatedCredentialService`). Tenant-owned third-party API credentials are injected at the proxy egress for **exact-host** matches; plaintext never leaves the proxy process; authorization granularity = tenant (no per-subject). Sync flows Control→Redis as a full snapshot; the KEK is a static deploy-time value. Decoupled from the rule rollout pipeline (**B1 config data**: CRUD + change audit, not part of PublishOrchestrator/canary).
+
+**Data flow**:
+
+```
+[Control] credential CRUD (write-time validation + request-scoped redaction) + admin emits tenant KEK
+    │ on change: SET Redis virbius:delegated:snapshot:{tenant} (all active rows, ciphertext only)
+    ▼
+[Proxy, single tenant] deploy-pinned tenant + static KEK; vault state {cold, loaded}
+  egress: existing filters (allowlist / URL extraction) → normalize → hit?
+    → hit: snapshot → tenant assert → https/443 → strip/filter headers → inject exactly one → no-follow → unified finalize
+    → miss: today's behavior (byte-identical)
+```
+
+**Wire contract (byte-identical across Java/Rust, pinned by interop vectors)**:
+
+- Table `tb_delegated_credentials` (migration `V11__delegated_cred_plane.sql`, single table): `tenant_id, handle, host, header_name, header_prefix, ciphertext, status, created_at, updated_at`; `PK(tenant_id,handle)`, `UNIQUE(tenant_id,host)`; revoke = status flip; re-issuing the same host = DELETE then INSERT.
+- Envelope: `dcv1:1:<std-base64-padded(iv12‖ct‖tag16)>`, AES-256-GCM; tenant KEK = `HKDF-SHA256(master, salt=lenprefix("virbius/delegated/kek/v1"), info=lenprefix("tenant-kek-v1")‖lenprefix(tenant)‖u64be(1))`, phase 1 pins `kek_version=1` (no rotation); **AAD = lenprefix(tenant)‖lenprefix(handle)‖lenprefix(host)‖lenprefix(header_name)‖lenprefix(header_prefix)** (`lenprefix(x)=u32_be(len)‖x`; changing any field requires re-encryption).
+- Snapshot JSON: `{"v":1,"tenant_id","gen","rows":[{tenant_id,handle,host,header_name,header_prefix,ciphertext}]}`; the proxy `GET`s it every 30s and **atomically swaps** the vault after staging validation; missing key = keep previous value + alert (counts toward TTL); `rows:[]` = authoritative clear → cold; foreign-tenant rows hard-dropped. Control retries failed publishes and re-publishes everything every 60s (self-healing).
+
+**Proxy behavior (hit branch; any failure = uniform opaque deny `-32014 delegated_egress_denied`)**:
+
+1. Ordering (§5-0): existing URL extraction / allowlist validation run first (a hit host ∉ allowlist alerts `host_not_in_allowlist` at vault apply); the miss path is untouched.
+2. Asserts session tenant == deploy tenant (misconfiguration detection only, not authentication; empty/"default" deploy tenant fails fast at startup).
+3. https+443 only; strips the agent's `Authorization` / same-name header / inbound framing headers (Host/Content-Length/Transfer-Encoding/Connection/Keep-Alive/Proxy-*/TE/Trailer/Upgrade); pins `Accept-Encoding: identity`; injects exactly one `header_name: prefix+value` (asserted `get_all==1` on a self-held HeaderMap).
+4. No redirects (dedicated no-follow client): 3xx returns only `{status, location}` (location redacted, body dropped); **non-2xx is always denied without reading the body**.
+5. Unified finalize: whole-body buffering ≤4MiB (over → deny); `Content-Encoding` absent = pass, present = every value must be `identity`; body starting with `1f 8b` rejected; **byte-exact redaction** (`prefix+value` and `value` → `[REDACTED]`) happens once at the byte-formation point — every sink afterwards (tool result / errors / logs / trace / engine) only consumes the cleaned buffer.
+6. **D-I**: while enabled, `LOCAL_EXEC_TOOLS` (shell/execute_python/execute_code/execute_node/exec_cmd) are denied outright (shared guard at the top of both `execute_in_sandbox` cfg variants, regardless of sandbox config).
+7. State machine: cold = plane inactive (availability fail-open, key-plane fail-closed); no successful read for longer than TTL (default 300s) → clear vault → cold + alert; restart = cold.
+
+**Control API** (`/api/v1/admin/tenants/{tenantId}/delegated-credentials`, admin auth, tenants normalized to lowercase on write): `GET` list (never returns the value) / `POST` create / `PUT /{handle}` full re-record (AAD binds all fields) / `POST /{handle}/revoke` / `DELETE /{handle}` / `POST /kek/reveal` one-time KEK output (audited). Request-scoped redaction on the write path: the value is registered before validation (raw/base64/urlencode variants); the exception advice echoes nothing. Write validation mirrors the proxy: canonical host (lowercase ASCII, single-label allowed, IP-literal/Unicode shapes rejected), header_name deny-list (hop-by-hop/framing/`Content-*`/`Accept-Encoding`), value ≥16B, `prefix+value` ≤4096B, CR/LF/NUL rejected.
+
+**Acceptance radius (D1, 10 items, pending Owner sign-off)**: ① T7 plaintext in proxy memory (non-zeroizable surfaces: HeaderMap / reqwest internals) ② T8 Control can decrypt + transient plaintext during CRUD ③ T-STALE revocation latency = poll 30s + in-flight + offline ≤TTL ④ T-CLEAN encoded variants (JSON-escaped/HTML-entity/percent) not redacted ⑤ T-SHARE shared within tenant ⑥ T-ADM any reachable session can trigger injection (premise = proxy tenant-only reachable, enforced by the bind startup check) ⑦ T-REDIR non-hit→hit landing leg gets no injection, no credential present ⑧ T-ORACLE after the uniform deny the residual = 3xx behavior difference ⑨ T-SSRF no runtime resolution check (rebinding/private-network residuals; IP literals rejected at write time) ⑩ KEK/master static, no rotation in phase 1 (rotation = redeploy).
+
+**Test baseline (merge gate)**: Java/Rust interop vector (fixed KEK/IV, byte-identical three ways); miss-path golden byte equivalence; 10 end-to-end hit-branch tests (2xx echo cleaned / exactly one injected header / Authorization stripped / identity pinned / framing dropped, gzip magic, CE gzip, 5xx no body, 302 redacted no-follow, miss/cold fallthrough, tenant mismatch).
+
+**Ops notes**: LLM traffic (llm-proxy / vendor domains) **must not enter the vault** — the phase-1 hit branch has no streaming; the LLM case is served by a gateway/key-proxy holder instead. KEK via a 0400 file (`kek_file` preferred); Redis write access = the plane's boundary; deployment details in [DEPLOYMENT.md](DEPLOYMENT.md) §9.6.
+
+**Phase-2 regression triggers**: per-agent isolation → AGT CredentialProfile + short-cert route; shared multi-tenant proxy → redo admission/tenant plane; arbitrary hosts/placeholders → credential_host + `allowed_handles`; streaming/SSE → bounded-window redaction; rotation → versioned KEK + grace window. Design history and the 13 Gate review rounds were removed from `docs/memory/` per Owner instruction (2026-10-10); this section is the authoritative phase-1 description.
+
 Sidecar deployment (K8s) — single upstream:
 
 ```yaml

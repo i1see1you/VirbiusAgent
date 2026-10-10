@@ -60,9 +60,11 @@ restart_engine() {
   info "Restarting engine to pick up new rules..."
   lsof -ti :8082 2>/dev/null | xargs kill -9 2>/dev/null || true
   sleep 1
+  local engine_jar
+  engine_jar="$ROOT/virbius-engine/target/virbius-engine-$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/').jar"
   nohup env VIRBIUS_DATA_DIR="$ROOT/data" VIRBIUS_REDIS_URL="${VIRBIUS_REDIS_URL:-redis://127.0.0.1:6379}" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
-    java -jar "$ROOT/virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar" \
+    java -jar "$engine_jar" \
     >/tmp/virbius-agent/logs/engine.log 2>&1 &
   for _ in $(seq 1 20); do
     if curl -sf http://127.0.0.1:8082/admin/health >/dev/null 2>&1; then

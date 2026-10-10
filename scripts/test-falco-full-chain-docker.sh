@@ -80,8 +80,10 @@ docker info >/dev/null 2>&1 || err "docker daemon not running"
 # control/engine run from host-built jars (bind-mounted into plain JRE images).
 # Build if missing or if any source file is newer than the jar.
 need_build=false
+APP_VER=$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
+export APP_VER
 for m in virbius-control virbius-engine; do
-  JAR="$ROOT/$m/target/$m-0.1.0-SNAPSHOT.jar"
+  JAR="$ROOT/$m/target/$m-${APP_VER}.jar"
   if [[ ! -f "$JAR" ]] || [[ -n $(find "$ROOT/$m/src" -newer "$JAR" -name '*.java' -print -quit 2>/dev/null) ]]; then
     need_build=true
   fi

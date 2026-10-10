@@ -16,6 +16,8 @@ pub enum VirbiusErrorCode {
     ChallengeRequired = -32011,
     MemoryWriteBlocked = -32012,
     ArgTransformFailed = -32013,
+    DelegatedEgressDenied = -32014,
+    DelegatedLocalExecDisabled = -32015,
 }
 
 impl VirbiusErrorCode {
@@ -34,6 +36,8 @@ impl VirbiusErrorCode {
             Self::ChallengeRequired => "challenge_required",
             Self::MemoryWriteBlocked => "memory_write_blocked",
             Self::ArgTransformFailed => "arg_transform_failed",
+            Self::DelegatedEgressDenied => "delegated_egress_denied",
+            Self::DelegatedLocalExecDisabled => "local_exec_disabled",
         }
     }
 
@@ -48,7 +52,9 @@ impl VirbiusErrorCode {
             | Self::OutputReviewBlocked
             | Self::ChallengeRequired
             | Self::MemoryWriteBlocked
-            | Self::ArgTransformFailed => 403,
+            | Self::ArgTransformFailed
+            | Self::DelegatedEgressDenied
+            | Self::DelegatedLocalExecDisabled => 403,
             Self::SchemaViolation => 400,
             Self::RateExceeded => 429,
         }

@@ -22,7 +22,7 @@ services:
     image: eclipse-temurin:17-jre
     depends_on: [redis]
     volumes:
-      - ../../virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar:/app/control.jar:ro
+      - ../../virbius-control/target/virbius-control-${APP_VER}.jar:/app/control.jar:ro
       - control-data:/data
     environment:
       VIRBIUS_DATA_DIR: /data
@@ -39,7 +39,7 @@ services:
     image: eclipse-temurin:17-jre
     depends_on: [redis]
     volumes:
-      - ../../virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar:/app/engine.jar:ro
+      - ../../virbius-engine/target/virbius-engine-${APP_VER}.jar:/app/engine.jar:ro
     environment:
       VIRBIUS_DATA_DIR: /tmp/engine-data
       VIRBIUS_REDIS_URL: redis://redis:6379

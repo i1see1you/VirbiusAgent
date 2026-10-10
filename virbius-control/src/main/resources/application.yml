@@ -53,6 +53,10 @@ virbius:
     master-key: ${VIRBIUS_LICENSE_MASTER_KEY:}
     # Dev-only escape hatch for legacy local databases with weak/denylisted keys.
     allow-insecure-dev-key: ${VIRBIUS_LICENSE_ALLOW_INSECURE_DEV_KEY:false}
+  delegated:
+    # Delegated credential plane (v2.5-min). Separate from the license master
+    # key (domain separation); >= 32 bytes, fail-fast on use.
+    master-key: ${VIRBIUS_DELEGATED_MASTER_KEY:}
   data-dir: ${VIRBIUS_DATA_DIR:./data}
   redis:
     url: ${VIRBIUS_REDIS_URL:redis://127.0.0.1:6379}

@@ -90,3 +90,6 @@ virbius-eval/
 
 # Intent workspace
 virbius-intent/
+
+# Memory / persistent workbuddy state
+docs/memory/

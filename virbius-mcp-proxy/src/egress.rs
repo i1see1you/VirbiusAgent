@@ -80,6 +80,9 @@ pub fn local_exec_tool_descriptors() -> Vec<Value> {
 #[derive(Clone)]
 pub struct EgressClient {
     http: reqwest::Client,
+    /// Redirect-following-disabled client for the delegated credential plane
+    /// (hit branch must not follow redirects). Built once, shared.
+    nofollow: reqwest::Client,
     max_body_bytes: usize,
 }
 
@@ -134,10 +137,22 @@ impl EgressClient {
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
+        let nofollow = reqwest::Client::builder()
+            .timeout(Duration::from_secs(timeout))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             http,
+            nofollow,
             max_body_bytes: max_body,
         }
+    }
+
+    /// Client with redirects disabled (delegated hit branch only).
+    pub fn nofollow(&self) -> reqwest::Client {
+        self.nofollow.clone()
     }
 
     /// Proxy an HTTP request to an external API with streaming response reading.

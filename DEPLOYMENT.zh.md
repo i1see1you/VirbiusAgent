@@ -557,3 +557,40 @@ PLAINTEXT，即 **审计/trace 载荷在集群内网明文传输**。P0 接受�
 - 存量 `private_key_enc` 仍按旧派生解密；新签发密钥使用 `v1:` HKDF 信封。
 - 旧本地开发库可用 `virbius.license.allow-insecure-dev-key=true`
   （**仅 dev profile**）在换强密钥前继续启动。
+
+### 9.6 代客凭证平面（v2.5）部署与运维
+
+详见 [PROTOCOL.zh.md](PROTOCOL.zh.md) §2.6.1「Egress 代客凭证注入」。要点：
+
+**Control 侧**：
+
+| 环境变量 | 说明 |
+|---------|------|
+| `VIRBIUS_DELEGATED_MASTER_KEY` | ≥32B，与 license master 分钥（域分离），fail-fast |
+| `VIRBIUS_REDIS_URL` | 快照发布通道（复用现有） |
+
+- 迁移：`V11__delegated_cred_plane.sql`（单表）。**构建须 clean**：旧切片产物 `target/classes/db/migration/V10__delegated_creds.sql` 与新迁移冲突；曾应用旧 V10 的环境执行 `flyway repair` + 手工 DROP 旧三表。
+- 签发流程：`POST /api/v1/admin/tenants/{t}/delegated-credentials`（handle/host/header_name/header_prefix/value）→ `POST /kek/reveal` 一次性取 KEK。
+
+**Proxy 侧**（`[delegated]` 配置段，均可用 `VIRBIUS_DELEGATED_*` 环境变量覆盖；非热更，改动需重启）：
+
+| 键 | 默认 | 说明 |
+|----|------|------|
+| `enabled` | `false` | 开关；关=非本地 egress 逐字节一致 + 本地执行不受限 |
+| `tenant_id` | — | 部署固定租户（trim+小写；空/"default" 拒启） |
+| `kek` / `kek_file` | — | 租户 KEK（b64 32B）；**优先 0400 文件**，禁入 argv/日志/shell 历史 |
+| `redis_url` | 回退 audit | 快照轮询通道 |
+| `poll_interval_secs` | `30` | 须 < ttl |
+| `ttl_secs` | `300` | 连续超时→清库→cold（注入停止） |
+| `max_body_mb` | `4` | 命中响应缓冲上限 |
+| `allow_external_bind` | `false` | 非 loopback 绑定的显式豁免（启动告警+审计） |
+
+**上线检查单**：
+
+1. `VIRBIUS_EGRESS_HOSTS` 必须包含全部凭据 host（vault 应用时会对缺失项告警 `host_not_in_allowlist`）。
+2. **LLM 流量不入 vault**（llm-proxy/LLM 厂商域名不配置凭据）：一期命中分支无流式（SSE 会缓冲到上限后拒绝）。
+3. 启动前提校验：绑定须 stdio/loopback（两族+hostname 解析），否则拒启——这是 D1⑥「仅租户可达」前提的唯一本地落点。
+4. 吊销时效：下一轮快照轮询（≤30s）生效；Control 全量清空（rows=[]）→ proxy 清库转 cold。
+5. 告警：`tracing::error`（`delegated_cred_alert{code,state}`，60s 节流）始终可用，不依赖 Kafka；关注 `snapshot_key_missing`、`snapshot_unreadable_rows`、`host_not_in_allowlist`、`ttl_breach_cleared`、`tenant_mismatch`。
+6. 轮询退避：读取失败按 `30s→60s→…→600s`（10min 封顶，±10% 抖动）指数退避，成功即复位；**TTL 清库判断每轮都执行**，退避不影响离线兜底。
+7. KEK 交付：`POST /kek/reveal` 响应带 `Cache-Control: no-store`+`Pragma: no-cache`（防中间层缓存）；Control 不记录请求/响应体，KEK 不落 access log——仍须运维以 0400 文件落地，勿经终端/CI 回显。
