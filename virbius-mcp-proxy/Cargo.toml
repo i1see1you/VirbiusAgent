@@ -4,6 +4,12 @@ version = "0.2.0"
 edition = "2021"
 license = "MIT"
 
+[features]
+# Test-only seam: lets the cross-process E2E harness drive the delegated hit
+# branch against a plain local HTTP server (relaxes the https+443 gate). Never
+# enabled in release builds.
+test-harness = []
+
 [dependencies]
 virbius-core = { path = "../virbius-core" }
 tokio = { version = "1", features = ["full"] }

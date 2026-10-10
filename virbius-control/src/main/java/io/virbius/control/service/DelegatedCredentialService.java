@@ -9,12 +9,16 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import redis.clients.jedis.params.ScanParams;
+import redis.clients.jedis.resps.ScanResult;
 
 /**
  * Delegated credential CRUD + snapshot publish (v2.5-min, B1 config-data
@@ -164,9 +168,14 @@ public class DelegatedCredentialService {
         if (combined.getBytes(StandardCharsets.UTF_8).length > 4096) {
             throw new BusinessException(400, "header_prefix + value must be <= 4096 bytes");
         }
+        // Reject every control character (0x00-0x1F, 0x7F) — the proxy injects
+        // the value via `HeaderValue::try_from`, which rejects exactly this set.
+        // Aligning here turns a would-be runtime inject failure into a clear 400.
+        // obs-text (>= 0x80) is intentionally left allowed (HeaderValue accepts it
+        // and byte-exact redaction is unaffected).
         for (char c : value.toCharArray()) {
-            if (c == '\r' || c == '\n' || c == '\0') {
-                throw new BusinessException(400, "value: CR/LF/NUL rejected");
+            if (c < 0x20 || c == 0x7f) {
+                throw new BusinessException(400, "value: control characters (0x00-0x1F, 0x7F) rejected");
             }
         }
     }
@@ -390,12 +399,29 @@ public class DelegatedCredentialService {
         log.info("delegated_audit event=publish tenant={} active_rows={}", tenantId, rows.size());
     }
 
-    /** Fallback re-publish for every tenant with rows (self-heal, 60s). */
+    /**
+     * Self-heal reconcile (60s): the union of tenants that have rows in the DB
+     * and tenants that still hold a snapshot key in Redis. For each, publishOnce
+     * re-reads the current active rows, so this closes both gaps without any
+     * bookkeeping table:
+     * <ul>
+     *   <li>a tenant whose last credential was deleted (zero rows) but whose
+     *       stale snapshot key survived a failed publish → authoritative empty
+     *       doc clears the proxy vault;</li>
+     *   <li>a tenant whose first publish failed (rows exist, no key) → the key
+     *       is created.</li>
+     * </ul>
+     * Redis tenants with zero rows keep producing an empty key, which just gets
+     * an idempotent empty re-SET each cycle — negligible for the rare tenants
+     * that have cleared all their credentials.
+     */
     @Scheduled(fixedDelay = 60_000, initialDelay = 90_000)
     public void republishAll() {
-        List<String> tenants = jdbc.query(
+        Set<String> tenants = new TreeSet<>();
+        tenants.addAll(jdbc.query(
                 "SELECT DISTINCT tenant_id FROM tb_delegated_credentials",
-                (rs, i) -> rs.getString(1));
+                (rs, i) -> rs.getString(1)));
+        tenants.addAll(snapshotTenantsFromRedis());
         for (String tenant : tenants) {
             try {
                 publishOnce(tenant);
@@ -404,6 +430,31 @@ public class DelegatedCredentialService {
                         tenant, e.getMessage());
             }
         }
+    }
+
+    /** Tenants with a live snapshot key in Redis (SCAN — non-blocking). */
+    private Set<String> snapshotTenantsFromRedis() {
+        Set<String> out = new TreeSet<>();
+        var poolOpt = jedisPools.pool();
+        if (poolOpt.isEmpty()) {
+            return out;
+        }
+        try (var jedis = poolOpt.get().getResource()) {
+            String cursor = ScanParams.SCAN_POINTER_START;
+            ScanParams params = new ScanParams().match(SNAPSHOT_KEY_PREFIX + "*").count(100);
+            do {
+                ScanResult<String> result = jedis.scan(cursor, params);
+                for (String key : result.getResult()) {
+                    if (key.startsWith(SNAPSHOT_KEY_PREFIX)) {
+                        out.add(key.substring(SNAPSHOT_KEY_PREFIX.length()));
+                    }
+                }
+                cursor = result.getCursor();
+            } while (!ScanParams.SCAN_POINTER_START.equals(cursor));
+        } catch (Exception e) {
+            log.error("delegated_audit event=reconcile_scan_failed error={}", e.getMessage());
+        }
+        return out;
     }
 
     private void audit(String event, String tenantId, String handle, String host) {

@@ -58,6 +58,20 @@ class DelegatedCredentialValidationTest {
     }
 
     @Test
+    void valueRejectsAllControlCharsButKeepsObsText() {
+        // Aligns with the proxy's HeaderValue::try_from: reject 0x00-0x1F + 0x7F.
+        assertThrows(BusinessException.class,
+                () -> DelegatedCredentialService.validateValue("sk-abcdefgh\u0001ijklmnop", ""));
+        assertThrows(BusinessException.class,
+                () -> DelegatedCredentialService.validateValue("sk-abcdefgh\u0009ijklmnop", "")); // tab
+        assertThrows(BusinessException.class,
+                () -> DelegatedCredentialService.validateValue("sk-abcdefgh\u007fijklmnop", "")); // DEL
+        // obs-text (>= 0x80) stays allowed — HeaderValue accepts it and
+        // byte-exact redaction is unaffected.
+        DelegatedCredentialService.validateValue("sk-abcdefgh\u00e9ijklmnop", "");
+    }
+
+    @Test
     void tenantNormalization() {
         // Proxy normalizes its deploy tenant identically; a mismatch would
         // make it drop the whole snapshot as foreign and stay cold forever.

@@ -203,13 +203,61 @@ fn replace_all(buf: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Replace every byte-exact occurrence of `prefix+value` (longer form first)
-/// and then bare `value` with `[REDACTED]`.
+/// Literal (never-decoding) encoding variants an upstream might echo instead
+/// of the raw bytes: percent-encoded (uppercase hex), standard base64, and
+/// base64url. The body is only pattern-replaced, never decoded/rewritten, so
+/// binary or otherwise opaque responses are never corrupted. `s` itself is
+/// dropped (already handled as the raw needle), as are forms with no special
+/// characters (percent form of an all-unreserved value equals the value).
+fn encode_variants(s: &str) -> Vec<String> {
+    use base64::engine::general_purpose::{STANDARD, URL_SAFE};
+    let bytes = s.as_bytes();
+    let mut out = vec![
+        STANDARD.encode(bytes),
+        URL_SAFE.encode(bytes),
+        percent_encode(s),
+    ];
+    out.retain(|v| !v.is_empty() && v != s);
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// RFC 3986 percent-encoding, keeping only unreserved characters literal.
+fn percent_encode(s: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        let unreserved = b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~');
+        if unreserved {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(HEX[(b >> 4) as usize] as char);
+            out.push(HEX[(b & 0x0f) as usize] as char);
+        }
+    }
+    out
+}
+
+fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.len() >= needle.len() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// Replace every occurrence of `prefix+value` (longer form first), bare
+/// `value`, and their percent/base64/base64url variants with `[REDACTED]`.
 pub fn redact_bytes(body: &[u8], value: &str, prefix: &str) -> Vec<u8> {
     let redacted = REDACTED.as_bytes();
     let combined = format!("{prefix}{value}");
-    let once = replace_all(body, combined.as_bytes(), redacted);
-    replace_all(&once, value.as_bytes(), redacted)
+    let mut out = replace_all(body, combined.as_bytes(), redacted);
+    out = replace_all(&out, value.as_bytes(), redacted);
+    for needle in encode_variants(&combined) {
+        out = replace_all(&out, needle.as_bytes(), redacted);
+    }
+    for needle in encode_variants(value) {
+        out = replace_all(&out, needle.as_bytes(), redacted);
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -711,6 +759,13 @@ impl DelegatedState {
             return Ok(None);
         }
 
+        // Observability: an upstream that reflects the injected credential back
+        // in its response is a signal worth alerting on. (Redaction below still
+        // removes the raw form; a post-redaction raw-form check would be dead
+        // code because `redact_bytes` replaces every raw occurrence.)
+        if contains_bytes(&buf, entry.value.as_bytes()) {
+            self.alert("hit_credential_echo");
+        }
         // Clean once at the byte-formation point; every sink below consumes
         // this cleaned buffer only.
         let cleaned = redact_bytes(&buf, entry.value.as_str(), entry.header_prefix.as_str());
@@ -855,6 +910,15 @@ pub fn init(
         .filter_map(|e| e.split(':').next())
         .filter_map(canonical_host)
         .collect();
+    // Test seam: only a build compiled with the `test-harness` feature honors
+    // the relax env var, so a production binary can never disable the
+    // https+443 gate. (Compile-time gate, not a runtime debug check.)
+    #[cfg(feature = "test-harness")]
+    let test_relax_endpoint =
+        std::env::var("VIRBIUS_DELEGATED_TEST_RELAX_ENDPOINT").is_ok_and(|v| v == "1");
+    #[cfg(not(feature = "test-harness"))]
+    let test_relax_endpoint = false;
+
     let params = DelegatedParams {
         enabled: true,
         tenant_id: tenant,
@@ -865,7 +929,7 @@ pub fn init(
         max_body_bytes: max_body,
         allow_external_bind,
         allowlist_hosts,
-        test_relax_endpoint: false,
+        test_relax_endpoint,
     };
     let st = DelegatedState::new(params);
     tracing::info!(target: "virbius::delegated", tenant = %st.params.tenant_id, "delegated credential plane enabled (cold until first snapshot)");
@@ -1203,6 +1267,33 @@ mod tests {
     fn redact_short_body_untouched() {
         let out = redact_bytes(b"hello", "sk-secret-123", "");
         assert_eq!(out, b"hello");
+    }
+
+    #[test]
+    fn redact_covers_encoded_variants() {
+        use base64::engine::general_purpose::{STANDARD, URL_SAFE};
+        use base64::Engine as _;
+        let value = "sk-abc+def/ghi=jkl:mno";
+        let b64 = STANDARD.encode(value.as_bytes());
+        let b64url = URL_SAFE.encode(value.as_bytes());
+        let pct = percent_encode(value);
+        assert_ne!(pct, value);
+        let body = format!("a {b64} b {b64url} c {pct} d").into_bytes();
+        let out = redact_bytes(&body, value, "");
+        let s = String::from_utf8(out).unwrap();
+        assert!(!s.contains(&b64), "base64 variant leaked: {s}");
+        assert!(!s.contains(&b64url), "base64url variant leaked: {s}");
+        assert!(!s.contains(&pct), "percent variant leaked: {s}");
+        assert!(!contains_bytes(s.as_bytes(), value.as_bytes()));
+    }
+
+    #[test]
+    fn contains_bytes_detects_raw_value() {
+        let v = "sk-abc+def/ghi=jkl:mno";
+        assert!(contains_bytes(format!("x {v} y").as_bytes(), v.as_bytes()));
+        assert!(contains_bytes(format!("Bearer {v}").as_bytes(), v.as_bytes()));
+        assert!(!contains_bytes(b"nothing here", v.as_bytes()));
+        assert!(!contains_bytes(b"short", v.as_bytes()));
     }
 
     #[test]
@@ -1775,6 +1866,36 @@ mod tests {
             r.header("content-length").is_empty(),
             "framing header must be dropped"
         );
+    }
+
+    #[tokio::test]
+    async fn e2e_hit_base64_echo_redacted() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        let b64 = STANDARD.encode(E2E_VALUE.as_bytes());
+        let body = format!("{{\"token\":\"{b64}\"}}");
+        let (port, _rec) = spawn_responder(http_response(
+            "HTTP/1.1 200 OK",
+            &[("Content-Type", "text/plain".to_string())],
+            body.as_bytes(),
+        ))
+        .await;
+        let st = e2e_state(true);
+        let resp = run_hit(
+            &st,
+            &format!("http://localhost:{port}/x"),
+            "GET",
+            None,
+            "acme",
+        )
+        .await;
+        let text = text_of(&resp);
+        assert!(
+            text.contains("[REDACTED]"),
+            "base64 echo must be redacted: {text}"
+        );
+        assert!(!text.contains(&b64), "base64 variant must not survive: {text}");
+        assert!(!contains_bytes(text.as_bytes(), E2E_VALUE.as_bytes()));
     }
 
     #[tokio::test]
