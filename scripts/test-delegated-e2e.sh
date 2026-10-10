@@ -28,7 +28,7 @@ ISO="iso-$S"
 SECRET1="sk-e2e-$S-0123456789abcdef"
 SECRET2="sk-e2e-$S-rotated-9876543210"
 
-CYAN='\033[0;36m'; GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
+GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
 PASS=0; FAIL=0
 HDR_FILE="$(mktemp)"; BODY_LOG="$(mktemp)"
 trap 'rm -f "$HDR_FILE" "$BODY_LOG"' EXIT
