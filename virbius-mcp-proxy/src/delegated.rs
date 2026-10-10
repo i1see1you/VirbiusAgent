@@ -241,7 +241,9 @@ fn percent_encode(s: &str) -> String {
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty() && haystack.len() >= needle.len() && haystack.windows(needle.len()).any(|w| w == needle)
+    !needle.is_empty()
+        && haystack.len() >= needle.len()
+        && haystack.windows(needle.len()).any(|w| w == needle)
 }
 
 /// Replace every occurrence of `prefix+value` (longer form first), bare
@@ -1291,7 +1293,10 @@ mod tests {
     fn contains_bytes_detects_raw_value() {
         let v = "sk-abc+def/ghi=jkl:mno";
         assert!(contains_bytes(format!("x {v} y").as_bytes(), v.as_bytes()));
-        assert!(contains_bytes(format!("Bearer {v}").as_bytes(), v.as_bytes()));
+        assert!(contains_bytes(
+            format!("Bearer {v}").as_bytes(),
+            v.as_bytes()
+        ));
         assert!(!contains_bytes(b"nothing here", v.as_bytes()));
         assert!(!contains_bytes(b"short", v.as_bytes()));
     }
@@ -1842,10 +1847,7 @@ mod tests {
             "acme",
         )
         .await;
-        assert!(
-            !resp.get("__fallthrough__").is_some(),
-            "hit must be handled"
-        );
+        assert!(resp.get("__fallthrough__").is_none(), "hit must be handled");
         let text = text_of(&resp);
         assert!(
             text.contains("[REDACTED]"),
@@ -1858,6 +1860,8 @@ mod tests {
         let reqs = rec.lock().unwrap();
         assert_eq!(reqs.len(), 1);
         let r = &reqs[0];
+        assert_eq!(r.method, "GET");
+        assert_eq!(r.path, "/x");
         let auth = r.header("authorization");
         assert_eq!(auth, vec![format!("Bearer {E2E_VALUE}").as_str()]);
         assert_eq!(r.header("accept-encoding"), vec!["identity"]);
@@ -1894,7 +1898,10 @@ mod tests {
             text.contains("[REDACTED]"),
             "base64 echo must be redacted: {text}"
         );
-        assert!(!text.contains(&b64), "base64 variant must not survive: {text}");
+        assert!(
+            !text.contains(&b64),
+            "base64 variant must not survive: {text}"
+        );
         assert!(!contains_bytes(text.as_bytes(), E2E_VALUE.as_bytes()));
     }
 
@@ -1988,7 +1995,7 @@ mod tests {
             "acme",
         )
         .await;
-        assert!(!resp.get("__fallthrough__").is_some());
+        assert!(resp.get("__fallthrough__").is_none());
         let text = text_of(&resp);
         let parsed: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(parsed["status"], 302);

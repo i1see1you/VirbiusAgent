@@ -340,15 +340,6 @@ async fn kafka_trace_worker(brokers: String, topic: String, mut rx: mpsc::Receiv
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
-/// Parse a Redis address string into a `SocketAddr`.
-///
-/// Accepts both `host:port` and `redis://host:port` formats.
-/// Uses DNS resolution to support hostnames (e.g. Docker service names).
-#[cfg(test)]
-fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
-    crate::sink_common::parse_redis_target(url).addr
-}
-
 fn sha256_hex(input: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(input.as_bytes());
