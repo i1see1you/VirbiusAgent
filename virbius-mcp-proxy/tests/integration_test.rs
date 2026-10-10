@@ -264,6 +264,7 @@ fn make_fake_jwt(allowed_tools: Vec<&str>) -> String {
 /// Test the full flow: initialize → tools/list → tools/call
 #[tokio::test]
 async fn test_initialize_tools_list_and_call() {
+    let _lock = SUITE_LOCK.lock().await;
     let upstream_url = start_mock_mcp().await;
     let env = setup_proxy(&upstream_url).await;
     let sid = "itest-full-flow";
@@ -325,13 +326,16 @@ async fn test_initialize_tools_list_and_call() {
     let session = env.session_mgr.get(sid).unwrap();
     assert!(
         session.tool_call_count >= 1,
-        "call count should be incremented"
+        "call count should be incremented (got {}) resp={}",
+        session.tool_call_count,
+        resp
     );
 }
 
 /// Test tools/list filtering by License allowed_tools
 #[tokio::test]
 async fn test_tools_list_filtered_by_license() {
+    let _lock = SUITE_LOCK.lock().await;
     let upstream_url = start_mock_mcp().await;
     let env = setup_proxy(&upstream_url).await;
     let sid = "itest-filter";
@@ -369,6 +373,7 @@ async fn test_tools_list_filtered_by_license() {
 /// Test high-risk tool denial without License
 #[tokio::test]
 async fn test_high_risk_tool_denied_without_license() {
+    let _lock = SUITE_LOCK.lock().await;
     let upstream_url = start_mock_mcp().await;
     let env = setup_proxy(&upstream_url).await;
     let sid = "itest-deny";
@@ -405,6 +410,7 @@ async fn test_high_risk_tool_denied_without_license() {
 /// Test that tools/call without initialize returns an error
 #[tokio::test]
 async fn test_tools_call_without_initialize() {
+    let _lock = SUITE_LOCK.lock().await;
     let upstream_url = start_mock_mcp().await;
     let env = setup_proxy(&upstream_url).await;
     let sid = "itest-no-init";
@@ -425,6 +431,7 @@ async fn test_tools_call_without_initialize() {
 /// Test that tools/list without initialize returns an error
 #[tokio::test]
 async fn test_tools_list_without_initialize() {
+    let _lock = SUITE_LOCK.lock().await;
     let upstream_url = start_mock_mcp().await;
     let env = setup_proxy(&upstream_url).await;
     let sid = "itest-no-init-list";
@@ -444,6 +451,7 @@ async fn test_tools_list_without_initialize() {
 /// Test session TTL expiry and cleanup
 #[tokio::test]
 async fn test_session_ttl_expiry() {
+    let _lock = SUITE_LOCK.lock().await;
     let session_mgr = Arc::new(SessionManager::with_ttl(Duration::from_secs(1)));
 
     let session = Session::from_meta(&json!({ "app_id": "test" }));
@@ -464,6 +472,7 @@ async fn test_session_ttl_expiry() {
 /// Test that session touch extends TTL
 #[tokio::test]
 async fn test_session_touch_extends_ttl() {
+    let _lock = SUITE_LOCK.lock().await;
     let session_mgr = Arc::new(SessionManager::with_ttl(Duration::from_secs(2)));
 
     let session = Session::from_meta(&json!({ "app_id": "test" }));
@@ -485,6 +494,7 @@ async fn test_session_touch_extends_ttl() {
 /// Test upstream manager cleanup of disconnected connections
 #[tokio::test]
 async fn test_upstream_cleanup_disconnected() {
+    let _lock = SUITE_LOCK.lock().await;
     let upstream_url = start_mock_mcp().await;
     let env = setup_proxy(&upstream_url).await;
     let sid = "itest-cleanup";
@@ -516,6 +526,7 @@ async fn test_upstream_cleanup_disconnected() {
 /// Test session risk score is accessible and initialized to 0
 #[tokio::test]
 async fn test_session_risk_score_initialization() {
+    let _lock = SUITE_LOCK.lock().await;
     let session = Session::from_meta(&json!({ "app_id": "test" }));
     assert_eq!(
         session.session_risk_score, 0,
@@ -526,6 +537,7 @@ async fn test_session_risk_score_initialization() {
 /// Test that the proxy capabilities are injected into the initialize response
 #[tokio::test]
 async fn test_proxy_capabilities_injected() {
+    let _lock = SUITE_LOCK.lock().await;
     let upstream_url = start_mock_mcp().await;
     let env = setup_proxy(&upstream_url).await;
     let sid = "itest-caps";
@@ -554,6 +566,7 @@ async fn test_proxy_capabilities_injected() {
 /// Test multiple concurrent sessions with independent upstream connections
 #[tokio::test]
 async fn test_concurrent_sessions() {
+    let _lock = SUITE_LOCK.lock().await;
     let upstream_url = start_mock_mcp().await;
     let env = setup_proxy(&upstream_url).await;
 
@@ -718,6 +731,7 @@ async fn mock_post_handler_with_tools(
 /// Test multi-upstream mode: two upstreams with different tools, no conflicts.
 #[tokio::test]
 async fn test_multi_upstream_no_conflict() {
+    let _lock = SUITE_LOCK.lock().await;
     let url_a =
         start_mock_mcp_with_tools(vec![("read_file", "Read a file"), ("search", "Search")]).await;
     let url_b = start_mock_mcp_with_tools(vec![
@@ -815,7 +829,10 @@ async fn test_multi_upstream_no_conflict() {
     });
     let resp = route(&env, &call_req, sid).await;
     let resp = resp.unwrap();
-    assert!(resp.get("result").is_some(), "search should succeed");
+    assert!(
+        resp.get("result").is_some(),
+        "search should succeed: {resp}"
+    );
 
     // 4. tools/call — "create_issue" should route to "gh" upstream
     let call_req = json!({
@@ -826,12 +843,16 @@ async fn test_multi_upstream_no_conflict() {
     });
     let resp = route(&env, &call_req, sid).await;
     let resp = resp.unwrap();
-    assert!(resp.get("result").is_some(), "create_issue should succeed");
+    assert!(
+        resp.get("result").is_some(),
+        "create_issue should succeed: {resp}"
+    );
 }
 
 /// Test multi-upstream mode with conflicting tool names — prefixing should occur.
 #[tokio::test]
 async fn test_multi_upstream_name_conflict() {
+    let _lock = SUITE_LOCK.lock().await;
     let url_a =
         start_mock_mcp_with_tools(vec![("read_file", "Read from fs"), ("search", "Search")]).await;
     let url_b = start_mock_mcp_with_tools(vec![
@@ -929,7 +950,10 @@ async fn test_multi_upstream_name_conflict() {
     });
     let resp = route(&env, &call_req, sid).await;
     let resp = resp.unwrap();
-    assert!(resp.get("result").is_some(), "search should succeed");
+    assert!(
+        resp.get("result").is_some(),
+        "search should succeed: {resp}"
+    );
 
     // 4. tools/call — "restore" should route to "backup" upstream
     let call_req = json!({
@@ -940,14 +964,22 @@ async fn test_multi_upstream_name_conflict() {
     });
     let resp = route(&env, &call_req, sid).await;
     let resp = resp.unwrap();
-    assert!(resp.get("result").is_some(), "restore should succeed");
+    assert!(
+        resp.get("result").is_some(),
+        "restore should succeed: {resp}"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════
 //  arg_transforms: initialize → allow → apply → forward / local shell
 // ═══════════════════════════════════════════════════════════════
 
-static MANIFEST_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+/// Serializes every test in this binary. They share process-global state in
+/// `virbius_core` (the edge manifest installed by `install_offline_manifest`
+/// and `EdgeInitConfig`) which any `tools/call` reads via `rewrite_tool_args`;
+/// running them in parallel lets one test's manifest leak into another and
+/// intermittently apply the wrong arg transforms. Hold this for the whole body.
+static SUITE_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
     std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 struct OfflineManifestGuard {
@@ -1050,7 +1082,7 @@ async fn setup_proxy_fast_path(upstream_url: &str, pubkey: String) -> ProxyEnv {
 /// Low-risk upstream tool: original args go to evaluate/fallback; Apply clamps before forward.
 #[tokio::test]
 async fn arg_transform_search_restrict_clamped_before_upstream() {
-    let _lock = MANIFEST_LOCK.lock().await;
+    let _lock = SUITE_LOCK.lock().await;
     let _manifest = install_offline_manifest(&json!({
         "tenant_id": "default",
         "app_id": "test-app",
@@ -1111,7 +1143,7 @@ async fn arg_transform_search_restrict_clamped_before_upstream() {
 /// High-risk local `shell`: license + fast_path skip engine; Apply still rewrites command then exec.
 #[tokio::test]
 async fn arg_transform_shell_full_flow_clamps_then_executes() {
-    let _lock = MANIFEST_LOCK.lock().await;
+    let _lock = SUITE_LOCK.lock().await;
     let _manifest = install_offline_manifest(&json!({
         "tenant_id": "default",
         "app_id": "test-app",
@@ -1191,7 +1223,7 @@ async fn arg_transform_shell_full_flow_clamps_then_executes() {
 /// Prefix restrict: scalar miss fails the call; nothing is forwarded.
 #[tokio::test]
 async fn arg_transform_search_restrict_prefix_mismatch_fails() {
-    let _lock = MANIFEST_LOCK.lock().await;
+    let _lock = SUITE_LOCK.lock().await;
     let _manifest = install_offline_manifest(&json!({
         "tenant_id": "default",
         "app_id": "test-app",
