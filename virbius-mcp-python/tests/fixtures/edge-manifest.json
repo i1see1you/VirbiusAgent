@@ -1,0 +1,24 @@
+{
+  "tenant_id": "tenant-1",
+  "app_id": "test-agent",
+  "rules": [],
+  "dlp_rules": [],
+  "sdk_config": {},
+  "tool_policies": [
+    {
+      "tool_name": "read_file",
+      "risk_class": "low",
+      "timeout_ms": 5000,
+      "fast_path": true,
+      "sandbox_type": "none",
+      "allowed_args_schema": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "landlock_profiles": []
+}

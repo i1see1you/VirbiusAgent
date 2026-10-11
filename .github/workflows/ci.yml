@@ -81,8 +81,37 @@ jobs:
           PYO3_PYTHON: python3
         run: cargo check -p virbius-mcp-python
 
+      - name: Build Python wheel (virbius-mcp-python)
+        run: |
+          pip install maturin
+          maturin build --release --manifest-path virbius-mcp-python/Cargo.toml -o dist
+
+      - name: Test Python bindings (virbius-mcp-python)
+        run: |
+          pip install dist/*.whl pytest
+          pytest virbius-mcp-python/tests -q
+
       - name: Check Node bindings (virbius-mcp-node)
         run: cargo check -p virbius-mcp-node
+
+  # ────────────────────────────────────────────────────────────
+  #  Python: native-tool integration plugin (virbius-integrate)
+  # ────────────────────────────────────────────────────────────
+  python-integrate:
+    name: Python (virbius-integrate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install and test
+        working-directory: virbius-integrate
+        run: |
+          pip install -e . pytest
+          pytest -q
 
   # ────────────────────────────────────────────────────────────
   #  Java: Maven test (engine · control · compiler · policy · groovy-l3)
@@ -200,19 +229,20 @@ jobs:
   ci-pass:
     name: CI (all checks)
     runs-on: ubuntu-latest
-    needs: [rust, rust-bindings, java, go, shellcheck, cargo-audit, sandbox-linux]
+    needs: [rust, rust-bindings, python-integrate, java, go, shellcheck, cargo-audit, sandbox-linux]
     if: always()
     steps:
       - name: Check job results
         run: |
           echo "rust: ${{ needs.rust.result }}"
           echo "rust-bindings: ${{ needs.rust-bindings.result }}"
+          echo "python-integrate: ${{ needs.python-integrate.result }}"
           echo "java: ${{ needs.java.result }}"
           echo "go: ${{ needs.go.result }}"
           echo "shellcheck: ${{ needs.shellcheck.result }}"
           echo "cargo-audit: ${{ needs.cargo-audit.result }}"
           echo "sandbox-linux: ${{ needs.sandbox-linux.result }}"
-          for r in "${{ needs.rust.result }}" "${{ needs.rust-bindings.result }}" "${{ needs.java.result }}" "${{ needs.go.result }}" "${{ needs.shellcheck.result }}" "${{ needs.cargo-audit.result }}" "${{ needs.sandbox-linux.result }}"; do
+          for r in "${{ needs.rust.result }}" "${{ needs.rust-bindings.result }}" "${{ needs.python-integrate.result }}" "${{ needs.java.result }}" "${{ needs.go.result }}" "${{ needs.shellcheck.result }}" "${{ needs.cargo-audit.result }}" "${{ needs.sandbox-linux.result }}"; do
             if [ "$r" != "success" ]; then
               echo "::error::One or more CI checks failed"
               exit 1

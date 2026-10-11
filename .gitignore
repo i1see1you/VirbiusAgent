@@ -32,6 +32,12 @@ virbius-control/frontend/node/
 # Python
 __pycache__/
 *.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.virbius-integrate-spill-*
+/dist/
+*.whl
 
 # Generated
 *.log

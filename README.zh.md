@@ -265,12 +265,16 @@ flowchart TB
 |------|------|--------|------|
 | virbius-core | 内嵌 | Rust | Edge SDK：工具预检、许可证校验、DLP、STI 污点追踪。毫秒级，可离线。 |
 | virbius-mcp-proxy | 9090 | Rust (axum) | MCP stdio/SSE 代理：多上游路由、安全管线、会话管理。 |
+| virbius-mcp-python | 内嵌 | Python (PyO3) | 原生工具**执法** SDK：License 预检、参数 schema、边缘规则（模式 B）。 |
+| virbius-integrate | 内嵌 | Python | 原生工具**观测**插件（LangChain callback）：工具清单/分级/观测时间轴（模式 A）。 |
 | virbius-gateway | WASM 插件 | Go | Higress WASM：限流、HTTP 阻断、审批 token 验证。 |
 | virbius-engine | 8082 | Java (Spring Boot) | 云端执行：Prompt 注入检测、Groovy L3 终判、STI 语义审计。 |
 | virbius-control | 8080 | Java (Spring Boot) | 控制面：运营台 UI、规则注册、灰度管理、审计大盘。 |
 | virbius-kernel | eBPF 插件 | Go + Rust | Falco DaemonSet：自定义 eBPF 规则，config-subscriber 热重载。 |
 | Redis | 6379 | — | 审计事件流、累计计数器、会话缓存。 |
 | 数据库 | — | SQLite / MySQL | 规则元数据、灰度状态、Agent 链路、审计事件。 |
+
+> **原生工具集成**（LangChain 原生工具的模式 A 观测 / 模式 B 执法，含覆盖分级与警示）见 [NATIVE_TOOL_INTEGRATION.zh.md](NATIVE_TOOL_INTEGRATION.zh.md)。
 
 ## 层职责
 

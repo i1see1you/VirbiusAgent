@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -205,14 +206,29 @@ public class ArtifactService {
             java.nio.file.Path edgeBase = dataDir.resolve("edge");
             java.nio.file.Files.createDirectories(edgeBase);
 
-            if (appIds.isEmpty()) {
+            // Reconcile against previously published apps too: when an app loses its last
+            // service-bind rule (disabled/removed), collectAppIds drops it, so without the
+            // published set its stale manifest would be served forever. Republishing an
+            // (empty/global-only) manifest lets edge SDKs converge and drop the dead rule.
+            Set<String> targetAppIds = new LinkedHashSet<>(appIds);
+            List<EdgeArtifactMeta> published = edgeArtifactMetaRepository.listByTenant(tenantId);
+            if (published != null) {
+                for (EdgeArtifactMeta meta : published) {
+                    if (pool.equals(meta.pool())) {
+                        targetAppIds.add(meta.appId());
+                    }
+                }
+            }
+
+            if (targetAppIds.isEmpty()) {
                 log.warn(
-                        "skip edge manifests for tenant={}: no service-bind app_ids",
-                        tenantId);
+                        "skip edge manifests for tenant={} pool={}: no app_ids",
+                        tenantId,
+                        pool);
                 return paths;
             }
 
-            for (String appId : appIds) {
+            for (String appId : targetAppIds) {
                 java.nio.file.Path dir = edgeBase.resolve(tenantId).resolve(appId);
                 java.nio.file.Files.createDirectories(dir);
                 List<RuleRevision> filtered = filterEdgeRulesForApp(allRules, appId);
@@ -223,10 +239,9 @@ public class ArtifactService {
                 writeEdgeManifestFile(tenantId, appId, pool, filtered, manifestFile);
                 paths.put("edge:" + appId + ":" + pool, manifestFile.toString());
             }
-            if (!appIds.isEmpty()) {
-                paths.put("edge" + ("canary".equals(pool) ? ":canary" : ""),
-                        paths.get("edge:" + appIds.get(0) + ":" + pool));
-            }
+            paths.put(
+                    "edge" + ("canary".equals(pool) ? ":canary" : ""),
+                    paths.get("edge:" + targetAppIds.iterator().next() + ":" + pool));
             return paths;
         } catch (Exception e) {
             log.warn("failed to write edge manifests for pool={}: {}", pool, e.getMessage());

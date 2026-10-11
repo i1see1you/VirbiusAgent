@@ -504,6 +504,8 @@ struct EdgeManifest {
 
 > **This section has been split into a separate document**: [PROTOCOL.md](PROTOCOL.md) — Contains the complete MCP Proxy technical solution (architecture, protocol handling, interception flow, session management, fallback strategy, error code definitions, configuration, deployment modes, implementation structure, core code).
 
+> **Native tool integration (Mode A observe / Mode B enforce)**: [NATIVE_TOOL_INTEGRATION.md](NATIVE_TOOL_INTEGRATION.md) — one-line observation wiring for LangChain native tools, coverage classification and warnings, ingest/query endpoints, and trust boundary.
+
 ---
 
 ### 2.7 Fast Path (Low-Risk Tools Skip Cloud)

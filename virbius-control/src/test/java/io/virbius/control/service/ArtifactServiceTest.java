@@ -10,6 +10,7 @@ import static org.mockito.Mockito.when;
 import io.virbius.control.domain.CumulativeDef;
 import io.virbius.control.domain.EdgeArtifactMeta;
 import io.virbius.control.domain.RuleRevision;
+import io.virbius.control.domain.TenantRolloutPolicy;
 import io.virbius.control.gateway.GatewayListRedisService;
 import io.virbius.control.repository.CumulativeRepository;
 import io.virbius.control.repository.EdgeArtifactMetaRepository;
@@ -117,6 +118,117 @@ class ArtifactServiceTest {
         assertEquals(7L, captor.getValue().artifactRevision());
         assertEquals("abc-canary-sha", captor.getValue().contentSha256());
         verify(edgeArtifactMetaRepository).delete(TENANT, "app-a", "canary");
+    }
+
+    @Test
+    void writeEdgeWithPoolRepublishesManifestForAppThatLeftExecutionPlane() throws Exception {
+        Path tmp = Files.createTempDirectory("edge-reconcile-orphan");
+        ArtifactService svc = new ArtifactService(
+                tmp.toString(),
+                registryRepo,
+                listMetaRepo,
+                cumulativeRepo,
+                policyRepository,
+                "",
+                "",
+                gatewayListRedisService,
+                edgeArtifactMetaRepository,
+                false,
+                true,
+                toolRegistryService,
+                expressionCompiler);
+
+        // The app's only service-bind rule is now disabled -> dropped from the execution plane,
+        // so collectAppIds returns nothing for it while a stale artifact is still published.
+        RuleRevision disabled = new RuleRevision(
+                TENANT,
+                "edge_dead",
+                1,
+                "poc-default",
+                "edge",
+                "lua-dsl",
+                "REASON",
+                100,
+                "deny",
+                Map.of("bind_scope", "service", "bind_ref", Map.of("app_ids", List.of("app-a"))),
+                Map.of("list_type", "deny", "keywords", List.of("dead")),
+                "disabled",
+                null,
+                Instant.now(),
+                Instant.now(),
+                null,
+                false,
+                null);
+        when(registryRepo.listCurrentRules(eq(TENANT), eq("edge"))).thenReturn(List.of(disabled));
+        when(policyRepository.getOrDefault(eq(TENANT))).thenReturn(TenantRolloutPolicy.defaults(TENANT));
+
+        EdgeArtifactMeta prior = new EdgeArtifactMeta(
+                TENANT, "app-a", "stable", 5L, "old-sha", Instant.parse("2026-01-01T00:00:00Z"));
+        when(edgeArtifactMetaRepository.listByTenant(eq(TENANT))).thenReturn(List.of(prior));
+        when(edgeArtifactMetaRepository.get(eq(TENANT), eq("app-a"), eq("stable")))
+                .thenReturn(Optional.of(prior));
+
+        Map<String, String> paths = svc.writeEdgeWithPool(TENANT, Map.of(), "stable");
+
+        Path manifest = tmp.resolve("edge").resolve(TENANT).resolve("app-a").resolve("edge-manifest.json");
+        assertTrue(Files.isRegularFile(manifest), "stale app manifest must be republished");
+        assertTrue(paths.containsKey("edge:app-a:stable"));
+
+        com.fasterxml.jackson.databind.JsonNode root =
+                new com.fasterxml.jackson.databind.ObjectMapper().readTree(Files.readAllBytes(manifest));
+        assertEquals(0, root.get("rules").size(), "disabled rule must not be delivered");
+
+        ArgumentCaptor<EdgeArtifactMeta> captor = ArgumentCaptor.forClass(EdgeArtifactMeta.class);
+        verify(edgeArtifactMetaRepository).save(captor.capture());
+        assertEquals(6L, captor.getValue().artifactRevision(), "revision must advance");
+        assertEquals("app-a", captor.getValue().appId());
+        assertEquals("stable", captor.getValue().pool());
+    }
+
+    @Test
+    void writeEdgeWithPoolKeepsLiveAppsAndAlsoReconcilesOrphans() throws Exception {
+        Path tmp = Files.createTempDirectory("edge-reconcile-mixed");
+        ArtifactService svc = new ArtifactService(
+                tmp.toString(),
+                registryRepo,
+                listMetaRepo,
+                cumulativeRepo,
+                policyRepository,
+                "",
+                "",
+                gatewayListRedisService,
+                edgeArtifactMetaRepository,
+                false,
+                true,
+                toolRegistryService,
+                expressionCompiler);
+
+        RuleRevision live = edgeRule(
+                "edge_live",
+                Map.of("bind_scope", "service", "bind_ref", Map.of("app_ids", List.of("app-b"))),
+                Map.of("list_type", "deny", "keywords", List.of("bad")));
+        when(registryRepo.listCurrentRules(eq(TENANT), eq("edge"))).thenReturn(List.of(live));
+        when(policyRepository.getOrDefault(eq(TENANT))).thenReturn(TenantRolloutPolicy.defaults(TENANT));
+
+        Instant now = Instant.now();
+        when(edgeArtifactMetaRepository.listByTenant(eq(TENANT)))
+                .thenReturn(List.of(
+                        new EdgeArtifactMeta(TENANT, "app-a", "stable", 3L, "a-sha", now),
+                        new EdgeArtifactMeta(TENANT, "app-b", "stable", 3L, "b-sha", now)));
+        when(edgeArtifactMetaRepository.get(eq(TENANT), eq("app-a"), eq("stable")))
+                .thenReturn(Optional.of(new EdgeArtifactMeta(TENANT, "app-a", "stable", 3L, "a-sha", now)));
+        when(edgeArtifactMetaRepository.get(eq(TENANT), eq("app-b"), eq("stable")))
+                .thenReturn(Optional.of(new EdgeArtifactMeta(TENANT, "app-b", "stable", 3L, "b-sha", now)));
+
+        svc.writeEdgeWithPool(TENANT, Map.of(), "stable");
+
+        com.fasterxml.jackson.databind.ObjectMapper om = new com.fasterxml.jackson.databind.ObjectMapper();
+        Path appA = tmp.resolve("edge").resolve(TENANT).resolve("app-a").resolve("edge-manifest.json");
+        Path appB = tmp.resolve("edge").resolve(TENANT).resolve("app-b").resolve("edge-manifest.json");
+        assertTrue(Files.isRegularFile(appA), "orphan app-a must be reconciled");
+        assertTrue(Files.isRegularFile(appB), "live app-b must still be published");
+        assertEquals(0, om.readTree(Files.readAllBytes(appA)).get("rules").size());
+        assertEquals(1, om.readTree(Files.readAllBytes(appB)).get("rules").size());
     }
 
     @Test

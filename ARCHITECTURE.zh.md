@@ -501,6 +501,8 @@ struct EdgeManifest {
 
 > **本节已拆分至独立文档**：[PROTOCOL.zh.md](PROTOCOL.zh.md) — 包含 MCP Proxy 完整技术方案（架构、协议处理、拦截流程、会话管理、Fallback 策略、错误码定义、配置、部署模式、实现结构、核心代码）。
 
+> **原生工具集成（模式 A 观测 / 模式 B 执法）**：[NATIVE_TOOL_INTEGRATION.zh.md](NATIVE_TOOL_INTEGRATION.zh.md) — LangChain 原生工具的一行接入观测、覆盖分级与警示、上报/查询接口与信任边界。
+
 ---
 
 ### 2.7 快速通道(低风险工具跳过云层)

@@ -45,6 +45,18 @@ public class JdbcEdgeArtifactMetaRepository implements EdgeArtifactMetaRepositor
     }
 
     @Override
+    public List<EdgeArtifactMeta> listByTenant(String tenantId) {
+        return jdbc.query(
+                """
+                SELECT tenant_id, app_id, pool, artifact_revision, content_sha256, published_at
+                FROM tb_edge_artifact_meta
+                WHERE tenant_id = ?
+                """,
+                MAPPER,
+                tenantId);
+    }
+
+    @Override
     public void save(EdgeArtifactMeta meta) {
         Optional<EdgeArtifactMeta> existing = get(meta.tenantId(), meta.appId(), meta.pool());
         if (existing.isEmpty()) {

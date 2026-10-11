@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "virbius-mcp-python"
+dynamic = ["version"]
+description = "VirbiusAgent edge enforcement primitives for Python (PyO3 binding of virbius-core)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+classifiers = [
+  "Programming Language :: Rust",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "License :: OSI Approved :: MIT License",
+]
+# 运行时零第三方依赖（纯扩展模块）
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+module-name = "virbius_mcp_python"
+features = ["pyo3/extension-module"]

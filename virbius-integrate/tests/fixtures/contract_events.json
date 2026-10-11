@@ -1,0 +1,97 @@
+{
+  "description": "Contract fixture shared between virbius-integrate (Python) and virbius-control integrate ingestion (Java). Keep both copies in sync.",
+  "events": [
+    {
+      "event_id": "0f0e0d0c-1111-2222-3333-444455556666",
+      "call_id": "7f9c2a10-1234-4abc-9def-001122334455",
+      "phase": "started",
+      "tenant_id": "acme",
+      "app_id": "crm-agent",
+      "device_id": "pod-7f9c",
+      "session_id": "thread-abc",
+      "trace_id": "lc-00112233-4455-6677-8899-aabbccddeeff",
+      "tool_name": "mail__send",
+      "duration_ms": null,
+      "args_repr": "{\"to\": \"138****5678\", \"subject\": \"hello\"}",
+      "result_repr": null,
+      "error": null,
+      "source": "langchain-native",
+      "package_version": "0.1.0",
+      "observed_at": "2026-10-11T08:00:00Z"
+    },
+    {
+      "event_id": "0f0e0d0c-1111-2222-3333-444455557777",
+      "call_id": "7f9c2a10-1234-4abc-9def-001122334455",
+      "phase": "completed",
+      "tenant_id": "acme",
+      "app_id": "crm-agent",
+      "device_id": "pod-7f9c",
+      "session_id": "thread-abc",
+      "trace_id": "lc-00112233-4455-6677-8899-aabbccddeeff",
+      "tool_name": null,
+      "duration_ms": 42,
+      "args_repr": null,
+      "result_repr": "sent ok, id=12345",
+      "error": null,
+      "source": "langchain-native",
+      "package_version": "0.1.0",
+      "observed_at": "2026-10-11T08:00:00Z"
+    },
+    {
+      "event_id": "0f0e0d0c-1111-2222-3333-444455558888",
+      "call_id": "7f9c2a10-1234-4abc-9def-00112233aabb",
+      "phase": "error",
+      "tenant_id": "acme",
+      "app_id": "crm-agent",
+      "device_id": "pod-7f9c",
+      "session_id": "<unscoped>",
+      "trace_id": "lc-00112233-4455-6677-8899-aabbccddeeff",
+      "tool_name": null,
+      "duration_ms": 7,
+      "args_repr": null,
+      "result_repr": null,
+      "error": "ValueError: smtp timeout",
+      "source": "langchain-native",
+      "package_version": "0.1.0",
+      "observed_at": "2026-10-11T08:00:01Z"
+    }
+  ],
+  "heartbeat": {
+    "tenant_id": "acme",
+    "app_id": "crm-agent",
+    "device_id": "pod-7f9c",
+    "package_version": "0.1.0",
+    "mode": "observe",
+    "dropped_total": 0,
+    "ts": "2026-10-11T08:00:00Z"
+  },
+  "inventory": {
+    "tools": [
+      {
+        "tool_name": "db_delete",
+        "mcp_name": null,
+        "description_digest": "delete rows",
+        "risk_hint": "high",
+        "matched_rules": ["verb:delete"],
+        "confidence": "high",
+        "recommended_mode": "B",
+        "rule_table_version": "integrate-rules-v1",
+        "bound_mode": "A",
+        "package_version": "0.1.0"
+      },
+      {
+        "tool_name": "query_user",
+        "mcp_name": "fs__read_file",
+        "description_digest": "query user profile",
+        "risk_hint": "medium",
+        "matched_rules": ["read-verb:query", "sensitive:email"],
+        "confidence": "medium",
+        "recommended_mode": "B",
+        "rule_table_version": "integrate-rules-v1",
+        "bound_mode": "A",
+        "package_version": "0.1.0"
+      }
+    ],
+    "reported_at": "2026-10-11T08:00:00Z"
+  }
+}

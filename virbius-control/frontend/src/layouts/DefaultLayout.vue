@@ -126,6 +126,7 @@ const icons: Record<string, string> = {
   monitor: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 16l5-7 4 3 5-8"/></svg>',
   challenge: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3l2.5 5 5.5.5-4 4 1 5.5L10 15l-5 3 1-5.5-4-4L7.5 8 10 3z"/></svg>',
   trace: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/><path d="M6 6l8 3M16 11l-6 4"/></svg>',
+  integrate: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h6a2 2 0 0 1 2 2v1"/><path d="M5 7h6a2 2 0 0 1 2 2v1"/><path d="M3 10h6a2 2 0 0 1 2 2v1"/><circle cx="15" cy="15" r="2.4"/></svg>',
   cloud: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 15.2h7.6a2.9 2.9 0 0 0 .3-5.78 4.1 4.1 0 0 0-7.9-1.15A3 3 0 0 0 6.2 15.2Z"/></svg>',
   gateway: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16.5V7.2a6 6 0 0 1 12 0v9.3"/><path d="M4 16.5h12"/><path d="M10 16.5V9"/></svg>',
   edge: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2.8" width="8" height="14.4" rx="1.6"/><path d="M9 15.2h2"/></svg>',
@@ -135,6 +136,7 @@ const icons: Record<string, string> = {
 const opsItems = [
   { to: '/challenge', name: 'challenge', label: 'nav.challenge' },
   { to: '/monitor', name: 'monitor', label: 'nav.monitor' },
+  { to: '/integrate', name: 'integrate', label: 'nav.integrate' },
   { to: '/trace', name: 'trace', label: 'nav.trace' },
   { to: '/audit-center', name: 'audit-center', label: 'nav.audit-center' }
 ];

@@ -268,12 +268,16 @@ flowchart TB
 |-----------|------|-------|------|
 | **virbius-core** | Embedded | Rust | Edge SDK: tool-call precheck, license verify, DLP, STI taint. Sub-ms, offline-capable. |
 | **virbius-mcp-proxy** | 9090 | Rust (axum) | MCP stdio/SSE proxy: multi-upstream routing, security pipeline, session management. |
+| **virbius-mcp-python** | Embedded | Python (PyO3) | Native-tool **enforcement** SDK: License precheck, args schema, edge rules (Mode B). |
+| **virbius-integrate** | Embedded | Python | Native-tool **observation** plugin (LangChain callback): inventory/classification/timeline (Mode A). |
 | **virbius-gateway** | WASM plugin | Go | Higress WASM: rate limiting, HTTP enforcement, challenge token validation. |
 | **virbius-engine** | 8082 | Java (Spring Boot) | Cloud execution: Prompt injection detection, Groovy L3 adjudication, STI semantic audit. |
 | **virbius-control** | 8080 | Java (Spring Boot) | Control plane: admin UI, rule registry, rollout management, audit dashboard. |
 | **virbius-kernel** | eBPF plugin | Go (plugin) + Rust (sidecar) | Falco DaemonSet: custom eBPF rules, config-subscriber for live reload. |
 | **Redis** | 6379 | — | Audit event stream, cumulative counters (rate limiting), session cache. |
 | **Database** | — | SQLite / MySQL | Rule metadata, rollout state, agent traces, audit events. |
+
+> **Native tool integration** (Mode A observe / Mode B enforce for LangChain native tools, with coverage classification and warnings) — see [NATIVE_TOOL_INTEGRATION.md](NATIVE_TOOL_INTEGRATION.md).
 
 ## Layer Responsibilities
 

@@ -589,3 +589,66 @@ CREATE TABLE IF NOT EXISTS tb_delegated_credentials (
     PRIMARY KEY (tenant_id, handle),
     UNIQUE (tenant_id, host)
 );
+
+-- Native-tool integration observability (V12 mirror for SQLite/dev, advisory grade).
+-- Independent channel; NOT hash-chained; NOT session risk input; best-effort delivery.
+CREATE TABLE IF NOT EXISTS tb_tool_observation (
+    event_id        VARCHAR(64)  NOT NULL,
+    call_id         VARCHAR(64)  NOT NULL,
+    phase           VARCHAR(16)  NOT NULL,
+    tenant_id       VARCHAR(64)  NOT NULL,
+    app_id          VARCHAR(64)  NOT NULL,
+    device_id       VARCHAR(128),
+    session_id      VARCHAR(128),
+    trace_id        VARCHAR(64),
+    tool_name       VARCHAR(128),
+    duration_ms     INTEGER,
+    args_repr       TEXT,
+    result_repr     TEXT,
+    error           VARCHAR(512),
+    source          VARCHAR(32),
+    package_version VARCHAR(32),
+    observed_at     VARCHAR(32)  NOT NULL,
+    PRIMARY KEY (event_id),
+    CHECK (phase IN ('started', 'completed', 'error'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tb_tool_observation_time
+    ON tb_tool_observation (tenant_id, app_id, observed_at);
+
+CREATE INDEX IF NOT EXISTS idx_tb_tool_observation_call
+    ON tb_tool_observation (tenant_id, app_id, call_id);
+
+CREATE TABLE IF NOT EXISTS tb_tool_inventory (
+    tenant_id           VARCHAR(64)  NOT NULL,
+    app_id              VARCHAR(64)  NOT NULL,
+    tool_name           VARCHAR(128) NOT NULL,
+    mcp_name            VARCHAR(128),
+    risk_class          VARCHAR(16)  NOT NULL DEFAULT 'low',
+    matched_rules       VARCHAR(512),
+    confidence          VARCHAR(16),
+    recommended_mode    VARCHAR(8),
+    rule_table_version  VARCHAR(32),
+    package_version     VARCHAR(32),
+    bound_mode          VARCHAR(8),
+    first_seen          VARCHAR(32)  NOT NULL,
+    last_seen           VARCHAR(32)  NOT NULL,
+    PRIMARY KEY (tenant_id, app_id, tool_name),
+    CHECK (risk_class IN ('low', 'medium', 'high'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tb_tool_inventory_mode
+    ON tb_tool_inventory (tenant_id, app_id, recommended_mode);
+
+CREATE TABLE IF NOT EXISTS tb_obs_app_liveness (
+    tenant_id       VARCHAR(64)  NOT NULL,
+    app_id          VARCHAR(64)  NOT NULL,
+    device_id       VARCHAR(128) NOT NULL,
+    last_seen       VARCHAR(32),
+    last_event_ts   VARCHAR(32),
+    dropped_total   INTEGER      NOT NULL DEFAULT 0,
+    package_version VARCHAR(32),
+    mode            VARCHAR(16),
+    updated_at      VARCHAR(32),
+    PRIMARY KEY (tenant_id, app_id, device_id)
+);

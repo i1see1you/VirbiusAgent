@@ -190,6 +190,8 @@ Verify the Ops Console is accessible at [http://localhost:8080](http://localhost
 
 VirbiusAgent supports three integration modes. Choose based on your deployment context (see DEPLOYMENT.md §8.3):
 
+> **See also**: For LangChain **native tools** (Mode A observe / Mode B enforce, with coverage classification and warnings), see [NATIVE_TOOL_INTEGRATION.md](NATIVE_TOOL_INTEGRATION.md). The table below covers the three **enforcement** integration paths.
+
 | Dimension | Mode 1: MCP Proxy (Sidecar) | Mode 2: Higress (Remote) | Mode 3: SDK Embedding |
 |-----------|----------------------------|--------------------------|----------------------|
 | Deployment | Agent + Proxy same Pod | Agent remote, Higress in-cluster | `virbius-core` linked into Agent |

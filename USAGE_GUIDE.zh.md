@@ -190,6 +190,8 @@ curl -s http://localhost:8082/admin/health
 
 VirbiusAgent 支持三种集成模式。根据您的部署上下文选择（见 DEPLOYMENT.md §8.3）：
 
+> **另见**：面向 LangChain **原生工具**的接入（**模式 A 观测 / 模式 B 执法**、覆盖分级与警示）见 [NATIVE_TOOL_INTEGRATION.zh.md](NATIVE_TOOL_INTEGRATION.zh.md)。下表为三种**强制执行**接入方式。
+
 | 维度 | 模式 1：MCP 代理（Sidecar） | 模式 2：Higress（远程） | 模式 3：SDK 嵌入 |
 |-----------|----------------------------|--------------------------|----------------------|
 | 部署方式 | Agent + 代理同 Pod | Agent 远程，Higress 在集群内 | `virbius-core` 链接到 Agent 中 |
