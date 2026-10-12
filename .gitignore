@@ -99,3 +99,6 @@ virbius-intent/
 
 # Memory / persistent workbuddy state
 docs/memory/
+
+# Evaluation module — split to i1see1you/VirbiusEvaluation
+virbius-evaluation/
