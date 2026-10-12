@@ -69,6 +69,7 @@ flowchart TD
 | **Memory Interceptor** | Desensitize sensitive data written to Agent memory |
 | **Output Review** | PII/credential leak detection in tool return values |
 | **Falco Rules Management** | Custom eBPF rules managed through console with canary deployment |
+| **Native Tool Integration** | LangChain callback observation (Mode A) + native-tool enforcement SDK (Mode B): tool inventory, coverage classification, warnings |
 
 ## Why VirbiusAgent
 
@@ -92,32 +93,33 @@ We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student mo
 
 ### Comparison with Industry Solutions
 
-| Capability | VirbiusAgent | Lakera Guard | Prompt Security | Guardrails AI |
-|-----------|:------------:|:------------:|:---------------:|:-------------:|
-| **Architecture** | 4-layer (Edge–Gateway–Kernel–Cloud) | Single API gateway | Single API gateway | SDK / library |
-| **Defense-in-depth** | ✅ Edge precheck → Gateway enforce → Kernel observe → Cloud adjudicate | ❌ Single checkpoint | ❌ Single checkpoint | ❌ Single checkpoint |
-| **Detection method** | Rules + ML models (hybrid) | ML model primary | ML model primary | ML model + validators |
-| **Rule engine** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ❌ Model-only | ❌ Model-only | ⚠️ Limited validators |
-| **Runtime observability** | ✅ eBPF / Falco (syscall-level) | ❌ | ❌ | ❌ |
-| **MCP protocol support** | ✅ Native (stdio/SSE proxy) | ❌ | ❌ | ❌ |
-| **Tool-call security** | ✅ Core focus (precheck → adjudicate → audit) | ⚠️ Prompt-level only | ⚠️ Prompt-level only | ⚠️ Output validation only |
-| **Human-in-the-loop** | ✅ Challenge → approve → token-gated execution | ❌ | ⚠️ Policy actions | ❌ |
-| **Decision trace** | ✅ Full-chain causal visualization | ❌ | ⚠️ Logs | ⚠️ Logs |
-| **DLP (PII masking)** | ✅ Edge-layer, sub-ms, offline | ⚠️ Cloud API | ⚠️ Cloud API | ✅ Validators |
-| **Sandbox isolation** | ✅ Landlock / gVisor | ❌ | ❌ | ❌ |
-| **Deployment** | Self-hosted (Sidecar / Remote / SDK) | SaaS | SaaS / self-hosted | SDK (Python) |
-| **Open source** | ✅ MIT | ❌ Closed | ❌ Closed | ✅ Apache-2.0 |
+| Capability | VirbiusAgent | Microsoft AGT | NeMo Guardrails | Guardrails AI | Snyk Agent Scan |
+|-----------|:------------:|:-------------:|:---------------:|:-------------:|:---------------:|
+| **Architecture** | 4-layer (Edge–Gateway–Kernel–Cloud) | SDK governance kernel (policy → identity → audit) | SDK / framework (rails) | SDK / library (validators) | CLI scanner |
+| **Defense-in-depth** | ✅ Edge precheck → Gateway enforce → Kernel observe → Cloud adjudicate | ⚠️ Optional layers (policy → identity → sandbox → audit) | ❌ Single checkpoint | ❌ Single checkpoint | ❌ Single scan point |
+| **Detection method** | Rules + ML models (hybrid) | Policy/rules (YAML/OPA/Cedar) + prompt-injection audit | Colang rules + optional ML | ML model + validators | ML + static analysis (scan-time) |
+| **Rule engine** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ✅ Policy engine (YAML/OPA/Cedar) | ✅ Colang rails | ⚠️ Limited validators | ⚠️ Scanner rules |
+| **Runtime observability** | ✅ eBPF / Falco (syscall-level) | ⚠️ App-level audit trail (no kernel) | ❌ | ❌ | ❌ |
+| **MCP protocol support** | ✅ Native (stdio/SSE proxy) | ✅ MCP security gateway | ⚠️ Tool-calling rails only | ❌ | ✅ Scans MCP servers |
+| **Tool-call security** | ✅ Core focus (precheck → adjudicate → audit) | ✅ Deterministic in-app interception | ⚠️ Dialog / tool rails | ⚠️ Input/output validation only | ⚠️ Scan-time (tool poisoning) |
+| **Human-in-the-loop** | ✅ Challenge → approve → token-gated execution | ✅ Approval policies | ❌ | ❌ | ❌ |
+| **Decision trace** | ✅ Full-chain causal visualization | ✅ Tamper-evident audit log | ⚠️ Logs / tracing | ⚠️ Logs | ⚠️ Scan report |
+| **DLP (PII masking)** | ✅ Edge-layer, sub-ms, offline | ❌ | ⚠️ Custom actions | ✅ Validators | ⚠️ Scan-time detection |
+| **Sandbox isolation** | ✅ Landlock / gVisor | ✅ Execution sandbox (privilege rings) | ❌ | ❌ | ❌ |
+| **Deployment** | Self-hosted (Sidecar / Remote / SDK) | SDK / library (pip/npm/NuGet) | SDK (Python) | SDK (Python) | CLI / uvx / binary |
+| **Open source** | ✅ MIT | ✅ MIT | ✅ Apache-2.0 | ✅ Apache-2.0 | ✅ Apache-2.0 |
+
+> Competitor summaries are drawn from public repos/docs (Microsoft Agent Governance Toolkit — MIT, public preview; NVIDIA NeMo Guardrails — Apache-2.0; Guardrails AI — Apache-2.0; Snyk Agent Scan, formerly Invariant Labs `mcp-scan` — Apache-2.0) and may drift as upstreams evolve.
 
 ### Key Differentiators
 
-1. **Four-layer defense-in-depth** — Most competitors offer a single API checkpoint. VirbiusAgent deploys security at four independent layers (Edge → Gateway → Kernel → Cloud), so even if one layer is bypassed, others still catch the threat. This architecture is inspired by the **defense-in-depth principle** used in Alibaba's and Meituan's production security systems.
+1. **Four-layer defense-in-depth** — Prompt-layer guardrails check a single point, and SDK-based peers (e.g. Microsoft Agent Governance Toolkit) add governance layers *in-process*. VirbiusAgent instead spans four independent layers across the runtime (Edge → Gateway → **Kernel** → Cloud), so even if one layer is bypassed, others still catch the threat — including **syscall-level (eBPF/Falco) observation** that no SDK peer offers. This architecture is inspired by the **defense-in-depth principle** used in Alibaba's and Meituan's production security systems.
 
 2. **Rules and models combined** — Rules catch known threats at sub-millisecond latency; models generalize better. Combining them yields high precision/recall and high performance at relatively low cost. This **hybrid approach** is the industry-proven optimal balance of cost, speed, and coverage.
 
-3. **Agent-native, not just LLM-native** — While competitors focus on prompt-level filtering, VirbiusAgent secures the entire **tool-call lifecycle**: pre-execution precheck → on-path gateway enforcement → runtime kernel observation → post-execution audit. This is purpose-built for the MCP era where Agents execute real actions.
+3. **Agent-native, not just LLM-native** — Guardrail and scanner peers target the prompt or static analysis; VirbiusAgent secures the entire **tool-call lifecycle** across layers: pre-execution precheck → on-path gateway enforcement → runtime kernel observation → post-execution audit. This is purpose-built for the MCP era where Agents execute real actions.
 
 4. **Runtime visibility at the kernel level** — Via eBPF/Falco, VirbiusAgent observes Agent processes at the syscall level (file access, network connections, process spawns). No competitor offers this depth of runtime observability.
-
 
 ### Agent Security vs Traditional Security
 
@@ -135,7 +137,6 @@ We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student mo
 
 > In short: **Traditional security defends against "external break-ins"; Agent security must also defend against "the model being led astray and attacking from within"** - it must understand business semantics and adapt dynamically to session risk and business change.
 
-
 ## Quick Start
 
 ### Prerequisites
@@ -144,8 +145,10 @@ We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student mo
 |-----------|---------|-------------|
 | JDK | 17+ | Control plane, engine, compiler |
 | Maven | 3.9+ | Java build |
-| Rust | 1.80+ | virbius-core, virbius-mcp-proxy |
-| Go | 1.22+ | WASM plugin (Gateway) |
+| Rust | 1.80+ | virbius-core, virbius-mcp-proxy, virbius-kernel, virbius-mcp-python (PyO3), virbius-mcp-node (napi-rs) |
+| Go | 1.22+ | WASM plugin (Gateway), virbius-expr |
+| Node.js | 18+ | virbius-mcp-node |
+| Python | 3.10+ | virbius-integrate, virbius-mcp-python (built via maturin) |
 | Redis | 7+ | Audit ingest, cumulative counters, cache |
 | MySQL | 8+ | Production database (SQLite for dev) |
 
@@ -173,7 +176,7 @@ cargo build --release -p virbius-core -p virbius-mcp-proxy
 
 # 4. Start control plane (SQLite in-memory, auto schema)
 cd virbius-control
-mvn spring-boot:run -Dspring-boot.run.profiles=local
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 # 5. Verify
 curl -s http://localhost:8080/api/v1/health
@@ -270,6 +273,7 @@ flowchart TB
 | **virbius-mcp-proxy** | 9090 | Rust (axum) | MCP stdio/SSE proxy: multi-upstream routing, security pipeline, session management. |
 | **virbius-mcp-python** | Embedded | Python (PyO3) | Native-tool **enforcement** SDK: License precheck, args schema, edge rules (Mode B). |
 | **virbius-integrate** | Embedded | Python | Native-tool **observation** plugin (LangChain callback): inventory/classification/timeline (Mode A). |
+| **virbius-mcp-node** | Embedded | Rust (napi-rs) | Native-tool **enforcement** SDK for Node.js/TS agents (Mode B). |
 | **virbius-gateway** | WASM plugin | Go | Higress WASM: rate limiting, HTTP enforcement, challenge token validation. |
 | **virbius-engine** | 8082 | Java (Spring Boot) | Cloud execution: Prompt injection detection, Groovy L3 adjudication, STI semantic audit. |
 | **virbius-control** | 8080 | Java (Spring Boot) | Control plane: admin UI, rule registry, rollout management, audit dashboard. |
@@ -332,7 +336,7 @@ The kernel layer operates at the OS level, providing visibility and isolation th
 The cloud is the central decision-making layer, aggregating signals from all layers and computing the final disposition.
 
 - **Policy management**: rule authoring, versioning, progressive rollout (draft → dry_run → canary → full)
-- **LLM-based detection**: Prompt L1 safety classification (Qwen3Guard, 9 safety categories), multi-category jailbreak/injection detection
+- **LLM-based detection**: Prompt L1 safety classification (VirbiusGuard, 9 safety categories), multi-category jailbreak/injection detection
 - **Groovy L3 adjudication**: terminal policy decision merging signals from all layers, calling external ML models via `mlPredict`, outputting `effective_action` (allow / deny / challenge)
 - **Decision trace**: full-chain tool_call/tool_result tracing with causal chain visualization
 - **Audit dashboard**: session risk, tool calls, alerts, approval queue, tamper-proof hash chain audit
@@ -435,13 +439,19 @@ The four layers differ in **execution location, latency, and purpose**. Guiding 
 virbius-agent/
 ├── virbius-core/          # Rust SDK — prechecks, DLP, license
 ├── virbius-mcp-proxy/     # Rust MCP proxy server
-├── virbius-kernel/        # Rust/Golang — Falco plugin, sandbox
+├── virbius-mcp-python/    # Python (PyO3) — native-tool enforcement SDK (Mode B)
+├── virbius-mcp-node/      # Rust (napi-rs) — Node.js MCP bindings
+├── virbius-integrate/     # Python — LangChain callback observation plugin (Mode A)
+├── virbius-kernel/        # Go (plugin) + Rust (sidecar) — Falco plugin, sandbox
 ├── virbius-gateway/       # Go WASM plugin for Higress
+├── virbius-expr/          # Go — expression evaluator/compiler
 ├── virbius-control/       # Java Spring Boot control plane
 ├── virbius-engine/        # Java Spring Boot security engine
+├── virbius-auth/          # Java Spring Boot — operator auth (login/token/SSO)
 ├── virbius-compiler/      # Java bundle compiler
 ├── virbius-policy/        # Java policy domain model
-└── virbius-groovy-l3/     # Java Groovy L3 adjudicator
+├── virbius-groovy-l3/     # Java Groovy L3 adjudicator
+└── virbius-demo/          # Demo / red-team playground (LLM SecRange)
 ```
 
 ## Documentation

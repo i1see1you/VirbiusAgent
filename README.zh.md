@@ -69,6 +69,7 @@ flowchart TD
 | 记忆管控 | Agent 写入记忆前的敏感数据脱敏 |
 | 输出审查 | 工具返回值中的 PII/凭据泄漏检测 |
 | Falco 规则管理 | 运营台统一管理 eBPF 规则，支持灰度部署 |
+| **原生工具集成** | LangChain 回调观测（模式 A）+ 原生工具执法 SDK（模式 B）：工具清单、覆盖分级、警示 |
 
 ## 为什么选择 VirbiusAgent
 
@@ -92,29 +93,31 @@ flowchart TD
 
 ### 与同类产品对比
 
-| 能力 | VirbiusAgent | Lakera Guard | Prompt Security | Guardrails AI |
-|------|:------------:|:------------:|:---------------:|:-------------:|
-| **架构** | 四层（端—管—核—云） | 单层 API 网关 | 单层 API 网关 | SDK / 库 |
-| **纵深防御** | ✅ 端预检 → 管阻断 → 核观测 → 云终判 | ❌ 单点检查 | ❌ 单点检查 | ❌ 单点检查 |
-| **检测方式** | 规则 + ML 模型（混合） | 以 ML 模型为主 | 以 ML 模型为主 | ML 模型 + 验证器 |
-| **规则引擎** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ❌ 纯模型 | ❌ 纯模型 | ⚠️ 有限验证器 |
-| **运行时观测** | ✅ eBPF / Falco（syscall 级） | ❌ | ❌ | ❌ |
-| **MCP 协议支持** | ✅ 原生（stdio/SSE 代理） | ❌ | ❌ | ❌ |
-| **工具调用安全** | ✅ 核心能力（预检 → 终判 → 审计） | ⚠️ 仅 Prompt 层 | ⚠️ 仅 Prompt 层 | ⚠️ 仅输出校验 |
-| **人工审批** | ✅ 挑战 → 审批 → token 验证放行 | ❌ | ⚠️ 策略动作 | ❌ |
-| **决策链路追踪** | ✅ 全链路因果可视化 | ❌ | ⚠️ 日志 | ⚠️ 日志 |
-| **DLP（PII 脱敏）** | ✅ 端层、亚毫秒、可离线 | ⚠️ 云端 API | ⚠️ 云端 API | ✅ 验证器 |
-| **沙箱隔离** | ✅ Landlock / gVisor | ❌ | ❌ | ❌ |
-| **部署方式** | 自部署（Sidecar / 远程 / SDK） | SaaS | SaaS / 自部署 | SDK（Python） |
-| **开源** | ✅ MIT | ❌ 闭源 | ❌ 闭源 | ✅ Apache-2.0 |
+| 能力 | VirbiusAgent | Microsoft AGT | NeMo Guardrails | Guardrails AI | Snyk Agent Scan |
+|------|:------------:|:-------------:|:---------------:|:-------------:|:---------------:|
+| **架构** | 四层（端—管—核—云） | SDK 治理内核（策略 → 身份 → 审计） | SDK / 框架（rails） | SDK / 库（验证器） | CLI 扫描器 |
+| **纵深防御** | ✅ 端预检 → 管阻断 → 核观测 → 云终判 | ⚠️ 可选分层（策略 → 身份 → 沙箱 → 审计） | ❌ 单点检查 | ❌ 单点检查 | ❌ 单点扫描 |
+| **检测方式** | 规则 + ML 模型（混合） | 策略/规则（YAML/OPA/Cedar）+ Prompt 注入审计 | Colang 规则 + 可选 ML | ML 模型 + 验证器 | ML + 静态分析（扫描期） |
+| **规则引擎** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ✅ 策略引擎（YAML/OPA/Cedar） | ✅ Colang rails | ⚠️ 有限验证器 | ⚠️ 扫描规则 |
+| **运行时观测** | ✅ eBPF / Falco（syscall 级） | ⚠️ 应用层审计日志（非内核） | ❌ | ❌ | ❌ |
+| **MCP 协议支持** | ✅ 原生（stdio/SSE 代理） | ✅ MCP 安全网关 | ⚠️ 仅工具调用 rails | ❌ | ✅ 扫描 MCP 服务器 |
+| **工具调用安全** | ✅ 核心能力（预检 → 终判 → 审计） | ✅ 应用内确定性拦截 | ⚠️ 对话 / 工具 rails | ⚠️ 仅输入输出校验 | ⚠️ 扫描期（工具投毒） |
+| **人工审批** | ✅ 挑战 → 审批 → token 验证放行 | ✅ 审批策略 | ❌ | ❌ | ❌ |
+| **决策链路追踪** | ✅ 全链路因果可视化 | ✅ 防篡改审计日志 | ⚠️ 日志 / 追踪 | ⚠️ 日志 | ⚠️ 扫描报告 |
+| **DLP（PII 脱敏）** | ✅ 端层、亚毫秒、可离线 | ❌ | ⚠️ 自定义动作 | ✅ 验证器 | ⚠️ 扫描期检测 |
+| **沙箱隔离** | ✅ Landlock / gVisor | ✅ 执行沙箱（特权环） | ❌ | ❌ | ❌ |
+| **部署方式** | 自部署（Sidecar / 远程 / SDK） | SDK / 库（pip/npm/NuGet） | SDK（Python） | SDK（Python） | CLI / uvx / 二进制 |
+| **开源** | ✅ MIT | ✅ MIT | ✅ Apache-2.0 | ✅ Apache-2.0 | ✅ Apache-2.0 |
+
+> 竞品信息摘自上列项目的公开仓库/文档（Microsoft Agent Governance Toolkit — MIT，公开预览；NVIDIA NeMo Guardrails — Apache-2.0；Guardrails AI — Apache-2.0；Snyk Agent Scan，原 Invariant Labs `mcp-scan` — Apache-2.0），可能随上游迭代变动。
 
 ### 核心差异化
 
-1. **四层纵深防御** — 多数竞品只提供单点 API 检查。VirbiusAgent 在四个独立层级（端 → 管 → 核 → 云）部署安全能力，即使某一层被绕过，其他层仍能拦截威胁。此架构参考了**阿里和美团生产安全系统的纵深防御原则**。
+1. **四层纵深防御** — Prompt 层护栏只做单点检查，基于 SDK 的同类（如 Microsoft Agent Governance Toolkit）在**进程内**增加了治理分层。VirbiusAgent 则在运行时贯穿四个独立层级（端 → 管 → **核** → 云），即使某一层被绕过，其他层仍能拦截——包括 SDK 同类都不具备的 **syscall 级（eBPF/Falco）观测**。此架构参考了**阿里和美团生产安全系统的纵深防御原则**。
 
 2. **规则和模型相结合** — 规则以亚毫秒延迟已知威胁,模型泛化能力更强,将两者结合可以在较低成本的同时获得较高的准召率和高性能。这种**混合方案**是业界验证的成本、速度与覆盖率的最佳平衡。
 
-3. **Agent 原生，而非仅 LLM 原生** — 竞品聚焦 Prompt 层过滤，VirbiusAgent 保护完整的**工具调用生命周期**：执行前预检 → 在线网关阻断 → 运行时内核观测 → 执行后审计。这是为 MCP 时代量身定制的，因为 Agent 会执行真实操作。
+3. **Agent 原生，而非仅 LLM 原生** — 护栏与扫描类同类聚焦 Prompt 或静态分析；VirbiusAgent 则跨层保护完整的**工具调用生命周期**：执行前预检 → 在线网关阻断 → 运行时内核观测 → 执行后审计。这是为 MCP 时代量身定制的，因为 Agent 会执行真实操作。
 
 4. **内核级运行时可见性** — 通过 eBPF/Falco，VirbiusAgent 在 syscall 级别观测 Agent 进程（文件访问、网络连接、进程创建）。没有竞品提供这种深度的运行时观测能力。
 
@@ -134,7 +137,6 @@ flowchart TD
 
 > 一句话:**传统安全防"外部打进来",Agent 安全还要防"模型被带偏后从内部打出去"**--既要懂业务语义,又要随会话风险和业务变化动态调整。
 
-
 ## 快速开始
 
 ### 依赖
@@ -143,8 +145,10 @@ flowchart TD
 |------|------|------|
 | JDK | 17+ | 控制面、引擎、编译器 |
 | Maven | 3.9+ | Java 构建 |
-| Rust | 1.80+ | virbius-core, virbius-mcp-proxy |
-| Go | 1.22+ | WASM 插件 |
+| Rust | 1.80+ | virbius-core, virbius-mcp-proxy, virbius-kernel, virbius-mcp-python (PyO3), virbius-mcp-node (napi-rs) |
+| Go | 1.22+ | WASM 插件（Gateway）、virbius-expr |
+| Node.js | 18+ | virbius-mcp-node |
+| Python | 3.10+ | virbius-integrate、virbius-mcp-python（经 maturin 构建） |
 | Redis | 7+ | 审计消费、累计计数器、缓存 |
 | MySQL | 8+ | 生产数据库（开发用 SQLite） |
 
@@ -172,7 +176,7 @@ cargo build --release -p virbius-core -p virbius-mcp-proxy
 
 # 4. 启动控制面（SQLite 内存模式，自动建表）
 cd virbius-control
-mvn spring-boot:run -Dspring-boot.run.profiles=local
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 # 5. 验证
 curl -s http://localhost:8080/api/v1/health
@@ -267,6 +271,7 @@ flowchart TB
 | virbius-mcp-proxy | 9090 | Rust (axum) | MCP stdio/SSE 代理：多上游路由、安全管线、会话管理。 |
 | virbius-mcp-python | 内嵌 | Python (PyO3) | 原生工具**执法** SDK：License 预检、参数 schema、边缘规则（模式 B）。 |
 | virbius-integrate | 内嵌 | Python | 原生工具**观测**插件（LangChain callback）：工具清单/分级/观测时间轴（模式 A）。 |
+| virbius-mcp-node | 内嵌 | Rust (napi-rs) | 面向 Node.js/TS Agent 的原生工具**执法** SDK（模式 B）。 |
 | virbius-gateway | WASM 插件 | Go | Higress WASM：限流、HTTP 阻断、审批 token 验证。 |
 | virbius-engine | 8082 | Java (Spring Boot) | 云端执行：Prompt 注入检测、Groovy L3 终判、STI 语义审计。 |
 | virbius-control | 8080 | Java (Spring Boot) | 控制面：运营台 UI、规则注册、灰度管理、审计大盘。 |
@@ -329,7 +334,7 @@ flowchart TB
 云层是中心决策层，聚合所有层的信号并输出最终处置动作。
 
 - **策略管理**：规则编写、版本管理、渐进式灰度（draft → dry_run → canary → full）
-- **LLM 检测**：Prompt L1 安全分类（Qwen3Guard，9 类安全标签），越狱/注入检测
+- **LLM 检测**：Prompt L1 安全分类（VirbiusGuard，9 类安全标签），越狱/注入检测
 - **Groovy L3 终判**：合并各层信号的策略终判，通过 `mlPredict` 调用外部 ML 模型，输出 `effective_action`（allow / deny / challenge）
 - **决策链路**：全链路 tool_call/tool_result 追踪，因果链可视化
 - **审计大盘**：会话风险、工具调用、告警、审批队列、防篡改哈希链审计
@@ -430,13 +435,19 @@ Agent 工具调用
 virbius-agent/
 ├── virbius-core/          # Rust SDK — 预检、DLP、许可证
 ├── virbius-mcp-proxy/     # Rust MCP 代理服务器
-├── virbius-kernel/        # Rust/Golang — Falco 插件、沙箱
+├── virbius-mcp-python/    # Python (PyO3) — 原生工具执法 SDK（模式 B）
+├── virbius-mcp-node/      # Rust (napi-rs) — Node.js MCP 绑定
+├── virbius-integrate/     # Python — LangChain 回调观测插件（模式 A）
+├── virbius-kernel/        # Go(插件) + Rust(边车) — Falco 插件、沙箱
 ├── virbius-gateway/       # Go WASM 插件（Higress）
+├── virbius-expr/          # Go — 表达式求值/编译
 ├── virbius-control/       # Java Spring Boot 控制面
 ├── virbius-engine/        # Java Spring Boot 安全引擎
+├── virbius-auth/          # Java Spring Boot — 运营者认证（登录/token/SSO）
 ├── virbius-compiler/      # Java 编译模块
 ├── virbius-policy/        # Java 策略领域模型
-└── virbius-groovy-l3/     # Java Groovy L3 终判器
+├── virbius-groovy-l3/     # Java Groovy L3 终判器
+└── virbius-demo/          # 演示 / 红队靶场（LLM SecRange）
 ```
 
 ## 文档
