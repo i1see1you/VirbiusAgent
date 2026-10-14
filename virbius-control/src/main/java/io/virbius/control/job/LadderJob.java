@@ -40,7 +40,7 @@ public class LadderJob {
         this.orchestrator = orchestrator;
     }
 
-    @Scheduled(fixedDelayString = "${rollout.ladder.poll-ms:900000}")
+    @Scheduled(fixedDelayString = "${virbius.rollout.ladder.poll-ms:900000}")
     public void tick() {
         List<Map<String, Object>> running = jdbc.queryForList(
                 "SELECT tenant_id, rule_id FROM tb_rule_ladder_state WHERE ladder_status = 'running'");

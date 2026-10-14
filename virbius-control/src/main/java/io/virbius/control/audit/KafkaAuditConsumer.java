@@ -16,7 +16,7 @@ public class KafkaAuditConsumer {
         this.ingestor = ingestor;
     }
 
-    @KafkaListener(topics = "${audit.ingest.kafka.topic:virbius-audit-events}")
+    @KafkaListener(topics = "${virbius.audit.ingest.kafka.topic:virbius-audit-events}")
     public void onMessage(String payload) {
         try {
             AuditEventIngestor.IngestResult result = ingestor.ingestPayload(payload);

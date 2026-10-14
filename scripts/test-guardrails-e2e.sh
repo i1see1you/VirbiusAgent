@@ -31,7 +31,7 @@
 #
 # Usage:        bash scripts/test-guardrails-e2e.sh
 # Skip build:   SKIP_BUILD=1 bash scripts/test-guardrails-e2e.sh
-# Custom ports: CONTROL_PORT=18080 ENGINE_PORT=18082 MOCK_PORT=18999 GRPC_PORT=15101
+# Custom ports: CONTROL_PORT=18080 ENGINE_PORT=18082 MOCK_PORT=18999
 # =============================================================================
 set -euo pipefail
 
@@ -41,7 +41,6 @@ cd "$ROOT"
 CONTROL_PORT="${CONTROL_PORT:-18080}"
 ENGINE_PORT="${ENGINE_PORT:-18082}"
 MOCK_PORT="${MOCK_PORT:-18999}"
-GRPC_PORT="${GRPC_PORT:-15101}"
 REDIS_URL="${VIRBIUS_REDIS_URL:-redis://127.0.0.1:6379}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/virbius-e2e.XXXXXX")"
@@ -139,9 +138,9 @@ if [ "$MOCK_READY" != "1" ]; then
   red "mock Ollama did not become ready on :$MOCK_PORT"; cat "$LOGS/mock.log" 2>/dev/null; exit 2
 fi
 
-info "starting engine on :$ENGINE_PORT (grpc :$GRPC_PORT)..."
+info "starting engine on :$ENGINE_PORT..."
 env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
-    VIRBIUS_LICENSE_MASTER_KEY="$VIRBIUS_LICENSE_MASTER_KEY" VIRBIUS_GRPC_PORT="$GRPC_PORT" \
+    VIRBIUS_LICENSE_MASTER_KEY="$VIRBIUS_LICENSE_MASTER_KEY" \
     VIRBIUS_PROMPT_LLM_BASE_URL="http://127.0.0.1:$MOCK_PORT" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$ENGINE_JAR" --server.port="$ENGINE_PORT" \

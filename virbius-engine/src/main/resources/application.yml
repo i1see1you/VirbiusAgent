@@ -32,6 +32,14 @@ virbius:
   audit:
     engine-path: ${VIRBIUS_ENGINE_AUDIT:/tmp/virbius/engine-audit.jsonl}
     engine-allow-path: ${VIRBIUS_ENGINE_AUDIT_ALLOW:/tmp/virbius/engine-audit-allow.jsonl}
+    publish:
+      async: true
+      queue-max: 2000
+      flush-batch-size: 64
+      flush-interval-ms: 100
+      backend: kafka
+      kafka:
+        topic: virbius-audit-events
   prompt-llm:
     base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
     model: ${VIRBIUS_PROMPT_LLM_MODEL:virbiusguard}
@@ -120,16 +128,6 @@ virbius:
       full-audit: 60                       # >60: exit fast path + full audit
       sample-audit: 30                     # >30: audit sampling 50%
     session-ttl-seconds: 3600
-
-audit:
-  publish:
-    async: true
-    queue-max: 2000
-    flush-batch-size: 64
-    flush-interval-ms: 100
-    backend: kafka
-    kafka:
-      topic: virbius-audit-events
 
 management:
   endpoints:

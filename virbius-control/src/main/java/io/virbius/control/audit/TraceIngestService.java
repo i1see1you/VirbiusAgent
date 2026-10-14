@@ -16,8 +16,8 @@ public class TraceIngestService {
     private final String topic;
 
     public TraceIngestService(
-            @Value("${trace.ingest.enabled:true}") boolean enabled,
-            @Value("${trace.ingest.kafka.topic:virbius-trace-events}") String topic) {
+            @Value("${virbius.trace.ingest.enabled:true}") boolean enabled,
+            @Value("${virbius.trace.ingest.kafka.topic:virbius-trace-events}") String topic) {
         this.enabled = enabled;
         this.topic = topic != null && !topic.isBlank() ? topic : "virbius-trace-events";
     }

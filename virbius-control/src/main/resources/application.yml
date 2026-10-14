@@ -91,47 +91,42 @@ virbius:
       max-file-size: ${VIRBIUS_AUDIT_ALLOW_MAX_FILE_SIZE:100MB}
       max-history: ${VIRBIUS_AUDIT_ALLOW_MAX_HISTORY_DAYS:30}
       total-size-cap: ${VIRBIUS_AUDIT_ALLOW_TOTAL_SIZE_CAP:5GB}
-
-audit:
-  publish:
-    async: true
-    queue-max: 2000
-    flush-batch-size: 64
-    flush-interval-ms: 100
-    backend: kafka
-    kafka:
-      topic: virbius-audit-events
-  ingest:
-    enabled: true
-    backend: kafka
-    kafka:
-      topic: virbius-audit-events
-    poll-ms: 1000
-    batch-size: 256
-    consumer-group: virbius-audit-ingest
-
-trace:
-  ingest:
-    enabled: true
-    backend: kafka
-    kafka:
-      topic: virbius-trace-events
-      group-id: virbius-trace-ingest
-    poll-ms: 1000
-    batch-size: 256
-    consumer-group: virbius-trace-ingest
-
-virbius.audit.hash-chain:
-  enabled: ${VIRBIUS_AUDIT_HASH_CHAIN_ENABLED:true}
-  verify-enabled: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_ENABLED:true}
-  verify-interval-ms: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_INTERVAL:3600000}
-  verify-batch-size: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_BATCH:10000}
-
-rollout:
-  metrics:
-    rollup-ms: 60000
-  ladder:
-    poll-ms: 900000
+    publish:
+      async: true
+      queue-max: 2000
+      flush-batch-size: 64
+      flush-interval-ms: 100
+      backend: kafka
+      kafka:
+        topic: virbius-audit-events
+    ingest:
+      enabled: true
+      backend: kafka
+      kafka:
+        topic: virbius-audit-events
+      poll-ms: 1000
+      batch-size: 256
+      consumer-group: virbius-audit-ingest
+    hash-chain:
+      enabled: ${VIRBIUS_AUDIT_HASH_CHAIN_ENABLED:true}
+      verify-enabled: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_ENABLED:true}
+      verify-interval-ms: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_INTERVAL:3600000}
+      verify-batch-size: ${VIRBIUS_AUDIT_HASH_CHAIN_VERIFY_BATCH:10000}
+  trace:
+    ingest:
+      enabled: true
+      backend: kafka
+      kafka:
+        topic: virbius-trace-events
+        group-id: virbius-trace-ingest
+      poll-ms: 1000
+      batch-size: 256
+      consumer-group: virbius-trace-ingest
+  rollout:
+    metrics:
+      rollup-ms: 60000
+    ladder:
+      poll-ms: 900000
 
 management:
   endpoints:

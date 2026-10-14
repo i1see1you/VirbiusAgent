@@ -36,7 +36,7 @@ public class TraceStepPublisher {
 
     public TraceStepPublisher(
             ObjectProvider<KafkaTemplate<String, String>> kafkaTemplateProvider,
-            @Value("${trace.ingest.kafka.topic:virbius-trace-events}") String topic,
+            @Value("${virbius.trace.ingest.kafka.topic:virbius-trace-events}") String topic,
             @Value("${virbius.trace.publish-enabled:true}") boolean enabled) {
         this.kafkaTemplate = kafkaTemplateProvider.getIfAvailable();
         this.topic = topic;

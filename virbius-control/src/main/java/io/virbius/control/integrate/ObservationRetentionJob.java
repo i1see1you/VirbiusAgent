@@ -19,12 +19,12 @@ public class ObservationRetentionJob {
 
     public ObservationRetentionJob(
             JdbcTemplate jdbc,
-            @Value("${integrate.retention-days:14}") int retentionDays) {
+            @Value("${virbius.integrate.retention-days:14}") int retentionDays) {
         this.jdbc = jdbc;
         this.retentionDays = retentionDays > 0 ? retentionDays : 14;
     }
 
-    @Scheduled(cron = "${integrate.retention.cron:0 0 3 * * *}")
+    @Scheduled(cron = "${virbius.integrate.retention.cron:0 0 3 * * *}")
     public void purge() {
         String cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS).toString();
         int deleted = jdbc.update(retentionDeleteSql(), cutoff);

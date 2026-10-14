@@ -21,8 +21,8 @@ public class ObservationQueryService {
 
     public ObservationQueryService(
             JdbcTemplate jdbc,
-            @Value("${integrate.liveness.heartbeat-interval-secs:60}") int heartbeatIntervalSecs,
-            @Value("${integrate.liveness.event-window-secs:300}") int eventWindowSecs) {
+            @Value("${virbius.integrate.liveness.heartbeat-interval-secs:60}") int heartbeatIntervalSecs,
+            @Value("${virbius.integrate.liveness.event-window-secs:300}") int eventWindowSecs) {
         this.jdbc = jdbc;
         this.heartbeatIntervalSecs = heartbeatIntervalSecs;
         this.eventWindowSecs = eventWindowSecs;

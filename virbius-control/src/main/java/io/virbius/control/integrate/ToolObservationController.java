@@ -28,8 +28,8 @@ public class ToolObservationController {
     public ToolObservationController(
             ToolObservationIngestor ingestor,
             ObservationQueryService queryService,
-            @Value("${integrate.ingest.token:}") String ingestToken,
-            @Value("${integrate.ingest.max-batch-size:100}") int maxBatchSize) {
+            @Value("${virbius.integrate.ingest.token:}") String ingestToken,
+            @Value("${virbius.integrate.ingest.max-batch-size:100}") int maxBatchSize) {
         this.ingestor = ingestor;
         this.queryService = queryService;
         this.ingestToken = ingestToken != null ? ingestToken : "";

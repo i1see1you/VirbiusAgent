@@ -17,8 +17,8 @@ public class KafkaTraceConsumer {
     }
 
     @KafkaListener(
-        topics = "${trace.ingest.kafka.topic:virbius-trace-events}",
-        groupId = "${trace.ingest.kafka.group-id:virbius-trace-ingest}"
+        topics = "${virbius.trace.ingest.kafka.topic:virbius-trace-events}",
+        groupId = "${virbius.trace.ingest.kafka.group-id:virbius-trace-ingest}"
     )
     public void onMessage(String payload) {
         try {

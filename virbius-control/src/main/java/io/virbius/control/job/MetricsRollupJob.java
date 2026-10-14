@@ -16,7 +16,7 @@ public class MetricsRollupJob {
         this.dialect = dialect;
     }
 
-    @Scheduled(fixedDelayString = "${rollout.metrics.rollup-ms:60000}")
+    @Scheduled(fixedDelayString = "${virbius.rollout.metrics.rollup-ms:60000}")
     public void rollup() {
         jdbc.update(buildSql());
     }

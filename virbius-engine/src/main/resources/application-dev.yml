@@ -6,12 +6,11 @@ virbius:
   prompt-llm:
     base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
     model: ${VIRBIUS_PROMPT_LLM_MODEL:virbiusguard}
-
-audit:
-  publish:
-    backend: kafka
-    kafka:
-      topic: virbius-audit-events
+  audit:
+    publish:
+      backend: kafka
+      kafka:
+        topic: virbius-audit-events
 
 logging:
   level:

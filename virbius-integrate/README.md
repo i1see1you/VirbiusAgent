@@ -32,7 +32,7 @@ agent = create_react_agent(llm, tools, callbacks=[VirbiusAuditCallback(
 
 | 变量 | 用途 |
 |---|---|
-| `VIRBIUS_INTEGRATE_TOKEN` | 摄取端点 token（control `integrate.ingest.token` 同值） |
+| `VIRBIUS_INTEGRATE_TOKEN` | 摄取端点 token（control `virbius.integrate.ingest.token` 同值） |
 | `VIRBIUS_INTEGRATE_ENDPOINT` | control 基址（可替代构造参数） |
 
 ## 工具清单与分级

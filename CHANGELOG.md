@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Delegated value validation ↔ proxy alignment**: `value` now rejects all control characters (0x00–0x1F, 0x7F), matching the proxy's `HeaderValue` acceptance, so a value the Control accepts can no longer fail at injection time; obs-text (≥0x80) is still allowed.
 
 ### Changed
+- **Config namespace unified under `virbius.`**: the `audit.*`, `trace.*`, `integrate.*` and `rollout.*` property namespaces (and the env-style `VIRBIUS_AUTH_DATA_DIR`) now live under `virbius.*` — `virbius.audit.*`, `virbius.trace.*`, `virbius.integrate.*`, `virbius.rollout.*`, `virbius.data-dir` — in both code (`@Value` / `@KafkaListener` / `@Scheduled`) and `application*.yml`, which is now fully nested under a single `virbius:` block (a stray dotted `virbius.audit.hash-chain:` key was folded in too). Implied env names follow suit (e.g. `INTEGRATE_INGEST_TOKEN` → `VIRBIUS_INTEGRATE_INGEST_TOKEN`). No functional change.
 - **Delegated redaction covers encoding variants**: body/location redaction now also replaces percent/base64/base64url literal forms of the credential (literal replacement only — the body is never decoded/rewritten); a response whose raw body contains the credential raises a `hit_credential_echo` alert.
 - **Proxy test seam**: added a `test-harness` cargo feature (compile-time only) so the full-chain E2E harness can drive the hit branch against a local HTTP server; a production binary cannot disable the https+443 gate via any runtime variable.
 

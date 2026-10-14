@@ -17,17 +17,17 @@ public class AuditPublisherConfig {
     @Bean
     public AuditEventSink kafkaAuditSink(
             KafkaTemplate<String, String> kafkaTemplate,
-            @Value("${audit.publish.kafka.topic:virbius-audit-events}") String topic) {
+            @Value("${virbius.audit.publish.kafka.topic:virbius-audit-events}") String topic) {
         return new KafkaAuditSink(kafkaTemplate, topic);
     }
 
     @Bean
     public AuditEventPublisher auditEventPublisher(
             AuditEventSink sink,
-            @Value("${audit.publish.async:true}") boolean async,
-            @Value("${audit.publish.queue-max:2000}") int queueMax,
-            @Value("${audit.publish.flush-batch-size:64}") int batchSize,
-            @Value("${audit.publish.flush-interval-ms:100}") long flushIntervalMs) {
+            @Value("${virbius.audit.publish.async:true}") boolean async,
+            @Value("${virbius.audit.publish.queue-max:2000}") int queueMax,
+            @Value("${virbius.audit.publish.flush-batch-size:64}") int batchSize,
+            @Value("${virbius.audit.publish.flush-interval-ms:100}") long flushIntervalMs) {
         publisher = new AuditEventPublisher(sink, async, queueMax, batchSize, flushIntervalMs);
         return publisher;
     }

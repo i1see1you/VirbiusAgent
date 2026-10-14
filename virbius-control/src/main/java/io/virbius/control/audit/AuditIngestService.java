@@ -21,8 +21,8 @@ public class AuditIngestService {
     public AuditIngestService(
             AuditEventIngestor ingestor,
             SqlDialectConfig dialectConfig,
-            @Value("${audit.ingest.enabled:true}") boolean enabled,
-            @Value("${audit.ingest.kafka.topic:virbius-audit-events}") String topic) {
+            @Value("${virbius.audit.ingest.enabled:true}") boolean enabled,
+            @Value("${virbius.audit.ingest.kafka.topic:virbius-audit-events}") String topic) {
         this.ingestor = ingestor;
         this.dialect = dialectConfig;
         this.enabled = enabled;

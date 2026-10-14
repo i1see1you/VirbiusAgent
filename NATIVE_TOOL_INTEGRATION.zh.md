@@ -82,7 +82,7 @@ agent = create_react_agent(llm, tools, callbacks=[VirbiusAuditCallback(
 | `spill` | `False` | 本地落盘缓冲（默认关） |
 | `mode` | `"observe"` | 观测模式 |
 
-环境变量：`VIRBIUS_INTEGRATE_ENDPOINT`、`VIRBIUS_INTEGRATE_TOKEN`（与 control `integrate.ingest.token` 同值）。
+环境变量：`VIRBIUS_INTEGRATE_ENDPOINT`、`VIRBIUS_INTEGRATE_TOKEN`（与 control `virbius.integrate.ingest.token` 同值）。
 
 ### 3.3 工具清单与分级
 
@@ -172,14 +172,14 @@ if not r["allowed"]:
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/tool-observations/batch` | body `{ "events": [...] }`，单批 ≤ `integrate.ingest.max-batch-size`；返回 `{ "accepted": N }` |
+| POST | `/tool-observations/batch` | body `{ "events": [...] }`，单批 ≤ `virbius.integrate.ingest.max-batch-size`；返回 `{ "accepted": N }` |
 | POST | `/tool-inventory` | body `{ "tools": [...] }`；返回 `{ "accepted": N }` |
 | POST | `/heartbeat` | body `{ device_id, package_version, mode, dropped_total, ts }` |
 | GET | `/tool-observations` | 查询（`call_id`/`since`/`until`/`limit`） |
 | GET | `/liveness` | 设备存活 |
 | GET | `/coverage` | 覆盖清单 + 警示 |
 
-鉴权：`Authorization: Bearer <token>` 或 `X-Virbius-Integrate-Token`；control 侧 `integrate.ingest.token` 为空则不校验。
+鉴权：`Authorization: Bearer <token>` 或 `X-Virbius-Integrate-Token`；control 侧 `virbius.integrate.ingest.token` 为空则不校验。
 
 ### 6.3 查询通道（控制台 / 管理）
 
@@ -197,12 +197,12 @@ if not r["allowed"]:
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
-| `integrate.ingest.token` | 空 | 上报鉴权 token（空 = 不校验） |
-| `integrate.ingest.max-batch-size` | 100 | 单批事件上限 |
-| `integrate.retention-days` | 14 | 观测事件保留天数 |
-| `integrate.retention.cron` | `0 0 3 * * *` | 清理任务 cron |
-| `integrate.liveness.heartbeat-interval-secs` | 60 | 心跳判活阈值（×2） |
-| `integrate.liveness.event-window-secs` | 300 | 事件判活窗口 |
+| `virbius.integrate.ingest.token` | 空 | 上报鉴权 token（空 = 不校验） |
+| `virbius.integrate.ingest.max-batch-size` | 100 | 单批事件上限 |
+| `virbius.integrate.retention-days` | 14 | 观测事件保留天数 |
+| `virbius.integrate.retention.cron` | `0 0 3 * * *` | 清理任务 cron |
+| `virbius.integrate.liveness.heartbeat-interval-secs` | 60 | 心跳判活阈值（×2） |
+| `virbius.integrate.liveness.event-window-secs` | 300 | 事件判活窗口 |
 
 存活状态：`live`（心跳 ≤ 2×间隔 或 最近事件 ≤ 窗口）、`stale`、`never-seen`。
 

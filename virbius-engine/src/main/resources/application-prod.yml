@@ -20,12 +20,11 @@ virbius:
     model: ${VIRBIUS_PROMPT_LLM_MODEL}
     timeout-ms: ${VIRBIUS_PROMPT_LLM_TIMEOUT_MS:30000}
     fail-open: false
-
-audit:
-  publish:
-    backend: kafka
-    kafka:
-      topic: virbius-audit-events
+  audit:
+    publish:
+      backend: kafka
+      kafka:
+        topic: virbius-audit-events
 
 management:
   endpoints:

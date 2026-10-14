@@ -82,7 +82,7 @@ Two-point events: `on_tool_start` (`started`, emitted immediately) and `on_tool_
 | `spill` | `False` | local disk buffering (off by default) |
 | `mode` | `"observe"` | observation mode |
 
-Environment: `VIRBIUS_INTEGRATE_ENDPOINT`, `VIRBIUS_INTEGRATE_TOKEN` (same value as control's `integrate.ingest.token`).
+Environment: `VIRBIUS_INTEGRATE_ENDPOINT`, `VIRBIUS_INTEGRATE_TOKEN` (same value as control's `virbius.integrate.ingest.token`).
 
 ### 3.3 Tool inventory and classification
 
@@ -170,14 +170,14 @@ Base: `/api/v1/internal/integrate/tenants/{tenantId}/apps/{appId}`
 
 | Method | Path | Description |
 |---|---|---|
-| POST | `/tool-observations/batch` | body `{ "events": [...] }`, batch ≤ `integrate.ingest.max-batch-size`; returns `{ "accepted": N }` |
+| POST | `/tool-observations/batch` | body `{ "events": [...] }`, batch ≤ `virbius.integrate.ingest.max-batch-size`; returns `{ "accepted": N }` |
 | POST | `/tool-inventory` | body `{ "tools": [...] }`; returns `{ "accepted": N }` |
 | POST | `/heartbeat` | body `{ device_id, package_version, mode, dropped_total, ts }` |
 | GET | `/tool-observations` | query (`call_id`/`since`/`until`/`limit`) |
 | GET | `/liveness` | device liveness |
 | GET | `/coverage` | coverage list + warnings |
 
-Auth: `Authorization: Bearer <token>` or `X-Virbius-Integrate-Token`; control-side `integrate.ingest.token` empty means no auth.
+Auth: `Authorization: Bearer <token>` or `X-Virbius-Integrate-Token`; control-side `virbius.integrate.ingest.token` empty means no auth.
 
 ### 6.3 Query channel (console / admin)
 
@@ -195,12 +195,12 @@ Timestamps are RFC3339 strings (matching the audit path; supports lexical range 
 
 | Config | Default | Description |
 |---|---|---|
-| `integrate.ingest.token` | empty | ingest auth token (empty = no auth) |
-| `integrate.ingest.max-batch-size` | 100 | max events per batch |
-| `integrate.retention-days` | 14 | observation retention (days) |
-| `integrate.retention.cron` | `0 0 3 * * *` | retention job cron |
-| `integrate.liveness.heartbeat-interval-secs` | 60 | heartbeat liveness threshold (×2) |
-| `integrate.liveness.event-window-secs` | 300 | event liveness window |
+| `virbius.integrate.ingest.token` | empty | ingest auth token (empty = no auth) |
+| `virbius.integrate.ingest.max-batch-size` | 100 | max events per batch |
+| `virbius.integrate.retention-days` | 14 | observation retention (days) |
+| `virbius.integrate.retention.cron` | `0 0 3 * * *` | retention job cron |
+| `virbius.integrate.liveness.heartbeat-interval-secs` | 60 | heartbeat liveness threshold (×2) |
+| `virbius.integrate.liveness.event-window-secs` | 300 | event liveness window |
 
 Liveness states: `live` (heartbeat ≤ 2× interval or last event ≤ window), `stale`, `never-seen`.
 

@@ -33,7 +33,7 @@ public class JwtIssuer {
     private final AuthProperties properties;
     private final ECKey key;
 
-    public JwtIssuer(AuthProperties properties, @Value("${VIRBIUS_AUTH_DATA_DIR:./data}") String dataDir) {
+    public JwtIssuer(AuthProperties properties, @Value("${virbius.data-dir:./data}") String dataDir) {
         this.properties = properties;
         this.key = loadOrCreate(dataDir);
     }

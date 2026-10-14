@@ -30,8 +30,8 @@ public class InternalAuditController {
     public InternalAuditController(
             AuditEventPublisher publisher,
             AuditAllowLogWriter allowLogWriter,
-            @Value("${audit.ingest.http.token:}") String ingestToken,
-            @Value("${audit.ingest.http.max-batch-size:100}") int maxBatchSize) {
+            @Value("${virbius.audit.ingest.http.token:}") String ingestToken,
+            @Value("${virbius.audit.ingest.http.max-batch-size:100}") int maxBatchSize) {
         this.publisher = publisher;
         this.allowLogWriter = allowLogWriter;
         this.ingestToken = ingestToken != null ? ingestToken : "";
