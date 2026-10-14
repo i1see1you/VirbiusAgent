@@ -65,4 +65,9 @@ final class StreamReviewWindow {
     int pendingLength() {
         return pending.length();
     }
+
+    /** Current context-overlap tail — shared test-vector assertions rely on this. */
+    String reviewedTail() {
+        return reviewedTail;
+    }
 }

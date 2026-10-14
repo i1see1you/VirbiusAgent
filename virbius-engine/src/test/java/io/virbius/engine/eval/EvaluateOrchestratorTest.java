@@ -9,6 +9,8 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -63,6 +65,7 @@ class EvaluateOrchestratorTest {
                 sessionRiskManager, trustViolationDetector, policyDataCache,
                 promptLlmProperties, fileGuardService,
                 chainPatternDetector, retryEscapeDetector, sessionHistoryService,
+                new ReviewRiskGuard(600000),
                 0.5, 0.1, 0.0, 0.0);
         lenient().when(sessionHistoryService.history(any())).thenReturn(java.util.List.of());
         lenient().when(chainPatternDetector.detect(any(), any(), any())).thenReturn(java.util.List.of());
@@ -506,5 +509,119 @@ class EvaluateOrchestratorTest {
 
         assertEquals("allow", resp.effectiveAction());
         assertEquals(0, resp.sessionRiskScore()); // fail-open to 0
+    }
+
+    // ================================================================
+    // Review-role semantics (role=input / role=output)
+    // ================================================================
+
+    private void stubCleanDetectors(String content) {
+        lenient().when(injectionDetector.detect(content))
+                .thenReturn(InjectionDetectionResult.clean());
+        lenient().when(trustViolationDetector.detect(anyString(), anyString()))
+                .thenReturn(TrustViolationResult.ok());
+        lenient().when(promptRunner.run(anyString(), any()))
+                .thenReturn(List.of());
+        lenient().when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(), 0));
+    }
+
+    private EvaluateRequestDto reviewRequest(String role, String traceId, String content) {
+        return new EvaluateRequestDto(
+                "default", role, "sess-rev", content, false, null,
+                traceId, "uid-1", null, Map.of(), null, null, null, null,
+                "input".equals(role) ? "chat_input" : "chat_completion",
+                null, 100);
+    }
+
+    @Test
+    void roleOutputReviewHasZeroSideEffects() {
+        EvaluateRequestDto req = reviewRequest("output", "tr-out", "leaky answer");
+        stubCleanDetectors("leaky answer");
+
+        SignalDto primary = new SignalDto("prompt-pii", 1, "cloud", "cloud",
+                80, "PII", "deny", "full", null, null);
+        when(policyMerger.merge(anyString(), anyString(), any()))
+                .thenReturn(new PolicyMerger.PolicyMergeResult(
+                        new EngineDecisionDto("deny", 80, "full"), primary));
+        when(sessionRiskManager.getRiskScore("sess-rev")).thenReturn(42);
+
+        EvaluateResponseDto resp = orchestrator.evaluate(req);
+
+        assertEquals("deny", resp.effectiveAction());
+        assertEquals(42, resp.sessionRiskScore()); // read-only, never updated
+        verify(sessionRiskManager, never()).updateRiskScore(any());
+        verify(scriptRuleRunner, never()).recordToolCall(anyString(), anyString(), any(), anyBoolean());
+        verify(scriptRuleRunner, never()).ingestCumulatives(anyString(), any());
+        verify(challengeService, never()).createChallenge(any(), any(), any(), any(), any(), any(), anyInt(), any());
+        verify(chainPatternDetector, never()).detect(any(), any(), any());
+        verify(retryEscapeDetector, never()).detect(any(), any(), any());
+        verify(auditWriter).write(any(), any(), any(), anyInt(), any(), anyBoolean());
+    }
+
+    @Test
+    void roleInputReviewFeedsRiskOncePerTrace() {
+        EvaluateRequestDto req = reviewRequest("input", "tr-in", "jailbreak text");
+        stubCleanDetectors("jailbreak text");
+
+        SignalDto primary = new SignalDto("prompt-jailbreak", 1, "cloud", "cloud",
+                90, "JAILBREAK", "deny", "full", null, null);
+        // The risk computation reads the raw runner signals, not the merged
+        // decision — feed the enforced signal through the script runner too.
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(primary), 0));
+        when(policyMerger.merge(anyString(), anyString(), any()))
+                .thenReturn(new PolicyMerger.PolicyMergeResult(
+                        new EngineDecisionDto("deny", 90, "full"), primary));
+        when(sessionRiskManager.updateRiskScore(any())).thenReturn(7);
+        when(sessionRiskManager.getRiskScore("sess-rev")).thenReturn(7);
+
+        orchestrator.evaluate(req);
+        verify(sessionRiskManager, times(1)).updateRiskScore(any());
+
+        // Retrying the same trace (same user message) must not double-count.
+        orchestrator.evaluate(reviewRequest("input", "tr-in", "jailbreak text"));
+        verify(sessionRiskManager, times(1)).updateRiskScore(any());
+    }
+
+    @Test
+    void roleInputDryRunDoesNotFeedRisk() {
+        EvaluateRequestDto req = reviewRequest("input", "tr-dry", "suspicious text");
+        stubCleanDetectors("suspicious text");
+
+        SignalDto primary = new SignalDto("prompt-agent", 1, "cloud", "cloud",
+                60, "AGENT_ABUSE", "deny", "dry_run", null, null);
+        when(policyMerger.merge(anyString(), anyString(), any()))
+                .thenReturn(new PolicyMerger.PolicyMergeResult(
+                        new EngineDecisionDto("allow", 0, "dry_run"), primary));
+        when(sessionRiskManager.getRiskScore("sess-rev")).thenReturn(5);
+
+        EvaluateResponseDto resp = orchestrator.evaluate(req);
+
+        verify(sessionRiskManager, never()).updateRiskScore(any());
+        assertEquals(5, resp.sessionRiskScore()); // read-only fallback
+    }
+
+    @Test
+    void roleInputReviewNeverCreatesChallengesOrToolHistory() {
+        EvaluateRequestDto req = reviewRequest("input", "tr-in-ch", "risky text");
+        stubCleanDetectors("risky text");
+
+        SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
+                70, "TOOL_CHALLENGE", "challenge", "full", null, null);
+        when(policyMerger.merge(anyString(), anyString(), any()))
+                .thenReturn(new PolicyMerger.PolicyMergeResult(
+                        new EngineDecisionDto("challenge", 70, "full"), primary));
+        lenient().when(sessionRiskManager.updateRiskScore(any())).thenReturn(0);
+
+        EvaluateResponseDto resp = orchestrator.evaluate(req);
+
+        // A challenge verdict passes through as-is: an input review cannot be
+        // "approved" through the tool-challenge flow.
+        assertEquals("challenge", resp.effectiveAction());
+        assertNull(resp.challengeId());
+        verify(challengeService, never()).createChallenge(any(), any(), any(), any(), any(), any(), anyInt(), any());
+        verify(scriptRuleRunner, never()).recordToolCall(anyString(), anyString(), any(), anyBoolean());
+        verify(scriptRuleRunner, never()).ingestCumulatives(anyString(), any());
     }
 }

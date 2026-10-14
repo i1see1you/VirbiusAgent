@@ -626,13 +626,15 @@ dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新�
 | `virbius.audit.export.key` | 空 | 导出产物 AES-256-GCM 密钥（base64，解码须 32B）；**不配则导出落 `failed`（fail-closed）** |
 | `virbius.audit.export.allow-plaintext` | `false` | 显式允许明文导出（不推荐，仅调试） |
 | `virbius.alert.risk-threshold` | `80` | 生成告警的风险阈值（且动作须为 block/deny/challenge） |
-| `virbius.output-review.skip-models` | `virbiusguard` | 跳过输出审查的模型名（逗号分隔）；护栏模型自身不回环审查 |
-| `virbius.output-review.refusal-text` | `抱歉，该内容已被安全策略拦截。` | `reject` 处置时的替换文案 |
-| `virbius.output-review.fail-closed` | `false` | 审查管线异常时是否拒答（true=拒答，false=放行并告警） |
-| `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | 原因码→处置（`reject|omit|redact|warn`）映射，未列出走关键字兜底 |
-| `virbius.output-review.streaming.window-chars` | `200` | 流式审查窗口硬上限 |
-| `virbius.output-review.streaming.context-chars` | `50` | 窗口重叠上下文长度 |
-| `virbius.output-review.streaming.stream-first` | `false` | 先流式后审查（否则缓冲到窗口判定后再发） |
+| `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | 原因码→处置（`reject|omit|redact|warn`）映射，未列出走关键字兜底；**统一在引擎解析，所有调用方一致** |
+| `virbius.evaluate.rate-limit.enabled` | `true` | `/v1/evaluate` 限流开关（无鉴权端点的滥用防护） |
+| `virbius.evaluate.rate-limit.per-session-per-min` | `60` | 每 session 每分钟**回答/请求数**（流式窗口按 trace 合并计 1 次） |
+| `virbius.evaluate.rate-limit.per-ip-per-min` | `600` | 每 IP 每分钟调用总数（兜底） |
+| `virbius.evaluate.rate-limit.max-windows-per-trace` | `64` | 单 trace 流式审查窗口上限（防单 trace 无限刷） |
+| `virbius.review.input-risk-dedup-ttl-ms` | `600000` | 输入审查风险计分去重窗口（同 trace 只计一次，10 分钟） |
+
+> 上述键目前均由代码 `@Value` 提供默认值，`application*.yml` 未显式声明；如需覆盖，用启动参数或同名 `VIRBIUS_*` env。
+> **已移至 SDK 侧**（原引擎 chat 内置审查的配置）：`skip-models`、`refusal-text`、`fail-closed`、`streaming.{window-chars,context-chars,stream-first}` —— 见 `virbius-review-sdk` README。`virbius.trace.*` 已随 `TraceStepPublisher` 删除。
 | `virbius.chain-patterns.enforce` | `false` | 时序链式检测：`false`=dry-run（仅审计），`true`=执行 |
 | `virbius.retry-escape.enforce` | `false` | 重试逃逸检测同上（dry-run by default） |
 | `virbius.trace.publish-enabled` | `true` | Engine 发布 chat `input`/`output` trace step 到控制面（Kafka 不可用时自动降级 no-op） |

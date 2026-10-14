@@ -1115,25 +1115,39 @@ XADD virbius:trace * \
 
 > 告警由控制面从摄入的高风险审计事件生成（`risk_score >= virbius.alert.risk-threshold` 且动作为 block/deny/challenge）；导出产物为 AES-256-GCM 密文，控制面不提供解密，未配置 `virbius.audit.export.key` 时任务落 `failed`（详见 DEPLOYMENT §10.3）。
 
-#### 2.6.5 引擎 Chat 输出安全扩展（大纲 B）
+#### 2.6.5 输入/输出审查 API（大纲 B；引擎 chat 扩展已移除）
 
-`virbius-engine` 的 OpenAI 兼容端点 `POST /v1/chat/completions` 支持请求级 `virbius` 扩展对象以启用输出审查与 chat 侧轨迹：
+**接入方式**：调用方在调 LLM **前/后**自行调用 `POST /v1/evaluate`，`role` 决定审查语义；流式由官方 SDK（`virbius-review-sdk`）做窗口化。引擎 `/v1/chat/completions` 退为**本地 Ollama 透传门面**（不审查、不接云模型）。
 
+**role 副作用矩阵（契约核心）**：
+
+| role | 判定 | 会话风险 | challenge | 计数器/工具历史 | 响应 |
+|---|---|---|---|---|---|
+| `input` | ✅ | ✅ 仅 enforce 命中，同 trace 只计一次 | ❌ | ❌ | 现有字段 |
+| `output` | ✅ | ❌ 零副作用 | ❌ | ❌ | **+`disposal_action`/`sanitized_content`** |
+| `tool_call`（proxy） | ✅ | ✅ 现状 | ✅ 现状 | ✅ 现状 | 不变 |
+| `user`（存量） | ✅ | 现状不变 | 现状 | 现状 | 不变 |
+
+**输入审查（调 LLM 前）**：
 ```json
-"virbius": {
-  "review_output": true,
-  "tenant_id": "default",
-  "session_id": "sess-1",
-  "trace_id": "...",      // 可选，缺省自动生成
-  "user_id": "u-1",       // 可选
-  "app_id": "my-agent"    // 可选
-}
+POST /v1/evaluate
+{ "tenant_id":"default","session_id":"s","trace_id":"tr","user_id":"u",
+  "role":"input","tool_name":"chat_input","content":"<用户输入>" }
+→ effective_action ∈ {deny,block} 即拦截（不调 LLM）
 ```
 
-行为：
+**输出审查（拿到回答后；流式窗口加 `stream_chunk:true`）**：
+```json
+POST /v1/evaluate
+{ "tenant_id":"default","session_id":"s","trace_id":"tr",
+  "role":"output","tool_name":"chat_completion","content":"<回答>","stream_chunk":false }
+→ { "effective_action":"deny", "reason_code":"PII",
+    "disposal_action":"redact", "sanitized_content":"...[REDACTED_EMAIL]..." }
+```
+调用方按 `disposal_action` 落地：`reject`→替换拒答文案、`omit`→置空、`redact`→用 `sanitized_content`、`warn`→放行仅留痕。映射由引擎 `OutputActionResolver` 统一解析（`virbius.output-review.action-map` 可按 reason_code 覆盖），保证各调用方行为一致。确定性正则（代码/SQL/模板注入、XSS、凭据）在管线前置命中即 `deny`。
 
-1. 为最后一条 user 消息发布 `input` trace step；
-2. 经标准 evaluate 管线审查助手回答（`role=output`）：非流式整段审查；流式按滑动窗口（`window-chars`/`context-chars`）审查；
-3. 发布 `output` trace step（携带审查决策）。
+**流式输出审查（SDK）**：`virbius-review-sdk` 的 `wrap_stream()` 移植引擎 `StreamReviewWindow`（共享测试向量 `schemas/review-window-vectors.json` 防漂移），逐窗调 `evaluate(role=output, stream_chunk=true)`；过审窗口才下发，命中即终止并建议断上游。
 
-处置动作 `reject|omit|redact|warn`（映射见 `virbius.output-review.action-map`），拦截时以 `refusal-text` 替换。**不带 `virbius` 扩展的请求原样透传**（护栏模型自身调用不回环审查）。
+**限流（v2，防无鉴权滥用）**：`/v1/evaluate` 按调用方 IP / session 限流；同一 `trace_id` 的流式窗口**合并计一次会话配额**（不误伤流式）；单 trace 窗口数上限默认 64。超限返回 `429 + Retry-After`。配置：`virbius.evaluate.rate-limit.*`。
+
+**规则寻址**：仅输入生效绑 `tool_names:["chat_input"]`，仅输出生效绑 `tool_names:["chat_completion"]`，global 规则两端都命中。

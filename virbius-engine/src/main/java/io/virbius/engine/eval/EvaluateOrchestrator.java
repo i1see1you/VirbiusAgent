@@ -39,6 +39,7 @@ public class EvaluateOrchestrator {
     private final ChainPatternDetector chainPatternDetector;
     private final RetryEscapeDetector retryEscapeDetector;
     private final SessionHistoryService sessionHistoryService;
+    private final ReviewRiskGuard reviewRiskGuard;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -64,6 +65,7 @@ public class EvaluateOrchestrator {
             ChainPatternDetector chainPatternDetector,
             RetryEscapeDetector retryEscapeDetector,
             SessionHistoryService sessionHistoryService,
+            ReviewRiskGuard reviewRiskGuard,
             @Value("${virbius.session-risk.intent-weight.block:0.5}") double blockWeight,
             @Value("${virbius.session-risk.intent-weight.challenge:0.1}") double challengeWeight,
             @Value("${virbius.session-risk.intent-weight.review:0.0}") double reviewWeight,
@@ -83,6 +85,7 @@ public class EvaluateOrchestrator {
         this.chainPatternDetector = chainPatternDetector;
         this.retryEscapeDetector = retryEscapeDetector;
         this.sessionHistoryService = sessionHistoryService;
+        this.reviewRiskGuard = reviewRiskGuard;
         this.blockWeight = blockWeight;
         this.challengeWeight = challengeWeight;
         this.reviewWeight = reviewWeight;
@@ -90,6 +93,17 @@ public class EvaluateOrchestrator {
     }
 
     public EvaluateResponseDto evaluate(EvaluateRequestDto req) {
+        // Review-role semantics (see PROTOCOL "evaluate role side-effect matrix"):
+        //   role=input  — content review of a user message; feeds session risk
+        //                 (enforced hits only, once per trace) but never creates
+        //                 challenges, counters or tool-call history.
+        //   role=output — content review of a model answer; ZERO side effects
+        //                 (disposal is computed by OutputReviewService).
+        //   other roles (tool_call / user / …) keep the full pipeline behavior.
+        String role = req.role() != null ? req.role().trim().toLowerCase(java.util.Locale.ROOT) : "";
+        boolean reviewInput = "input".equals(role);
+        boolean reviewOutput = "output".equals(role);
+        boolean review = reviewInput || reviewOutput;
         // A1: Inject tool_name / tool_session_key as vars for cumulative aggregation
         String toolName = req.toolName() != null ? req.toolName() : "";
         String sessionId = req.sessionId() != null ? req.sessionId() : "";
@@ -197,12 +211,16 @@ public class EvaluateOrchestrator {
         signals.addAll(scriptResult.signals());
 
         // --- C1/C2: temporal chain + retry-escape detection (session history) ---
-        try {
-            List<Map<String, Object>> history = sessionHistoryService.history(sessionId);
-            signals.addAll(chainPatternDetector.detect(history, toolName, req.argsJson()));
-            retryEscapeDetector.detect(history, toolName, req.argsJson()).ifPresent(signals::add);
-        } catch (Exception e) {
-            log.warn("session-history detection failed: {}", e.getMessage());
+        // Behavioural detectors over the tool-call history — review roles carry
+        // content, not tool calls, so they are skipped for input/output review.
+        if (!review) {
+            try {
+                List<Map<String, Object>> history = sessionHistoryService.history(sessionId);
+                signals.addAll(chainPatternDetector.detect(history, toolName, req.argsJson()));
+                retryEscapeDetector.detect(history, toolName, req.argsJson()).ifPresent(signals::add);
+            } catch (Exception e) {
+                log.warn("session-history detection failed: {}", e.getMessage());
+            }
         }
 
         PolicyMerger.PolicyMergeResult merged = policyMerger.merge(req.tenantId(), req.sessionId(), signals);
@@ -217,19 +235,23 @@ public class EvaluateOrchestrator {
         auditWriter.write(req, decision, primaryRuleId, primaryRevision, reasonCode, degraded);
 
         // A1: Auto-ingest cumulative counters (configuration-driven, after rule evaluation)
-        try {
-            scriptRuleRunner.ingestCumulatives(
-                    req.tenantId() != null ? req.tenantId() : "default", matchCtx);
-        } catch (Exception e) {
-            log.warn("cumulative ingest failed: {}", e.getMessage());
-        }
-
         // A1: Record tool call in session state (for session-level toolCallCount)
-        try {
-            scriptRuleRunner.recordToolCall(sessionId, toolName, req.argsJson(),
-                    !"block".equalsIgnoreCase(decision.effectiveAction()));
-        } catch (Exception e) {
-            log.warn("recordToolCall failed: {}", e.getMessage());
+        // Both are tool-call side effects — skipped for review roles (an
+        // input/output review must not pollute counters or tool history).
+        if (!review) {
+            try {
+                scriptRuleRunner.ingestCumulatives(
+                        req.tenantId() != null ? req.tenantId() : "default", matchCtx);
+            } catch (Exception e) {
+                log.warn("cumulative ingest failed: {}", e.getMessage());
+            }
+
+            try {
+                scriptRuleRunner.recordToolCall(sessionId, toolName, req.argsJson(),
+                        !"block".equalsIgnoreCase(decision.effectiveAction()));
+            } catch (Exception e) {
+                log.warn("recordToolCall failed: {}", e.getMessage());
+            }
         }
 
         // Compute args hash for challenge binding
@@ -245,58 +267,90 @@ public class EvaluateOrchestrator {
         // (binding per approval_mode), bypass the challenge and allow the call.
         // This check is done BEFORE risk score update so that exempted calls
         // do not accumulate chain_anomaly risk from the triggering rule.
+        // Review roles never participate in the challenge flow.
         String effectiveAction = decision.effectiveAction();
         String challengeId = null;
-        boolean exempted = "challenge".equalsIgnoreCase(effectiveAction)
-                && challengeService.hasActiveExemption(sessionId, toolName, argsHash, approvalMode);
-        if (exempted) {
-            log.info("challenge bypassed by session exemption: tenant={} session={} tool={} args_hash={} approval_mode={}",
-                    req.tenantId(), sessionId, toolName, argsHash, approvalMode);
-            effectiveAction = "allow";
+        boolean exempted = false;
+        if (!review) {
+            exempted = "challenge".equalsIgnoreCase(effectiveAction)
+                    && challengeService.hasActiveExemption(sessionId, toolName, argsHash, approvalMode);
+            if (exempted) {
+                log.info("challenge bypassed by session exemption: tenant={} session={} tool={} args_hash={} approval_mode={}",
+                        req.tenantId(), sessionId, toolName, argsHash, approvalMode);
+                effectiveAction = "allow";
+            }
         }
 
         // --- P1.3: Session Risk adaptive scoring (multi-dimensional weighted + time decay) ---
         // When a challenge is bypassed by session exemption, skip chain_anomaly
         // accumulation so that approved retries don't inflate the risk score.
+        //
+        // Review-role policy:
+        //   role=output — read-only (never updates the score);
+        //   role=input  — updates only on enforced hits, at most once per trace
+        //                 (ReviewRiskGuard dedup); otherwise read-only.
         int sessionRiskScore = 0;
-        try {
-            int injectionHits = (int) signals.stream()
-                    .filter(s -> "PROMPT_INJECTION".equals(s.ruleId()))
-                    .count();
-            // P2: weight chainDelta by intent_action so that challenge/review
-            // don't inflate risk as aggressively as block.
-            int signalChainDelta = exempted ? 0 : signals.stream()
-                    .filter(s -> s.ruleId() != null
-                            && !"PROMPT_INJECTION".equals(s.ruleId())
-                            && s.score() > 0)
-                    .mapToInt(s -> {
-                        double weight = switch (s.intentAction() == null ? "allow" : s.intentAction().toLowerCase()) {
-                            case "deny", "block" -> blockWeight;
-                            case "challenge" -> challengeWeight;
-                            case "review" -> reviewWeight;
-                            default -> allowWeight;
-                        };
-                        return (int) Math.round(s.score() * weight);
-                    })
-                    .sum();
-            // Rule-declared chain anomaly (ctx.incrementRiskScore) is fed through the same
-            // chain_anomaly dimension; suppressed on challenge exemption like signal deltas.
-            int chainDelta = exempted ? 0 : signalChainDelta + scriptResult.chainAnomalyDelta();
-            RiskUpdateInput riskInput = new RiskUpdateInput(
-                    sessionId,
-                    req.tenantId() != null ? req.tenantId() : "default",
-                    req.riskQuota() > 0 ? req.riskQuota() : 100, // from License JWT, fallback 100
-                    injectionHits,
-                    injectionResult.hit() ? injectionResult.riskDelta() : 15,
-                    chainDelta,
-                    0); // falco alerts are async, consumed from pending counter
-            sessionRiskScore = sessionRiskManager.updateRiskScore(riskInput);
-        } catch (Exception e) {
-            log.warn("sessionRiskManager.updateRiskScore failed: {}", e.getMessage());
+        if (reviewOutput) {
+            try {
+                sessionRiskScore = sessionRiskManager.getRiskScore(sessionId);
+            } catch (Exception e) {
+                log.warn("sessionRiskManager.getRiskScore failed: {}", e.getMessage());
+            }
+        } else {
+            try {
+                int injectionHits = (int) signals.stream()
+                        .filter(s -> "PROMPT_INJECTION".equals(s.ruleId()))
+                        .count();
+                // P2: weight chainDelta by intent_action so that challenge/review
+                // don't inflate risk as aggressively as block.
+                // Input review counts enforced signals only (dry_run hits don't
+                // increment the session score).
+                int signalChainDelta = exempted ? 0 : signals.stream()
+                        .filter(s -> s.ruleId() != null
+                                && !"PROMPT_INJECTION".equals(s.ruleId())
+                                && s.score() > 0)
+                        .filter(s -> !reviewInput || isEnforced(s))
+                        .mapToInt(s -> {
+                            double weight = switch (s.intentAction() == null ? "allow" : s.intentAction().toLowerCase()) {
+                                case "deny", "block" -> blockWeight;
+                                case "challenge" -> challengeWeight;
+                                case "review" -> reviewWeight;
+                                default -> allowWeight;
+                            };
+                            return (int) Math.round(s.score() * weight);
+                        })
+                        .sum();
+                // Rule-declared chain anomaly (ctx.incrementRiskScore) is fed through the same
+                // chain_anomaly dimension; suppressed on challenge exemption like signal deltas.
+                int chainDelta = exempted ? 0 : signalChainDelta + scriptResult.chainAnomalyDelta();
+                boolean increment = true;
+                if (reviewInput) {
+                    boolean enforcedHit = injectionResult.hit() || signalChainDelta > 0
+                            || scriptResult.chainAnomalyDelta() > 0;
+                    increment = enforcedHit && reviewRiskGuard.tryAcquire(req.traceId());
+                }
+                if (increment) {
+                    RiskUpdateInput riskInput = new RiskUpdateInput(
+                            sessionId,
+                            req.tenantId() != null ? req.tenantId() : "default",
+                            req.riskQuota() > 0 ? req.riskQuota() : 100, // from License JWT, fallback 100
+                            injectionHits,
+                            injectionResult.hit() ? injectionResult.riskDelta() : 15,
+                            chainDelta,
+                            0); // falco alerts are async, consumed from pending counter
+                    sessionRiskScore = sessionRiskManager.updateRiskScore(riskInput);
+                } else {
+                    sessionRiskScore = sessionRiskManager.getRiskScore(sessionId);
+                }
+            } catch (Exception e) {
+                log.warn("sessionRiskManager.updateRiskScore failed: {}", e.getMessage());
+            }
         }
 
         // If effective_action is still "challenge", create a challenge record in Redis
-        if ("challenge".equalsIgnoreCase(effectiveAction)) {
+        // (never for review roles — an input/output review cannot be "approved"
+        // through the tool-challenge flow).
+        if (!review && "challenge".equalsIgnoreCase(effectiveAction)) {
             challengeId = challengeService.createChallenge(
                     req.tenantId() != null ? req.tenantId() : "default",
                     req.sessionId() != null ? req.sessionId() : "",
@@ -320,6 +374,12 @@ public class EvaluateOrchestrator {
                 decision.enforceMode(),
                 challengeId,
                 argsHash);
+    }
+
+    /** A signal counts as enforced when its rule runs in full or canary mode. */
+    private static boolean isEnforced(SignalDto s) {
+        String em = s.enforceMode() == null ? "" : s.enforceMode().trim().toLowerCase(java.util.Locale.ROOT);
+        return "full".equals(em) || "canary".equals(em);
     }
 
     /**

@@ -2696,20 +2696,28 @@ fail_open = true            # whether to allow when Engine is unavailable
 
 > Three layers cover the complete review chain from tool return to final output.
 
-#### 13.7.7 Engine-side output review (outline B, this round)
+#### 13.7.7 Output review as API + SDK (outline B; the engine chat-embedded review was removed)
 
-Output review is implemented on the `virbius-engine` OpenAI-compatible endpoint `POST /v1/chat/completions` (see [PROTOCOL.md §2.6.5](PROTOCOL.md)):
+Output review is no longer embedded in the engine chat proxy: callers integrate via the **evaluate API** and stream via the **official SDK** (contract in [PROTOCOL.md §2.6.5](PROTOCOL.md)). The engine's `/v1/chat/completions` is now a local Ollama passthrough facade (no review, no cloud models).
 
-| Component | Responsibility |
-|------|------|
-| `ChatCompletionsController` (extended) | recognize the request-level `virbius` extension; review the assistant answer via `role=output`; emit `input`/`output` trace steps |
-| `StreamReviewWindow` | streaming sliding-window buffer (hard cap + context overlap); only a passed window is forwarded |
-| `OutputContentRules` | NeMo-style regex content rules (code/SQL/template injection, XSS, credential leak), no extra dependency |
-| `OutputActionResolver` | disposal resolution: `reject|omit|redact|warn`, overrides via `virbius.output-review.action-map` + keyword fallback, `reject` as safe default |
-| `OutputMasker` | in-place PII/credential masking for the `redact` action (email/phone/ID/bank card/AWS key/private key/Bearer) |
-| `TraceStepPublisher` | publish chat `input`/`output` trace steps from the Engine to Control (degrades to a no-op without Kafka) |
+| Component | Location | Responsibility |
+|------|------|------|
+| `OutputReviewService` | engine `api/` | entry for `evaluate(role=output)`: regex pre-check → zero-side-effect pipeline verdict → `OutputActionResolver` resolves `disposal_action` → `OutputMasker` produces `sanitized_content` |
+| `OutputContentRules` | engine `api/` | NeMo-style regex rules (code/SQL/template injection, XSS, credentials); a pre-pipeline hit denies immediately (an audit event with scene=output is still written) |
+| `OutputActionResolver` | engine `api/` | `reject|omit|redact|warn` resolution (`action-map` overrides + keyword fallback, reject as safe default) — **resolved once in the engine, identical for every caller** |
+| `OutputMasker` | engine `api/` | in-place PII/credential masking for `redact` (email/phone/ID/bank card/AWS key/private key/Bearer) |
+| `StreamReviewWindow` | engine `api/` + **SDK port** | the sliding-window algorithm's single source of truth; the SDK and the engine share test vectors (`schemas/review-window-vectors.json`) |
+| `EvaluateRateLimiter` | engine `api/` | `/v1/evaluate` rate limiting v2: per-trace aggregation (streaming windows share one quota unit), session/IP quotas, per-trace window cap, 429+Retry-After |
+| `ReviewRiskGuard` | engine `eval/` | input-review risk dedup (once per trace, TTL default 10 min) |
+| `virbius-review-sdk` (Python) | caller side | `review_input`/`review_output`/`apply_disposal`/`wrap_stream` (windowed per-window review, abort upstream on hit) |
 
-Configuration (defaults in DEPLOYMENT §10.2): `virbius.output-review.skip-models`, `refusal-text`, `fail-closed`, `streaming.{window-chars,context-chars,stream-first}`, `action-map`. False-positive statistics are exposed via `GET .../audit/output-review-stats` for the console's "Output-review" tab.
+**Role side-effect matrix**: `role=input` feeds session risk (enforced hits only, once per trace) and skips challenge/counters/tool history; `role=output` is **zero side effects** (reads the current risk score, never updates) — streaming windows never pollute session risk. `tool_call`/`user` behavior is unchanged.
+
+**Stats**: `output-review-stats` counts **answers** (`COUNT(DISTINCT trace_id)`, falling back to event_id) plus a raw `window_events` count — N windows of one answer are no longer N outputs.
+
+**Removed** (the former chat-embedded review): the `ChatCompletionsController` `virbius` extension/review branches/streaming wiring, `TraceStepPublisher` (chat-side input/output trace steps), config `virbius.output-review.{skip-models,refusal-text,fail-closed,streaming.*}` (moved to SDK config) and `virbius.trace.*`. `action-map` stays.
+
+Configuration: DEPLOYMENT §10.2 (engine side) and the SDK README (caller side: window params, `fail_open`, refusal text).
 
 ---
 

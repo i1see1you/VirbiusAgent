@@ -1,0 +1,65 @@
+{
+  "$comment": "Shared test vectors for the streaming review window (StreamReviewWindow). Single source of truth consumed by BOTH the Java engine test (virbius-engine StreamReviewWindowVectorTest) and the Python SDK test (virbius-review-sdk tests/test_window.py) — keep them in sync via CI. Semantics per step: apply delta+done to due(); assert the returned text (null = not due); optional 'then' accepts/rejects the window, asserting the forwarded text and the resulting context tail.",
+  "format": 1,
+  "cases": [
+    {
+      "name": "below-window-accumulates-until-done",
+      "windowChars": 10,
+      "contextChars": 3,
+      "steps": [
+        { "delta": "hel", "done": false, "due": null },
+        { "delta": "lo", "done": false, "due": null },
+        { "delta": " wor", "done": false, "due": null },
+        { "delta": "ld", "done": false, "due": "hello world", "then": "accept", "forward": "hello world", "tail": "rld" },
+        { "delta": "!", "done": false, "due": null },
+        { "delta": "", "done": true, "due": "rld!", "then": "accept", "forward": "!", "tail": "ld!" }
+      ]
+    },
+    {
+      "name": "context-overlap-carried-into-next-window",
+      "windowChars": 5,
+      "contextChars": 4,
+      "steps": [
+        { "delta": "abcde", "done": false, "due": "abcde", "then": "accept", "forward": "abcde", "tail": "bcde" },
+        { "delta": "fghij", "done": false, "due": "bcdefghij", "then": "accept", "forward": "fghij", "tail": "ghij" }
+      ]
+    },
+    {
+      "name": "reject-drops-pending-keeps-tail",
+      "windowChars": 5,
+      "contextChars": 3,
+      "steps": [
+        { "delta": "abcde", "done": false, "due": "abcde", "then": "reject" },
+        { "delta": "xyz", "done": true, "due": "xyz", "then": "accept", "forward": "xyz", "tail": "xyz" }
+      ]
+    },
+    {
+      "name": "done-with-empty-pending-is-not-due",
+      "windowChars": 5,
+      "contextChars": 3,
+      "steps": [
+        { "delta": "abcde", "done": false, "due": "abcde", "then": "accept", "forward": "abcde", "tail": "cde" },
+        { "delta": "", "done": true, "due": null }
+      ]
+    },
+    {
+      "name": "hard-cap-window-of-one",
+      "windowChars": 1,
+      "contextChars": 0,
+      "steps": [
+        { "delta": "a", "done": false, "due": "a", "then": "accept", "forward": "a", "tail": "" },
+        { "delta": "b", "done": true, "due": "b", "then": "accept", "forward": "b", "tail": "" }
+      ]
+    },
+    {
+      "name": "reject-mid-stream-then-continue",
+      "windowChars": 4,
+      "contextChars": 2,
+      "steps": [
+        { "delta": "abcd", "done": false, "due": "abcd", "then": "accept", "forward": "abcd", "tail": "cd" },
+        { "delta": "efgh", "done": false, "due": "cdefgh", "then": "reject" },
+        { "delta": "ij", "done": true, "due": "cdij", "then": "accept", "forward": "ij", "tail": "ij" }
+      ]
+    }
+  ]
+}

@@ -6,8 +6,12 @@
 # 8080/8082), points the engine at a local mock Ollama, and exercises:
 #
 #   Engine (via HTTP + Redis):
-#     B1/B3/B4  final-output review: malicious -> reject+replace, normal -> warn
-#     B2        streaming output review -> guardrails_violation
+#     B1/B3/B4  output review via POST /v1/evaluate role=output:
+#               deterministic rules (XSS -> reject, credential -> redact+sanitized),
+#               pipeline verdict (normal -> allow+warn)
+#     B2        streaming-window review (stream_chunk=true) -> disposal
+#     RATE      evaluate rate limiter v2: 30 windows of one trace unthrottled
+#     FACADE    /v1/chat/completions is a pure local LLM facade (no review)
 #     C1        chain pattern: sensitive read -> external egress (chain-exfil)
 #     C2        retry-escape after a block (retry-escape)
 #   Control (dev SQLite + new schema):
@@ -16,18 +20,21 @@
 #     A4  Merkle proof + independent verify (correct root -> true, tampered -> false)
 #     A6  Decision BOM reconstruction (and from an alert)
 #     A7  encrypted export (AES-GCM, no plaintext leak) + export list/404
-#     A8/B7 output-review stats
+#     A8/B7 output-review stats (answer-level aggregation via trace_id)
 #     C4  alerts lifecycle: seed -> list -> get -> ack -> BOM
 #     C5  session checkpoint read path (seeded -> returned)
 #
 # Requires: java, curl, python3, sqlite3, a reachable Redis.
-# Kafka is NOT required (trace publish is disabled for the run).
+# Kafka is NOT required (engine audit events are queued async, dropped
+# without a broker — stats checks seed the DB directly).
 #
 # Known gaps (need a Kafka broker + run-local.sh, not runnable here):
 #   - audit/trace ingest -> auto alert generation, session checkpoint writes,
 #     audit hash-chain / Merkle chaining, retention archive job.
 #   - engine C0 chainAnomaly delta from an L3 Groovy rule (needs a rule store).
 #   - MCP-proxy STI (B6) — Rust binary, separate harness.
+#   - SDK streaming wrap_stream end-to-end — covered by
+#     virbius-review-sdk tests + schemas/review-window-vectors.json.
 #
 # Usage:        bash scripts/test-guardrails-e2e.sh
 # Skip build:   SKIP_BUILD=1 bash scripts/test-guardrails-e2e.sh
@@ -145,7 +152,6 @@ env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$ENGINE_JAR" --server.port="$ENGINE_PORT" \
       --virbius.ollama-base-url="http://127.0.0.1:$MOCK_PORT" \
-      --virbius.trace.publish-enabled=false \
     > "$LOGS/engine.log" 2>&1 &
 ENGINE_PID=$!
 
@@ -173,24 +179,47 @@ chat(){ local body="$1" r=""; for _ in 1 2 3 4 5; do
   sleep 1; done; printf '%s' "$r"; }
 
 # ── engine scenarios ─────────────────────────────────────────────────────────
-# warm-up (engine first chat request initializes the output-review path)
-chat '{"model":"m","virbius":{"review_output":true,"tenant_id":"default","session_id":"warm","trace_id":"tr-warm"},"messages":[{"role":"user","content":"hi"}]}' >/dev/null || true
+# warm-up (first chat request initializes the passthrough proxy)
+chat '{"model":"m","messages":[{"role":"user","content":"hi"}]}' >/dev/null || true
 
-info "E2E: engine output review (B1/B3/B4)"
-R=$(chat '{"model":"m","virbius":{"review_output":true,"tenant_id":"default","session_id":"s-out-1","trace_id":"tr-out-1"},"messages":[{"role":"user","content":"malicious"}]}')
-V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if (d["virbius"]["review"]["action"]=="reject" and d["choices"][0]["finish_reason"]=="content_filter") else "0")' 2>/dev/null || echo 0)
-[ "${E2E_DEBUG:-0}" = "1" ] && printf 'DBG R1=%s\n' "${R:0:200}" >&2
-check "$V" "malicious output -> reject + content_filter"
+# Output review is exposed via POST /v1/evaluate with role=output: the engine
+# returns disposal_action (+ sanitized_content for redact) and the caller
+# applies it verbatim. Streaming windows are reviewed the same way with
+# stream_chunk=true (the official SDK wraps this; its windowing is covered by
+# the shared vectors in schemas/review-window-vectors.json).
+evout(){ curl -s --max-time 20 -X POST "$E/v1/evaluate" -H 'Content-Type: application/json' -d "$1"; }
 
-R=$(chat '{"model":"m","virbius":{"review_output":true,"tenant_id":"default","session_id":"s-out-2","trace_id":"tr-out-2"},"messages":[{"role":"user","content":"hi"}]}')
-V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d["virbius"]["review"]["action"]=="warn" else "0")' 2>/dev/null || echo 0)
-check "$V" "normal output -> warn (not blocked)"
+info "E2E: engine output review via evaluate API (B1/B3/B4)"
+R=$(evout '{"tenant_id":"default","role":"output","tool_name":"chat_completion","session_id":"s-out-1","trace_id":"tr-out-1","content":"Sure! Here is the snippet: <script>alert(document.cookie)</script>"}')
+V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("disposal_action")=="reject" and d.get("effective_action")=="deny" else "0")' 2>/dev/null || echo 0)
+[ "${E2E_DEBUG:-0}" = "1" ] && printf 'DBG R1=%s\n' "${R:0:220}" >&2
+check "$V" "malicious output -> deny + disposal reject"
 
-info "E2E: engine streaming output review (B2)"
-R=$(curl -s --max-time 20 -N -X POST "$E/v1/chat/completions" -H 'Content-Type: application/json' \
-  -d '{"model":"m","stream":true,"virbius":{"review_output":true,"tenant_id":"default","session_id":"s-out-3","trace_id":"tr-out-3"},"messages":[{"role":"user","content":"malicious"}]}')
-V=$(printf '%s' "$R" | grep -q 'guardrails_violation' && echo 1 || echo 0)
-check "$V" "stream malicious -> guardrails_violation"
+R=$(evout '{"tenant_id":"default","role":"output","tool_name":"chat_completion","session_id":"s-out-2","trace_id":"tr-out-2","content":"leaked key AKIAABCDEFGHIJKLMNOP and mail a@b.com"}')
+V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("disposal_action")=="redact" and "[REDACTED_AWS_KEY]" in (d.get("sanitized_content") or "") and "[REDACTED_EMAIL]" in (d.get("sanitized_content") or "") else "0")' 2>/dev/null || echo 0)
+check "$V" "credential leak -> disposal redact + sanitized_content"
+
+R=$(evout '{"tenant_id":"default","role":"output","tool_name":"chat_completion","session_id":"s-out-3","trace_id":"tr-out-3","content":"The weather today is sunny and warm."}')
+V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("disposal_action")=="warn" and d.get("effective_action")=="allow" else "0")' 2>/dev/null || echo 0)
+check "$V" "normal output -> allow + disposal warn"
+
+info "E2E: engine streaming-window output review (B2, stream_chunk=true)"
+R=$(evout '{"tenant_id":"default","role":"output","tool_name":"chat_completion","session_id":"s-out-4","trace_id":"tr-out-4","stream_chunk":true,"content":"partial window <script>alert(1)</script>"}')
+V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("disposal_action") in ("reject","omit") else "0")' 2>/dev/null || echo 0)
+check "$V" "stream window malicious -> disposal reject/omit"
+
+info "E2E: chat endpoint is a pure local LLM facade (no review)"
+R=$(chat '{"model":"m","messages":[{"role":"user","content":"malicious"}]}')
+V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("choices") and "virbius" not in d else "0")' 2>/dev/null || echo 0)
+check "$V" "chat passthrough: no review object, no virbius key"
+
+info "E2E: evaluate rate limit does not throttle streaming windows (v2)"
+V=1
+for i in $(seq 1 30); do
+  evout "{\"tenant_id\":\"default\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-rl\",\"trace_id\":\"tr-rl\",\"stream_chunk\":true,\"content\":\"window $i\"}" \
+    | grep -q '"rate_limited"' && V=0
+done
+check "$V" "30 windows of one trace pass the rate limiter"
 
 info "E2E: chain pattern detection (C1)"
 SESS_C="e2e-c1-$$"

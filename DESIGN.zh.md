@@ -2695,20 +2695,28 @@ fail_open = true            # Engine 不可用时是否放行
 
 > 三层覆盖从工具返回到最终输出的完整审查链路。
 
-#### 13.7.7 Engine 侧输出审查实现（大纲 B，本轮新增）
+#### 13.7.7 输出审查的 API/SDK 形态（大纲 B；引擎 chat 内置审查已移除）
 
-在 `virbius-engine` 的 OpenAI 兼容端点 `POST /v1/chat/completions` 上落地输出审查（详见 [PROTOCOL.zh.md §2.6.5](PROTOCOL.zh.md)）：
+输出审查不再内嵌于引擎 chat 代理，改为**调用方 API 接入 + 官方 SDK 流式窗口**（契约详见 [PROTOCOL.zh.md §2.6.5](PROTOCOL.zh.md)）。引擎 `/v1/chat/completions` 退为本地 Ollama 透传门面（不审查、不接云模型）。
 
-| 组件 | 职责 |
-|------|------|
-| `ChatCompletionsController`（扩展） | 识别请求级 `virbius` 扩展；对助手回答走 `role=output` 审查；发布 `input`/`output` trace step |
-| `StreamReviewWindow` | 流式滑动窗口缓冲（窗口硬上限 + 上下文重叠），窗口判定通过才下发 |
-| `OutputContentRules` | NeMo 风格正则内容规则（代码/SQL/模板注入、XSS、凭据泄露），无额外依赖 |
-| `OutputActionResolver` | 处置动作解析：`reject|omit|redact|warn`，`virbius.output-review.action-map` 覆盖 + 关键字兜底，`reject` 为安全默认 |
-| `OutputMasker` | `redact` 处置时的 PII/凭据就地遮蔽（邮箱/手机/身份证/银行卡/AWS key/私钥/Bearer） |
-| `TraceStepPublisher` | 从 Engine 侧发布 chat `input`/`output` trace step 到控制面（Kafka 不可用时降级 no-op） |
+| 组件 | 位置 | 职责 |
+|------|------|------|
+| `OutputReviewService` | engine `api/` | `evaluate(role=output)` 入口：正则前置 → 零副作用管线判定 → `OutputActionResolver` 解析 `disposal_action` → `OutputMasker` 产 `sanitized_content` |
+| `OutputContentRules` | engine `api/` | NeMo 风格正则规则（代码/SQL/模板注入、XSS、凭据），管线前置命中即 deny（仍写审计事件，scene=output） |
+| `OutputActionResolver` | engine `api/` | `reject|omit|redact|warn` 解析（`action-map` 覆盖 + 关键字兜底，reject 安全默认）——**映射只在引擎做一次，所有调用方一致** |
+| `OutputMasker` | engine `api/` | `redact` 时 PII/凭据就地遮蔽（邮箱/手机/身份证/银行卡/AWS key/私钥/Bearer） |
+| `StreamReviewWindow` | engine `api/` + **SDK 移植** | 滑动窗口算法单一真源；SDK 与引擎共用测试向量 `schemas/review-window-vectors.json` |
+| `EvaluateRateLimiter` | engine `api/` | `/v1/evaluate` 限流 v2：按 trace 聚合（流式窗口合并计一次配额）、会话/IP 配额、单 trace 窗口上限、429+Retry-After |
+| `ReviewRiskGuard` | engine `eval/` | 输入审查计分去重（同 trace 只计一次，TTL 默认 10 分钟） |
+| `virbius-review-sdk`（Python） | 调用方侧 | `review_input`/`review_output`/`apply_disposal`/`wrap_stream`（窗口化逐窗送审，命中断流） |
 
-配置项（默认见 DEPLOYMENT §10.2）：`virbius.output-review.skip-models`、`refusal-text`、`fail-closed`、`streaming.{window-chars,context-chars,stream-first}`、`action-map`。误拦统计经 `GET .../audit/output-review-stats` 暴露，供运营台「输出误拦」tab 使用。
+**role 副作用矩阵**：`role=input` 喂会话风险（仅 enforce 命中、同 trace 一次）、跳 challenge/计数器/工具历史；`role=output` **零副作用**（读当前风险分，不更新）——流式多窗不会污染会话风险。`tool_call`/`user` 行为不变。
+
+**统计口径**：`output-review-stats` 以**回答**为单位（`COUNT(DISTINCT trace_id)`，缺省回退 event_id），另给 `window_events` 原始窗口数——流式 N 窗不会计成 N 个输出。
+
+**移除项**（原 chat 内置审查）：`ChatCompletionsController` 的 `virbius` 扩展/审查分支/流式窗口接线、`TraceStepPublisher`（chat 侧 input/output trace step）、配置 `virbius.output-review.{skip-models,refusal-text,fail-closed,streaming.*}`（转由 SDK 配置）与 `virbius.trace.*`。保留 `action-map`。
+
+配置项见 DEPLOYMENT §10.2（引擎侧）与 SDK README（调用方侧：窗口参数、`fail_open`、拒答文案）。
 
 ---
 

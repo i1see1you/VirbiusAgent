@@ -181,6 +181,36 @@ public class RolloutDashboardService {
         }, args.toArray());
     }
 
+    /**
+     * Answer-level output-review aggregates. A streaming review emits one audit
+     * event per window; the <b>answer</b> (identified by trace_id, falling back
+     * to event_id) is the unit users care about, so totals/denies are counted
+     * per answer. {@code window_events} keeps the raw event count for
+     * transparency.
+     */
+    public Map<String, Object> outputReviewAnswerStats(
+            String tenantId, java.time.Instant from, java.time.Instant to) {
+        StringBuilder sql = new StringBuilder("""
+                SELECT COUNT(DISTINCT COALESCE(trace_id, event_id)) AS answers,
+                       COUNT(DISTINCT CASE WHEN effective_action IN ('deny','block')
+                                 THEN COALESCE(trace_id, event_id) END) AS denied_answers,
+                       COUNT(*) AS window_events
+                FROM tb_audit_events
+                WHERE tenant_id = ? AND scene = 'output'
+                """);
+        var args = new java.util.ArrayList<Object>();
+        args.add(tenantId);
+        if (from != null) {
+            sql.append(" AND intercepted_at >= ?");
+            args.add(from);
+        }
+        if (to != null) {
+            sql.append(" AND intercepted_at <= ?");
+            args.add(to);
+        }
+        return jdbc.queryForMap(sql.toString(), args.toArray());
+    }
+
     public List<Map<String, Object>> gateLogs(String tenantId, String ruleId, int limit) {
         return jdbc.query(
                 """

@@ -57,19 +57,18 @@ public class AuditCenterService {
         }
         List<Map<String, Object>> rows = dashboardService.outputReviewStats(tenantId, from, to);
         out.put("groups", rows);
-        long total = 0;
-        long denied = 0;
-        for (Map<String, Object> row : rows) {
-            long cnt = ((Number) row.get("cnt")).longValue();
-            total += cnt;
-            String action = String.valueOf(row.get("effective_action"));
-            if ("deny".equalsIgnoreCase(action) || "block".equalsIgnoreCase(action)) {
-                denied += cnt;
-            }
-        }
+        // Answer-level aggregation: a streaming review emits one event per
+        // window, so an "answer" (trace_id, falling back to event_id) is the
+        // unit for totals/denies; window_events keeps the raw event count.
+        Map<String, Object> answerStats =
+                dashboardService.outputReviewAnswerStats(tenantId, from, to);
+        long total = ((Number) answerStats.getOrDefault("answers", 0L)).longValue();
+        long denied = ((Number) answerStats.getOrDefault("denied_answers", 0L)).longValue();
+        long windowEvents = ((Number) answerStats.getOrDefault("window_events", 0L)).longValue();
         out.put("total", total);
         out.put("denied", denied);
         out.put("deny_rate", total == 0 ? 0.0 : denied / (double) total);
+        out.put("window_events", windowEvents);
         return out;
     }
 }

@@ -568,18 +568,18 @@ Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lac
 | `virbius.audit.export.key` | empty | AES-256-GCM key for export artifacts (base64, must decode to 32B); **when unset, exports land `failed` (fail-closed)** |
 | `virbius.audit.export.allow-plaintext` | `false` | explicitly allow plaintext export (not recommended; debug only) |
 | `virbius.alert.risk-threshold` | `80` | alert generation risk threshold (and action must be block/deny/challenge) |
-| `virbius.output-review.skip-models` | `virbiusguard` | models skipped by output review (comma-separated); the guard model never reviews itself |
-| `virbius.output-review.refusal-text` | `抱歉，该内容已被安全策略拦截。` | replacement text for the `reject` action |
-| `virbius.output-review.fail-closed` | `false` | refuse when the review pipeline errors (true=refuse, false=allow + alert) |
-| `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | reason-code→action (`reject|omit|redact|warn`) map; unlisted codes fall back to keyword matching |
-| `virbius.output-review.streaming.window-chars` | `200` | streaming review window hard cap |
-| `virbius.output-review.streaming.context-chars` | `50` | window overlap context length |
-| `virbius.output-review.streaming.stream-first` | `false` | stream-then-review (otherwise buffer until the window verdict is ready) |
+| `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | reason-code→action (`reject|omit|redact|warn`) map; unlisted codes fall back to keyword matching — **resolved once in the engine, identical for every caller** |
+| `virbius.evaluate.rate-limit.enabled` | `true` | `/v1/evaluate` rate limiting (abuse bound for the unauthenticated endpoint) |
+| `virbius.evaluate.rate-limit.per-session-per-min` | `60` | answers/requests per session per minute (streaming windows share one unit per trace) |
+| `virbius.evaluate.rate-limit.per-ip-per-min` | `600` | total calls per IP per minute (backstop) |
+| `virbius.evaluate.rate-limit.max-windows-per-trace` | `64` | per-trace streaming window cap (bounds a bogus trace streaming forever) |
+| `virbius.review.input-risk-dedup-ttl-ms` | `600000` | input-review risk dedup window (once per trace, 10 min) |
 | `virbius.chain-patterns.enforce` | `false` | temporal chain-pattern detection: `false`=dry-run (audit only), `true`=enforce |
 | `virbius.retry-escape.enforce` | `false` | retry-escape detection likewise (dry-run by default) |
 | `virbius.trace.publish-enabled` | `true` | Engine publishes chat `input`/`output` trace steps to Control (degrades to a no-op when Kafka is unavailable) |
 
 > These keys currently get their defaults from code (`@Value`); `application*.yml` does not declare them. Override with a startup argument or the same-named `VIRBIUS_*` env var.
+> **Moved to the SDK** (config of the removed chat-embedded review): `skip-models`, `refusal-text`, `fail-closed`, `streaming.{window-chars,context-chars,stream-first}` — see the `virbius-review-sdk` README. `virbius.trace.*` was removed together with `TraceStepPublisher`.
 
 ### 10.3 Audit export key (must be provided explicitly)
 
