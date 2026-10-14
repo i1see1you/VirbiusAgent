@@ -31,6 +31,7 @@ public class TraceQueryService {
                        input_role, input_content_hash,
                        tool_name, tool_args_hash, tool_args, tool_decision, rule_id, reason_code, risk_score,
                        tool_status, tool_duration_ms,
+                       tool_result_preview,
                        content_size, content_sampled, dlp_masked,
                        upstream_name, app_id, occurred_at
                 FROM tb_agent_trace
@@ -60,6 +61,7 @@ public class TraceQueryService {
                     row.put("risk_score", rs.getInt("risk_score"));
                     row.put("tool_status", rs.getString("tool_status"));
                     row.put("tool_duration_ms", rs.getObject("tool_duration_ms"));
+                    row.put("tool_result_preview", rs.getString("tool_result_preview"));
                     row.put("content_size", rs.getObject("content_size"));
                     row.put("content_sampled", rs.getInt("content_sampled"));
                     row.put("dlp_masked", rs.getInt("dlp_masked"));
@@ -83,6 +85,7 @@ public class TraceQueryService {
                        input_role, input_content_hash,
                        tool_name, tool_args_hash, tool_args, tool_decision, rule_id, reason_code, risk_score,
                        tool_status, tool_duration_ms,
+                       tool_result_preview,
                        content_size, content_sampled, dlp_masked,
                        upstream_name, app_id, occurred_at
                 FROM tb_agent_trace
@@ -112,6 +115,7 @@ public class TraceQueryService {
                     row.put("risk_score", rs.getInt("risk_score"));
                     row.put("tool_status", rs.getString("tool_status"));
                     row.put("tool_duration_ms", rs.getObject("tool_duration_ms"));
+                    row.put("tool_result_preview", rs.getString("tool_result_preview"));
                     row.put("content_size", rs.getObject("content_size"));
                     row.put("content_sampled", rs.getInt("content_sampled"));
                     row.put("dlp_masked", rs.getInt("dlp_masked"));
@@ -133,6 +137,27 @@ public class TraceQueryService {
             String stepType,
             String toolDecision,
             int limit) {
+        return search(tenantId, toolName, stepType, toolDecision, null, null, null, null, limit);
+    }
+
+    /**
+     * Search trace steps (A8): adds time-range and risk-score filters.
+     *
+     * @param from        ISO-8601 lower bound on occurred_at (inclusive), or null
+     * @param to          ISO-8601 upper bound on occurred_at (inclusive), or null
+     * @param riskMin     minimum risk_score (inclusive), or null
+     * @param riskMax     maximum risk_score (inclusive), or null
+     */
+    public List<Map<String, Object>> search(
+            String tenantId,
+            String toolName,
+            String stepType,
+            String toolDecision,
+            String from,
+            String to,
+            Integer riskMin,
+            Integer riskMax,
+            int limit) {
         StringBuilder sql = new StringBuilder("""
                 SELECT trace_id, session_id, step_id, step_seq, step_type, layer,
                        tool_name, tool_args_hash, tool_decision, rule_id, reason_code, risk_score,
@@ -150,6 +175,18 @@ public class TraceQueryService {
         if (toolDecision != null && !toolDecision.isBlank()) {
             sql.append(" AND tool_decision = ?");
         }
+        if (from != null && !from.isBlank()) {
+            sql.append(" AND occurred_at >= ?");
+        }
+        if (to != null && !to.isBlank()) {
+            sql.append(" AND occurred_at <= ?");
+        }
+        if (riskMin != null) {
+            sql.append(" AND risk_score >= ?");
+        }
+        if (riskMax != null) {
+            sql.append(" AND risk_score <= ?");
+        }
         sql.append(" ORDER BY occurred_at DESC LIMIT ?");
 
         var args = new java.util.ArrayList<Object>();
@@ -157,6 +194,10 @@ public class TraceQueryService {
         if (toolName != null && !toolName.isBlank()) args.add(toolName);
         if (stepType != null && !stepType.isBlank()) args.add(stepType);
         if (toolDecision != null && !toolDecision.isBlank()) args.add(toolDecision);
+        if (from != null && !from.isBlank()) args.add(from);
+        if (to != null && !to.isBlank()) args.add(to);
+        if (riskMin != null) args.add(riskMin);
+        if (riskMax != null) args.add(riskMax);
         args.add(Math.min(limit, 500));
 
         return jdbc.query(sql.toString(), (rs, i) -> {

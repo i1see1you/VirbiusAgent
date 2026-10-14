@@ -13,15 +13,21 @@ public class AuditEventIngestor {
     private final JdbcTemplate jdbc;
     private final SqlDialectConfig dialect;
     private final HashChainOrchestrator hashChain;
+    private final AlertService alertService;
     private final ObjectMapper mapper = new ObjectMapper();
 
     private final String insertIgnorePrefix;
     private final String hourExpr;
 
-    public AuditEventIngestor(JdbcTemplate jdbc, SqlDialectConfig dialect, HashChainOrchestrator hashChain) {
+    public AuditEventIngestor(
+            JdbcTemplate jdbc,
+            SqlDialectConfig dialect,
+            HashChainOrchestrator hashChain,
+            AlertService alertService) {
         this.jdbc = jdbc;
         this.dialect = dialect;
         this.hashChain = hashChain;
+        this.alertService = alertService;
         if (dialect.isMysql()) {
             this.insertIgnorePrefix = "INSERT IGNORE";
             this.hourExpr = "DATE_FORMAT(NOW(), '%Y-%m-%d %H:00:00')";
@@ -85,6 +91,7 @@ public class AuditEventIngestor {
                 return IngestResult.duplicated();
             }
             bumpRequestStats(tenantId, str(event.get("scene")), str(event.get("layer")), event);
+            alertService.onAuditEvent(tenantId, event);
             return IngestResult.accepted();
         } catch (Exception e) {
             return IngestResult.rejected(e.getMessage());

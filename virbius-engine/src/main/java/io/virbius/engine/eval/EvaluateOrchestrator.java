@@ -36,6 +36,9 @@ public class EvaluateOrchestrator {
     private final PolicyDataCache policyDataCache;
     private final PromptLlmProperties promptLlmProperties;
     private final FileGuardService fileGuardService;
+    private final ChainPatternDetector chainPatternDetector;
+    private final RetryEscapeDetector retryEscapeDetector;
+    private final SessionHistoryService sessionHistoryService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -58,6 +61,9 @@ public class EvaluateOrchestrator {
             PolicyDataCache policyDataCache,
             PromptLlmProperties promptLlmProperties,
             FileGuardService fileGuardService,
+            ChainPatternDetector chainPatternDetector,
+            RetryEscapeDetector retryEscapeDetector,
+            SessionHistoryService sessionHistoryService,
             @Value("${virbius.session-risk.intent-weight.block:0.5}") double blockWeight,
             @Value("${virbius.session-risk.intent-weight.challenge:0.1}") double challengeWeight,
             @Value("${virbius.session-risk.intent-weight.review:0.0}") double reviewWeight,
@@ -74,6 +80,9 @@ public class EvaluateOrchestrator {
         this.policyDataCache = policyDataCache;
         this.promptLlmProperties = promptLlmProperties;
         this.fileGuardService = fileGuardService;
+        this.chainPatternDetector = chainPatternDetector;
+        this.retryEscapeDetector = retryEscapeDetector;
+        this.sessionHistoryService = sessionHistoryService;
         this.blockWeight = blockWeight;
         this.challengeWeight = challengeWeight;
         this.reviewWeight = reviewWeight;
@@ -183,7 +192,18 @@ public class EvaluateOrchestrator {
                 toolName);
 
         signals.addAll(promptRunner.run(req.tenantId(), matchCtx));
-        signals.addAll(scriptRuleRunner.run(req.tenantId(), matchCtx, req.priorSignals(), imageEvidence));
+        ScriptRuleRunner.ScriptRunResult scriptResult =
+                scriptRuleRunner.runWithDelta(req.tenantId(), matchCtx, req.priorSignals(), imageEvidence);
+        signals.addAll(scriptResult.signals());
+
+        // --- C1/C2: temporal chain + retry-escape detection (session history) ---
+        try {
+            List<Map<String, Object>> history = sessionHistoryService.history(sessionId);
+            signals.addAll(chainPatternDetector.detect(history, toolName, req.argsJson()));
+            retryEscapeDetector.detect(history, toolName, req.argsJson()).ifPresent(signals::add);
+        } catch (Exception e) {
+            log.warn("session-history detection failed: {}", e.getMessage());
+        }
 
         PolicyMerger.PolicyMergeResult merged = policyMerger.merge(req.tenantId(), req.sessionId(), signals);
         EngineDecisionDto decision = merged.decision();
@@ -245,7 +265,7 @@ public class EvaluateOrchestrator {
                     .count();
             // P2: weight chainDelta by intent_action so that challenge/review
             // don't inflate risk as aggressively as block.
-            int chainDelta = exempted ? 0 : signals.stream()
+            int signalChainDelta = exempted ? 0 : signals.stream()
                     .filter(s -> s.ruleId() != null
                             && !"PROMPT_INJECTION".equals(s.ruleId())
                             && s.score() > 0)
@@ -259,6 +279,9 @@ public class EvaluateOrchestrator {
                         return (int) Math.round(s.score() * weight);
                     })
                     .sum();
+            // Rule-declared chain anomaly (ctx.incrementRiskScore) is fed through the same
+            // chain_anomaly dimension; suppressed on challenge exemption like signal deltas.
+            int chainDelta = exempted ? 0 : signalChainDelta + scriptResult.chainAnomalyDelta();
             RiskUpdateInput riskInput = new RiskUpdateInput(
                     sessionId,
                     req.tenantId() != null ? req.tenantId() : "default",

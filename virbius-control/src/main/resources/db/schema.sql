@@ -409,6 +409,10 @@ CREATE TABLE IF NOT EXISTS tb_agent_trace (
     risk_score       INTEGER      DEFAULT 0,
     tool_status      VARCHAR(16),
     tool_duration_ms INTEGER,
+    tool_result_preview TEXT,
+    chain_seq        INTEGER      NOT NULL DEFAULT 0,
+    prev_hash        VARCHAR(128) NOT NULL DEFAULT '',
+    curr_hash        VARCHAR(128) NOT NULL DEFAULT '',
     content_ref      VARCHAR(256),
     content_size     INTEGER,
     content_sampled  INTEGER      DEFAULT 0,
@@ -536,6 +540,152 @@ CREATE TABLE IF NOT EXISTS tb_audit_chain_state (
     last_hash   VARCHAR(128) NOT NULL DEFAULT '',
     version     INT          NOT NULL DEFAULT 0,
     updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Per-session trace chain state (V14 / A3)
+CREATE TABLE IF NOT EXISTS tb_trace_chain_state (
+    tenant_id   VARCHAR(64)  NOT NULL,
+    session_id  VARCHAR(128) NOT NULL,
+    seq         BIGINT       NOT NULL DEFAULT 0,
+    last_hash   VARCHAR(128) NOT NULL DEFAULT '',
+    version     INT          NOT NULL DEFAULT 0,
+    updated_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, session_id)
+);
+
+-- Daily Merkle anchor over session chain heads (V14 / A3)
+CREATE TABLE IF NOT EXISTS tb_audit_daily_anchor (
+    tenant_id   VARCHAR(64)  NOT NULL,
+    anchor_date VARCHAR(10)  NOT NULL,
+    root_hash   VARCHAR(128) NOT NULL,
+    sessions    INTEGER      NOT NULL DEFAULT 0,
+    events      INTEGER      NOT NULL DEFAULT 0,
+    created_at  TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, anchor_date)
+);
+
+-- Retention policy (V14 / A5): mode 'archive' copies to *_archive, keeps originals.
+CREATE TABLE IF NOT EXISTS tb_tenant_retention_policy (
+    tenant_id      VARCHAR(64) NOT NULL,
+    table_name     VARCHAR(64) NOT NULL,
+    retention_days INTEGER     NOT NULL DEFAULT 180,
+    mode           VARCHAR(8)  NOT NULL DEFAULT 'archive',
+    updated_at     TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, table_name)
+);
+
+-- Archive mirrors (V14 / A5), same shape as sources + archived_at.
+CREATE TABLE IF NOT EXISTS tb_audit_events_archive (
+    id                INTEGER PRIMARY KEY,
+    event_id          VARCHAR(128),
+    trace_id          VARCHAR(128) NOT NULL,
+    trace_id_source   VARCHAR(16),
+    tenant_id         VARCHAR(64) NOT NULL,
+    scene             VARCHAR(64) NOT NULL,
+    layer             VARCHAR(16) NOT NULL,
+    rule_id           VARCHAR(128) NOT NULL,
+    rule_revision     INTEGER NOT NULL,
+    reason_code       VARCHAR(64) NOT NULL,
+    effective_action  VARCHAR(16) NOT NULL,
+    max_risk_score    INTEGER NOT NULL,
+    rollout_state     VARCHAR(16),
+    canary_percent    INTEGER,
+    in_canary_bucket  INTEGER,
+    degraded          INTEGER,
+    sampled_allow     INTEGER,
+    sample_rate_allow REAL,
+    intercepted_at    TIMESTAMP NOT NULL,
+    user_id           VARCHAR(256),
+    device_id         VARCHAR(256),
+    audit_seq         BIGINT      NOT NULL DEFAULT 0,
+    prev_hash         VARCHAR(128) NOT NULL DEFAULT '',
+    curr_hash         VARCHAR(128) NOT NULL DEFAULT '',
+    created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    archived_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS tb_agent_trace_archive (
+    id               INTEGER      PRIMARY KEY,
+    trace_id         VARCHAR(128) NOT NULL,
+    session_id       VARCHAR(128) NOT NULL,
+    tenant_id        VARCHAR(64)  NOT NULL,
+    step_id          VARCHAR(64)  NOT NULL,
+    parent_step_id   VARCHAR(64),
+    step_seq         INTEGER      NOT NULL DEFAULT 0,
+    step_type        VARCHAR(32)  NOT NULL,
+    layer            VARCHAR(16)  NOT NULL DEFAULT 'edge',
+    user_id          VARCHAR(256),
+    device_id        VARCHAR(256),
+    input_role       VARCHAR(16),
+    input_content_hash VARCHAR(64),
+    tool_name        VARCHAR(128),
+    tool_args_hash   VARCHAR(64),
+    tool_args        TEXT,
+    tool_decision    VARCHAR(16),
+    rule_id          VARCHAR(128),
+    reason_code      VARCHAR(64),
+    risk_score       INTEGER      DEFAULT 0,
+    tool_status      VARCHAR(16),
+    tool_duration_ms INTEGER,
+    tool_result_preview TEXT,
+    chain_seq        INTEGER      NOT NULL DEFAULT 0,
+    prev_hash        VARCHAR(128) NOT NULL DEFAULT '',
+    curr_hash        VARCHAR(128) NOT NULL DEFAULT '',
+    content_ref      VARCHAR(256),
+    content_size     INTEGER,
+    content_sampled  INTEGER      DEFAULT 0,
+    dlp_masked       INTEGER      DEFAULT 0,
+    upstream_name    VARCHAR(128),
+    app_id           VARCHAR(128),
+    occurred_at      TIMESTAMP    NOT NULL,
+    created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    archived_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (trace_id, step_id)
+);
+
+-- Export job ledger (V14 / A7): every export leaves a row here.
+CREATE TABLE IF NOT EXISTS tb_audit_export_job (
+    job_id       VARCHAR(64)  PRIMARY KEY,
+    tenant_id    VARCHAR(64)  NOT NULL,
+    requester    VARCHAR(128) NOT NULL,
+    filters_json TEXT         NOT NULL,
+    status       VARCHAR(16)  NOT NULL DEFAULT 'queued',
+    file_path    VARCHAR(512),
+    file_sha256  VARCHAR(128),
+    file_bytes   BIGINT,
+    error        VARCHAR(512),
+    created_at   TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP    NULL
+);
+
+-- Alerts (V15 / C4)
+CREATE TABLE IF NOT EXISTS tb_alert (
+    alert_id         VARCHAR(64)  PRIMARY KEY,
+    tenant_id        VARCHAR(64)  NOT NULL,
+    trace_id         VARCHAR(128),
+    session_id       VARCHAR(128),
+    scene            VARCHAR(64),
+    rule_id          VARCHAR(128),
+    reason_code      VARCHAR(64),
+    risk_score       INTEGER      NOT NULL DEFAULT 0,
+    effective_action VARCHAR(16),
+    status           VARCHAR(16)  NOT NULL DEFAULT 'open',   -- open|acked|closed
+    created_at       TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    acked_by         VARCHAR(128),
+    acked_at         TIMESTAMP    NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tb_alert_tenant ON tb_alert (tenant_id, status, created_at);
+
+-- Session checkpoints (V15 / C5)
+CREATE TABLE IF NOT EXISTS tb_session_checkpoint (
+    tenant_id        VARCHAR(64)  NOT NULL,
+    session_id       VARCHAR(128) NOT NULL,
+    last_chain_seq   BIGINT       NOT NULL DEFAULT 0,
+    last_occurred_at TIMESTAMP    NULL,
+    event_count      BIGINT       NOT NULL DEFAULT 0,
+    tool_names       VARCHAR(512),
+    saved_at         TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (tenant_id, session_id)
 );
 
 -- ============================================================

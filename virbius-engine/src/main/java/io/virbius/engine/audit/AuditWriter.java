@@ -60,7 +60,11 @@ public class AuditWriter {
             event.put("trace_id", req.traceId());
             event.put("trace_id_source", "client");
             event.put("tenant_id", req.tenantId());
+            // Scene = evaluation role (tool_call / output / memory): lets audit
+            // queries and output-review FP statistics distinguish review surfaces.
+            event.put("scene", req.role() != null && !req.role().isBlank() ? req.role() : "tool_call");
             event.put("layer", "cloud");
+            event.put("tool_name", req.toolName() != null ? req.toolName() : "");
             event.put("rule_id", ruleId != null ? ruleId : "");
             event.put("rule_revision", ruleRevision);
             event.put("reason_code", reasonCode != null ? reasonCode : "");

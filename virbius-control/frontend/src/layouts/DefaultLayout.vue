@@ -123,6 +123,8 @@ const icons: Record<string, string> = {
   rules: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 3h12v14H4z"/><path d="M7 7h6M7 11h6"/></svg>',
   rollout: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3v12M6 11l4 4 4-4"/><path d="M3 17h14"/></svg>',
   'audit-center': '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="9" r="5"/><path d="M13 13l4 4"/></svg>',
+  alerts: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3a5 5 0 0 0-5 5v3l-1.5 2.5h13L15 11V8a5 5 0 0 0-5-5z"/><path d="M8.2 16a1.8 1.8 0 0 0 3.6 0"/></svg>',
+  integrity: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.8 16 5v5c0 3.6-2.6 6.3-6 7.2C6.6 16.3 4 13.6 4 10V5l6-2.2z"/><path d="M7.4 10.2 9.2 12l3.4-3.6"/></svg>',
   monitor: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 16l5-7 4 3 5-8"/></svg>',
   challenge: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3l2.5 5 5.5.5-4 4 1 5.5L10 15l-5 3 1-5.5-4-4L7.5 8 10 3z"/></svg>',
   trace: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/><path d="M6 6l8 3M16 11l-6 4"/></svg>',
@@ -138,7 +140,9 @@ const opsItems = [
   { to: '/monitor', name: 'monitor', label: 'nav.monitor' },
   { to: '/integrate', name: 'integrate', label: 'nav.integrate' },
   { to: '/trace', name: 'trace', label: 'nav.trace' },
-  { to: '/audit-center', name: 'audit-center', label: 'nav.audit-center' }
+  { to: '/audit-center', name: 'audit-center', label: 'nav.audit-center' },
+  { to: '/audit-integrity', name: 'integrity', label: 'nav.audit-integrity' },
+  { to: '/alerts', name: 'alerts', label: 'nav.alerts' }
 ];
 const policyItems = [
   { to: '/rollout', name: 'rollout', label: 'nav.rollout' }

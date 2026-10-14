@@ -38,4 +38,38 @@ public class AuditCenterService {
         out.put("note", "Recent " + limit + " audit events (ordered by intercepted_at DESC).");
         return out;
     }
+
+    /**
+     * Output-review statistics (B7): grouped by effective_action × reason_code.
+     * Run a benign-output sample set first, then read this — deny/block counts on
+     * the benign run are the output-review false positives.
+     */
+    public Map<String, Object> outputReviewStats(
+            String tenantId, java.time.Instant from, java.time.Instant to) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("tenant_id", tenantId);
+        out.put("scene", "output");
+        if (from != null) {
+            out.put("from", from.toString());
+        }
+        if (to != null) {
+            out.put("to", to.toString());
+        }
+        List<Map<String, Object>> rows = dashboardService.outputReviewStats(tenantId, from, to);
+        out.put("groups", rows);
+        long total = 0;
+        long denied = 0;
+        for (Map<String, Object> row : rows) {
+            long cnt = ((Number) row.get("cnt")).longValue();
+            total += cnt;
+            String action = String.valueOf(row.get("effective_action"));
+            if ("deny".equalsIgnoreCase(action) || "block".equalsIgnoreCase(action)) {
+                denied += cnt;
+            }
+        }
+        out.put("total", total);
+        out.put("denied", denied);
+        out.put("deny_rate", total == 0 ? 0.0 : denied / (double) total);
+        return out;
+    }
 }

@@ -261,4 +261,106 @@ class ScriptRuleRunnerTest {
         assertTrue(data.toolPolicies().isEmpty());
     }
 
+    /** Retry like {@link #runWarmed} but keeps the collected chain-anomaly delta. */
+    private ScriptRuleRunner.ScriptRunResult runWithDeltaWarmed(MatchContext ctx) {
+        ScriptRuleRunner.ScriptRunResult result = new ScriptRuleRunner.ScriptRunResult(List.of(), 0);
+        for (int i = 0; i < 5; i++) {
+            result = runner.runWithDelta("default", ctx, List.of(), Map.of());
+            if (!result.signals().isEmpty() || result.chainAnomalyDelta() != 0) {
+                return result;
+            }
+        }
+        return result;
+    }
+
+    @Test
+    void incrementRiskScoreAccumulatesChainAnomalyDelta() {
+        RuleEntry rule = new RuleEntry(
+                "default", "Rule_Chain", 1, "cloud", "groovy",
+                "CHAIN_ABUSE", 80, "challenge", "full", 0, "full",
+                "def decide(ctx) { ctx.incrementRiskScore(20); return true }",
+                Map.of("bind_scope", "global"), false, null);
+        when(cache.rulesForTenant("default")).thenReturn(List.of(rule));
+
+        MatchContext ctx = MatchContext.forToolCall(
+                "hello", null, null, null, "sess-1", Map.of(), "read_file");
+
+        ScriptRuleRunner.ScriptRunResult result = runWithDeltaWarmed(ctx);
+
+        assertEquals(20, result.chainAnomalyDelta());
+        assertEquals(1, result.signals().size());
+        assertEquals("challenge", result.signals().get(0).intentAction());
+    }
+
+    @Test
+    void incrementRiskScoreCollectedEvenWithoutHit() {
+        RuleEntry rule = new RuleEntry(
+                "default", "Rule_Chain", 1, "cloud", "groovy",
+                "CHAIN_ABUSE", 80, "challenge", "full", 0, "full",
+                "def decide(ctx) { ctx.incrementRiskScore(15); return false }",
+                Map.of("bind_scope", "global"), false, null);
+        when(cache.rulesForTenant("default")).thenReturn(List.of(rule));
+
+        MatchContext ctx = MatchContext.forToolCall(
+                "hello", null, null, null, "sess-1", Map.of(), "read_file");
+
+        ScriptRuleRunner.ScriptRunResult result = runWithDeltaWarmed(ctx);
+
+        assertEquals(15, result.chainAnomalyDelta());
+        assertTrue(result.signals().isEmpty());
+    }
+
+    @Test
+    void setIntentOverridesHitSignalIntentAction() {
+        RuleEntry rule = new RuleEntry(
+                "default", "Rule_Escalate", 1, "cloud", "groovy",
+                "SESSION_RISK", 85, "challenge", "full", 0, "full",
+                "def decide(ctx) { ctx.setIntent('deny'); return true }",
+                Map.of("bind_scope", "global"), false, null);
+        when(cache.rulesForTenant("default")).thenReturn(List.of(rule));
+
+        MatchContext ctx = MatchContext.forToolCall(
+                "hello", null, null, null, "sess-1", Map.of(), "read_file");
+
+        ScriptRuleRunner.ScriptRunResult result = runWithDeltaWarmed(ctx);
+
+        assertEquals(1, result.signals().size());
+        assertEquals("deny", result.signals().get(0).intentAction());
+    }
+
+    @Test
+    void setIntentBlockMapsToDeny() {
+        RuleEntry rule = new RuleEntry(
+                "default", "Rule_Escalate", 1, "cloud", "groovy",
+                "SESSION_RISK", 85, "review", "full", 0, "full",
+                "def decide(ctx) { ctx.setIntent('block'); return true }",
+                Map.of("bind_scope", "global"), false, null);
+        when(cache.rulesForTenant("default")).thenReturn(List.of(rule));
+
+        MatchContext ctx = MatchContext.forToolCall(
+                "hello", null, null, null, "sess-1", Map.of(), "read_file");
+
+        ScriptRuleRunner.ScriptRunResult result = runWithDeltaWarmed(ctx);
+
+        assertEquals("deny", result.signals().get(0).intentAction());
+    }
+
+    @Test
+    void setIntentUnknownValueIsIgnored() {
+        RuleEntry rule = new RuleEntry(
+                "default", "Rule_Escalate", 1, "cloud", "groovy",
+                "SESSION_RISK", 85, "challenge", "full", 0, "full",
+                "def decide(ctx) { ctx.setIntent('bogus'); return true }",
+                Map.of("bind_scope", "global"), false, null);
+        when(cache.rulesForTenant("default")).thenReturn(List.of(rule));
+
+        MatchContext ctx = MatchContext.forToolCall(
+                "hello", null, null, null, "sess-1", Map.of(), "read_file");
+
+        ScriptRuleRunner.ScriptRunResult result = runWithDeltaWarmed(ctx);
+
+        assertEquals(1, result.signals().size());
+        assertEquals("challenge", result.signals().get(0).intentAction());
+    }
+
 }

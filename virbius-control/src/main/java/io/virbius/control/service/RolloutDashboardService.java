@@ -149,6 +149,38 @@ public class RolloutDashboardService {
                 limit);
     }
 
+    /**
+     * Output-review statistics grouped by effective_action × reason_code for
+     * scene='output' (B7): run a benign-output sample set and read this to
+     * measure the output-review false-positive rate.
+     */
+    public List<Map<String, Object>> outputReviewStats(
+            String tenantId, java.time.Instant from, java.time.Instant to) {
+        StringBuilder sql = new StringBuilder("""
+                SELECT effective_action, reason_code, COUNT(*) AS cnt
+                FROM tb_audit_events
+                WHERE tenant_id = ? AND scene = 'output'
+                """);
+        var args = new java.util.ArrayList<Object>();
+        args.add(tenantId);
+        if (from != null) {
+            sql.append(" AND intercepted_at >= ?");
+            args.add(from);
+        }
+        if (to != null) {
+            sql.append(" AND intercepted_at <= ?");
+            args.add(to);
+        }
+        sql.append(" GROUP BY effective_action, reason_code ORDER BY cnt DESC");
+        return jdbc.query(sql.toString(), (rs, i) -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("effective_action", rs.getString("effective_action"));
+            row.put("reason_code", rs.getString("reason_code"));
+            row.put("cnt", rs.getLong("cnt"));
+            return row;
+        }, args.toArray());
+    }
+
     public List<Map<String, Object>> gateLogs(String tenantId, String ruleId, int limit) {
         return jdbc.query(
                 """

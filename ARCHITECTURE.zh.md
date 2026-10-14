@@ -930,7 +930,7 @@ pub struct MemoryAuditEvent {
 
 ### 2.10 输出审查（Output Review）
 
-> **工具结果审查已实现；Agent 最终输出审查为设计建议，待应用层集成。** 实际实现复用 Engine `/v1/evaluate` 端点，而非新建独立 `OutputReviewer` 类。工具结果审查已在 MCP Proxy 中实现；Agent 最终输出审查（方案 B）需应用层自行调用 `/v1/evaluate`，目前代码库中未包含应用层集成代码。详见 [DESIGN.zh.md §13.7](DESIGN.zh.md#137-输出审查output-review)。
+> **工具结果审查已在 MCP Proxy 实现；Agent 最终输出审查本轮已在 Engine 侧实现。** 实际实现复用 Engine 管线而非新建独立 `OutputReviewer` 类。工具结果审查在 MCP Proxy 中实现；Agent 最终输出审查经 Engine 兼容端点 `/v1/chat/completions` 的 `virbius` 扩展（`role=output`，非流式整段 / 流式滑动窗口）实现，含 `reject|omit|redact|warn` 处置与 PII/凭据遮蔽。详见 [DESIGN.zh.md §13.7](DESIGN.zh.md#137-输出审查output-review)。
 
 > STI Taint（§5.4）审查的是**工具返回值**，输出审查审查的是 **Agent 最终返回给用户的响应**——经过 LLM 汇总工具结果后生成的内容。两者覆盖不同阶段。
 

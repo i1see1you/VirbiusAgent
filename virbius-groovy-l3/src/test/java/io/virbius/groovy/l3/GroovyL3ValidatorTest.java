@@ -35,6 +35,18 @@ class GroovyL3ValidatorTest {
     }
 
     @Test
+    void validSetIntentAndIncrementRiskScore() {
+        // ctx.setIntent / ctx.incrementRiskScore are allowlisted PolicyContext methods
+        assertDoesNotThrow(() ->
+                GroovyL3Validator.validate(
+                        "def decide(ctx) {\n"
+                                + "  ctx.incrementRiskScore(20)\n"
+                                + "  ctx.setIntent('deny')\n"
+                                + "  return true\n"
+                                + "}"));
+    }
+
+    @Test
     void validBinaryComparison() {
         assertDoesNotThrow(() ->
                 GroovyL3Validator.validate(

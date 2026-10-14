@@ -596,3 +596,73 @@ PLAINTEXT，即 **审计/trace 载荷在集群内网明文传输**。P0 接受�
 5. 告警：`tracing::error`（`delegated_cred_alert{code,state}`，60s 节流）始终可用，不依赖 Kafka；关注 `snapshot_key_missing`、`snapshot_unreadable_rows`、`host_not_in_allowlist`、`ttl_breach_cleared`、`tenant_mismatch`、`hit_credential_echo`（上游回显凭证）。
 6. 轮询退避：读取失败按 `30s→60s→…→600s`（10min 封顶，±10% 抖动）指数退避，成功即复位；**TTL 清库判断每轮都执行**，退避不影响离线兜底。
 7. KEK 交付：`POST /kek/reveal` 响应带 `Cache-Control: no-store`+`Pragma: no-cache`（防中间层缓存）；Control 不记录请求/响应体，KEK 不落 access log——仍须运维以 0400 文件落地，勿经终端/CI 回显。
+
+---
+
+## 10. 审计完整性 / 输出安全 / 动态风险（A/B/C）
+
+本节覆盖评测大纲 A（日志审计 1.2）、B（输出安全 1.5）、C（动态风险 3.1/3.2）相关的库表、配置与运维动作。
+
+### 10.1 新增数据库迁移（Flyway，prod/staging）
+
+| 迁移 | 内容 |
+|---|---|
+| `V13__trace_result_preview.sql` | `tb_agent_trace.tool_result_preview`（工具结果预览，供决策重建回看） |
+| `V14__audit_integrity_retention_export.sql` | 每会话 trace 哈希链列（`chain_seq`/`prev_hash`/`curr_hash`）+ `tb_trace_chain_state`；每日锚点表 `tb_audit_daily_anchor`；保留策略表 `tb_tenant_retention_policy`；归档镜像 `tb_audit_events_archive`/`tb_agent_trace_archive`；导出账本 `tb_audit_export_job` |
+| `V15__alerts_and_session_checkpoints.sql` | 告警表 `tb_alert`、会话检查点表 `tb_session_checkpoint` |
+
+dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新列/新表**，需以 `VIRBIUS_REBUILD_DB=1 ./scripts/run-local.sh` 重建（会删库并 `FLUSHDB`）。
+
+### 10.2 新增配置项
+
+| 键 | 默认 | 说明 |
+|---|---|---|
+| `virbius.audit.hash-chain.enabled` | `true` | 审计事件哈希链开关 |
+| `virbius.audit.hash-chain.verify-enabled` | `true` | 定时全链校验 |
+| `virbius.audit.hash-chain.verify-interval-ms` | `3600000` | 校验周期（1h） |
+| `virbius.audit.hash-chain.verify-batch-size` | `10000` | 每批校验行数 |
+| `virbius.audit.daily-anchor.enabled` | `true` | 每日 Merkle 锚点封存 |
+| `virbius.audit.retention.enabled` | `true` | 保留归档任务 |
+| `virbius.audit.export.key` | 空 | 导出产物 AES-256-GCM 密钥（base64，解码须 32B）；**不配则导出落 `failed`（fail-closed）** |
+| `virbius.audit.export.allow-plaintext` | `false` | 显式允许明文导出（不推荐，仅调试） |
+| `virbius.alert.risk-threshold` | `80` | 生成告警的风险阈值（且动作须为 block/deny/challenge） |
+| `virbius.output-review.skip-models` | `virbiusguard` | 跳过输出审查的模型名（逗号分隔）；护栏模型自身不回环审查 |
+| `virbius.output-review.refusal-text` | `抱歉，该内容已被安全策略拦截。` | `reject` 处置时的替换文案 |
+| `virbius.output-review.fail-closed` | `false` | 审查管线异常时是否拒答（true=拒答，false=放行并告警） |
+| `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | 原因码→处置（`reject|omit|redact|warn`）映射，未列出走关键字兜底 |
+| `virbius.output-review.streaming.window-chars` | `200` | 流式审查窗口硬上限 |
+| `virbius.output-review.streaming.context-chars` | `50` | 窗口重叠上下文长度 |
+| `virbius.output-review.streaming.stream-first` | `false` | 先流式后审查（否则缓冲到窗口判定后再发） |
+| `virbius.chain-patterns.enforce` | `false` | 时序链式检测：`false`=dry-run（仅审计），`true`=执行 |
+| `virbius.retry-escape.enforce` | `false` | 重试逃逸检测同上（dry-run by default） |
+| `virbius.trace.publish-enabled` | `true` | Engine 发布 chat `input`/`output` trace step 到控制面（Kafka 不可用时自动降级 no-op） |
+
+> 上述键目前均由代码 `@Value` 提供默认值，`application*.yml` 未显式声明；如需覆盖，用启动参数或同名 `VIRBIUS_*` env。
+
+### 10.3 审计导出密钥（必须显式提供）
+
+```bash
+# 生成一把 32B 密钥并交给 control（与 run-local 启动参数或 env 二选一）
+export VIRBIUS_AUDIT_EXPORT_KEY="$(openssl rand -base64 32)"
+# 或 --virbius.audit.export.key=<base64>
+```
+
+- 语义：导出内容是审计事件的 JSONL（含 `user_id`/`device_id`/`reason_code`），以 `12B IV || 密文+tag` 落 `data/exports/<jobId>.bin`，AAD 绑定 `jobId`。
+- 控制面**只产出密文**，不提供解密端点——运营方持同一把密钥离线解密。
+- 不配置且未显式 `allow-plaintext=true` → 导出任务落 `failed`，`error` 字段给出原因（安全默认，非缺陷）。
+
+### 10.4 审计证据表 append-only 授权（A0，tamper prevention）
+
+哈希链提供**检测**，以下脚本提供**预防**：对应用账号回收证据表的 `UPDATE`/`DELETE`，使审计/trace/挑战表在权限层不可改写。
+
+```bash
+# 生产手动执行（账号名按实际调整；非 Flyway 管理）
+mysql -u root -p < deploy/scripts/audit-insert-only-grants.sql
+```
+
+保留归档所需的 `DELETE` 仅由独立 ops 账号持有，且只允许删除保留窗口之外、且当日锚点已封存的行。
+
+### 10.5 运营台新增页面
+
+- `/alerts`（告警）：列表 + 状态过滤（`open`/`acked`）+ 确认（ack）+ 展开决策 BOM。
+- `/audit-integrity`（审计完整性，6 tab）：完整性校验（含每日锚点封存/运行校验）、Merkle 证明、决策 BOM、审计导出、输出误拦统计、会话检查点。

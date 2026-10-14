@@ -11,6 +11,7 @@ import io.virbius.control.service.RolloutDashboardService;
 import io.virbius.control.service.RolloutService;
 import io.virbius.control.audit.AuditCenterService;
 import io.virbius.control.audit.AuditIngestService;
+import io.virbius.control.audit.SessionCheckpointService;
 import io.virbius.control.audit.TraceIngestService;
 import io.virbius.control.audit.TraceQueryService;
 import java.util.List;
@@ -37,6 +38,7 @@ public class RolloutAdminController {
     private final DeployRolloutRepository deployRolloutRepo;
     private final TraceQueryService traceQueryService;
     private final TraceIngestService traceIngestService;
+    private final SessionCheckpointService sessionCheckpointService;
 
     public RolloutAdminController(
             RolloutService rolloutService,
@@ -46,7 +48,8 @@ public class RolloutAdminController {
             AuditCenterService auditCenterService,
             DeployRolloutRepository deployRolloutRepo,
             TraceQueryService traceQueryService,
-            TraceIngestService traceIngestService) {
+            TraceIngestService traceIngestService,
+            SessionCheckpointService sessionCheckpointService) {
         this.rolloutService = rolloutService;
         this.policyRepository = policyRepository;
         this.dashboardService = dashboardService;
@@ -55,6 +58,7 @@ public class RolloutAdminController {
         this.deployRolloutRepo = deployRolloutRepo;
         this.traceQueryService = traceQueryService;
         this.traceIngestService = traceIngestService;
+        this.sessionCheckpointService = sessionCheckpointService;
     }
 
     @PatchMapping("/rules/{ruleId}/rollout")
@@ -244,13 +248,30 @@ public class RolloutAdminController {
             @RequestParam(value = "tool_name", required = false) String toolName,
             @RequestParam(value = "step_type", required = false) String stepType,
             @RequestParam(value = "tool_decision", required = false) String toolDecision,
+            @RequestParam(value = "from", required = false) String from,
+            @RequestParam(value = "to", required = false) String to,
+            @RequestParam(value = "risk_min", required = false) Integer riskMin,
+            @RequestParam(value = "risk_max", required = false) Integer riskMax,
             @RequestParam(value = "limit", defaultValue = "50") int limit) {
-        return ApiResult.ok(traceQueryService.search(tenantId, toolName, stepType, toolDecision, limit));
+        return ApiResult.ok(traceQueryService.search(
+                tenantId, toolName, stepType, toolDecision, from, to, riskMin, riskMax, limit));
     }
 
     @GetMapping("/trace/ingest-status")
     public ApiResult<Map<String, Object>> traceIngestStatus(
             @PathVariable("tenantId") String tenantId) {
         return ApiResult.ok(traceIngestService.status());
+    }
+
+    /** C5: session checkpoint (context that survives a Redis eviction). */
+    @GetMapping("/sessions/{sessionId}/checkpoint")
+    public ApiResult<?> sessionCheckpoint(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("sessionId") String sessionId) {
+        Map<String, Object> checkpoint = sessionCheckpointService.get(tenantId, sessionId);
+        if (checkpoint == null) {
+            return ApiResult.error(404, "not_found");
+        }
+        return ApiResult.ok(checkpoint);
     }
 }

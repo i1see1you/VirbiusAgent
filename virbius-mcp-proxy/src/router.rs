@@ -1537,6 +1537,39 @@ async fn review_tool_output(
         session.session_risk_score
     );
 
+    // B6: STI taint check first — dedicated indirect-injection detection on tool
+    // returns (malicious instructions embedded in external data). A taint block
+    // is terminal for this result.
+    match pipeline.sti_check_tool_result(session, tool_name, &text).await {
+        Ok(sti) => {
+            if sti.action == "block" {
+                let reason = sti
+                    .reason
+                    .as_deref()
+                    .or(sti.detected_pattern.as_deref())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("tainted tool output");
+                info!(
+                    "STI taint blocked: tool={} session={} pattern={:?}",
+                    tool_name, session.session_id, sti.detected_pattern
+                );
+                let safe_msg = format!("[Tool output blocked (taint): {}]", reason);
+                replace_result_text(resp, &safe_msg);
+                return;
+            }
+        }
+        Err(e) => {
+            warn!(
+                "STI taint check error: tool={} session={} error={}",
+                tool_name, session.session_id, e
+            );
+            if !cfg.fail_open {
+                replace_result_text(resp, "[Content blocked: taint check unavailable]");
+                return;
+            }
+        }
+    }
+
     match pipeline.review_output(session, tool_name, &text).await {
         Ok(eval_resp) => {
             let action = eval_resp.effective_action.as_str();

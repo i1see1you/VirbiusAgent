@@ -149,6 +149,27 @@ pub(crate) struct MemoryCheckResponse {
     pub(crate) metadata: Option<String>,
 }
 
+/// Engine STI tool-result taint check request body.
+#[derive(Debug, Serialize)]
+struct ToolResultRequest<'a> {
+    tenant_id: &'a str,
+    session_id: &'a str,
+    trace_id: &'a str,
+    tool_name: &'a str,
+    tool_result: &'a str,
+    session_risk_score: u32,
+}
+
+/// Engine STI tool-result taint check response body.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ToolResultResponse {
+    pub(crate) action: String,
+    #[serde(default)]
+    pub(crate) detected_pattern: Option<String>,
+    #[serde(default)]
+    pub(crate) reason: Option<String>,
+}
+
 /// HTTP client for calling virbius-engine.
 pub struct EngineClient {
     pub(crate) url: String,
@@ -188,6 +209,33 @@ impl EngineClient {
         }
 
         resp.json::<EvaluateResponse>()
+            .await
+            .map_err(EngineError::Http)
+    }
+
+    /// STI taint check for a tool result (engine `POST /v1/evaluate/tool-result`).
+    async fn sti_check(
+        &self,
+        req: &ToolResultRequest<'_>,
+        timeout: Duration,
+    ) -> Result<ToolResultResponse, EngineError> {
+        let url = self
+            .url
+            .replace("/v1/evaluate", "/v1/evaluate/tool-result");
+        let resp = self
+            .http
+            .post(&url)
+            .json(req)
+            .timeout(timeout)
+            .send()
+            .await
+            .map_err(EngineError::Http)?;
+        if !resp.status().is_success() {
+            let status = resp.status().as_u16();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(EngineError::Status(status, body));
+        }
+        resp.json::<ToolResultResponse>()
             .await
             .map_err(EngineError::Http)
     }
@@ -770,6 +818,28 @@ impl SecurityPipeline {
     /// Returns the output review configuration.
     pub fn output_review_config(&self) -> &OutputReviewConfig {
         &self.output_review
+    }
+
+    /// STI taint check for a tool return value (B6): detects indirect prompt
+    /// injection / malicious instructions embedded in external data. Uses the
+    /// engine's dedicated `/v1/evaluate/tool-result` endpoint.
+    pub(crate) async fn sti_check_tool_result(
+        &self,
+        session: &Session,
+        tool_name: &str,
+        content: &str,
+    ) -> Result<ToolResultResponse, EngineError> {
+        let req = ToolResultRequest {
+            tenant_id: &session.tenant_id,
+            session_id: &session.session_id,
+            trace_id: &session.trace_id,
+            tool_name,
+            tool_result: content,
+            session_risk_score: session.session_risk_score,
+        };
+        self.engine
+            .sti_check(&req, self.timeout_for(&session.tenant_id))
+            .await
     }
 }
 

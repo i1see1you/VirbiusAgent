@@ -21,13 +21,16 @@ public class TraceEventIngestor {
 
     private final JdbcTemplate jdbc;
     private final SqlDialectConfig dialect;
+    private final SessionCheckpointService sessionCheckpoint;
     private final ObjectMapper mapper = new ObjectMapper();
 
     private final String insertIgnorePrefix;
 
-    public TraceEventIngestor(JdbcTemplate jdbc, SqlDialectConfig dialect) {
+    public TraceEventIngestor(JdbcTemplate jdbc, SqlDialectConfig dialect,
+                              SessionCheckpointService sessionCheckpoint) {
         this.jdbc = jdbc;
         this.dialect = dialect;
+        this.sessionCheckpoint = sessionCheckpoint;
         if (dialect.isMysql()) {
             this.insertIgnorePrefix = "INSERT IGNORE";
         } else if (dialect.isPostgresql()) {
@@ -52,10 +55,10 @@ public class TraceEventIngestor {
                     + "  step_type, layer, user_id, device_id,"
                     + "  input_role, input_content_hash,"
                     + "  tool_name, tool_args_hash, tool_args, tool_decision, rule_id, reason_code, risk_score,"
-                    + "  tool_status, tool_duration_ms,"
+                    + "  tool_status, tool_duration_ms, tool_result_preview,"
                     + "  content_size, content_sampled, dlp_masked,"
                     + "  upstream_name, app_id, occurred_at"
-                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
             int updated = jdbc.update(sql,
                     traceId,
@@ -79,6 +82,7 @@ public class TraceEventIngestor {
                     intValOrNull(event.get("risk_score")),
                     nullIfBlank(str(event.get("tool_status"))),
                     intValOrNull(event.get("tool_duration_ms")),
+                    nullIfBlank(str(event.get("tool_result_preview"))),
                     intValOrNull(event.get("content_size")),
                     boolInt(event.get("content_sampled")),
                     boolInt(event.get("dlp_masked")),
@@ -89,10 +93,117 @@ public class TraceEventIngestor {
             if (updated == 0) {
                 return IngestResult.duplicated();
             }
+            chainEvent(event);
+            sessionCheckpoint.onTraceEvent(
+                    tenantId,
+                    str(event.get("session_id")),
+                    longVal(event.get("chain_seq")),
+                    str(event.get("occurred_at")),
+                    str(event.get("tool_name")));
             return IngestResult.accepted();
         } catch (Exception e) {
             log.warn("trace ingest failed: {}", e.getMessage());
             return IngestResult.rejected(e.getMessage());
+        }
+    }
+
+    /**
+     * A3: per-session hash chain over trace rows. Sessions chain independently
+     * (short chains, parallel verification); a daily Merkle anchor over the
+     * day's session heads seals the whole day (see DailyAnchorJob).
+     *
+     * <p>CAS-first: the session chain state advances only on the optimistic-lock
+     * update; the row is annotated after the state wins, so a lost race never
+     * publishes a broken chain. Best-effort: failures leave the row unchained
+     * and are visible to TraceChainVerifier as a gap.
+     */
+    private void chainEvent(Map<String, Object> event) {
+        try {
+            String tenantId = str(event.get("tenant_id"));
+            String sessionId = str(event.get("session_id"));
+            if (tenantId.isBlank() || sessionId.isBlank()) {
+                return;
+            }
+            String traceId = str(event.get("trace_id"));
+            String stepId = str(event.get("step_id"));
+
+            for (int attempt = 0; attempt < 3; attempt++) {
+                var rows = jdbc.queryForList(
+                        "SELECT seq, last_hash, version FROM tb_trace_chain_state WHERE tenant_id = ? AND session_id = ?",
+                        tenantId, sessionId);
+                long seq;
+                String prevHash;
+                int version;
+                if (rows.isEmpty()) {
+                    jdbc.update(
+                            "INSERT INTO tb_trace_chain_state (tenant_id, session_id, seq, last_hash, version) VALUES (?, ?, 0, ?, 0)",
+                            tenantId, sessionId, GENESIS_HASH);
+                    seq = 0;
+                    prevHash = GENESIS_HASH;
+                    version = 0;
+                } else {
+                    Map<String, Object> row = rows.get(0);
+                    seq = ((Number) row.get("seq")).longValue();
+                    prevHash = str(row.get("last_hash"));
+                    if (prevHash.isBlank()) {
+                        prevHash = GENESIS_HASH;
+                    }
+                    version = ((Number) row.get("version")).intValue();
+                }
+                seq++;
+                String currHash = computeTraceHash(prevHash, seq, event);
+                int updated = jdbc.update(
+                        "UPDATE tb_trace_chain_state SET seq = ?, last_hash = ?, version = version + 1, updated_at = ? "
+                                + "WHERE tenant_id = ? AND session_id = ? AND version = ?",
+                        seq, currHash, java.time.Instant.now().toString(), tenantId, sessionId, version);
+                if (updated == 0) {
+                    continue; // lost the race, re-read state
+                }
+                jdbc.update(
+                        "UPDATE tb_agent_trace SET chain_seq = ?, prev_hash = ?, curr_hash = ? "
+                                + "WHERE tenant_id = ? AND trace_id = ? AND step_id = ?",
+                        seq, prevHash, currHash, tenantId, traceId, stepId);
+                event.put("chain_seq", seq);
+                event.put("prev_hash", prevHash);
+                event.put("curr_hash", currHash);
+                return;
+            }
+            log.warn("trace chain CAS exhausted: tenant={} session={}", tenantId, sessionId);
+        } catch (Exception e) {
+            log.warn("trace chain failed: {}", e.getMessage());
+        }
+    }
+
+    static String computeTraceHash(String prevHash, long seq, Map<String, Object> event) {
+        String input = prevHash
+                + "|" + seq
+                + "|" + str(event.get("tenant_id"))
+                + "|" + str(event.get("trace_id"))
+                + "|" + str(event.get("step_id"))
+                + "|" + str(event.get("step_type"))
+                + "|" + str(event.get("tool_name"))
+                + "|" + str(event.get("tool_args_hash"))
+                + "|" + str(event.get("tool_decision"))
+                + "|" + str(event.get("rule_id"))
+                + "|" + str(event.get("reason_code"))
+                + "|" + str(event.get("risk_score"))
+                + "|" + MerkleUtil.canonicalTs(event.get("occurred_at"));
+        return "sha256:" + sha256Hex(input);
+    }
+
+    private static final String GENESIS_HASH = "sha256:" + "0".repeat(64);
+
+    private static String sha256Hex(String input) {
+        try {
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = md.digest(input.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
         }
     }
 
@@ -134,6 +245,16 @@ public class TraceEventIngestor {
             return Integer.parseInt(str(o));
         } catch (Exception e) {
             return 0;
+        }
+    }
+
+    private static long longVal(Object o) {
+        if (o == null) return 0L;
+        if (o instanceof Number n) return n.longValue();
+        try {
+            return Long.parseLong(str(o));
+        } catch (Exception e) {
+            return 0L;
         }
     }
 

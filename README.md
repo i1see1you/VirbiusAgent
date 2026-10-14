@@ -19,6 +19,8 @@ The Agent security landscape falls into two categories: **endpoint-side controls
 
 ![VirbiusAgent operations console — rule registry (English)](docs/images/ops-en.png)
 
+Main pages: rule registry & rollout, policy-cache hot reload, audit center, **Audit Integrity** (integrity verification / Merkle proof / Decision BOM / audit export / output-review stats / session checkpoints, 6 tabs), **Alerts** (list / status filter / acknowledge / expand Decision BOM), sessions & traces, delegated credentials, and more.
+
 ## Architecture
 
 ```mermaid

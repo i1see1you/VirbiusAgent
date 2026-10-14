@@ -538,3 +538,73 @@ See [PROTOCOL.md](PROTOCOL.md) §2.6.1 "Egress Delegated Credential Injection" f
 5. Alerts: `tracing::error` (`delegated_cred_alert{code,state}`, 60s throttle) is always available, independent of Kafka; watch `snapshot_key_missing`, `snapshot_unreadable_rows`, `host_not_in_allowlist`, `ttl_breach_cleared`, `tenant_mismatch`, `hit_credential_echo` (upstream echoed the credential).
 6. Poll backoff: read failures back off exponentially `30s → 60s → … → 600s` (10min cap, ±10% jitter) and reset on success; the **TTL clear check runs every loop**, so backoff never weakens the offline fallback.
 7. KEK delivery: `POST /kek/reveal` responds with `Cache-Control: no-store` + `Pragma: no-cache` (no intermediate caching); Control logs no request/response bodies, so the KEK never reaches the access log — still land it in a 0400 file, never echo it through a terminal/CI log.
+
+---
+
+## 10. Audit Integrity / Output Safety / Dynamic Risk (A/B/C)
+
+This section covers the datastore, configuration and ops actions for the evaluation outline's A (audit logging, 1.2), B (output safety, 1.5) and C (dynamic risk, 3.1/3.2).
+
+### 10.1 New database migrations (Flyway, prod/staging)
+
+| Migration | Contents |
+|---|---|
+| `V13__trace_result_preview.sql` | `tb_agent_trace.tool_result_preview` (tool output preview, so decision reconstruction can show what the tool returned) |
+| `V14__audit_integrity_retention_export.sql` | per-session trace hash-chain columns (`chain_seq`/`prev_hash`/`curr_hash`) + `tb_trace_chain_state`; daily anchor table `tb_audit_daily_anchor`; retention policy table `tb_tenant_retention_policy`; archive mirrors `tb_audit_events_archive`/`tb_agent_trace_archive`; export ledger `tb_audit_export_job` |
+| `V15__alerts_and_session_checkpoints.sql` | alerts `tb_alert`, session checkpoints `tb_session_checkpoint` |
+
+Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lacks these new columns/tables**, so rebuild with `VIRBIUS_REBUILD_DB=1 ./scripts/run-local.sh` (deletes the DB and `FLUSHDB`).
+
+### 10.2 New configuration keys
+
+| Key | Default | Description |
+|---|---|---|
+| `virbius.audit.hash-chain.enabled` | `true` | audit-event hash chain |
+| `virbius.audit.hash-chain.verify-enabled` | `true` | scheduled full-chain verification |
+| `virbius.audit.hash-chain.verify-interval-ms` | `3600000` | verification interval (1h) |
+| `virbius.audit.hash-chain.verify-batch-size` | `10000` | rows per verification batch |
+| `virbius.audit.daily-anchor.enabled` | `true` | daily Merkle anchor sealing |
+| `virbius.audit.retention.enabled` | `true` | retention archival job |
+| `virbius.audit.export.key` | empty | AES-256-GCM key for export artifacts (base64, must decode to 32B); **when unset, exports land `failed` (fail-closed)** |
+| `virbius.audit.export.allow-plaintext` | `false` | explicitly allow plaintext export (not recommended; debug only) |
+| `virbius.alert.risk-threshold` | `80` | alert generation risk threshold (and action must be block/deny/challenge) |
+| `virbius.output-review.skip-models` | `virbiusguard` | models skipped by output review (comma-separated); the guard model never reviews itself |
+| `virbius.output-review.refusal-text` | `抱歉，该内容已被安全策略拦截。` | replacement text for the `reject` action |
+| `virbius.output-review.fail-closed` | `false` | refuse when the review pipeline errors (true=refuse, false=allow + alert) |
+| `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | reason-code→action (`reject|omit|redact|warn`) map; unlisted codes fall back to keyword matching |
+| `virbius.output-review.streaming.window-chars` | `200` | streaming review window hard cap |
+| `virbius.output-review.streaming.context-chars` | `50` | window overlap context length |
+| `virbius.output-review.streaming.stream-first` | `false` | stream-then-review (otherwise buffer until the window verdict is ready) |
+| `virbius.chain-patterns.enforce` | `false` | temporal chain-pattern detection: `false`=dry-run (audit only), `true`=enforce |
+| `virbius.retry-escape.enforce` | `false` | retry-escape detection likewise (dry-run by default) |
+| `virbius.trace.publish-enabled` | `true` | Engine publishes chat `input`/`output` trace steps to Control (degrades to a no-op when Kafka is unavailable) |
+
+> These keys currently get their defaults from code (`@Value`); `application*.yml` does not declare them. Override with a startup argument or the same-named `VIRBIUS_*` env var.
+
+### 10.3 Audit export key (must be provided explicitly)
+
+```bash
+# generate a 32B key and hand it to control (startup argument or env)
+export VIRBIUS_AUDIT_EXPORT_KEY="$(openssl rand -base64 32)"
+# or --virbius.audit.export.key=<base64>
+```
+
+- Semantics: the export is audit-event JSONL (with `user_id`/`device_id`/`reason_code`), written as `12B IV || ciphertext+tag` to `data/exports/<jobId>.bin`, with the AAD bound to `jobId`.
+- Control only produces ciphertext and offers no decrypt endpoint — the operator decrypts offline with the same key.
+- Unset and no explicit `allow-plaintext=true` → the export job lands `failed`, with the reason in the `error` field (safe default, not a defect).
+
+### 10.4 Audit evidence tables append-only grants (A0, tamper prevention)
+
+The hash chain detects tampering; the script below prevents it: it revokes `UPDATE`/`DELETE` on the evidence tables from the application account, so audit/trace/challenge rows cannot be altered at the privilege layer.
+
+```bash
+# apply manually in production (adjust the account; not managed by Flyway)
+mysql -u root -p < deploy/scripts/audit-insert-only-grants.sql
+```
+
+The `DELETE` needed for retention archival is held only by a separate ops account, and only for rows outside the retention window whose daily anchor is already sealed.
+
+### 10.5 New console pages
+
+- `/alerts` (Alerts): list + status filter (`open`/`acked`) + acknowledge (ack) + expand Decision BOM.
+- `/audit-integrity` (Audit Integrity, 6 tabs): integrity verification (incl. daily-anchor seal / run verification), Merkle proof, Decision BOM, audit export, output-review stats, session checkpoints.

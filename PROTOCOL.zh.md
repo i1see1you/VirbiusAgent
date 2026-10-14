@@ -1080,3 +1080,60 @@ XADD virbius:trace * \
 | GET | `/api/v1/admin/tenants/{tenantId}/trace/trace/{traceId}` | 追踪因果链（parent_step_id 递归） |
 | GET | `/api/v1/admin/tenants/{tenantId}/trace/search?toolName=&sessionId=&limit=` | 搜索 |
 | GET | `/api/v1/admin/tenants/{tenantId}/trace/ingest/status` | 摄入健康状态（pending/lag） |
+
+#### 2.6.4 审计完整性与告警控制面 API（大纲 A / C）
+
+新增控制面端点，均以 `/api/v1/admin/tenants/{tenantId}` 为前缀、admin 鉴权。
+
+**审计完整性**（`/audit/...`）：
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| GET | `/audit/chain/status` | 审计链头（`seq`/`last_hash`） |
+| POST | `/audit/verify` | 全链校验（`from`/`to` 可选） |
+| GET | `/audit/proof/{eventId}` | 单事件 Merkle 包含证明（`from`/`to` 可选） |
+| POST | `/audit/verify-proof` | 独立校验证明（`root`+`steps` 由审计方提供） |
+| GET | `/audit/trace-chain/verify?session_id=` | 校验会话/整租户的 trace 链 |
+| POST | `/audit/daily-anchor/seal` | 按日封存 Merkle 锚点（body `{date}`，缺省昨日 UTC） |
+| GET | `/audit/output-review-stats?from=&to=` | 输出误拦统计（`total`/`denied`/`deny_rate` 等） |
+| GET | `/audit/decision-bom/{traceId}` | 决策 BOM 重建（audit / session / policy / trace 四相） |
+| POST | `/audit/export` | 创建加密导出（body：`from`/`to`/`sessionId`/`traceId`/`minRisk`/`effectiveAction`；查询参数 `requester`） |
+| GET | `/audit/export` | 导出任务列表 |
+| GET | `/audit/export/{jobId}` | 任务详情（含失败原因 `error`） |
+| GET | `/audit/export/{jobId}/file` | 下载密文产物（`X-Virbius-Format: aes-256-gcm`） |
+
+**告警**（`/alerts/...`）：
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| GET | `/alerts?status=&limit=` | 列表（`status`：`open`/`acked`） |
+| GET | `/alerts/{alertId}` | 详情（不存在返回信封 `code=404`） |
+| POST | `/alerts/{alertId}/ack?operator=` | 确认（`open`→`acked`，重复确认返回 `acknowledged=false`） |
+| GET | `/alerts/{alertId}/bom` | 由告警 `trace_id` 展开决策 BOM |
+
+**会话检查点**（C5）：`GET /sessions/{sessionId}/checkpoint`（上下文跨 Redis 驱逐保留；不存在返回信封 `code=404`）。
+
+> 告警由控制面从摄入的高风险审计事件生成（`risk_score >= virbius.alert.risk-threshold` 且动作为 block/deny/challenge）；导出产物为 AES-256-GCM 密文，控制面不提供解密，未配置 `virbius.audit.export.key` 时任务落 `failed`（详见 DEPLOYMENT §10.3）。
+
+#### 2.6.5 引擎 Chat 输出安全扩展（大纲 B）
+
+`virbius-engine` 的 OpenAI 兼容端点 `POST /v1/chat/completions` 支持请求级 `virbius` 扩展对象以启用输出审查与 chat 侧轨迹：
+
+```json
+"virbius": {
+  "review_output": true,
+  "tenant_id": "default",
+  "session_id": "sess-1",
+  "trace_id": "...",      // 可选，缺省自动生成
+  "user_id": "u-1",       // 可选
+  "app_id": "my-agent"    // 可选
+}
+```
+
+行为：
+
+1. 为最后一条 user 消息发布 `input` trace step；
+2. 经标准 evaluate 管线审查助手回答（`role=output`）：非流式整段审查；流式按滑动窗口（`window-chars`/`context-chars`）审查；
+3. 发布 `output` trace step（携带审查决策）。
+
+处置动作 `reject|omit|redact|warn`（映射见 `virbius.output-review.action-map`），拦截时以 `refusal-text` 替换。**不带 `virbius` 扩展的请求原样透传**（护栏模型自身调用不回环审查）。

@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -43,6 +44,9 @@ class EvaluateOrchestratorTest {
     @Mock private TrustViolationDetector trustViolationDetector;
     @Mock private PolicyDataCache policyDataCache;
     @Mock private FileGuardService fileGuardService;
+    @Mock private ChainPatternDetector chainPatternDetector;
+    @Mock private RetryEscapeDetector retryEscapeDetector;
+    @Mock private SessionHistoryService sessionHistoryService;
     private final PromptLlmProperties promptLlmProperties =
             new PromptLlmProperties(null, null, null, 0, false, null, null, null, null);
 
@@ -58,7 +62,11 @@ class EvaluateOrchestratorTest {
                 challengeService, injectionDetector, taintDetector,
                 sessionRiskManager, trustViolationDetector, policyDataCache,
                 promptLlmProperties, fileGuardService,
+                chainPatternDetector, retryEscapeDetector, sessionHistoryService,
                 0.5, 0.1, 0.0, 0.0);
+        lenient().when(sessionHistoryService.history(any())).thenReturn(java.util.List.of());
+        lenient().when(chainPatternDetector.detect(any(), any(), any())).thenReturn(java.util.List.of());
+        lenient().when(retryEscapeDetector.detect(any(), any(), any())).thenReturn(java.util.Optional.empty());
     }
 
     @Test
@@ -74,8 +82,8 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of());
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(), 0));
 
         SignalDto primary = new SignalDto("POLICY_ALLOW", 0, "cloud", "cloud",
                 0, "POLICY_ALLOW", "allow", "dry_run", null, null);
@@ -106,8 +114,8 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Block", 1, "cloud", "cloud",
                 80, "TOOL_DENY", "deny", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of(signal));
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(signal), 0));
 
         SignalDto primary = new SignalDto("Rule_Block", 1, "cloud", "cloud",
                 80, "TOOL_DENY", "deny", "full", null, null);
@@ -139,8 +147,8 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of(signal));
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(signal), 0));
 
         SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
@@ -179,8 +187,8 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of(signal));
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(signal), 0));
 
         SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
@@ -225,8 +233,8 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of(signal));
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(signal), 0));
 
         SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
@@ -269,8 +277,8 @@ class EvaluateOrchestratorTest {
 
         SignalDto signal = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of(signal));
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(signal), 0));
 
         SignalDto primary = new SignalDto("Rule_Challenge", 1, "cloud", "cloud",
                 70, "TOOL_CHALLENGE", "challenge", "full", null, null);
@@ -310,8 +318,8 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of());
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(), 0));
 
         SignalDto primary = new SignalDto("PROMPT_INJECTION", 1, "cloud", "cloud",
                 30, "JAILBREAK", "deny", "full", null, null);
@@ -339,8 +347,8 @@ class EvaluateOrchestratorTest {
                         "INJECTION_LEAKAGE", "you are now", 20, "injection from tool result"));
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of());
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(), 0));
 
         SignalDto primary = new SignalDto("TRUST_VIOLATION", 1, "cloud", "cloud",
                 20, "INJECTION_LEAKAGE", "warn", "full", null, null);
@@ -369,8 +377,8 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of());
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(), 0));
 
         SignalDto primary = new SignalDto("POLICY_ALLOW", 0, "cloud", "cloud",
                 0, "POLICY_ALLOW", "allow", "dry_run", null, null);
@@ -454,8 +462,8 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of());
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(), 0));
         when(sessionRiskManager.updateRiskScore(any()))
                 .thenReturn(0);
 
@@ -483,8 +491,8 @@ class EvaluateOrchestratorTest {
                 .thenReturn(TrustViolationResult.ok());
         when(promptRunner.run(anyString(), any()))
                 .thenReturn(List.of());
-        when(scriptRuleRunner.run(anyString(), any(), any(), any()))
-                .thenReturn(List.of());
+        when(scriptRuleRunner.runWithDelta(anyString(), any(), any(), any()))
+                .thenReturn(new ScriptRuleRunner.ScriptRunResult(List.of(), 0));
         when(sessionRiskManager.updateRiskScore(any()))
                 .thenThrow(new RuntimeException("Redis down"));
 

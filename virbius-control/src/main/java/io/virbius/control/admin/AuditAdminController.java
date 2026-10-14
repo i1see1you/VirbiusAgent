@@ -1,15 +1,26 @@
 package io.virbius.control.admin;
 
+import io.virbius.control.audit.AuditCenterService;
+import io.virbius.control.audit.AuditExportService;
+import io.virbius.control.audit.DailyAnchorJob;
+import io.virbius.control.audit.DecisionBomService;
 import io.virbius.control.audit.HashChainOrchestrator;
 import io.virbius.control.audit.HashChainVerifier;
 import io.virbius.control.audit.HashChainVerifier.ChainVerificationResult;
+import io.virbius.control.audit.MerkleAuditService;
+import io.virbius.control.audit.TraceChainVerifier;
 import io.virbius.control.common.response.ApiResult;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -18,11 +29,35 @@ public class AuditAdminController {
 
     private final HashChainOrchestrator hashChain;
     private final HashChainVerifier verifier;
+    private final AuditCenterService auditCenter;
+    private final MerkleAuditService merkleAudit;
+    private final TraceChainVerifier traceChainVerifier;
+    private final DecisionBomService decisionBom;
+    private final AuditExportService auditExport;
+    private final DailyAnchorJob dailyAnchorJob;
 
-    public AuditAdminController(HashChainOrchestrator hashChain, HashChainVerifier verifier) {
+    public AuditAdminController(
+            HashChainOrchestrator hashChain,
+            HashChainVerifier verifier,
+            AuditCenterService auditCenter,
+            MerkleAuditService merkleAudit,
+            TraceChainVerifier traceChainVerifier,
+            DecisionBomService decisionBom,
+            AuditExportService auditExport,
+            DailyAnchorJob dailyAnchorJob) {
         this.hashChain = hashChain;
         this.verifier = verifier;
+        this.auditCenter = auditCenter;
+        this.merkleAudit = merkleAudit;
+        this.traceChainVerifier = traceChainVerifier;
+        this.decisionBom = decisionBom;
+        this.auditExport = auditExport;
+        this.dailyAnchorJob = dailyAnchorJob;
     }
+
+    // ============================================================
+    // A1.2 hash chain + integrity
+    // ============================================================
 
     @PostMapping("/verify")
     public ApiResult<ChainVerificationResult> verify(
@@ -43,5 +78,144 @@ public class AuditAdminController {
         return ApiResult.ok(hashChain.getChainHead(tenantId));
     }
 
+    /** A4: Merkle inclusion proof for one audit event. */
+    @GetMapping("/proof/{eventId}")
+    public ApiResult<Map<String, Object>> proof(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("eventId") String eventId,
+            @RequestParam(value = "from", required = false) String from,
+            @RequestParam(value = "to", required = false) String to) {
+        return ApiResult.ok(merkleAudit.proof(
+                tenantId, eventId,
+                from != null && !from.isBlank() ? Instant.parse(from) : null,
+                to != null && !to.isBlank() ? Instant.parse(to) : null));
+    }
+
+    /** A4: independent proof verification (root + steps supplied by the auditor). */
+    @PostMapping("/verify-proof")
+    public ApiResult<Map<String, Object>> verifyProof(
+            @PathVariable("tenantId") String tenantId,
+            @RequestBody VerifyProofRequest body) {
+        List<io.virbius.control.audit.MerkleUtil.ProofStep> steps = body.proof() == null
+                ? List.of()
+                : body.proof().stream()
+                        .map(s -> new io.virbius.control.audit.MerkleUtil.ProofStep(s.hash(), s.position()))
+                        .toList();
+        boolean ok = merkleAudit.verifyProof(tenantId, body.eventId(), body.rootHash(), steps);
+        return ApiResult.ok(Map.of("verified", ok));
+    }
+
+    /** A3: verify a session's trace chain, or the whole tenant when session_id is omitted. */
+    @GetMapping("/trace-chain/verify")
+    public ApiResult<Object> traceChainVerify(
+            @PathVariable("tenantId") String tenantId,
+            @RequestParam(value = "session_id", required = false) String sessionId) {
+        if (sessionId != null && !sessionId.isBlank()) {
+            return ApiResult.ok(traceChainVerifier.verifySession(tenantId, sessionId));
+        }
+        return ApiResult.ok(traceChainVerifier.verifyTenant(tenantId));
+    }
+
+    /** A3: seal a day's Merkle anchor on demand (ops/backfill). */
+    @PostMapping("/daily-anchor/seal")
+    public ApiResult<Map<String, Object>> sealAnchor(
+            @PathVariable("tenantId") String tenantId,
+            @RequestBody(required = false) SealAnchorRequest body) {
+        LocalDate day = body != null && body.date() != null && !body.date().isBlank()
+                ? LocalDate.parse(body.date())
+                : LocalDate.now(java.time.ZoneOffset.UTC).minusDays(1);
+        dailyAnchorJob.seal(day);
+        return ApiResult.ok(Map.of("sealed_date", day.toString()));
+    }
+
+    // ============================================================
+    // B7 output-review false-positive statistics
+    // ============================================================
+
+    @GetMapping("/output-review-stats")
+    public ApiResult<Map<String, Object>> outputReviewStats(
+            @PathVariable("tenantId") String tenantId,
+            @RequestParam(value = "from", required = false) String from,
+            @RequestParam(value = "to", required = false) String to) {
+        Instant fromInstant = from != null && !from.isBlank() ? Instant.parse(from) : null;
+        Instant toInstant = to != null && !to.isBlank() ? Instant.parse(to) : null;
+        return ApiResult.ok(auditCenter.outputReviewStats(tenantId, fromInstant, toInstant));
+    }
+
+    // ============================================================
+    // A6 Decision BOM / traceability export
+    // ============================================================
+
+    @GetMapping("/decision-bom/{traceId}")
+    public ApiResult<Map<String, Object>> decisionBom(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("traceId") String traceId) {
+        return ApiResult.ok(decisionBom.reconstruct(tenantId, traceId));
+    }
+
+    // ============================================================
+    // A7 secure export
+    // ============================================================
+
+    @PostMapping("/export")
+    public ApiResult<Map<String, Object>> export(
+            @PathVariable("tenantId") String tenantId,
+            @RequestBody ExportRequest body,
+            @RequestParam(value = "requester", required = false) String requester) {
+        AuditExportService.ExportFilters filters = new AuditExportService.ExportFilters(
+                body != null ? body.from() : null,
+                body != null ? body.to() : null,
+                body != null ? body.sessionId() : null,
+                body != null ? body.traceId() : null,
+                body != null ? body.minRisk() : null,
+                body != null ? body.effectiveAction() : null);
+        return ApiResult.ok(auditExport.startExport(tenantId, requester, filters));
+    }
+
+    @GetMapping("/export")
+    public ApiResult<List<Map<String, Object>>> listExports(
+            @PathVariable("tenantId") String tenantId,
+            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        return ApiResult.ok(auditExport.list(tenantId, limit));
+    }
+
+    @GetMapping("/export/{jobId}")
+    public ApiResult<?> exportStatus(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("jobId") String jobId) {
+        Map<String, Object> job = auditExport.get(tenantId, jobId);
+        if (job == null) {
+            return ApiResult.error(404, "not_found");
+        }
+        return ApiResult.ok(job);
+    }
+
+    /** Download the encrypted artifact; the ledger row records who exported what. */
+    @GetMapping("/export/{jobId}/file")
+    public ResponseEntity<byte[]> exportFile(
+            @PathVariable("tenantId") String tenantId,
+            @PathVariable("jobId") String jobId) throws Exception {
+        byte[] bytes = auditExport.readFile(tenantId, jobId);
+        if (bytes == null) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok()
+                .header("Content-Type", "application/octet-stream")
+                .header("Content-Disposition", "attachment; filename=\"" + jobId + ".bin\"")
+                .header("X-Virbius-Format", "aes-256-gcm")
+                .body(bytes);
+    }
+
     public record VerifyRequest(String from, String to) {}
+
+    public record VerifyProofRequest(
+            String eventId, String rootHash, List<ProofStepDto> proof) {}
+
+    public record ProofStepDto(String hash, String position) {}
+
+    public record SealAnchorRequest(String date) {}
+
+    public record ExportRequest(
+            String from, String to, String sessionId, String traceId,
+            Integer minRisk, String effectiveAction) {}
 }

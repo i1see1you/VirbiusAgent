@@ -26,6 +26,10 @@ public final class PolicyContext {
     private final int currentRiskScore;
     private final Map<String, Long> toolCounts;
 
+    // === Rule side-effect accumulators (collected by the runner, not written here) ===
+    private int chainAnomalyDelta;
+    private String intentOverride;
+
     public PolicyContext(
             String tenantId,
             String sessionId,
@@ -216,5 +220,46 @@ public final class PolicyContext {
         } catch (Exception e) {
             return false;
         }
+    }
+
+    // ========== Rule side-effect API ==========
+
+    /**
+     * Script API: override the intent action of the signal this rule emits on hit.
+     *
+     * <p>Accepted values: {@code allow} / {@code review} / {@code challenge} /
+     * {@code deny} (case-insensitive; {@code block} is treated as {@code deny} by
+     * the runner). Unknown values are ignored by the runner. Only meaningful for
+     * sync (full/canary) rules — async and dry_run rules never affect the decision.
+     */
+    public void setIntent(String action) {
+        if (action == null || action.isBlank()) {
+            return;
+        }
+        this.intentOverride = action.trim().toLowerCase();
+    }
+
+    /**
+     * Script API: accumulate session chain-anomaly risk by {@code delta}.
+     *
+     * <p>Does <b>not</b> write Redis directly. The delta is collected by the rule
+     * runner and passed to {@code SessionRiskManager.updateRiskScore()} as
+     * {@code chainAnomalyDelta} (DESIGN §集成点 2), keeping multi-dimensional
+     * scoring and time decay intact.
+     */
+    public void incrementRiskScore(int delta) {
+        if (delta != 0) {
+            this.chainAnomalyDelta += delta;
+        }
+    }
+
+    /** Runner-facing: intent override set via {@link #setIntent(String)}, or {@code null}. */
+    public String intentOverride() {
+        return intentOverride;
+    }
+
+    /** Runner-facing: total delta accumulated via {@link #incrementRiskScore(int)}. */
+    public int chainAnomalyDelta() {
+        return chainAnomalyDelta;
     }
 }

@@ -36,8 +36,11 @@ public class HashChainVerifyTask {
         if (!enabled) {
             return;
         }
+        // Enumerate tenants from the events table, not tb_audit_chain_state:
+        // in Redis-backed deployments the chain state lives only in Redis and
+        // the MySQL state table stays empty, which made this task a no-op.
         var tenants = jdbc.queryForList(
-                "SELECT DISTINCT tenant_id FROM tb_audit_chain_state", String.class);
+                "SELECT DISTINCT tenant_id FROM tb_audit_events", String.class);
         for (String tenantId : tenants) {
             try {
                 Instant to = Instant.now();

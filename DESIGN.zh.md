@@ -598,7 +598,7 @@ if session_risk > 30: 提升审计采样率
 | 审计完整性 | hash chain | P1 | ✅ 已完成（详见 [§13.5](#135-审计完整性hash-chain)） |
 | 供应链身份 | License 签发/校验/吊销 | P0 | ✅ 已完成 |
 | 记忆管控 | Memory Interceptor（PII 脱敏 + 凭据检测 + LLM 注入检测） | P1 | ✅ 已完成（写入拦截 ✅ + 读取拦截 ✅ + 框架集成 ✅，详见 [§13.6](#136-记忆管控memory-interceptor)） |
-| 输出安全 | Output Review（PII 脱敏 ✅ + 凭据检测 ✅ + 内容安全 ✅） | P1 | ✅ 工具结果审查已完成（MCP Proxy 复用 Engine `/v1/evaluate` + VirbiusGuard 规则管线）；Agent 最终输出审查为设计建议，待应用层集成（详见 [§13.7](#137-输出审查output-review)） |
+| 输出安全 | Output Review（PII 脱敏 ✅ + 凭据检测 ✅ + 内容安全 ✅） | P1 | ✅ 工具结果审查已完成（MCP Proxy 复用 Engine `/v1/evaluate` + VirbiusGuard 规则管线）；Agent 最终输出审查已在 Engine 侧实现（`/v1/chat/completions` + `role=output`，见 [§13.7](#137-输出审查output-review)） |
 | 决策链路追踪 | Trace Collector + Ingest + 可视化 | P1 | ✅ 已完成 |
 | 显式信任分层 | TrustTagger + TrustViolationDetector | P1.10 | ✅ 已完成（Edge 端包裹 `<trust_boundary>` + Engine 端违规检测，详见 [§13.10](#1310-显式信任分层explicit-trust-layering)） |
 | 规划劫持检测 | IntentAnchor + PlanDriftDetector | P1.11 | 📋 后续规划（暂不实现，设计已归档于 [§13.11](#1311-规划劫持检测plan-hijacking-detection)） |
@@ -675,7 +675,7 @@ LASM 是一个 **7 层 × 4 类时间性**的网格：
 | | 高风险人工审批（Challenge 全链路） | Engine + Control Dashboard | PROTOCOL.zh.md | T1 | ✅ 已完成 |
 | | 累计计数器（双层计数） | Engine `CounterStore.ingest` | §13.9 | T1/T2 | ✅ 已完成 |
 | | 内核级沙箱（Landlock + capset + prctl + gVisor） | `virbius-core/src/sandbox/landlock.rs` | §2.3/§2.4 | T1 | ✅ 已实现 |
-| | 输出审查（工具结果 + Agent 最终响应） | MCP Proxy → Engine `/v1/evaluate` | §13.7 | T1 | ✅ 工具结果审查完成；Agent 最终输出待集成 |
+| | 输出审查（工具结果 + Agent 最终响应） | MCP Proxy → Engine `/v1/evaluate`；Engine `/v1/chat/completions` | §13.7 | T1 | ✅ 工具结果审查完成；Agent 最终输出审查已在 Engine 侧实现 |
 | **L5 Multi-Agent Coordination** | ⚠️ 几乎未覆盖（当前为单 Agent 架构） | — | — | — | 📋 后续规划（暂不实现） |
 | | MCP Proxy 多上游路由（部分相关） | `virbius-mcp-proxy/upstream.rs` | §2.6.1 | T1 | 🔧 仅路由，无协同安全 |
 | | A2A 路由（设计提及） | §6.1 | — | — | 📋 后续规划 |
@@ -1956,6 +1956,19 @@ P1.10 和 P1.11 产生的 riskDelta 统一汇入 chain_anomaly 维度，
 享受时间衰减：20 分钟前的信任违规只保留 51% 权重。
 ```
 
+#### 13.3.14 时序行为检测器（大纲 C，本轮新增）
+
+在会话风险评分之上，本轮新增两个**基于会话工具历史**的原生检测器（`virbius-engine/src/main/java/io/virbius/engine/eval/`），弥补单条规则无法覆盖的多步时序违规：
+
+| 检测器 | 覆盖模式 | 触发条件（保守） | 默认 |
+|--------|---------|-----------------|------|
+| `ChainPatternDetector` | 敏感读→外发、写→执行、单调提权（READ→WRITE→EXEC→NETWORK） | 参数级条件（敏感路径前缀 + 外部 host），避免"任意读+任意网络"误报 | `dry_run`（`virbius.chain-patterns.enforce=false`） |
+| `RetryEscapeDetector` | 被拦后改名/改参重试逃逸 | 距上次 block 的第 ≥3 次尝试、窗口内、且至少一次改工具/参数；含 ≥3 连续放行的 wash-out 保护 | `dry_run`（`virbius.retry-escape.enforce=false`） |
+
+两者经 `SessionHistoryService` 读取会话历史（`SessionStatePreloader` 之上），信号在 `EvaluateOrchestrator` 中汇入 `chain_anomaly` 维度。默认 `dry_run`：信号写入审计但不强制，避免正常长任务被误 block；置 `enforce=true` 才参与决策。
+
+**脚本规则副作用 API**：`PolicyContext` 新增 `ctx.setIntent(action)`（覆盖命中规则的动作，仅同步规则生效）与 `ctx.incrementRiskScore(delta)`（累积 `chain_anomaly` 增量）；由 `ScriptRuleRunner.runWithDelta()` 收集后统一应用。
+
 ---
 
 ### 13.4 ~~自定义 virbius-audit Falco 插件~~ + Falco 规则库扩充
@@ -2341,6 +2354,22 @@ virbius:
 | `virbius.audit.hash-chain.verify-interval-ms` | `3600000` | 验证间隔（ms） |
 | `virbius.audit.hash-chain.verify-batch-size` | `10000` | 批量大小 |
 
+#### 13.5.9 扩展实现（大纲 A：trace 链 / Merkle / 锚点 / 保留 / 导出 / 决策 BOM）
+
+在审计链基础上，本轮补齐大纲 A 的落地组件（迁移 `V13`–`V15`）：
+
+| 组件 | 职责 | 表 |
+|------|------|----|
+| `TraceChainVerifier` | 按会话/整租户校验 `tb_agent_trace` 哈希链（`chain_seq`/`prev_hash`/`curr_hash`） | `tb_agent_trace`、`tb_trace_chain_state` |
+| `MerkleUtil` + `MerkleAuditService` | 对审计事件 `curr_hash`（按 `audit_seq`）构造 Merkle 树，产出单事件包含证明并支持独立校验 | `tb_audit_events` |
+| `DailyAnchorJob` | 每日封存各会话链头到 per-tenant Merkle 根 | `tb_audit_daily_anchor` |
+| `AuditRetentionJob` | 保留归档：默认 `archive` 模式仅**复制**过期行到 `*_archive` 镜像（删除为人工 ops 动作，且须锚点已封存） | `tb_tenant_retention_policy`、`*_archive` |
+| `DecisionBomService` | 由单个 `trace_id` 重建决策 BOM（audit / session / policy / trace 四相） | — |
+| `AuditExportService` | 权限受控的加密导出 + 导出账本；AES-256-GCM，未配 `virbius.audit.export.key` 即 fail-closed | `tb_audit_export_job` |
+| `SessionCheckpointService` | 由 trace 摄入维护会话检查点，跨 Redis 驱逐保留 | `tb_session_checkpoint` |
+
+新增 API 见 [PROTOCOL.zh.md §2.6.4](PROTOCOL.zh.md#264-审计完整性与告警控制面-api大纲-a--c)；配置与运维见 [DEPLOYMENT.zh.md §10](DEPLOYMENT.zh.md)。除链检测（detection）外，`deploy/scripts/audit-insert-only-grants.sql` 提供权限层 append-only（prevention）。
+
 ---
 
 ### 13.6 记忆管控（Memory Interceptor）
@@ -2586,7 +2615,7 @@ injection_threshold = 0.7         # 注入检测置信度阈值
 
 ### 13.7 输出审查（Output Review）
 
-> **工具结果审查已实现；Agent 最终输出审查为设计建议，待应用层集成。** 本方案放弃了原始设计中独立的 `OutputReviewer` 类，改为**复用 Engine 现有规则管线**（`POST /v1/evaluate`），实现零新增端点、零新增 LLM 客户端。工具结果审查已在 MCP Proxy 中实现；Agent 最终输出审查（方案 B）需应用层自行调用 `/v1/evaluate`，目前代码库中未包含应用层集成代码。
+> **工具结果审查已在 MCP Proxy 实现；Agent 最终输出审查本轮已在 Engine 侧实现（见 §13.7.7）。** 本方案放弃了原始设计中独立的 `OutputReviewer` 类，改为**复用 Engine 现有规则管线**（`POST /v1/evaluate`），实现零新增端点、零新增 LLM 客户端。工具结果审查已在 MCP Proxy 中实现；Agent 最终输出审查通过 Engine 兼容端点 `POST /v1/chat/completions` 的 `virbius` 扩展实现（`role=output`，非流式整段 / 流式滑动窗口）。
 
 #### 13.7.1 设计决策：复用而非新建
 
@@ -2664,6 +2693,21 @@ fail_open = true            # Engine 不可用时是否放行
 | **Agent 输出审查（方案 B）** | Agent 最终响应 | Agent 汇总后、返回用户前 | 应用层调用 `/v1/evaluate`（⏳ 设计建议/待应用层集成） |
 
 > 三层覆盖从工具返回到最终输出的完整审查链路。
+
+#### 13.7.7 Engine 侧输出审查实现（大纲 B，本轮新增）
+
+在 `virbius-engine` 的 OpenAI 兼容端点 `POST /v1/chat/completions` 上落地输出审查（详见 [PROTOCOL.zh.md §2.6.5](PROTOCOL.zh.md)）：
+
+| 组件 | 职责 |
+|------|------|
+| `ChatCompletionsController`（扩展） | 识别请求级 `virbius` 扩展；对助手回答走 `role=output` 审查；发布 `input`/`output` trace step |
+| `StreamReviewWindow` | 流式滑动窗口缓冲（窗口硬上限 + 上下文重叠），窗口判定通过才下发 |
+| `OutputContentRules` | NeMo 风格正则内容规则（代码/SQL/模板注入、XSS、凭据泄露），无额外依赖 |
+| `OutputActionResolver` | 处置动作解析：`reject|omit|redact|warn`，`virbius.output-review.action-map` 覆盖 + 关键字兜底，`reject` 为安全默认 |
+| `OutputMasker` | `redact` 处置时的 PII/凭据就地遮蔽（邮箱/手机/身份证/银行卡/AWS key/私钥/Bearer） |
+| `TraceStepPublisher` | 从 Engine 侧发布 chat `input`/`output` trace step 到控制面（Kafka 不可用时降级 no-op） |
+
+配置项（默认见 DEPLOYMENT §10.2）：`virbius.output-review.skip-models`、`refusal-text`、`fail-closed`、`streaming.{window-chars,context-chars,stream-first}`、`action-map`。误拦统计经 `GET .../audit/output-review-stats` 暴露，供运营台「输出误拦」tab 使用。
 
 ---
 

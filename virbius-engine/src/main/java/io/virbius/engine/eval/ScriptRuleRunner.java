@@ -82,18 +82,32 @@ public class ScriptRuleRunner {
         }
     }
 
+    /** Signals plus the chain-anomaly delta accumulated by rules via
+     *  {@code ctx.incrementRiskScore(delta)} (collected, not yet applied). */
+    public record ScriptRunResult(List<SignalDto> signals, int chainAnomalyDelta) {}
+
     public List<SignalDto> run(String tenantId, MatchContext matchCtx, List<SignalDto> priorSignals) {
         return run(tenantId, matchCtx, priorSignals, Map.of());
     }
 
+    public List<SignalDto> run(String tenantId, MatchContext matchCtx, List<SignalDto> priorSignals,
+                               Map<String, ImageBlacklistService.BlacklistHit> imageEvidence) {
+        return runWithDelta(tenantId, matchCtx, priorSignals, imageEvidence).signals();
+    }
+
     /**
+     * Run script rules and also collect rule side effects:
+     * {@code ctx.incrementRiskScore(delta)} accumulators (sync rules only) and
+     * {@code ctx.setIntent(action)} overrides applied to the hit rule's signal.
+     *
      * @param imageEvidence best-per-list image-blacklist evidence collected by
      *                      the attachment phase; exposed to scripts as
      *                      {@code imageMatch(listName)} → {layer, distance, sha} | null
      */
-    public List<SignalDto> run(String tenantId, MatchContext matchCtx, List<SignalDto> priorSignals,
-                               Map<String, ImageBlacklistService.BlacklistHit> imageEvidence) {
+    public ScriptRunResult runWithDelta(String tenantId, MatchContext matchCtx, List<SignalDto> priorSignals,
+                                        Map<String, ImageBlacklistService.BlacklistHit> imageEvidence) {
         List<SignalDto> syncSignals = new ArrayList<>();
+        int chainAnomalyDelta = 0;
         PolicyDataCache.TenantPolicyData data = policyData.get(tenantId);
         Map<String, ImageBlacklistService.BlacklistHit> evidence =
                 imageEvidence != null ? imageEvidence : Map.of();
@@ -123,15 +137,43 @@ public class ScriptRuleRunner {
                 try {
                     PolicyContext ctx = buildContext(tenantId, matchCtx, rule, priorSignals, syncSignals, scriptEnv, sessionData);
                     boolean hit = executor.executeDecide(bodyText(rule.body()), ctx);
+                    chainAnomalyDelta += ctx.chainAnomalyDelta();
                     if (hit) {
-                        syncSignals.add(toSignal(rule));
+                        SignalDto signal = toSignal(rule);
+                        String override = normalizeIntentOverride(ctx.intentOverride());
+                        if (override != null) {
+                            signal = new SignalDto(
+                                    signal.ruleId(),
+                                    signal.ruleRevision(),
+                                    signal.source(),
+                                    signal.layer(),
+                                    signal.score(),
+                                    signal.reasonCode(),
+                                    override,
+                                    signal.enforceMode(),
+                                    signal.canaryPercent(),
+                                    signal.asyncActionConfig());
+                        }
+                        syncSignals.add(signal);
                     }
                 } catch (Exception e) {
                     log.warn("groovy script failed tenant={} rule={}: {}", tenantId, rule.ruleId(), e.getMessage());
                 }
             }
         }
-        return syncSignals;
+        return new ScriptRunResult(syncSignals, chainAnomalyDelta);
+    }
+
+    /** Map a {@code ctx.setIntent(...)} value to a valid intentAction, or null to ignore. */
+    private static String normalizeIntentOverride(String override) {
+        if (override == null || override.isBlank()) {
+            return null;
+        }
+        return switch (override.trim().toLowerCase()) {
+            case "allow", "review", "challenge", "deny" -> override.trim().toLowerCase();
+            case "block" -> "deny";
+            default -> null;
+        };
     }
 
     /**

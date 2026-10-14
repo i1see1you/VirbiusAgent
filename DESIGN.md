@@ -597,7 +597,7 @@ Use a matrix to assess each Agent's control coverage:
 | Audit integrity | hash chain | P1 | ✅ Completed (see [§13.5](#135-audit-integrity-hash-chain)) |
 | Supply chain identity | License issuance/verification/revocation | P0 | ✅ Completed |
 | Memory control | Memory Interceptor (PII desensitization + credential detection + LLM injection detection) | P1 | ✅ Completed (write interception ✅ + read interception ✅ + framework integration ✅, see [§13.6](#136-memory-control-memory-interceptor)) |
-| Output security | Output Review (PII desensitization ✅ + credential detection ✅ + content safety ✅) | P1 | ✅ Tool result review completed (MCP Proxy reuses Engine `/v1/evaluate` + VirbiusGuard rule pipeline); Agent final output review is a design suggestion pending application layer integration (see [§13.7](#137-output-review)) |
+| Output security | Output Review (PII desensitization ✅ + credential detection ✅ + content safety ✅) | P1 | ✅ Tool result review completed (MCP Proxy reuses Engine `/v1/evaluate` + VirbiusGuard rule pipeline); Agent final output review implemented on the Engine side (`/v1/chat/completions` + `role=output`, see [§13.7](#137-output-review)) |
 | Decision chain tracing | Trace Collector + Ingest + Visualization | P1 | ✅ Completed |
 | Explicit trust layering | TrustTagger + TrustViolationDetector | P1.10 | ✅ Completed (Edge wraps `<trust_boundary>` + Engine-side violation detection, see [§13.10](#1310-explicit-trust-layering)) |
 | Plan hijacking detection | IntentAnchor + PlanDriftDetector | P1.11 | 📋 Future plan (not implemented yet, design archived at [§13.11](#1311-plan-hijacking-detection)) |
@@ -674,7 +674,7 @@ The paper's core finding: Low layers and short timescales (L2 Cognitive, T1 imme
 | | High-risk human approval (Challenge full chain) | Engine + Control Dashboard | PROTOCOL.md | T1 | ✅ Completed |
 | | Cumulative counters (dual-layer counting) | Engine `CounterStore.ingest` | §13.9 | T1/T2 | ✅ Completed |
 | | Kernel-level sandbox (Landlock + capset + prctl + gVisor) | `virbius-core/src/sandbox/landlock.rs` | §2.3/§2.4 | T1 | ✅ Implemented |
-| | Output review (tool results + Agent final response) | MCP Proxy → Engine `/v1/evaluate` | §13.7 | T1 | ✅ Tool result review completed; Agent final output pending integration |
+| | Output review (tool results + Agent final response) | MCP Proxy → Engine `/v1/evaluate`; Engine `/v1/chat/completions` | §13.7 | T1 | ✅ Tool result review completed; Agent final output review implemented on the Engine side |
 | **L5 Multi-Agent Coordination** | ⚠️ Almost no coverage (currently single-Agent architecture) | — | — | — | 📋 Future plan (not implemented) |
 | | MCP Proxy multi-upstream routing (partially relevant) | `virbius-mcp-proxy/upstream.rs` | §2.6.1 | T1 | 🔧 Routing only, no coordination security |
 | | A2A routing (design mention) | §6.1 | — | — | 📋 Future plan |
@@ -1956,6 +1956,18 @@ P1.10 and P1.11 riskDeltas are unified into the chain_anomaly dimension,
 benefiting from time decay: a trust violation from 20 minutes ago retains only 51% weight.
 ```
 
+#### 13.3.14 Temporal behaviour detectors (outline C, this round)
+
+On top of session-risk scoring, this round adds two **session-history-based** native detectors (`virbius-engine/src/main/java/io/virbius/engine/eval/`) covering multi-step violations no single rule catches:
+
+| Detector | Patterns | Trigger (conservative) | Default |
+|--------|---------|-----------------|------|
+| `ChainPatternDetector` | read-sensitive→egress, write→execute, monotonic privilege escalation (READ→WRITE→EXEC→NETWORK) | argument-level conditions (sensitive path prefix + external host) to avoid the "any read + any network" false positive | `dry_run` (`virbius.chain-patterns.enforce=false`) |
+| `RetryEscapeDetector` | retry-escape by changing tool/args after a block | at least the 3rd attempt after the last block, within the window, and at least one attempt changed tool/args; includes a ≥3-consecutive-allowed wash-out guard | `dry_run` (`virbius.retry-escape.enforce=false`) |
+
+Both read session history via `SessionHistoryService` (over `SessionStatePreloader`); signals merge into the `chain_anomaly` dimension in `EvaluateOrchestrator`. Default `dry_run`: signals are audited but not enforced, so ordinary long tasks are never mis-blocked; enforcement requires `enforce=true`.
+
+**Script-rule side-effect API**: `PolicyContext` gains `ctx.setIntent(action)` (override the hit rule's action; sync rules only) and `ctx.incrementRiskScore(delta)` (accumulate a `chain_anomaly` delta); `ScriptRuleRunner.runWithDelta()` collects them and applies them once.
 
 ---
 
@@ -2342,6 +2354,21 @@ virbius:
 | `virbius.audit.hash-chain.verify-interval-ms` | `3600000` | Verification interval (ms) |
 | `virbius.audit.hash-chain.verify-batch-size` | `10000` | Batch size |
 
+#### 13.5.9 Extended Implementation (outline A: trace chain / Merkle / anchor / retention / export / Decision BOM)
+
+On top of the audit chain, this round completes the outline-A components (migrations `V13`–`V15`):
+
+| Component | Responsibility | Table(s) |
+|------|------|----|
+| `TraceChainVerifier` | verify a session's or the tenant's `tb_agent_trace` hash chain (`chain_seq`/`prev_hash`/`curr_hash`) | `tb_agent_trace`, `tb_trace_chain_state` |
+| `MerkleUtil` + `MerkleAuditService` | Merkle tree over audit-event `curr_hash` (by `audit_seq`), producing per-event inclusion proofs and independent verification | `tb_audit_events` |
+| `DailyAnchorJob` | seal each day's session chain heads under a per-tenant Merkle root | `tb_audit_daily_anchor` |
+| `AuditRetentionJob` | retention archival: default `archive` mode only **copies** expired rows into `*_archive` mirrors (deletion is a manual ops action, only after the anchor is sealed) | `tb_tenant_retention_policy`, `*_archive` |
+| `DecisionBomService` | reconstruct the Decision BOM from a single `trace_id` (audit / session / policy / trace) | — |
+| `AuditExportService` | permission-controlled encrypted export + export ledger; AES-256-GCM, fail-closed when `virbius.audit.export.key` is unset | `tb_audit_export_job` |
+| `SessionCheckpointService` | per-session checkpoint maintained from trace ingest, surviving a Redis eviction | `tb_session_checkpoint` |
+
+New APIs: [PROTOCOL.md §2.6.4](PROTOCOL.md). Configuration and ops: [DEPLOYMENT.md §10](DEPLOYMENT.md). Beyond chain detection, `deploy/scripts/audit-insert-only-grants.sql` adds privilege-layer append-only hardening (prevention).
 
 ---
 
@@ -2589,7 +2616,7 @@ injection_threshold = 0.7         # injection detection confidence threshold
 
 ### 13.7 Output Review
 
-> **Tool result review implemented; Agent final output review is a design suggestion pending application layer integration.** This approach abandons the original design's independent `OutputReviewer` class, instead **reusing the Engine's existing rule pipeline** (`POST /v1/evaluate`), achieving zero new endpoints and zero new LLM clients. Tool result review is already implemented in MCP Proxy; Agent final output review (Plan B) requires the application layer to call `/v1/evaluate` itself; the codebase currently does not contain application layer integration code.
+> **Tool result review is implemented in MCP Proxy; Agent final output review is now implemented on the Engine side (see §13.7.7).** This approach abandons the original design's independent `OutputReviewer` class, instead **reusing the Engine's existing rule pipeline** (`POST /v1/evaluate`), achieving zero new endpoints and zero new LLM clients. Tool result review is implemented in MCP Proxy; Agent final output review is implemented via the Engine's OpenAI-compatible endpoint `POST /v1/chat/completions` with a `virbius` extension (`role=output`; whole response for non-streaming, sliding window for streaming).
 
 #### 13.7.1 Design Decision: Reuse Instead of New
 
@@ -2668,6 +2695,20 @@ fail_open = true            # whether to allow when Engine is unavailable
 
 > Three layers cover the complete review chain from tool return to final output.
 
+#### 13.7.7 Engine-side output review (outline B, this round)
+
+Output review is implemented on the `virbius-engine` OpenAI-compatible endpoint `POST /v1/chat/completions` (see [PROTOCOL.md §2.6.5](PROTOCOL.md)):
+
+| Component | Responsibility |
+|------|------|
+| `ChatCompletionsController` (extended) | recognize the request-level `virbius` extension; review the assistant answer via `role=output`; emit `input`/`output` trace steps |
+| `StreamReviewWindow` | streaming sliding-window buffer (hard cap + context overlap); only a passed window is forwarded |
+| `OutputContentRules` | NeMo-style regex content rules (code/SQL/template injection, XSS, credential leak), no extra dependency |
+| `OutputActionResolver` | disposal resolution: `reject|omit|redact|warn`, overrides via `virbius.output-review.action-map` + keyword fallback, `reject` as safe default |
+| `OutputMasker` | in-place PII/credential masking for the `redact` action (email/phone/ID/bank card/AWS key/private key/Bearer) |
+| `TraceStepPublisher` | publish chat `input`/`output` trace steps from the Engine to Control (degrades to a no-op without Kafka) |
+
+Configuration (defaults in DEPLOYMENT §10.2): `virbius.output-review.skip-models`, `refusal-text`, `fail-closed`, `streaming.{window-chars,context-chars,stream-first}`, `action-map`. False-positive statistics are exposed via `GET .../audit/output-review-stats` for the console's "Output-review" tab.
 
 ---
 
