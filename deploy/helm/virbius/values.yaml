@@ -133,8 +133,6 @@ auth:
 
 engine:
   replicaCount: 1
-  grpc:
-    port: 50051
   resources:
     requests:
       cpu: 200m

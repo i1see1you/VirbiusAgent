@@ -29,8 +29,6 @@ virbius:
     ttl-seconds: ${VIRBIUS_CHALLENGE_TTL:600}
     token-ttl-seconds: ${VIRBIUS_CHALLENGE_TOKEN_TTL:600}
     exemption-ttl-seconds: ${VIRBIUS_CHALLENGE_EXEMPTION_TTL:600}
-  grpc:
-    port: ${VIRBIUS_GRPC_PORT:50051}
   audit:
     engine-path: ${VIRBIUS_ENGINE_AUDIT:/tmp/virbius/engine-audit.jsonl}
     engine-allow-path: ${VIRBIUS_ENGINE_AUDIT_ALLOW:/tmp/virbius/engine-audit-allow.jsonl}

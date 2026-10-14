@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Delegated redaction covers encoding variants**: body/location redaction now also replaces percent/base64/base64url literal forms of the credential (literal replacement only — the body is never decoded/rewritten); a response whose raw body contains the credential raises a `hit_credential_echo` alert.
 - **Proxy test seam**: added a `test-harness` cargo feature (compile-time only) so the full-chain E2E harness can drive the hit branch against a local HTTP server; a production binary cannot disable the https+443 gate via any runtime variable.
 
+### Removed
+- **`virbius-engine` gRPC decision path (port 50051)**: the gRPC `EvaluateService` had no in-repo consumer — the MCP proxy, the compiled gateway `engine_url`, and the Control facades all use the HTTP/JSON `POST /v1/evaluate` path. Removed `EvaluateGrpcService` / `GrpcServerLifecycle` / `ProtoMapper`, `src/main/proto/evaluate.proto`, the `io.grpc`/`protobuf-java`/`javax.annotation-api` dependencies and the `protobuf-maven-plugin`/`os-maven-plugin` build config, the `virbius.grpc.port` setting, and the Helm gRPC service port / `engine.grpc.port` value. `/v1/evaluate` is now documented and commented as the single authoritative internal decision path.
+
 ## [0.2.0] - 2026-09-15
 
 ### Changed

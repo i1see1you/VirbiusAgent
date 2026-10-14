@@ -5,7 +5,12 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
-/** HTTP mirror of the gateway-agent contract, for local debugging; production path is gRPC :50051. */
+/**
+ * Authoritative internal decision API (HTTP/JSON). This is the single decision
+ * path consumed by the MCP proxy, the gateway (compiled {@code engine_url}),
+ * and the Control-side simulate/challenge facades. The former gRPC mirror
+ * (port 50051) was removed — see CHANGELOG.
+ */
 @RestController
 public class EvaluateHttpController {
 

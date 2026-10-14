@@ -31,7 +31,6 @@ Before production use:
 {{- else }}
   - engine.promptLlm.baseUrl must point at an external Ollama/gateway
 {{- end }}
-  - In-cluster gRPC evaluate is {{ include "virbius.fullname" . }}-engine:{{ .Values.engine.grpc.port | default 50051 }}
 
 P0 security notes:
 

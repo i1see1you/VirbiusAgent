@@ -11,9 +11,6 @@ spec:
     - name: http
       port: 8082
       targetPort: http
-    - name: grpc
-      port: {{ .Values.engine.grpc.port | default 50051 }}
-      targetPort: grpc
   selector:
     {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "engine") | nindent 4 }}
 ---
@@ -54,15 +51,11 @@ spec:
           ports:
             - name: http
               containerPort: 8082
-            - name: grpc
-              containerPort: {{ .Values.engine.grpc.port | default 50051 }}
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: prod
             - name: SERVER_PORT
               value: "8082"
-            - name: VIRBIUS_GRPC_PORT
-              value: {{ .Values.engine.grpc.port | default 50051 | quote }}
             - name: KAFKA_BOOTSTRAP_SERVERS
               value: {{ include "virbius.kafkaBootstrap" . | quote }}
             {{- include "virbius.kafkaSaslEnv" . | nindent 12 }}
