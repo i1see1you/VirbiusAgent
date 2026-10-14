@@ -2621,9 +2621,9 @@ injection_threshold = 0.7         # 注入检测置信度阈值
 
 原始设计（ARCHITECTURE.md §2.10）提议在 `virbius-core` 中新建 `OutputReviewer` 结构体，内嵌 `GuardModelClient`。经分析发现 Engine 的 `prompt` runtime（VirbiusGuard）已具备完整的内容安全分类能力，`groovy` runtime 覆盖确定性检查，两者共享信号流和策略合并。因此实际实现为：
 
-- **Engine 侧零改动**：`POST /v1/evaluate` 的 `EvaluateRequestDto` 已有 `content` 和 `role` 字段，现有 `PromptRunner` + `ScriptRuleRunner` → `PolicyMerger` 管线自动对 `content` 执行安全分类
+- **Engine 侧复用**：`POST /v1/evaluate` 的 `EvaluateRequestDto` 已有 `content` 和 `role` 字段，现有 `PromptRunner` + `ScriptRuleRunner` → `PolicyMerger` 管线自动对 `content` 执行安全分类
 - **MCP Proxy 侧**：在工具结果返回前（`mask_pii` + `trust_tag` 之后），提取文本调用 `/v1/evaluate`（`role="output"`），若 `deny` 则替换为安全提示
-- **Agent 最终输出**：⏳ 设计建议——应用层直接调用 `POST /v1/evaluate`（方案 B），无需额外端点。Engine 侧已就绪（`/v1/evaluate` 支持 `role="output"`），但应用层集成代码尚未编写
+- **Agent 最终输出**：✅ **已在 Engine 侧实现**（§13.7.7）——`POST /v1/chat/completions` 携带 `virbius` 扩展时经 `role="output"` 审查助手回答（非流式整段 / 流式滑动窗口）。应用层直接调用 `POST /v1/evaluate` 仍是一种可选接入方式，但不再是必需前提。
 
 #### 13.7.2 审查维度对照
 
@@ -2654,14 +2654,15 @@ review_tool_output()       ← 内容安全审查（新增）
   └── 若 deny → replace_result_text() 替换为安全提示
       若 engine 不可用 → 根据 fail_open 决定放行或拦截
 
-Agent 最终响应（方案 B：应用层调用，⏳ 设计建议/待应用层集成）
+Agent 最终响应（✅ 已实现：Engine 侧 /v1/chat/completions + virbius 扩展）
   │
   ▼
-应用层 POST /v1/evaluate { content: "<Agent 输出>", role: "output" }
-  └── Engine 同一管线分类 → deny 则脱敏/拦截
+Engine POST /v1/chat/completions { ..., virbius: { review_output: true, ... } }
+  ├── 非流式：整段回答经 evaluate 管线（role="output"）→ reject/omit/redact/warn
+  └── 流式：滑动窗口（StreamReviewWindow）逐窗口审查
 ```
 
-> **工具结果审查与 Agent 最终输出审查的分工**：MCP Proxy 只能看到工具调用和工具返回值，看不到 Agent 的最终文本响应（那是 chat completion API 的响应）。因此工具结果审查在 MCP Proxy 实现（✅ 已完成），Agent 最终输出审查由应用层自行调用 `/v1/evaluate`（方案 B，⏳ 设计建议——Engine 侧已就绪，待应用层集成）。
+> **工具结果审查与 Agent 最终输出审查的分工**：MCP Proxy 只能看到工具调用和工具返回值，看不到 Agent 的最终文本响应（那是 chat completion API 的响应）。因此工具结果审查在 MCP Proxy 实现（✅ 已完成），Agent 最终输出审查在 Engine 侧的 chat 接入点实现（✅ 已完成，`POST /v1/chat/completions` + `virbius` 扩展，见 §13.7.7）；应用层直接调用 `/v1/evaluate` 仍可作为可选接入方式。
 
 #### 13.7.4 代码位置
 
@@ -2690,7 +2691,7 @@ fail_open = true            # Engine 不可用时是否放行
 |--------|---------|------|------|
 | **STI Taint（§13.2）** | 工具返回值 | 工具执行后、Agent 汇总前 | 小模型判定注入 |
 | **工具结果审查（本节）** | 工具返回值 | PII 脱敏 + 信任标签之后 | 复用 Engine 规则管线（VirbiusGuard + groovy） |
-| **Agent 输出审查（方案 B）** | Agent 最终响应 | Agent 汇总后、返回用户前 | 应用层调用 `/v1/evaluate`（⏳ 设计建议/待应用层集成） |
+| **Agent 输出审查** | Agent 最终响应 | Agent 汇总后、返回用户前 | Engine `/v1/chat/completions`（`role="output"`，整段/流式窗口）✅ |
 
 > 三层覆盖从工具返回到最终输出的完整审查链路。
 

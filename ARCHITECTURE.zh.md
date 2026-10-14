@@ -954,11 +954,12 @@ review_tool_output()       ← 内容安全审查（新增）
   +-- 若 deny -> replace_result_text() 替换为安全提示
       若 engine 不可用 -> 根据 fail_open 决定放行或拦截
 
-Agent 最终响应（方案 B：应用层调用，⏳ 设计建议/待应用层集成）
+Agent 最终响应（✅ 已实现：Engine 侧 /v1/chat/completions + virbius 扩展）
   |
   v
-应用层 POST /v1/evaluate { content: "<Agent 输出>", role: "output" }
-  +-- Engine 同一管线分类 -> deny 则脱敏/拦截
+Engine POST /v1/chat/completions { ..., virbius: { review_output: true, ... } }
+  +-- 非流式：整段回答经 evaluate 管线（role="output"）-> reject/omit/redact/warn
+  +-- 流式：滑动窗口（StreamReviewWindow）逐窗口审查
 ```
 
 **审查维度**：
@@ -976,7 +977,7 @@ Agent 最终响应（方案 B：应用层调用，⏳ 设计建议/待应用层�
 |--------|---------|------|------|
 | **STI Taint（§5.4）** | 工具返回值 | 工具执行后、Agent 汇总前 | 小模型判定注入 |
 | **工具结果审查（本节）** | 工具返回值 | PII 脱敏 + 信任标签之后 | 复用 Engine 规则管线（VirbiusGuard + groovy） |
-| **Agent 输出审查（方案 B）** | Agent 最终响应 | Agent 汇总后、返回用户前 | 应用层调用 `/v1/evaluate`（⏳ 设计建议/待应用层集成） |
+| **Agent 输出审查** | Agent 最终响应 | Agent 汇总后、返回用户前 | Engine `/v1/chat/completions`（`role="output"`，整段/流式窗口）✅ |
 
 > 三层覆盖从工具返回到最终输出的完整审查链路。
 

@@ -2624,7 +2624,7 @@ The original design (ARCHITECTURE.md §2.10) proposed creating a new `OutputRevi
 
 - **Zero changes on the Engine side**: `POST /v1/evaluate`'s `EvaluateRequestDto` already has `content` and `role` fields; the existing `PromptRunner` + `ScriptRuleRunner` → `PolicyMerger` pipeline automatically performs safety classification on `content`
 - **MCP Proxy side**: Before the tool result is returned (after `mask_pii` + `trust_tag`), extract text and call `/v1/evaluate` (`role="output"`); if `deny`, replace with a safety prompt
-- **Agent final output**: ⏳ Design suggestion — the application layer directly calls `POST /v1/evaluate` (Plan B), no additional endpoints needed. The Engine side is already ready (`/v1/evaluate` supports `role="output"`), but the application layer integration code has not yet been written
+- **Agent final output**: ✅ **implemented on the Engine side** (§13.7.7) — `POST /v1/chat/completions` with the `virbius` extension reviews the assistant answer via `role="output"` (whole response for non-streaming, sliding window for streaming). An application-layer direct call to `POST /v1/evaluate` remains an optional integration, no longer a prerequisite.
 
 #### 13.7.2 Review Dimension Mapping
 
@@ -2655,14 +2655,15 @@ review_tool_output()       ← Content safety review (new)
   └── If deny → replace_result_text() replace with safety prompt
        If engine unavailable → decide based on fail_open to allow or block
 
-Agent final response (Plan B: application layer call, ⏳ design suggestion/pending application layer integration)
+Agent final response (✅ implemented: Engine /v1/chat/completions + virbius extension)
   |
   ▼
-Application layer POST /v1/evaluate { content: "<Agent output>", role: "output" }
-  └── Engine same pipeline classification → deny then desensitize/block
+Engine POST /v1/chat/completions { ..., virbius: { review_output: true, ... } }
+  ├── non-streaming: whole answer via the evaluate pipeline (role="output") → reject/omit/redact/warn
+  └── streaming: sliding window (StreamReviewWindow) reviewed window-by-window
 ```
 
-> **Division of labor between tool result review and Agent final output review**: MCP Proxy can only see tool calls and tool return values, not the Agent's final text response (that is the chat completion API's response). Therefore, tool result review is implemented in MCP Proxy (✅ completed), while Agent final output review is done by the application layer calling `/v1/evaluate` (Plan B, ⏳ design suggestion — Engine side already ready, pending application layer integration).
+> **Division of labor between tool result review and Agent final output review**: MCP Proxy can only see tool calls and tool return values, not the Agent's final text response (that is the chat completion API's response). Therefore, tool result review is implemented in MCP Proxy (✅ completed), while Agent final output review is implemented at the Engine's chat entry point (✅ completed, `POST /v1/chat/completions` + `virbius` extension, see §13.7.7); an application-layer direct call to `/v1/evaluate` remains an optional integration.
 
 #### 13.7.4 Code Locations
 
@@ -2691,7 +2692,7 @@ fail_open = true            # whether to allow when Engine is unavailable
 |----------------|---------------|-------|-----------|
 | **STI Taint (§13.2)** | Tool return value | After tool execution, before Agent aggregation | Small model judges injection |
 | **Tool result review (this section)** | Tool return value | After PII desensitization + trust tags | Reuses Engine rule pipeline (VirbiusGuard + groovy) |
-| **Agent output review (Plan B)** | Agent final response | After Agent aggregation, before returning to user | Application layer calls `/v1/evaluate` (⏳ design suggestion/pending application layer integration) |
+| **Agent output review** | Agent final response | After Agent aggregation, before returning to user | Engine `/v1/chat/completions` (`role="output"`, whole/streaming window) ✅ |
 
 > Three layers cover the complete review chain from tool return to final output.
 

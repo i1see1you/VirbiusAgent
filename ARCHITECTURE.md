@@ -958,11 +958,12 @@ review_tool_output()       ← Content security review (new)
   +-- if deny -> replace_result_text() replace with safety notice
        if engine unavailable -> decide allow or block based on fail_open
 
-Agent final response (Plan B: application layer call, ⏳ design suggestion/pending application layer integration)
+Agent final response (✅ implemented: Engine /v1/chat/completions + virbius extension)
   |
   v
-Application layer POST /v1/evaluate { content: "<Agent output>", role: "output" }
-  +-- Engine same pipeline classification -> deny then desensitize/block
+Engine POST /v1/chat/completions { ..., virbius: { review_output: true, ... } }
+  +-- non-streaming: whole answer via the evaluate pipeline (role="output") -> reject/omit/redact/warn
+  +-- streaming: sliding window (StreamReviewWindow) reviewed window-by-window
 ```
 
 **Review dimensions**:
@@ -980,7 +981,7 @@ Application layer POST /v1/evaluate { content: "<Agent output>", role: "output" 
 |--------|---------|------|------|
 | **STI Taint (§5.4)** | Tool return values | After tool execution, before Agent summarization | Small model determines injection |
 | **Tool result review (this section)** | Tool return values | After PII desensitization + trust tagging | Reuses Engine rule pipeline (VirbiusGuard + groovy) |
-| **Agent output review (Plan B)** | Agent final response | After Agent summarization, before returning to user | Application layer calls `/v1/evaluate` (⏳ design suggestion/pending application layer integration) |
+| **Agent output review** | Agent final response | After Agent summarization, before returning to user | Engine `/v1/chat/completions` (`role="output"`, whole/streaming window) ✅ |
 
 > Three layers cover the complete review chain from tool results to final output.
 
