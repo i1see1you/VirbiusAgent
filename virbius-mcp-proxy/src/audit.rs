@@ -1,11 +1,10 @@
-/// Audit event reporting to Redis Stream or Kafka (best-effort, non-blocking).
+/// Audit event reporting to Kafka (best-effort, non-blocking).
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-const AUDIT_REDIS_STREAM_KEY: &str = "virbius:audit:stream";
 const AUDIT_QUEUE_SIZE: usize = 512;
 const KAFKA_TIMEOUT_SECS: u64 = 5;
 
@@ -95,7 +94,6 @@ impl AuditEvent {
 #[derive(Debug, Clone)]
 pub enum AuditBackend {
     Disabled,
-    Redis { url: String },
     Kafka { brokers: String, topic: String },
 }
 
@@ -111,13 +109,6 @@ impl AuditSink {
             AuditBackend::Disabled => {
                 debug!("audit sink disabled");
                 None
-            }
-            AuditBackend::Redis { url } => {
-                let (tx, rx) = mpsc::channel::<AuditEvent>(AUDIT_QUEUE_SIZE);
-                tokio::spawn(async move {
-                    redis_audit_worker(url, rx).await;
-                });
-                Some(tx)
             }
             AuditBackend::Kafka { brokers, topic } => {
                 let (tx, rx) = mpsc::channel::<AuditEvent>(AUDIT_QUEUE_SIZE);
@@ -151,70 +142,6 @@ impl AuditSink {
 }
 
 pub type SharedAuditSink = Arc<AuditSink>;
-
-// ─── Redis worker ───────────────────────────────────────────────────────
-
-async fn redis_audit_worker(url: String, mut rx: mpsc::Receiver<AuditEvent>) {
-    debug!("audit redis worker started");
-    let target = crate::sink_common::parse_redis_target(&url);
-    loop {
-        match tokio::net::TcpStream::connect(target.addr).await {
-            Ok(stream) => {
-                use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-                let (reader, mut writer) = stream.into_split();
-                let mut reader = BufReader::new(reader);
-                let mut line = String::new();
-
-                // AUTH handshake when the URL carries a password
-                // (redis://:password@host:port). RESP-encoded so passwords may
-                // contain any bytes (the inline protocol is not binary-safe).
-                if let Some(password) = &target.password {
-                    let auth = crate::sink_common::resp_command("AUTH", &[password]);
-                    if writer.write_all(&auth).await.is_err() {
-                        warn!("audit redis auth write failed, reconnecting...");
-                        continue;
-                    }
-                    line.clear();
-                    match reader.read_line(&mut line).await {
-                        Ok(_) if line.starts_with('+') => {}
-                        _ => {
-                            warn!("audit redis auth rejected, retrying in 5s...");
-                            while rx.try_recv().is_ok() {}
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-                            continue;
-                        }
-                    }
-                }
-
-                while let Some(event) = rx.recv().await {
-                    let json = match serde_json::to_string(&event) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            warn!("audit serialize error: {e}");
-                            continue;
-                        }
-                    };
-                    let cmd = format!(
-                        "XADD {} * data '{}'\r\n",
-                        AUDIT_REDIS_STREAM_KEY,
-                        json.replace('\'', "\\'")
-                    );
-                    if writer.write_all(cmd.as_bytes()).await.is_err() {
-                        warn!("audit redis write failed, reconnecting...");
-                        break;
-                    }
-                    line.clear();
-                    let _ = reader.read_line(&mut line).await;
-                }
-            }
-            Err(e) => {
-                warn!("audit redis connect failed: {e}, retrying in 5s...");
-                while rx.try_recv().is_ok() {}
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-        }
-    }
-}
 
 // ─── Kafka worker ──────────────────────────────────────────────────────
 
@@ -268,13 +195,6 @@ fn rand_sample() -> f64 {
         .as_nanos()
         .hash(&mut h);
     (h.finish() as f64 / u64::MAX as f64).fract()
-}
-
-/// Backwards-compatible test seam: parses via the shared sink helper so the
-/// historical address tests keep exercising the real parsing path.
-#[cfg(test)]
-fn parse_redis_addr(url: &str) -> std::net::SocketAddr {
-    crate::sink_common::parse_redis_target(url).addr
 }
 
 #[cfg(test)]
@@ -359,24 +279,6 @@ mod tests {
         let s = rand_sample();
         assert!(s >= 0.0);
         assert!(s < 1.0);
-    }
-
-    #[test]
-    fn test_parse_redis_addr_host_port() {
-        let addr = parse_redis_addr("127.0.0.1:6379");
-        assert_eq!(addr.to_string(), "127.0.0.1:6379");
-    }
-
-    #[test]
-    fn test_parse_redis_addr_redis_protocol() {
-        let addr = parse_redis_addr("redis://10.0.0.1:6380");
-        assert_eq!(addr.to_string(), "10.0.0.1:6380");
-    }
-
-    #[test]
-    #[should_panic(expected = "invalid Redis address")]
-    fn test_parse_redis_addr_invalid() {
-        parse_redis_addr("not-a-valid-address");
     }
 
     #[test]

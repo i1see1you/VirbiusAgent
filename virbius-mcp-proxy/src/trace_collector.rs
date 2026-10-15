@@ -11,7 +11,6 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-const TRACE_REDIS_STREAM_KEY: &str = "virbius:trace:stream";
 const TRACE_QUEUE_SIZE: usize = 1024;
 const KAFKA_TIMEOUT_SECS: u64 = 5;
 
@@ -185,7 +184,6 @@ impl TraceEvent {
 #[derive(Debug, Clone)]
 pub enum TraceBackend {
     Disabled,
-    Redis { url: String },
     Kafka { brokers: String, topic: String },
 }
 
@@ -199,13 +197,6 @@ impl TraceCollector {
             TraceBackend::Disabled => {
                 debug!("trace collector disabled");
                 None
-            }
-            TraceBackend::Redis { url } => {
-                let (tx, rx) = mpsc::channel::<TraceEvent>(TRACE_QUEUE_SIZE);
-                tokio::spawn(async move {
-                    redis_trace_worker(url, rx).await;
-                });
-                Some(tx)
             }
             TraceBackend::Kafka { brokers, topic } => {
                 let (tx, rx) = mpsc::channel::<TraceEvent>(TRACE_QUEUE_SIZE);
@@ -233,70 +224,6 @@ impl TraceCollector {
 }
 
 pub type SharedTraceCollector = Arc<TraceCollector>;
-
-// ─── Redis worker ───────────────────────────────────────────────────────
-
-async fn redis_trace_worker(url: String, mut rx: mpsc::Receiver<TraceEvent>) {
-    debug!("trace redis worker started");
-    let target = crate::sink_common::parse_redis_target(&url);
-    loop {
-        match tokio::net::TcpStream::connect(target.addr).await {
-            Ok(stream) => {
-                use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-                let (reader, mut writer) = stream.into_split();
-                let mut reader = BufReader::new(reader);
-                let mut line = String::new();
-
-                // AUTH handshake when the URL carries a password
-                // (redis://:password@host:port). RESP-encoded so passwords may
-                // contain any bytes (the inline protocol is not binary-safe).
-                if let Some(password) = &target.password {
-                    let auth = crate::sink_common::resp_command("AUTH", &[password]);
-                    if writer.write_all(&auth).await.is_err() {
-                        warn!("trace redis auth write failed, reconnecting...");
-                        continue;
-                    }
-                    line.clear();
-                    match reader.read_line(&mut line).await {
-                        Ok(_) if line.starts_with('+') => {}
-                        _ => {
-                            warn!("trace redis auth rejected, retrying in 5s...");
-                            while rx.try_recv().is_ok() {}
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-                            continue;
-                        }
-                    }
-                }
-
-                while let Some(event) = rx.recv().await {
-                    let json = match serde_json::to_string(&event) {
-                        Ok(j) => j,
-                        Err(e) => {
-                            warn!("trace serialize error: {e}");
-                            continue;
-                        }
-                    };
-                    let cmd = format!(
-                        "XADD {} * data '{}'\r\n",
-                        TRACE_REDIS_STREAM_KEY,
-                        json.replace('\'', "\\'")
-                    );
-                    if writer.write_all(cmd.as_bytes()).await.is_err() {
-                        warn!("trace redis write failed, reconnecting...");
-                        break;
-                    }
-                    line.clear();
-                    let _ = reader.read_line(&mut line).await;
-                }
-            }
-            Err(e) => {
-                warn!("trace redis connect failed: {e}, retrying in 5s...");
-                while rx.try_recv().is_ok() {}
-                tokio::time::sleep(Duration::from_secs(5)).await;
-            }
-        }
-    }
-}
 
 // ─── Kafka worker ──────────────────────────────────────────────────────
 
@@ -583,9 +510,6 @@ mod tests {
     fn test_trace_backend_debug() {
         let d = TraceBackend::Disabled;
         assert!(format!("{:?}", d).contains("Disabled"));
-
-        let r = TraceBackend::Redis { url: "r".into() };
-        assert!(format!("{:?}", r).contains("Redis"));
 
         let k = TraceBackend::Kafka {
             brokers: "b".into(),

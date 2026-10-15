@@ -279,6 +279,10 @@ impl Default for FailoverConfig {
 pub struct AuditSection {
     #[serde(default)]
     pub backend: String,
+    /// Shared Redis endpoint (set via `VIRBIUS_REDIS_URL`). The audit/trace
+    /// bus is Kafka-only; this URL now only backs the policy hot-reload stream
+    /// and the delegated-credential snapshot (each may override with its own
+    /// `redis_url`).
     #[serde(default)]
     pub redis_url: String,
     #[serde(default)]
@@ -355,9 +359,6 @@ impl ProxyConfig {
         }
         if let Ok(v) = std::env::var("VIRBIUS_AUDIT_KAFKA_TOPIC") {
             cfg.audit.kafka_topic = v;
-        }
-        if let Ok(v) = std::env::var("VIRBIUS_TRACE_REDIS_URL") {
-            cfg.trace.redis_url = v;
         }
         if let Ok(v) = std::env::var("VIRBIUS_TRACE_BACKEND") {
             cfg.trace.backend = v;
@@ -466,15 +467,6 @@ impl ProxyConfig {
         }
     }
 
-    /// Return effective trace redis URL (falls back to audit redis_url).
-    pub fn trace_redis_url(&self) -> &str {
-        if self.trace.redis_url.is_empty() {
-            &self.audit.redis_url
-        } else {
-            &self.trace.redis_url
-        }
-    }
-
     /// Check if audit should use Kafka backend.
     pub fn audit_use_kafka(&self) -> bool {
         self.audit.backend == "kafka" && !self.audit.kafka_brokers.is_empty()
@@ -536,10 +528,6 @@ pub const HIGH_RISK_TOOLS: &[&str] = &[
 pub struct TraceSection {
     #[serde(default)]
     pub backend: String,
-    /// Redis URL for trace stream. If empty, reuses audit.redis_url.
-    /// Format: host:port (raw TCP, same as audit sink).
-    #[serde(default)]
-    pub redis_url: String,
     #[serde(default)]
     pub kafka_brokers: String,
     #[serde(default = "default_trace_kafka_topic")]
@@ -561,7 +549,6 @@ impl Default for TraceSection {
     fn default() -> Self {
         Self {
             backend: String::new(),
-            redis_url: String::new(),
             kafka_brokers: String::new(),
             kafka_topic: default_trace_kafka_topic(),
             enabled: default_trace_enabled(),
@@ -642,7 +629,6 @@ mod tests {
     fn test_default_trace_values() {
         let cfg = ProxyConfig::default();
         assert!(cfg.trace.backend.is_empty());
-        assert!(cfg.trace.redis_url.is_empty());
         assert!(cfg.trace.kafka_brokers.is_empty());
         assert_eq!(cfg.trace.kafka_topic, "virbius-trace-events");
         assert!(cfg.trace.enabled);
@@ -682,19 +668,6 @@ mod tests {
         assert_eq!(format!("{:?}", p), "DefaultDeny");
         let cloned = p;
         assert_eq!(cloned, FallbackPolicy::DefaultDeny);
-    }
-
-    #[test]
-    fn test_trace_redis_url_fallback() {
-        let mut cfg = ProxyConfig::default();
-
-        // When trace.redis_url is empty, fallback to audit.redis_url
-        cfg.audit.redis_url = "127.0.0.1:6379".to_string();
-        assert_eq!(cfg.trace_redis_url(), "127.0.0.1:6379");
-
-        // When trace.redis_url is set, use it
-        cfg.trace.redis_url = "10.0.0.1:6380".to_string();
-        assert_eq!(cfg.trace_redis_url(), "10.0.0.1:6380");
     }
 
     #[test]
