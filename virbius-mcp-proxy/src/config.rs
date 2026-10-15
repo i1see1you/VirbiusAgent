@@ -22,6 +22,46 @@ pub struct ProxyConfig {
     /// hot-reloadable (restart to change).
     #[serde(default)]
     pub delegated: DelegatedSection,
+    /// Evaluate-token authentication (P0-min). Enabled when control_base_url
+    /// is set; the proxy exchanges the license for a short-lived token.
+    #[serde(default)]
+    pub auth: AuthSection,
+}
+
+/// Evaluate-token auth configuration (P0-min).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthSection {
+    /// Control-plane base URL hosting the exchange endpoint. Empty = disabled.
+    #[serde(default)]
+    pub control_base_url: String,
+    #[serde(default = "default_auth_exchange_path")]
+    pub exchange_path: String,
+    #[serde(default = "default_auth_timeout_ms")]
+    pub exchange_timeout_ms: u64,
+    /// Refresh a cached token once this percentage of its TTL has elapsed.
+    #[serde(default = "default_auth_refresh_margin")]
+    pub refresh_margin_percent: u64,
+}
+
+fn default_auth_exchange_path() -> String {
+    "/api/v1/auth/evaluate-token".to_string()
+}
+fn default_auth_timeout_ms() -> u64 {
+    3000
+}
+fn default_auth_refresh_margin() -> u64 {
+    50
+}
+
+impl Default for AuthSection {
+    fn default() -> Self {
+        Self {
+            control_base_url: String::new(),
+            exchange_path: default_auth_exchange_path(),
+            exchange_timeout_ms: default_auth_timeout_ms(),
+            refresh_margin_percent: default_auth_refresh_margin(),
+        }
+    }
 }
 
 /// Delegated credential plane configuration (v2.5-min, A+B1 contract).
@@ -393,6 +433,9 @@ impl ProxyConfig {
         }
         if let Ok(v) = std::env::var("VIRBIUS_POLICY_REDIS_URL") {
             cfg.policy.redis_url = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_AUTH_CONTROL_URL") {
+            cfg.auth.control_base_url = v;
         }
         if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_ENABLED") {
             cfg.delegated.enabled = v == "1" || v.eq_ignore_ascii_case("true");

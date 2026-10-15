@@ -69,8 +69,26 @@ public class EvaluateHttpController {
             body.put("supported_roles", List.of("input", "output", "tool_call"));
             return ResponseEntity.badRequest().body(body);
         }
+
+        // Verified-subject handling (P0-min): claims take precedence over
+        // self-reported fields; conflicts are rejected (subject_mismatch).
+        io.virbius.engine.auth.TrustedIssuerRegistry.IssuedTokenClaims subject =
+                io.virbius.engine.auth.EvaluateAuthFilter.subject(http);
+        if (subject != null) {
+            String sid = io.virbius.engine.auth.EvaluateAuthFilter.requiredSid(http);
+            if (sid != null && request.sessionId() != null && !sid.equals(request.sessionId())) {
+                return errorBody(HttpStatus.UNAUTHORIZED, "unauthorized", "sid_mismatch");
+            }
+            ResponseEntity<?> mismatch = enforceClaims(subject, request);
+            if (mismatch != null) {
+                return mismatch;
+            }
+            request = withVerifiedSubject(request, subject);
+        }
+
         java.util.Optional<Duration> limited = rateLimiter.check(
-                request.sessionId(), clientIp(http), request.traceId(), request.streamChunk());
+                subject != null ? subject.agentAid() : request.sessionId(),
+                clientIp(http), request.traceId(), request.streamChunk(), subject != null);
         if (limited.isPresent()) {
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("error", "rate_limited");
@@ -98,6 +116,93 @@ public class EvaluateHttpController {
     public io.virbius.engine.eval.MemoryCheckResponseDto checkMemory(
             @RequestBody io.virbius.engine.eval.MemoryCheckRequestDto request) {
         return orchestrator.checkMemory(request);
+    }
+
+    /**
+     * Claims precedence + capability enforcement (P0-min).
+     *
+     * <ul>
+     *   <li><b>subject_mismatch</b> — a self-reported tenant/app that conflicts
+     *       with the token is rejected (agent tokens).</li>
+     *   <li><b>Service-token exception</b> — {@code sub=service:*} tokens have
+     *       no tenant of their own; cross-tenant operation is their purpose, so
+     *       the request body's tenant is trusted (audited as service_token).</li>
+     *   <li><b>capability_denied</b> — {@code role=tool_call} requires
+     *       {@code tool_name ∈ scope.allowed_tools} (B2: input/output roles are
+     *       exempt — chat_input/chat_completion are not MCP tools); the
+     *       self-reported {@code license_risk_quota} is clamped to the token's
+     *       scope.</li>
+     * </ul>
+     */
+    private ResponseEntity<?> enforceClaims(
+            io.virbius.engine.auth.TrustedIssuerRegistry.IssuedTokenClaims subject,
+            EvaluateRequestDto request) {
+        boolean serviceToken = subject.subject() != null && subject.subject().startsWith("service:");
+        if (!serviceToken) {
+            if (subject.tenantId() != null
+                    && request.tenantId() != null && !request.tenantId().isBlank()
+                    && !subject.tenantId().equals(request.tenantId())) {
+                return errorBody(HttpStatus.FORBIDDEN, "subject_mismatch", "tenant_id");
+            }
+            if (subject.appId() != null
+                    && request.vars() != null) {
+                Object reportedApp = request.vars().get("app_id");
+                if (reportedApp != null && !reportedApp.toString().isBlank()
+                        && !subject.appId().equals(reportedApp.toString())) {
+                    return errorBody(HttpStatus.FORBIDDEN, "subject_mismatch", "app_id");
+                }
+            }
+        }
+        // Capability check (B2): ONLY role=tool_call; input/output are exempt.
+        if ("tool_call".equals(request.role() == null ? "" : request.role().trim().toLowerCase(java.util.Locale.ROOT))
+                && subject.allowedTools() != null && !subject.allowedTools().isEmpty()
+                && !subject.allowedTools().contains("*")
+                && !subject.allowedTools().contains(request.toolName())) {
+            return errorBody(HttpStatus.FORBIDDEN, "capability_denied", request.toolName());
+        }
+        return null;
+    }
+
+    /** Rebuild the request with token-derived fields (claims precedence).
+     *  The verified-subject attribution rides the vars map under the
+     *  {@code virbius.} namespace so AuditWriter can persist it without
+     *  changing the DTO shape. */
+    private EvaluateRequestDto withVerifiedSubject(
+            EvaluateRequestDto req,
+            io.virbius.engine.auth.TrustedIssuerRegistry.IssuedTokenClaims subject) {
+        boolean serviceToken = subject.subject() != null && subject.subject().startsWith("service:");
+        String tenant = serviceToken || subject.tenantId() == null ? req.tenantId() : subject.tenantId();
+        int quota = subject.riskQuota() != null && req.riskQuota() > subject.riskQuota()
+                ? subject.riskQuota() : req.riskQuota();
+        java.util.Map<String, String> vars = new java.util.HashMap<>(
+                req.vars() != null ? req.vars() : java.util.Map.of());
+        if (subject.agentAid() != null) {
+            vars.put("virbius.agent_aid", subject.agentAid());
+        }
+        if (subject.appId() != null) {
+            vars.put("virbius.app_id", subject.appId());
+        }
+        vars.put("virbius.subject_source",
+                serviceToken ? "service_token" : "token");
+        vars.put("virbius.token_iss", subject.issuer());
+        if (subject.jti() != null) {
+            vars.put("virbius.token_jti", subject.jti());
+        }
+        vars.put("virbius.sid_binding",
+                subject.sid() != null && !subject.sid().isBlank() ? "bound" : "none");
+        return new EvaluateRequestDto(
+                tenant, req.role(), req.sessionId(), req.content(), req.streamChunk(),
+                req.priorSignals(), req.traceId(), req.userId(), req.deviceId(), vars,
+                req.routeUri(), req.upstreamId(), req.consumerId(), req.apiKeyGroup(),
+                req.toolName(), req.argsJson(), quota, req.attachments());
+    }
+
+    private static ResponseEntity<Map<String, Object>> errorBody(
+            HttpStatus status, String error, String reason) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("error", error);
+        body.put("reason", reason);
+        return ResponseEntity.status(status).body(body);
     }
 
     private static String clientIp(HttpServletRequest request) {

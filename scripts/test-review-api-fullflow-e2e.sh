@@ -197,6 +197,8 @@ env VIRBIUS_DATA_DIR="$DATA" \
     KAFKA_BOOTSTRAP_SERVERS="$KAFKA_HOST:$KAFKA_PORT" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$ENGINE_JAR" --server.port="$ENGINE_PORT" \
+      --virbius.evaluate.auth.enabled=false \
+      --virbius.evaluate.auth.bootstrap-pem-file= \
     > "$LOGS/engine.log" 2>&1 &
 ENGINE_PID=$!
 

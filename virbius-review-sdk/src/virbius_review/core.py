@@ -91,6 +91,15 @@ def rate_limited_error(retry_after_seconds) -> None:
     raise ReviewError(f"rate_limited (retry_after {retry_after_seconds}s)")
 
 
+def auth_error(reason: str) -> None:
+    """HTTP 401/403 fails CLOSED (mirrors AGT design principle 4, and the 429
+    policy): a rejected/absent credential must never degrade to "content is
+    forwarded unreviewed". Opt into the availability posture with
+    ``auth_fail_open=True`` only when unauthenticated fallback is acceptable.
+    """
+    raise ReviewError(f"unauthorized ({reason})")
+
+
 def apply_disposal(cfg: ReviewConfig, content: str, verdict: OutputVerdict) -> str:
     """Apply the disposal verbatim — the canonical enforcement mapping.
 

@@ -186,7 +186,7 @@ public class TraceEventIngestor {
                 + "|" + str(event.get("tool_decision"))
                 + "|" + str(event.get("rule_id"))
                 + "|" + str(event.get("reason_code"))
-                + "|" + str(event.get("risk_score"))
+                + "|" + canonicalRiskScore(event.get("risk_score"))
                 + "|" + MerkleUtil.canonicalTs(event.get("occurred_at"));
         return "sha256:" + sha256Hex(input);
     }
@@ -266,6 +266,20 @@ public class TraceEventIngestor {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /**
+     * Canonical {@code risk_score} form shared by hashing and storage. The row
+     * keeps {@link #intValOrNull} (an int, or NULL), so the chain hash must
+     * commit the same normalized value; otherwise a wire value that is not a
+     * plain int (e.g. {@code 20.7} or {@code "abc"}) hashes as "20.7"/"abc"
+     * while the stored row reads back as 20 / NULL, and
+     * {@link TraceChainVerifier}'s recompute falsely reports a curr_hash
+     * mismatch on a legitimately ingested event.
+     */
+    static String canonicalRiskScore(Object o) {
+        Integer v = intValOrNull(o);
+        return v == null ? "" : v.toString();
     }
 
     private static int boolInt(Object o) {

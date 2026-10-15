@@ -9,14 +9,49 @@ engine 会自动执行两层防护（见 virbius-engine EvaluateOrchestrator）�
 本模块只负责"调接口 + 判定是否拦截"，不参与 engine 内部逻辑（硬约束：不改 virbius-engine）。
 """
 import logging
+import threading
+import time
+
 import requests
 
 from modules import settings
 
 logger = logging.getLogger(__name__)
 
+# Short-lived evaluate-token cache (P0-min). Keyed by license JWT.
+_TOKEN_LOCK = threading.Lock()
+_TOKEN_CACHE = {}
 
-def guard_prompt(content, session_id="ctf:5", user_id="ctf-player"):
+
+def _evaluate_token(license_jwt, control_url):
+    """Exchange the License JWT for a short-lived evaluate token (cached)."""
+    if not license_jwt or not control_url:
+        return ""
+    now = time.time()
+    with _TOKEN_LOCK:
+        cached = _TOKEN_CACHE.get(license_jwt)
+        if cached and now < cached[1]:
+            return cached[0]
+    try:
+        resp = requests.post(
+            control_url.rstrip("/") + "/api/v1/auth/evaluate-token",
+            json={"licenseJwt": license_jwt},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        payload = data.get("data", data) if isinstance(data, dict) else {}
+        token = (payload or {}).get("access_token", "")
+        ttl = float((payload or {}).get("expires_in", 900) or 900)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[virbius_guard] evaluate-token exchange failed: %s", exc)
+        return ""
+    with _TOKEN_LOCK:
+        _TOKEN_CACHE[license_jwt] = (token, now + max(1.0, ttl * 0.8))
+    return token
+
+
+def guard_prompt(content, session_id="ctf:5", user_id="ctf-player", license_jwt=""):
     """调用 virbius-engine /v1/evaluate，返回拦截判定与信号详情。
 
     返回 dict：
@@ -27,8 +62,14 @@ def guard_prompt(content, session_id="ctf:5", user_id="ctf-player"):
       - rule_id   : 命中主规则
       - reason    : reasonCode（如 llm:Jailbreak）
       - error     : 调用失败时为错误信息，其余为 None
+
+    P0-min 认证：当提供 license_jwt（或配置 VIRBIUS_EVAL_LICENSE_JWT）且
+    VIRBIUS_CONTROL_URL 可用时，先用 license 换取短 token 再调引擎；否则不带
+    认证头（适用于引擎 auth 关闭的环境）。
     """
     engine_url = settings.get("VIRBIUS_ENGINE_URL")
+    control_url = settings.get("VIRBIUS_CONTROL_URL", "")
+    license_jwt = license_jwt or settings.get("VIRBIUS_EVAL_LICENSE_JWT", "")
     # engine 的 EvaluateRequestDto 期望 snake_case 字段（tenant_id/session_id/user_id），
     # 不能用 camelCase，否则 tenant_id 反序列化为 null，PromptRunner 按租户查不到 prompt 规则。
     payload = {
@@ -38,8 +79,12 @@ def guard_prompt(content, session_id="ctf:5", user_id="ctf-player"):
         "role": "input",
         "user_id": user_id,
     }
+    headers = {}
+    token = _evaluate_token(license_jwt, control_url)
+    if token:
+        headers["Authorization"] = "Bearer " + token
     try:
-        r = requests.post(f"{engine_url}/v1/evaluate", json=payload, timeout=30)
+        r = requests.post(f"{engine_url}/v1/evaluate", json=payload, headers=headers, timeout=30)
         r.raise_for_status()
         data = r.json()
     except requests.RequestException as e:

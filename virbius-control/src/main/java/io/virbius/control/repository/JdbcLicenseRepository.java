@@ -45,6 +45,14 @@ public class JdbcLicenseRepository implements LicenseRepository {
     }
 
     @Override
+    public Optional<AgentLicense> findById(String licenseId) {
+        List<AgentLicense> rows = jdbc.query(
+                "SELECT * FROM tb_agent_licenses WHERE license_id = ?",
+                MAPPER, licenseId);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
+    }
+
+    @Override
     public void save(AgentLicense license, String licenseId) {
         jdbc.update(
                 """
@@ -120,11 +128,10 @@ public class JdbcLicenseRepository implements LicenseRepository {
                 licenseId);
         jdbc.update(
                 """
-                INSERT INTO tb_license_revocations (license_id, tenant_id, app_id, revoked_by, revoke_reason)
-                SELECT ?, tenant_id, app_id, ?, ?
+                INSERT INTO tb_license_revocations (license_id, tenant_id, app_id, agent_aid, revoked_by, revoke_reason)
+                SELECT license_id, tenant_id, app_id, agent_aid, ?, ?
                 FROM tb_agent_licenses WHERE license_id = ?
                 """,
-                licenseId,
                 revokedBy,
                 reason,
                 licenseId);

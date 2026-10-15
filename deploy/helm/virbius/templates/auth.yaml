@@ -50,6 +50,10 @@ spec:
         fsGroup: 999
         runAsUser: 999
         runAsGroup: 999
+      initContainers:
+        {{- if .Values.mysql.enabled }}
+        {{- include "virbius.waitFor" (dict "root" . "name" "mysql" "host" (printf "%s-mysql" (include "virbius.fullname" .)) "port" 3306) | nindent 8 }}
+        {{- end }}
       containers:
         - name: auth
           image: {{ include "virbius.image" (dict "root" . "component" "auth") }}
@@ -61,6 +65,15 @@ spec:
               value: prod
             - name: SERVER_PORT
               value: "8083"
+            - name: VIRBIUS_JDBC_URL
+              value: {{ include "virbius.jdbcUrl" . | quote }}
+            - name: VIRBIUS_JDBC_USER
+              value: virbius
+            - name: VIRBIUS_JDBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "virbius.secretName" . }}
+                  key: mysql-password
             - name: VIRBIUS_AUTH_DATA_DIR
               value: /data
             - name: VIRBIUS_AUTH_ISSUER

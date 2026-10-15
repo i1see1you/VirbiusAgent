@@ -40,20 +40,31 @@ public class EvaluateRateLimiter {
     private final long perSessionPerMin;
     private final long perIpPerMin;
     private final long maxWindowsPerTrace;
+    private final long perAgentPerMin;
 
     private final ConcurrentHashMap<String, MinuteCounter> sessions = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, MinuteCounter> ips = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, MinuteCounter> agents = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, TraceState> traces = new ConcurrentHashMap<>();
 
+    @org.springframework.beans.factory.annotation.Autowired
     public EvaluateRateLimiter(
             @Value("${virbius.evaluate.rate-limit.enabled:true}") boolean enabled,
             @Value("${virbius.evaluate.rate-limit.per-session-per-min:60}") long perSessionPerMin,
             @Value("${virbius.evaluate.rate-limit.per-ip-per-min:600}") long perIpPerMin,
-            @Value("${virbius.evaluate.rate-limit.max-windows-per-trace:64}") long maxWindowsPerTrace) {
+            @Value("${virbius.evaluate.rate-limit.max-windows-per-trace:64}") long maxWindowsPerTrace,
+            @Value("${virbius.evaluate.rate-limit.per-agent-per-min:600}") long perAgentPerMin) {
         this.enabled = enabled;
         this.perSessionPerMin = Math.max(1, perSessionPerMin);
         this.perIpPerMin = Math.max(1, perIpPerMin);
         this.maxWindowsPerTrace = Math.max(1, maxWindowsPerTrace);
+        this.perAgentPerMin = Math.max(1, perAgentPerMin);
+    }
+
+    /** Test/legacy constructor: agent-level backstop defaults to 10x session quota. */
+    public EvaluateRateLimiter(
+            boolean enabled, long perSessionPerMin, long perIpPerMin, long maxWindowsPerTrace) {
+        this(enabled, perSessionPerMin, perIpPerMin, maxWindowsPerTrace, perSessionPerMin * 10);
     }
 
     /**
@@ -61,6 +72,19 @@ public class EvaluateRateLimiter {
      *         {@code Retry-After} duration.
      */
     public java.util.Optional<Duration> check(String sessionId, String ip, String traceId, boolean streamChunk) {
+        return check(sessionId, ip, traceId, streamChunk, false);
+    }
+
+    /**
+     * Authenticated variant (P0-min). When {@code authenticated}, {@code sessionId}
+     * carries the VERIFIED agent_aid: the session-layer key becomes agent-level
+     * (B3: an agent-level backstop on top of the unchanged per-session quota —
+     * a multi-session agent cannot escape its agent quota by rotating sessions,
+     * and legitimate multi-session agents are not throttled by the session
+     * quota alone). The per-agent limit defaults to 10x the session limit.
+     */
+    public java.util.Optional<Duration> check(
+            String sessionId, String ip, String traceId, boolean streamChunk, boolean authenticated) {
         if (!enabled) {
             return java.util.Optional.empty();
         }
@@ -73,9 +97,18 @@ public class EvaluateRateLimiter {
             return java.util.Optional.of(remaining(minute));
         }
 
+        // Agent-level backstop (verified subject; B3).
+        if (authenticated && sessionId != null && !sessionId.isBlank()) {
+            MinuteCounter agentCounter = agents.computeIfAbsent(
+                    "agent:" + sessionId, k -> new MinuteCounter());
+            if (agentCounter.increment(minute) > perAgentPerMin) {
+                return java.util.Optional.of(remaining(minute));
+            }
+        }
+
         String sessionKey = sessionId == null || sessionId.isBlank()
                 ? "ip:" + (ip == null || ip.isBlank() ? "unknown" : ip)
-                : "sess:" + sessionId;
+                : (authenticated ? "agent:" : "sess:") + sessionId;
         MinuteCounter sessionCounter = sessions.computeIfAbsent(sessionKey, k -> new MinuteCounter());
 
         if (streamChunk && traceId != null && !traceId.isBlank()) {

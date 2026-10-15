@@ -552,6 +552,12 @@ This section covers the datastore, configuration and ops actions for the evaluat
 | `V13__trace_result_preview.sql` | `tb_agent_trace.tool_result_preview` (tool output preview, so decision reconstruction can show what the tool returned) |
 | `V14__audit_integrity_retention_export.sql` | per-session trace hash-chain columns (`chain_seq`/`prev_hash`/`curr_hash`) + `tb_trace_chain_state`; daily anchor table `tb_audit_daily_anchor`; retention policy table `tb_tenant_retention_policy`; archive mirrors `tb_audit_events_archive`/`tb_agent_trace_archive`; export ledger `tb_audit_export_job` |
 | `V15__alerts_and_session_checkpoints.sql` | alerts `tb_alert`, session checkpoints `tb_session_checkpoint` |
+| `V16__evaluate_token_auth.sql` | evaluate-token auth: `tb_evaluate_token_issuers`, `tb_evaluate_tokens`; audit + archive gain `agent_aid`/`app_id`/`subject_source`/`token_iss`; `tb_license_revocations` gains `agent_aid`/`expires_at` |
+| `V17__proxy_policy.sql` | `tb_proxy_policy` (previously SQLite-only; the proxy-policy admin API failed with "table doesn't exist" on MySQL) |
+| `V18__trace_tool_args.sql` | `tb_agent_trace.tool_args` + `tb_agent_trace_archive.tool_args` (previously SQLite-only; trace ingest failed on MySQL) |
+| `virbius-auth` `V1__baseline.sql` | auth MySQL baseline (`tb_operator_user`, `tb_auth_code`); prod uses Flyway with a distinct history table `auth_schema_history` |
+
+A `SchemaDialectParityTest` (in both `virbius-control` and `virbius-auth`) fails the build if `db/schema.sql` (SQLite/dev) and `db/migration/*.sql` (MySQL/prod) drift in tables or columns.
 
 Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lacks these new columns/tables**, so rebuild with `VIRBIUS_REBUILD_DB=1 ./scripts/run-local.sh` (deletes the DB and `FLUSHDB`).
 
@@ -571,13 +577,35 @@ Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lac
 | `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | reason-code→action (`reject|omit|redact|warn`) map; unlisted codes fall back to keyword matching — **resolved once in the engine, identical for every caller** |
 | `virbius.evaluate.rate-limit.enabled` | `true` | `/v1/evaluate` rate limiting (abuse bound for the unauthenticated endpoint) |
 | `virbius.evaluate.rate-limit.per-session-per-min` | `60` | answers/requests per session per minute (streaming windows share one unit per trace) |
-| `virbius.evaluate.rate-limit.per-ip-per-min` | `600` | total calls per IP per minute (backstop) |
+| `virbius.evaluate.rate-limit.per-ip-per-min` | `600` | total calls per IP per minute (backstop; also applies pre-auth, covering 401 traffic) |
+| `virbius.evaluate.rate-limit.per-agent-per-min` | `600` | per verified `agent_aid` per minute (**backstop** above the session quota; prevents bypass by rotating sessions; ≈ sessions×60) |
 | `virbius.evaluate.rate-limit.max-windows-per-trace` | `64` | per-trace streaming window cap (bounds a bogus trace streaming forever) |
+| `virbius.evaluate.auth.enabled` | `true` | caller authentication. When on, `/v1/evaluate*` requires a short token; **401/403 fail-closed** |
+| `virbius.evaluate.auth.bootstrap-pem-file` | empty | **N1 bootstrap trust anchor**: path to control's platform public PEM (baked at deploy). Auth on + no anchor and no Redis issuer → **the engine refuses to start** |
+| `virbius.evaluate.auth.bootstrap-kid` | `bootstrap` | anchor key id |
+| `virbius.evaluate.auth.issuer-redis-key` | `virbius:engine:issuers` | issuer set (control republishes idempotently on boot) + 30s refresh |
+| `virbius.evaluate.auth.revocation-redis-key` | `virbius:engine:revocations` | revocation snapshot (boot load + 30s reconciliation) |
+| `virbius.evaluate.auth.revocation-channel` | `virbius:license:revoked` | instant revocation push channel |
+| `virbius.evaluate.auth.verify-cache-ttl-seconds` | `900` | signature-verify cache (**revocation is NOT cached — checked every request**) |
+| `virbius.evaluate-token.ttl-seconds` (control) | `900` | short-token TTL |
+| `virbius.evaluate-token.ledger-retention-hours` (control) | `24` | issuance-ledger (`tb_evaluate_tokens`) retention; enables jti-level revocation |
+| `virbius.evaluate-token.exchange.rate-limit-per-license-per-min` (control) | `10` | exchange-endpoint rate limit |
+| `auth.control_base_url` (proxy) | empty | non-empty enables proxy-side exchange (once per session + proactive refresh) |
 | `virbius.review.input-risk-dedup-ttl-ms` | `600000` | input-review risk dedup window (once per trace, 10 min) |
 | `virbius.chain-patterns.enforce` | `false` | temporal chain-pattern detection: `false`=dry-run (audit only), `true`=enforce |
 | `virbius.retry-escape.enforce` | `false` | retry-escape detection likewise (dry-run by default) |
+| `VIRBIUS_JDBC_INIT_SQL` (control/auth · prod/staging) | `SET time_zone = '+00:00'` | per-connection init SQL; pins MySQL/MariaDB sessions to UTC so `NOW()`/`CURRENT_TIMESTAMP` match the ISO-UTC strings the app writes (SQLite is already UTC) |
 
 > These keys currently get their defaults from code (`@Value`); `application*.yml` does not declare them. Override with a startup argument or the same-named `VIRBIUS_*` env var.
+
+### 10.2.1 Caller-auth operations (P0-min)
+
+- **Trust-anchor delivery**: bake control's platform public PEM into the engine via `virbius.evaluate.auth.bootstrap-pem-file` (recommended), and/or let control publish the issuer set to Redis (`virbius:engine:issuers`) for enrichment. **With auth on, if neither exists the engine refuses to start (fail-fast — no silent unauthenticated mode).**
+- **Boot order**: Redis → control (publishes issuers/revocations) → engine. If Redis loses the issuer hash, control's republish endpoint rebuilds it idempotently (or restart control).
+- **`control` becomes a runtime dependency (proxy path)**: the proxy exchanges the license once per **session** (not per request); a control outage blocks **new** sessions and existing ones fall to 401 after the token TTL. Prefer multi-instance control + weigh the short-token TTL (default 15min).
+- **Revocation latency**: sub-second normally (channel + per-request check); only a broken channel degrades the worst case to the token TTL.
+- **Residual risk (explicitly registered)**: engine **unreachable → caller `fail_open` (unreviewed content passes)**, whereas **auth rejected 401/403 → `fail_closed` (blocked)**. Two opposite postures for "engine-side trouble"; the "engine unreachable" branch needs gateway/alert coverage in production.
+- **Out-of-repo integrations (release checklist)**: the APISIX/Higress gateway and `gateway-agent` calling `/v1/evaluate` must carry a **per-purpose service token** (`POST /api/v1/admin/evaluate-token/service`; `*` tools only for cross-tenant purposes).
 > **Moved to the SDK** (config of the removed chat-embedded review): `skip-models`, `refusal-text`, `fail-closed`, `streaming.{window-chars,context-chars,stream-first}` — see the `virbius-review-sdk` README. `virbius.trace.*` was removed together with `TraceStepPublisher`.
 
 ### 10.3 Audit export key (must be provided explicitly)

@@ -180,6 +180,8 @@ public class HashChainOrchestrator {
     }
 
     static String computeHash(String prevHash, long seq, Map<String, Object> event) {
+        // agent_aid participates in the chain so the VERIFIED subject attribution
+        // is tamper-evident (P0-min decision: new project, no legacy chains).
         String input = prevHash
                 + "|" + seq
                 + "|" + str(event.get("tenant_id"))
@@ -192,6 +194,7 @@ public class HashChainOrchestrator {
                 + "|" + str(event.get("scene"))
                 + "|" + str(event.get("user_id"))
                 + "|" + str(event.get("device_id"))
+                + "|" + str(event.get("agent_aid"))
                 + "|" + str(event.get("intercepted_at"));
         return "sha256:" + sha256Hex(input);
     }

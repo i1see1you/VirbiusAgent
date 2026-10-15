@@ -90,6 +90,14 @@ public class AuditWriter {
             if (req.deviceId() != null && !req.deviceId().isBlank()) {
                 event.put("device_id", req.deviceId());
             }
+            // Verified-subject attribution (P0-min): set by the auth filter via
+            // the "virbius." vars namespace when a valid evaluate token was
+            // presented. Absent = self-reported/unauthenticated request.
+            Map<String, String> vars = req.vars() != null ? req.vars() : Map.of();
+            putIfPresent(event, "agent_aid", vars.get("virbius.agent_aid"));
+            putIfPresent(event, "app_id", vars.get("virbius.app_id"));
+            putIfPresent(event, "subject_source", vars.get("virbius.subject_source"));
+            putIfPresent(event, "token_iss", vars.get("virbius.token_iss"));
             boolean isAllow = "allow".equalsIgnoreCase(decision.effectiveAction());
             if (isAllow && auditSampleRateAllow > 0) {
                 boolean sampled = ThreadLocalRandom.current().nextDouble() < auditSampleRateAllow;
@@ -109,6 +117,12 @@ public class AuditWriter {
             }
         } catch (Exception e) {
             log.warn("audit write failed: {}", e.getMessage());
+        }
+    }
+
+    private static void putIfPresent(Map<String, Object> event, String key, String value) {
+        if (value != null && !value.isBlank()) {
+            event.put(key, value);
         }
     }
 }

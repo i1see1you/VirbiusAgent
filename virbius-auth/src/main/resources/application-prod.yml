@@ -1,10 +1,22 @@
 spring:
+  # Required env: VIRBIUS_JDBC_URL, VIRBIUS_JDBC_USER, VIRBIUS_JDBC_PASSWORD
   datasource:
-    url: jdbc:sqlite:${virbius.data-dir:./data}/virbius-auth.db
-    driver-class-name: org.sqlite.JDBC
+    url: ${VIRBIUS_JDBC_URL}
+    driver-class-name: org.mariadb.jdbc.Driver
+    username: ${VIRBIUS_JDBC_USER}
+    password: ${VIRBIUS_JDBC_PASSWORD}
+    hikari:
+      maximum-pool-size: 20
+      connection-timeout: 3000
+      # Pin MySQL/MariaDB sessions to UTC so CURRENT_TIMESTAMP matches the
+      # ISO-UTC strings the app writes (SQLite is already UTC).
+      connection-init-sql: ${VIRBIUS_JDBC_INIT_SQL:SET time_zone = '+00:00'}
   sql:
     init:
-      mode: always
-      schema-locations: classpath:db/schema.sql
+      mode: never
   flyway:
-    enabled: false
+    enabled: true
+    locations: classpath:db/migration
+    # Distinct history table: auth may share the MySQL database with control,
+    # and both would otherwise claim the default flyway_schema_history.
+    table: auth_schema_history

@@ -32,6 +32,19 @@
       <version>3.45.3.0</version>
       <scope>runtime</scope>
     </dependency>
+    <!-- MySQL/MariaDB driver + Flyway migrations for the prod profile
+         (dev/SQLite uses db/schema.sql via spring.sql.init instead). -->
+    <dependency>
+      <groupId>org.mariadb.jdbc</groupId>
+      <artifactId>mariadb-java-client</artifactId>
+      <version>3.4.1</version>
+      <scope>runtime</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.flywaydb</groupId>
+      <artifactId>flyway-mysql</artifactId>
+      <optional>true</optional>
+    </dependency>
     <dependency>
       <groupId>com.nimbusds</groupId>
       <artifactId>nimbus-jose-jwt</artifactId>

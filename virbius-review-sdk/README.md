@@ -73,11 +73,16 @@ async with AsyncReviewClient("http://virbius-engine:8082") as client:
 | `stream_first` | `False` | 先发后审：延迟低，**已发 token 不可撤回**（默认先审后发） |
 | `refusal_text` | 抱歉… | `apply_disposal` 对 `reject` 的替换文案 |
 | `timeout` | `30` | 单次 evaluate 超时（秒） |
+| `license_jwt` + `auth_url` | — | 用长寿命 License JWT 在 `{auth_url}/api/v1/auth/evaluate-token` **一次性换取**短 token 并自动刷新（License 本体不逐请求携带） |
+| `token_provider` | — | 零参可调用对象，**每次调用前求值**（支持流式中途刷新/自定义签发） |
+| `auth_token` | — | 静态短 token（逃生口，不刷新） |
+| `auth_fail_open` | `False` | 401/403 策略：默认 **fail-closed**（认证被拒绝不放行未审内容）；`True` 仅在你明确接受无鉴权兜底时用 |
 
 ## 行为要点
 
 - **429 处理**：命中引擎限流 → **恒抛 `ReviewError`（fail-closed），无放行开关**——限流是人为节流而非故障，fail-open 会让恶意刷限流的调用方把后续内容全部未审放行。
-- **自定义 transport 契约**：429 必须返回引擎的 JSON body（`{"error":"rate_limited",...}`）而不是抛异常——抛出的 429 无法与传输故障区分，会落入 `fail_open` 策略。默认 requests/httpx 传输已按此处理。
+- **401/403 处理**：认证失败（缺凭证/签名无效/过期/被吊销）→ 默认 **恒抛 `ReviewError`（fail-closed）**；需要可用性兜底时用 `auth_fail_open=True`。接入认证推荐 `license_jwt` + `auth_url`（SDK 自动换取+刷新），或 `token_provider`。
+- **自定义 transport 契约**：429 必须返回引擎的 JSON body（`{"error":"rate_limited",...}`），401/403 必须返回 `{"error":"unauthorized","reason":...}`，**都不要抛异常**——抛出会与传输故障混同并落入 `fail_open` 策略。若需带认证，transport 内从 `client.current_token()` 取当前 Bearer 并自行附加 `Authorization` 头（默认 requests/httpx 传输已自动处理）。
 - **契约严格化**：`role=output` 响应缺 `disposal_action` 即抛 `ReviewError`（引擎与 SDK 同仓同版，不存在版本偏斜）；本地 fail-open 合成判定除外（推导为 warn/reject）。
 - **trace 贯通**：`trace_id/session_id/user_id` 贯穿 input、每窗、output——审计/统计按回答聚合依赖它。
 - **规则寻址**：控制台里绑 `tool_names:["chat_input"]` 仅输入生效，`["chat_completion"]` 仅输出生效。

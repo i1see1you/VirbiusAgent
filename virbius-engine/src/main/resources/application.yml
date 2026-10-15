@@ -25,6 +25,31 @@ virbius:
     redis:
       match-cache-ttl-sec: 60
       match-cache-max-entries: 200000
+  evaluate:
+    rate-limit:
+      enabled: true
+      per-session-per-min: 60
+      per-ip-per-min: 600
+      # P0-min: agent-level backstop (verified subject). Kept well above the
+      # session quota so multi-session agents are not throttled; override with
+      # 0-width semantics via per-session only. Formula: ~ sessions x 60.
+      per-agent-per-min: ${VIRBIUS_EVALUATE_RATE_LIMIT_PER_AGENT_PER_MIN:600}
+      max-windows-per-trace: 64
+    auth:
+      # P0-min caller authentication. The only per-request credential is a
+      # short-lived (aud=evaluate) token; the 825-day License JWT is exchanged
+      # once at POST /api/v1/auth/evaluate-token and never sent per-request.
+      enabled: ${VIRBIUS_EVALUATE_AUTH_ENABLED:true}
+      # N1: config-baked trust anchor (control's platform public PEM file).
+      # MUST load when auth is enabled -> the engine refuses to start otherwise.
+      bootstrap-pem-file: ${VIRBIUS_EVALUATE_AUTH_BOOTSTRAP_PEM:}
+      bootstrap-kid: ${VIRBIUS_EVALUATE_AUTH_BOOTSTRAP_KID:bootstrap}
+      # Redis enrichment / revocation sources (published by control).
+      issuer-redis-key: virbius:engine:issuers
+      revocation-redis-key: virbius:engine:revocations
+      revocation-channel: virbius:license:revoked
+      boot-retry-seconds: 60
+      verify-cache-ttl-seconds: 900
   challenge:
     ttl-seconds: ${VIRBIUS_CHALLENGE_TTL:600}
     token-ttl-seconds: ${VIRBIUS_CHALLENGE_TOKEN_TTL:600}

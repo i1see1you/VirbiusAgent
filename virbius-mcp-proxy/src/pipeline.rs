@@ -192,12 +192,13 @@ impl EngineClient {
         &self,
         req: &EvaluateRequest<'_>,
         timeout: Duration,
+        token: &str,
     ) -> Result<EvaluateResponse, EngineError> {
-        let resp = self
-            .http
-            .post(&self.url)
-            .json(req)
-            .timeout(timeout)
+        let mut builder = self.http.post(&self.url).json(req).timeout(timeout);
+        if !token.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {token}"));
+        }
+        let resp = builder
             .send()
             .await
             .map_err(EngineError::Http)?;
@@ -218,15 +219,16 @@ impl EngineClient {
         &self,
         req: &ToolResultRequest<'_>,
         timeout: Duration,
+        token: &str,
     ) -> Result<ToolResultResponse, EngineError> {
         let url = self
             .url
             .replace("/v1/evaluate", "/v1/evaluate/tool-result");
-        let resp = self
-            .http
-            .post(&url)
-            .json(req)
-            .timeout(timeout)
+        let mut builder = self.http.post(&url).json(req).timeout(timeout);
+        if !token.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {token}"));
+        }
+        let resp = builder
             .send()
             .await
             .map_err(EngineError::Http)?;
@@ -267,6 +269,8 @@ pub struct SecurityPipeline {
     output_review: OutputReviewConfig,
     /// Tenant overrides from Control. Empty until `use_policies` shares the registry.
     policies: Arc<PolicyRegistry>,
+    /// Evaluate-token manager (P0-min). None = auth disabled (v1 behaviour).
+    auth: Option<Arc<crate::auth::TokenManager>>,
 }
 
 impl SecurityPipeline {
@@ -289,12 +293,28 @@ impl SecurityPipeline {
             audit,
             output_review,
             policies: Arc::new(PolicyRegistry::empty()),
+            auth: None,
         }
     }
 
     /// Share the process-wide policy registry filled by the Redis subscriber.
     pub fn use_policies(&mut self, policies: Arc<PolicyRegistry>) {
         self.policies = policies;
+    }
+
+    /// Enable evaluate-token authentication (P0-min).
+    pub fn use_auth(&mut self, auth: Arc<crate::auth::TokenManager>) {
+        self.auth = Some(auth);
+    }
+
+    /// Resolve the short-lived bearer token for a session ("" = no auth).
+    async fn auth_token(&self, session: &Session) -> String {
+        match &self.auth {
+            Some(mgr) if mgr.enabled() => {
+                mgr.token_for(&session.license_jwt, &session.session_id).await
+            }
+            _ => String::new(),
+        }
     }
 
     fn fast_path_for(&self, tenant_id: &str) -> FastPathConfig {
@@ -444,7 +464,17 @@ impl SecurityPipeline {
 
         let failover = self.failover_for(&session.tenant_id);
         let timeout = Duration::from_millis(failover.engine_timeout_ms);
-        match self.engine.evaluate(&req, timeout).await {
+        let mut token = self.auth_token(session).await;
+        let mut evaluated = self.engine.evaluate(&req, timeout, &token).await;
+        // 401 -> the token was rejected (expired/revoked): refresh once + retry.
+        if let Err(EngineError::Status(401, _)) = &evaluated {
+            if let Some(mgr) = &self.auth {
+                mgr.invalidate(&session.session_id);
+            }
+            token = self.auth_token(session).await;
+            evaluated = self.engine.evaluate(&req, timeout, &token).await;
+        }
+        match evaluated {
             Ok(resp) => {
                 if resp.effective_action == "block" {
                     self.audit_tool_call(
@@ -638,12 +668,17 @@ impl SecurityPipeline {
             tool_name,
         };
         let url = self.engine.url.replace("/v1/evaluate", "/v1/memory/check");
-        let resp = self
+        let token = self.auth_token(session).await;
+        let mut builder = self
             .engine
             .http
             .post(&url)
             .json(&req)
-            .timeout(self.timeout_for(&session.tenant_id))
+            .timeout(self.timeout_for(&session.tenant_id));
+        if !token.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {token}"));
+        }
+        let resp = builder
             .send()
             .await
             .map_err(EngineError::Http)?;
@@ -679,12 +714,17 @@ impl SecurityPipeline {
             .engine
             .url
             .replace("/v1/evaluate", "/v1/challenge/verify");
-        let resp = self
+        let token = self.auth_token(session).await;
+        let mut builder = self
             .engine
             .http
             .post(&url)
             .json(&verify_req)
-            .timeout(self.timeout_for(&session.tenant_id))
+            .timeout(self.timeout_for(&session.tenant_id));
+        if !token.is_empty() {
+            builder = builder.header("Authorization", format!("Bearer {token}"));
+        }
+        let resp = builder
             .send()
             .await
             .map_err(EngineError::Http)?;
@@ -811,7 +851,7 @@ impl SecurityPipeline {
             vars,
         };
         self.engine
-            .evaluate(&req, self.timeout_for(&session.tenant_id))
+            .evaluate(&req, self.timeout_for(&session.tenant_id), &self.auth_token(session).await)
             .await
     }
 
@@ -838,7 +878,7 @@ impl SecurityPipeline {
             session_risk_score: session.session_risk_score,
         };
         self.engine
-            .sti_check(&req, self.timeout_for(&session.tenant_id))
+            .sti_check(&req, self.timeout_for(&session.tenant_id), &self.auth_token(session).await)
             .await
     }
 }

@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Callable, Iterable, Optional
 
 from . import core
+from ._token import TokenManager
 from .config import ReviewConfig
 from .models import Blocked, Delta, Done, InputVerdict, OutputVerdict
 from .window import StreamReviewWindow
@@ -52,6 +53,13 @@ class ReviewClient:
         )
         self._session = session
         self._transport = transport or self._requests_post
+        self._tokens = TokenManager(self.config)
+        self._current_token = ""
+
+    def current_token(self) -> str:
+        """The bearer token attached to the most recent call (custom transports
+        read this to attach ``Authorization`` themselves)."""
+        return self._current_token
 
     # -- review API --------------------------------------------------------
 
@@ -82,6 +90,8 @@ class ReviewClient:
     # -- call layer --------------------------------------------------------
 
     def _call(self, payload: dict) -> dict:
+        # Resolve the bearer token BEFORE the transport (may itself refresh).
+        self._current_token = self._tokens.current() if self._tokens.configured else ""
         try:
             data = self._transport(payload)
         except Exception as exc:  # transport error / timeout / 5xx
@@ -92,16 +102,33 @@ class ReviewClient:
             # Deliberate throttle: always fails closed — never a fail-open
             # verdict, otherwise flooding the limiter would bypass review.
             core.rate_limited_error(data.get("retry_after_seconds"))
+        if data.get("error") == "unauthorized":
+            # Auth failure: fails closed by default (AGT design principle 4).
+            if self.config.auth_fail_open:
+                return core.allow_on_error(
+                    self.config, f"unauthorized ({data.get('reason', 'unknown')})")
+            core.auth_error(data.get("reason", "unknown"))
         return data
 
     def _requests_post(self, payload: dict) -> dict:
         import requests
 
+        headers = dict(self.config.extra_headers)
+        if self._current_token:
+            headers["Authorization"] = "Bearer " + self._current_token
         kwargs = {"timeout": self.config.timeout}
-        if self.config.extra_headers:
-            kwargs["headers"] = dict(self.config.extra_headers)
+        if headers:
+            kwargs["headers"] = headers
         resp = (self._session or requests).post(
             self.config.engine_url + "/v1/evaluate", json=payload, **kwargs)
+        if resp.status_code in (401, 403):
+            # Return the engine's auth-error body so _call applies the
+            # (default fail-closed) auth policy instead of treating it as a
+            # transport failure subject to fail_open.
+            try:
+                return resp.json()
+            except Exception:
+                pass
         if resp.status_code == 429:
             # Return the engine's rate-limit body instead of raising so _call
             # applies the (default fail-closed) rate-limit policy — a raised
@@ -154,6 +181,8 @@ class AsyncReviewClient:
         )
         self._transport = transport
         self._http = None
+        self._tokens = TokenManager(self.config)
+        self._current_token = ""
         if transport is None:
             try:
                 import httpx  # noqa: F401
@@ -161,6 +190,11 @@ class AsyncReviewClient:
                 raise ReviewAsyncUnavailable(
                     "httpx is required for AsyncReviewClient: "
                     "pip install 'virbius-review-sdk[async]'") from exc
+
+    def current_token(self) -> str:
+        """The bearer token attached to the most recent call (custom transports
+        read this to attach ``Authorization`` themselves)."""
+        return self._current_token
 
     async def __aenter__(self) -> "AsyncReviewClient":
         return self
@@ -223,6 +257,7 @@ class AsyncReviewClient:
     # -- call layer --------------------------------------------------------
 
     async def _call(self, payload: dict) -> dict:
+        self._current_token = self._tokens.current() if self._tokens.configured else ""
         try:
             data = await self._post(payload)
         except Exception as exc:
@@ -232,6 +267,11 @@ class AsyncReviewClient:
         if data.get("error") == "rate_limited":
             # Deliberate throttle: always fails closed (see core).
             core.rate_limited_error(data.get("retry_after_seconds"))
+        if data.get("error") == "unauthorized":
+            if self.config.auth_fail_open:
+                return core.allow_on_error(
+                    self.config, f"unauthorized ({data.get('reason', 'unknown')})")
+            core.auth_error(data.get("reason", "unknown"))
         return data
 
     async def _post(self, payload: dict) -> dict:
@@ -244,8 +284,17 @@ class AsyncReviewClient:
             import httpx
 
             self._http = httpx.AsyncClient(timeout=self.config.timeout)
+        headers = dict(self.config.extra_headers)
+        if self._current_token:
+            headers["Authorization"] = "Bearer " + self._current_token
         resp = await self._http.post(
-            self.config.engine_url + "/v1/evaluate", json=payload)
+            self.config.engine_url + "/v1/evaluate", json=payload,
+            headers=headers or None)
+        if resp.status_code in (401, 403):
+            try:
+                return resp.json()
+            except Exception:
+                pass
         if resp.status_code == 429:
             # Return the rate-limit body so _call applies the fail-closed
             # policy instead of treating 429 as a transport failure.

@@ -194,6 +194,10 @@ CREATE TABLE IF NOT EXISTS tb_audit_events (
     intercepted_at    TIMESTAMP NOT NULL,
     user_id           VARCHAR(256),
     device_id         VARCHAR(256),
+    agent_aid         VARCHAR(256),
+    app_id            VARCHAR(128),
+    subject_source    VARCHAR(16),
+    token_iss         VARCHAR(64),
     audit_seq         BIGINT      NOT NULL DEFAULT 0,
     prev_hash         VARCHAR(128) NOT NULL DEFAULT '',
     curr_hash         VARCHAR(128) NOT NULL DEFAULT '',
@@ -524,11 +528,50 @@ CREATE TABLE IF NOT EXISTS tb_license_revocations (
     app_id          VARCHAR(128) NOT NULL,
     revoked_by      VARCHAR(64),
     revoke_reason   VARCHAR(255),
-    revoked_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP
+    revoked_at      TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    agent_aid       VARCHAR(256),
+    expires_at      TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_tb_license_revocations_license
     ON tb_license_revocations (license_id);
+
+-- ============================================================
+-- Evaluate-token authentication (P0-min: control single-path issuance)
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS tb_evaluate_token_issuers (
+    kid                   VARCHAR(64)  PRIMARY KEY,
+    key_type              VARCHAR(16)  NOT NULL DEFAULT 'control',
+    public_key_pem        TEXT         NOT NULL,
+    encrypted_private_key TEXT         NOT NULL DEFAULT '',
+    status                VARCHAR(16)  NOT NULL DEFAULT 'active',
+    description           VARCHAR(255) NOT NULL DEFAULT '',
+    created_at            TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    retired_at            TIMESTAMP,
+    CHECK (status IN ('active', 'retired'))
+);
+
+CREATE TABLE IF NOT EXISTS tb_evaluate_tokens (
+    jti           VARCHAR(64)  PRIMARY KEY,
+    subject       VARCHAR(256) NOT NULL,
+    tenant_id     VARCHAR(64),
+    app_id        VARCHAR(128),
+    license_id    VARCHAR(64),
+    sid           VARCHAR(128),
+    issued_at     TIMESTAMP    NOT NULL,
+    expires_at    TIMESTAMP    NOT NULL,
+    status        VARCHAR(16)  NOT NULL DEFAULT 'active',
+    revoked_at    TIMESTAMP,
+    revoke_reason VARCHAR(255),
+    CHECK (status IN ('active', 'revoked'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tb_evaluate_tokens_subject
+    ON tb_evaluate_tokens (subject, status);
+
+CREATE INDEX IF NOT EXISTS idx_tb_evaluate_tokens_expiry
+    ON tb_evaluate_tokens (expires_at);
 
 -- ============================================================
 -- Audit hash chain (per-tenant tamper-evident chain)
@@ -597,6 +640,10 @@ CREATE TABLE IF NOT EXISTS tb_audit_events_archive (
     intercepted_at    TIMESTAMP NOT NULL,
     user_id           VARCHAR(256),
     device_id         VARCHAR(256),
+    agent_aid         VARCHAR(256),
+    app_id            VARCHAR(128),
+    subject_source    VARCHAR(16),
+    token_iss         VARCHAR(64),
     audit_seq         BIGINT      NOT NULL DEFAULT 0,
     prev_hash         VARCHAR(128) NOT NULL DEFAULT '',
     curr_hash         VARCHAR(128) NOT NULL DEFAULT '',

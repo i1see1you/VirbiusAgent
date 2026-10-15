@@ -28,6 +28,19 @@ class ReviewConfig:
         refusal_text: text substituted by :meth:`apply_disposal` on ``reject``.
         input_tool_name / output_tool_name: synthetic tool markers used for
             rule addressing (bind rules via tool scope in the console).
+        auth_token: a static short-lived evaluate token (rarely needed — prefer
+            ``token_provider`` or ``license_jwt`` so it is refreshed for you).
+        license_jwt: the caller's long-lived License JWT. When set with
+            ``auth_url``, the SDK exchanges it ONCE for a short-lived evaluate
+            token and refreshes automatically — the License JWT itself never
+            travels per-request.
+        auth_url: control-plane base URL hosting ``POST /api/v1/auth/evaluate-token``.
+        token_provider: a zero-arg callable returning a fresh bearer token,
+            evaluated before every call (supports mid-stream refresh).
+        auth_fail_open: policy for HTTP 401/403 (auth failure). Default ``False``
+            (fail CLOSED — a rejected credential must never pass content
+            unreviewed); set ``True`` only when unauthenticated fallback is
+            explicitly acceptable.
     """
 
     engine_url: str = "http://127.0.0.1:8082"
@@ -40,3 +53,8 @@ class ReviewConfig:
     input_tool_name: str = "chat_input"
     output_tool_name: str = "chat_completion"
     extra_headers: dict = field(default_factory=dict)
+    auth_token: str = ""
+    license_jwt: str = ""
+    auth_url: str = ""
+    token_provider: object = None
+    auth_fail_open: bool = False

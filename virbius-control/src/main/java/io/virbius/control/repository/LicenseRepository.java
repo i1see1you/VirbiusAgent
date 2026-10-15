@@ -8,6 +8,8 @@ public interface LicenseRepository {
 
     void save(AgentLicense license, String licenseId);
 
+    Optional<AgentLicense> findById(String licenseId);
+
     Optional<AgentLicense> findActiveByAppId(String tenantId, String appId);
 
     List<AgentLicense> listByTenant(String tenantId, String status);

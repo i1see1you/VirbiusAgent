@@ -61,8 +61,9 @@ public class AuditEventIngestor {
                     + "  rule_id, rule_revision, reason_code, effective_action, max_risk_score,"
                     + "  rollout_state, canary_percent, in_canary_bucket, degraded, sampled_allow,"
                     + "  sample_rate_allow, intercepted_at, user_id, device_id,"
+                    + "  agent_aid, app_id, subject_source, token_iss,"
                     + "  audit_seq, prev_hash, curr_hash"
-                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
             int updated = jdbc.update(insertSql,
                     eventId,
                     traceId,
@@ -84,6 +85,10 @@ public class AuditEventIngestor {
                     str(event.get("intercepted_at")),
                     str(event.get("user_id")),
                     str(event.get("device_id")),
+                    nullIfBlank(str(event.get("agent_aid"))),
+                    nullIfBlank(str(event.get("app_id"))),
+                    nullIfBlank(str(event.get("subject_source"))),
+                    nullIfBlank(str(event.get("token_iss"))),
                     longVal(event.get("audit_seq")),
                     str(event.get("prev_hash")),
                     str(event.get("curr_hash")));
@@ -165,6 +170,10 @@ public class AuditEventIngestor {
 
     private static String str(Object o) {
         return o == null ? "" : o.toString();
+    }
+
+    private static String nullIfBlank(String s) {
+        return s == null || s.isBlank() ? null : s;
     }
 
     private static long longVal(Object o) {

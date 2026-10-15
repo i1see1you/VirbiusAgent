@@ -32,11 +32,17 @@ public class LicenseService {
     private final LicenseRepository repo;
     private final LicenseSigner signer;
     private final Optional<JedisPool> jedisPool;
+    private final EvaluateRevocationPublisher evaluateRevocationPublisher;
 
-    public LicenseService(LicenseRepository repo, LicenseSigner signer, ControlJedisPools jedisPools) {
+    public LicenseService(
+            LicenseRepository repo,
+            LicenseSigner signer,
+            ControlJedisPools jedisPools,
+            EvaluateRevocationPublisher evaluateRevocationPublisher) {
         this.repo = repo;
         this.signer = signer;
         this.jedisPool = jedisPools.pool();
+        this.evaluateRevocationPublisher = evaluateRevocationPublisher;
     }
 
     /**
@@ -120,21 +126,34 @@ public class LicenseService {
     }
 
     /**
-     * Revoke a License by ID. Propagates via Redis pub/sub.
+     * Revoke a License by ID. Propagates via Redis pub/sub and the
+     * evaluate-revocation hash so both the proxy and the engine reject the
+     * agent's tokens immediately (agent-level, covers every issued token).
      */
     public void revokeLicense(String licenseId, String revokedBy, String reason) {
+        String agentAid = repo.findById(licenseId)
+                .map(AgentLicense::getAgentAid)
+                .orElse(null);
         repo.revoke(licenseId, revokedBy, reason);
 
-        // Publish revocation via Redis pub/sub
+        // Publish revocation via Redis pub/sub (legacy edge channel, payload
+        // extended with agent_aid for evaluate-token revocation).
         if (jedisPool.isPresent()) {
             try (var jedis = jedisPool.get().getResource()) {
-                jedis.publish(REVOCATION_CHANNEL,
-                        "{\"license_id\":\"" + licenseId + "\",\"reason\":\"" + reason + "\"}");
+                String payload = "{\"license_id\":\"" + licenseId + "\""
+                        + (agentAid != null ? ",\"agent_aid\":\"" + agentAid + "\"" : "")
+                        + ",\"reason\":\"" + reason + "\"}";
+                jedis.publish(REVOCATION_CHANNEL, payload);
             } catch (Exception e) {
                 log.warn("failed to publish revocation via Redis: {}", e.getMessage());
             }
         } else {
             log.warn("Redis not configured; revocation not published via pub/sub");
+        }
+
+        // Evaluate-token revocation: agent-level entry in the engine hash + channel.
+        if (agentAid != null) {
+            evaluateRevocationPublisher.publish("agent:" + agentAid, agentAid, null, reason, null);
         }
 
         log.info("revoked license {} by {} reason: {}", licenseId, revokedBy, reason);

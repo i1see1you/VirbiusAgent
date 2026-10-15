@@ -485,7 +485,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 
 把这四个名字指到 Ingress 的外部 IP。TLS 默认关闭，在 values 里打开 `ingress.tls`。管侧 host 上的 `/login` 转到 `virbius-auth`（与 `/ui/` 同域，避免登录 cookie 丢失）。默认账号 `admin` / `secrets.authBootstrapPassword`。
 
-集群内 DNS：`virbius-control:8080`、`virbius-auth:8083`、`virbius-engine:8082`、`virbius-mcp-proxy:9090`、`virbius-demo:8000`（SSE `:9091`）。Auth 用 SQLite + JWT 密钥落在 PVC 上，不要扩副本。设 `auth.enabled=false` 则不部署 Auth、Control 也不开 operator JWT。
+集群内 DNS：`virbius-control:8080`、`virbius-auth:8083`、`virbius-engine:8082`、`virbius-mcp-proxy:9090`、`virbius-demo:8000`（SSE `:9091`）。Auth 用 MySQL（与 Control 同库，独立 Flyway 历史表 `auth_schema_history`），JWT 密钥落在 PVC 上，不要扩副本。设 `auth.enabled=false` 则不部署 Auth、Control 也不开 operator JWT。
 
 靶场 Agent 关卡仍在 Pod 内用 stdio 拉起 `virbius-mcp-proxy`。Ingress 上的端侧是给集群外 MCP 客户端的 TCP 入口，upstream 默认 `http://virbius-demo:9091`。
 
@@ -610,6 +610,12 @@ PLAINTEXT，即 **审计/trace 载荷在集群内网明文传输**。P0 接受�
 | `V13__trace_result_preview.sql` | `tb_agent_trace.tool_result_preview`（工具结果预览，供决策重建回看） |
 | `V14__audit_integrity_retention_export.sql` | 每会话 trace 哈希链列（`chain_seq`/`prev_hash`/`curr_hash`）+ `tb_trace_chain_state`；每日锚点表 `tb_audit_daily_anchor`；保留策略表 `tb_tenant_retention_policy`；归档镜像 `tb_audit_events_archive`/`tb_agent_trace_archive`；导出账本 `tb_audit_export_job` |
 | `V15__alerts_and_session_checkpoints.sql` | 告警表 `tb_alert`、会话检查点表 `tb_session_checkpoint` |
+| `V16__evaluate_token_auth.sql` | 评估令牌鉴权：`tb_evaluate_token_issuers`、`tb_evaluate_tokens`；审计表与归档表加 `agent_aid`/`app_id`/`subject_source`/`token_iss`；`tb_license_revocations` 加 `agent_aid`/`expires_at` |
+| `V17__proxy_policy.sql` | `tb_proxy_policy`（此前仅存在于 SQLite；MySQL 上代理策略接口报 "table doesn't exist"） |
+| `V18__trace_tool_args.sql` | `tb_agent_trace.tool_args` + `tb_agent_trace_archive.tool_args`（此前仅存在于 SQLite；MySQL 上 trace 入库失败） |
+| `virbius-auth` `V1__baseline.sql` | auth 的 MySQL 基线（`tb_operator_user`、`tb_auth_code`）；prod 用 Flyway，独立历史表 `auth_schema_history` |
+
+`SchemaDialectParityTest`（`virbius-control` 与 `virbius-auth` 各一份）在 `db/schema.sql`（SQLite/dev）与 `db/migration/*.sql`（MySQL/prod）表或列不一致时令构建失败。
 
 dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新列/新表**，需以 `VIRBIUS_REBUILD_DB=1 ./scripts/run-local.sh` 重建（会删库并 `FLUSHDB`）。
 
@@ -629,9 +635,22 @@ dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新�
 | `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | 原因码→处置（`reject|omit|redact|warn`）映射，未列出走关键字兜底；**统一在引擎解析，所有调用方一致** |
 | `virbius.evaluate.rate-limit.enabled` | `true` | `/v1/evaluate` 限流开关（无鉴权端点的滥用防护） |
 | `virbius.evaluate.rate-limit.per-session-per-min` | `60` | 每 session 每分钟**回答/请求数**（流式窗口按 trace 合并计 1 次） |
-| `virbius.evaluate.rate-limit.per-ip-per-min` | `600` | 每 IP 每分钟调用总数（兜底） |
+| `virbius.evaluate.rate-limit.per-ip-per-min` | `600` | 每 IP 每分钟调用总数（兜底；认证前也生效，覆盖 401 刷量） |
+| `virbius.evaluate.rate-limit.per-agent-per-min` | `600` | 每已验 `agent_aid` 每分钟调用上限（会话配额之上的**兜底**，防换 session 绕过；约为「会话数×60」） |
 | `virbius.evaluate.rate-limit.max-windows-per-trace` | `64` | 单 trace 流式审查窗口上限（防单 trace 无限刷） |
+| `virbius.evaluate.auth.enabled` | `true` | 调用者认证开关。开启后 `/v1/evaluate*` 需短 token；**401/403 fail-closed** |
+| `virbius.evaluate.auth.bootstrap-pem-file` | 空 | **N1 内置信任锚**：control 平台公钥 PEM 文件路径（部署烘焙；认证开启且无内置锚又拉不到 Redis issuer → **引擎拒绝启动**） |
+| `virbius.evaluate.auth.bootstrap-kid` | `bootstrap` | 内置锚的 kid |
+| `virbius.evaluate.auth.issuer-redis-key` | `virbius:engine:issuers` | issuer 集（control 启动时幂等发布）+ 30s 周期刷新 |
+| `virbius.evaluate.auth.revocation-redis-key` | `virbius:engine:revocations` | 吊销全量快照（启动加载 + 30s 对账） |
+| `virbius.evaluate.auth.revocation-channel` | `virbius:license:revoked` | 吊销即时推送通道 |
+| `virbius.evaluate.auth.verify-cache-ttl-seconds` | `900` | 验签结果缓存（**吊销不在该缓存内，每请求必查**） |
+| `virbius.evaluate-token.ttl-seconds`（control） | `900` | 短 token TTL |
+| `virbius.evaluate-token.ledger-retention-hours`（control） | `24` | 签发台账（`tb_evaluate_tokens`）留存；支撑 jti 级吊销 |
+| `virbius.evaluate-token.exchange.rate-limit-per-license-per-min`（control） | `10` | 换取端点限速 |
+| `auth.control_base_url`（proxy） | 空 | 非空即启用 proxy 端换取（每会话一次 + 主动刷新） |
 | `virbius.review.input-risk-dedup-ttl-ms` | `600000` | 输入审查风险计分去重窗口（同 trace 只计一次，10 分钟） |
+| `VIRBIUS_JDBC_INIT_SQL`（control/auth · prod/staging） | `SET time_zone = '+00:00'` | 连接初始化 SQL；把 MySQL/MariaDB 会话固定为 UTC，使 `NOW()`/`CURRENT_TIMESTAMP` 与应用写入的 ISO-UTC 字符串一致（SQLite 本就是 UTC） |
 
 > 上述键目前均由代码 `@Value` 提供默认值，`application*.yml` 未显式声明；如需覆盖，用启动参数或同名 `VIRBIUS_*` env。
 > **已移至 SDK 侧**（原引擎 chat 内置审查的配置）：`skip-models`、`refusal-text`、`fail-closed`、`streaming.{window-chars,context-chars,stream-first}` —— 见 `virbius-review-sdk` README。`virbius.trace.*` 已随 `TraceStepPublisher` 删除。
@@ -639,6 +658,15 @@ dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新�
 | `virbius.retry-escape.enforce` | `false` | 重试逃逸检测同上（dry-run by default） |
 
 > 上述键目前均由代码 `@Value` 提供默认值，`application*.yml` 未显式声明；如需覆盖，用启动参数或同名 `VIRBIUS_*` env。
+
+### 10.2.1 调用者认证运维要点（P0-min）
+
+- **信任锚交付**：首选把 control 平台公钥 PEM 落到引擎 `virbius.evaluate.auth.bootstrap-pem-file`（部署烘焙）；也可让 control 启动后把 issuer 集写入 Redis（`virbius:engine:issuers`）由引擎拉取。**认证开启时，二者皆无 → 引擎拒绝启动（fail-fast，防静默无鉴权）**。
+- **启动顺序**：Redis → control（发布 issuer/吊销）→ engine。Redis 丢失 issuer hash 时，control 用「重发」端点幂等重建（或重启）。
+- **`control` 成为运行期依赖（proxy 路径）**：proxy 每**会话**向 control 换取一次短 token（非每请求）；control 宕机会导致**新会话**起不来、存量会话在 token TTL 内可续。生产建议 control 多实例 + 短 token TTL 权衡（默认 15min）。
+- **吊销时延**：正常情况下秒级（Redis 通道 + 每请求查名单）；通道本身故障时以 token TTL 为最坏窗口。
+- **残余风险（显式登记）**：引擎**不可达 → 调用方 `fail_open`（内容未审放行）**，而**认证被拒 401/403 → `fail_closed`（拦截）**——同为“引擎侧异常”两种相反姿态，属既定策略，认证上线后更需在生产网关/告警层关注“引擎不可达”这一路。
+- **仓外接入（上线检查单）**：APISIX/Higress 网关与 `gateway-agent` 调用 `/v1/evaluate` 需携带 **per-purpose 服务 token**（`POST /api/v1/admin/evaluate-token/service` 签发，跨租户用途才授予 `*` 工具）。
 
 ### 10.3 审计导出密钥（必须显式提供）
 

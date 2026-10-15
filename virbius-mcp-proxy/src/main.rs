@@ -127,6 +127,17 @@ async fn main() {
         cfg.security.output_review.clone(),
     );
     pipeline_inner.use_policies(policies.clone());
+    // Evaluate-token auth (P0-min): enabled when auth.control_base_url is set.
+    let auth_cfg = virbius_mcp_proxy::auth::AuthConfig {
+        control_base_url: cfg.auth.control_base_url.clone(),
+        exchange_path: cfg.auth.exchange_path.clone(),
+        timeout: std::time::Duration::from_millis(cfg.auth.exchange_timeout_ms),
+        refresh_margin_percent: cfg.auth.refresh_margin_percent,
+    };
+    if auth_cfg.enabled() {
+        info!("evaluate-token auth enabled (control={})", cfg.auth.control_base_url);
+        pipeline_inner.use_auth(Arc::new(virbius_mcp_proxy::auth::TokenManager::new(auth_cfg)));
+    }
     let pipeline = Arc::new(pipeline_inner);
 
     // Create upstream manager from normalized config (single or multi-upstream)

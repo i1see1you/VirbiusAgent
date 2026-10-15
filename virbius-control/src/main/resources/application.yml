@@ -53,6 +53,14 @@ virbius:
     master-key: ${VIRBIUS_LICENSE_MASTER_KEY:}
     # Dev-only escape hatch for legacy local databases with weak/denylisted keys.
     allow-insecure-dev-key: ${VIRBIUS_LICENSE_ALLOW_INSECURE_DEV_KEY:false}
+  evaluate-token:
+    # P0-min: control is the single issuer of short-lived evaluate access tokens
+    # (the ONLY per-request credential; the 825-day License JWT is presented once
+    # at POST /api/v1/auth/evaluate-token and never travels per-request).
+    ttl-seconds: ${VIRBIUS_EVALUATE_TOKEN_TTL_SECONDS:900}
+    ledger-retention-hours: ${VIRBIUS_EVALUATE_TOKEN_LEDGER_RETENTION_HOURS:24}
+    exchange:
+      rate-limit-per-license-per-min: ${VIRBIUS_EVALUATE_TOKEN_EXCHANGE_RPM:10}
   delegated:
     # Delegated credential plane (v2.5-min). Separate from the license master
     # key (domain separation); >= 32 bytes, fail-fast on use.

@@ -1147,3 +1147,12 @@ POST /v1/evaluate
 **限流（v2，防无鉴权滥用）**：`/v1/evaluate` 按调用方 IP / session 限流；同一 `trace_id` 的流式窗口**合并计一次会话配额**（不误伤流式）；单 trace 窗口数上限默认 64。超限返回 `429 + Retry-After`。配置：`virbius.evaluate.rate-limit.*`。
 
 **规则寻址**：仅输入生效绑 `tool_names:["chat_input"]`，仅输出生效绑 `tool_names:["chat_completion"]`，global 规则两端都命中。
+
+**调用者认证（P0-min，控制面单路签发）**：`/v1/evaluate`、`/v1/evaluate/tool-result`、`/v1/memory/check`、`/v1/challenge/verify` 需要短寿命 Bearer 凭证。
+- **长短分离**：`Authorization: Bearer <evaluate-token>`（`aud=evaluate`、TTL 900s、带 `scope{allowed_tools,risk_quota,tool_rate_limit}` 能力范围、可选 `sid` 绑定）。**825 天的 License JWT 只在 `POST /api/v1/auth/evaluate-token` 换取一次**，绝不逐请求携带；proxy 每会话换取一次并主动刷新，SDK 用 `license_jwt`+`auth_url` 自动换成 token。
+- **引擎校验链**：验签（信任锚 = 配置内置 control 平台公钥 + Redis `virbius:engine:issuers` 增强，多 `kid`）→ `aud/exp` → 吊销（`agent_aid`/`jti`，Redis 通道即时 + 启动/周期全量对账）→ 注入已验证主体。
+- **声明优先**：`tenant_id/app_id` **以令牌为准**，请求体冲突 → `403 subject_mismatch`；服务 token（`sub=service:*`，无自带租户、按用途签发、通配仅在显式跨租户时授予）例外——租户取自请求，审计记 `on_behalf_of`。
+- **能力校验**：仅 `role=tool_call` 校验 `tool_name ∈ scope.allowed_tools`（否则 `403 capability_denied`）；`role=input/output` 豁免；`license_risk_quota` 取 token scope 上限。
+- **失败姿态**：缺/坏/过期/`sid` 不符/被吊销 → **`401`（fail-closed）**；SDK 对 401/403 恒抛 `ReviewError`（`auth_fail_open=True` 才放行）。与 429 政策同源：认证/限流故障绝不放行未审内容。
+- **审计**：事件新增 `agent_aid/app_id/subject_source(token|service_token|reported)/token_iss`，且 `agent_aid` 纳入审计哈希链——“哪个 agent 干的”从自报变实证。
+- **限流**：`per-agent-per-min`（已验 `agent_aid`）作为会话配额之上的**兜底**（session 级 60/min 不变）；未认证的 401 流量由前置 per-IP 配额覆盖。

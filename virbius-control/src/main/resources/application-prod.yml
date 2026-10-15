@@ -9,6 +9,10 @@ spring:
       maximum-pool-size: 50
       connection-timeout: 3000
       leak-detection-threshold: 30000
+      # MySQL/MariaDB sessions default to the server timezone; pin to UTC so
+      # CURRENT_TIMESTAMP / NOW() match the ISO-UTC strings the app writes
+      # (SQLite's CURRENT_TIMESTAMP/datetime('now') are already UTC).
+      connection-init-sql: ${VIRBIUS_JDBC_INIT_SQL:SET time_zone = '+00:00'}
   sql:
     init:
       mode: never

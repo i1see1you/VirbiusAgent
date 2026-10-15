@@ -524,7 +524,7 @@ INSERT INTO tb_rule_history (
                   reason_code, risk_score, intent_action, scope_json, body_json,
     rollout_state, canary_percent, effective_from, modified_at
 )
-SELECT 'default', 'builtin_sensitive_file_access', 1, 'demo-default', 'falco', 'falco',
+SELECT 'default', 'builtin_sensitive_file_access', 1, 'system-builtin', 'falco', 'falco',
     'WARNING', 100, 'deny',
     '{"bind_scope":"global","description":"Detect access to sensitive system files"}',
     '{"condition":"evt.type in (open, openat, openat2) and fd.name in (/etc/shadow, /etc/passwd, /root/.ssh/id_rsa, /root/.ssh/authorized_keys) and evt.is_open_write=true","output":"Sensitive file access (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, pname=%proc.name, file=%fd.name, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","filesystem","sensitive"]}',
@@ -532,7 +532,7 @@ SELECT 'default', 'builtin_sensitive_file_access', 1, 'demo-default', 'falco', '
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'builtin_sensitive_file_access' AND rule_revision = 1);
 
 INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
-SELECT 'default', 'builtin_sensitive_file_access', 1, 'demo-default', 'falco', 'falco', 'WARNING', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+SELECT 'default', 'builtin_sensitive_file_access', 1, 'system-builtin', 'falco', 'falco', 'WARNING', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'builtin_sensitive_file_access');
 
 INSERT INTO tb_rule_history (
@@ -540,7 +540,7 @@ INSERT INTO tb_rule_history (
                   reason_code, risk_score, intent_action, scope_json, body_json,
     rollout_state, canary_percent, effective_from, modified_at
 )
-SELECT 'default', 'builtin_agent_process_spawned', 1, 'demo-default', 'falco', 'falco',
+SELECT 'default', 'builtin_agent_process_spawned', 1, 'system-builtin', 'falco', 'falco',
     'WARNING', 80, 'deny',
     '{"bind_scope":"global","description":"Detect new processes spawned by Agent"}',
     '{"condition":"evt.type in (execve, execveat) and evt.dir=< and not proc.name startswith \"falco\" and not proc.name startswith \"virbius\"","output":"Agent process spawned (user=%user.name, pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, command=%proc.cmdline, pcmdline=%proc.pcmdline)","priority":"WARNING","tags":["agent","process"]}',
@@ -548,7 +548,7 @@ SELECT 'default', 'builtin_agent_process_spawned', 1, 'demo-default', 'falco', '
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_process_spawned' AND rule_revision = 1);
 
 INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
-SELECT 'default', 'builtin_agent_process_spawned', 1, 'demo-default', 'falco', 'falco', 'WARNING', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+SELECT 'default', 'builtin_agent_process_spawned', 1, 'system-builtin', 'falco', 'falco', 'WARNING', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_process_spawned');
 
 INSERT INTO tb_rule_history (
@@ -556,7 +556,7 @@ INSERT INTO tb_rule_history (
                   reason_code, risk_score, intent_action, scope_json, body_json,
     rollout_state, canary_percent, effective_from, modified_at
 )
-SELECT 'default', 'builtin_agent_outbound_connection', 1, 'demo-default', 'falco', 'falco',
+SELECT 'default', 'builtin_agent_outbound_connection', 1, 'system-builtin', 'falco', 'falco',
     'NOTICE', 60, 'deny',
     '{"bind_scope":"global","description":"Detect outbound connections from Agent"}',
     '{"condition":"evt.type=connect and evt.dir=< and fd.typechar=4 and not fd.sip in (127.0.0.1, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)","output":"Agent outbound connection (pid=%proc.pid, ppid=%proc.ppid, cgroup=%proc.cgroup.id, pname=%proc.name, sip=%fd.sip, sport=%fd.sport, pcmdline=%proc.pcmdline)","priority":"NOTICE","tags":["agent","network"]}',
@@ -564,7 +564,7 @@ SELECT 'default', 'builtin_agent_outbound_connection', 1, 'demo-default', 'falco
 WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_outbound_connection' AND rule_revision = 1);
 
 INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
-SELECT 'default', 'builtin_agent_outbound_connection', 1, 'demo-default', 'falco', 'falco', 'NOTICE', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+SELECT 'default', 'builtin_agent_outbound_connection', 1, 'system-builtin', 'falco', 'falco', 'NOTICE', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'builtin_agent_outbound_connection');
 
 -- ============================================================
