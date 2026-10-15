@@ -16,9 +16,10 @@ class ReviewConfig:
     Attributes:
         engine_url: base URL of virbius-engine, e.g. ``http://engine:8082``.
         timeout: per-request timeout in seconds for evaluate calls.
-        fail_open: when the engine is unreachable/times out/limits the call,
-            ``True`` (default) returns an allow verdict carrying ``error``;
-            ``False`` raises :class:`virbius_review.ReviewError`.
+        fail_open: when the engine is unreachable/times out, ``True`` (default)
+            returns an allow verdict carrying ``error``; ``False`` raises
+            :class:`virbius_review.ReviewError`. Rate limiting (HTTP 429) is
+            NOT covered by this switch — a throttle always fails closed.
         window_chars: streaming review window hard cap (mirrors the engine's
             ``StreamReviewWindow.windowChars``).
         context_chars: context overlap carried into the next window review.

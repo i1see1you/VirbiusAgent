@@ -1113,20 +1113,19 @@ XADD virbius:trace * \
 
 **会话检查点**（C5）：`GET /sessions/{sessionId}/checkpoint`（上下文跨 Redis 驱逐保留；不存在返回信封 `code=404`）。
 
-> 告警由控制面从摄入的高风险审计事件生成（`risk_score >= virbius.alert.risk-threshold` 且动作为 block/deny/challenge）；导出产物为 AES-256-GCM 密文，控制面不提供解密，未配置 `virbius.audit.export.key` 时任务落 `failed`（详见 DEPLOYMENT §10.3）。
+> 告警由控制面从摄入的高风险审计事件生成（`risk_score >= virbius.alert.risk-threshold` 且动作为 block/deny/challenge），**按答案（`trace_id`）聚合去重**且**携带 `session_id`**——一个被拦流式答案的每个审查窗口事件只产生一条告警（BOM 内可见全部窗口）；空 `trace_id` 退化为按事件。`/audit/output-review-stats` 的答案级计数对 allow 采样（`virbius.audit.sample-rate-allow`）做 Horvitz–Thompson 加权（`allowed`=估计值、`sampled_allow_answers`=原始观测数，`denied` 恒精确）；导出产物为 AES-256-GCM 密文，控制面不提供解密，未配置 `virbius.audit.export.key` 时任务落 `failed`（详见 DEPLOYMENT §10.3）。
 
 #### 2.6.5 输入/输出审查 API（大纲 B；引擎 chat 扩展已移除）
 
-**接入方式**：调用方在调 LLM **前/后**自行调用 `POST /v1/evaluate`，`role` 决定审查语义；流式由官方 SDK（`virbius-review-sdk`）做窗口化。引擎 `/v1/chat/completions` 退为**本地 Ollama 透传门面**（不审查、不接云模型）。
+**接入方式**：调用方在调 LLM **前/后**自行调用 `POST /v1/evaluate`，`role` 决定审查语义；流式由官方 SDK（`virbius-review-sdk`）做窗口化。引擎**不再提供 `/v1/chat/completions`**（本地模型直连 Ollama 原生 OpenAI 兼容端点，云端模型由应用直调）。
 
-**role 副作用矩阵（契约核心）**：
+**role 副作用矩阵（契约核心；role 为封闭枚举 `input | output | tool_call`，空白缺省= `tool_call` 语义，其他值——含历史 `user`——一律 `400 unsupported_role`）**：
 
 | role | 判定 | 会话风险 | challenge | 计数器/工具历史 | 响应 |
 |---|---|---|---|---|---|
 | `input` | ✅ | ✅ 仅 enforce 命中，同 trace 只计一次 | ❌ | ❌ | 现有字段 |
 | `output` | ✅ | ❌ 零副作用 | ❌ | ❌ | **+`disposal_action`/`sanitized_content`** |
-| `tool_call`（proxy） | ✅ | ✅ 现状 | ✅ 现状 | ✅ 现状 | 不变 |
-| `user`（存量） | ✅ | 现状不变 | 现状 | 现状 | 不变 |
+| `tool_call`（含缺省；proxy） | ✅ | ✅ 现状 | ✅ 现状 | ✅ 现状 | 不变 |
 
 **输入审查（调 LLM 前）**：
 ```json
@@ -1146,7 +1145,7 @@ POST /v1/evaluate
 ```
 调用方按 `disposal_action` 落地：`reject`→替换拒答文案、`omit`→置空、`redact`→用 `sanitized_content`、`warn`→放行仅留痕。映射由引擎 `OutputActionResolver` 统一解析（`virbius.output-review.action-map` 可按 reason_code 覆盖），保证各调用方行为一致。确定性正则（代码/SQL/模板注入、XSS、凭据）在管线前置命中即 `deny`。
 
-**流式输出审查（SDK）**：`virbius-review-sdk` 的 `wrap_stream()` 移植引擎 `StreamReviewWindow`（共享测试向量 `schemas/review-window-vectors.json` 防漂移），逐窗调 `evaluate(role=output, stream_chunk=true)`；过审窗口才下发，命中即终止并建议断上游。
+**流式输出审查（SDK）**：`virbius-review-sdk` 的 `wrap_stream()` 移植引擎 `StreamReviewWindow`（共享测试向量 `schemas/review-window-vectors.json` 防漂移），逐窗调 `evaluate(role=output, stream_chunk=true)`；过审窗口才下发，命中即终止并建议断上游。SDK 对引擎故障默认 fail-open（`fail_open=True` 可关），但对 **429/限流恒 fail-closed**（无放行开关）——限流是人为节流，放行即绕过审查。
 
 **限流（v2，防无鉴权滥用）**：`/v1/evaluate` 按调用方 IP / session 限流；同一 `trace_id` 的流式窗口**合并计一次会话配额**（不误伤流式）；单 trace 窗口数上限默认 64。超限返回 `429 + Retry-After`。配置：`virbius.evaluate.rate-limit.*`。
 

@@ -2697,7 +2697,7 @@ fail_open = true            # Engine 不可用时是否放行
 
 #### 13.7.7 输出审查的 API/SDK 形态（大纲 B；引擎 chat 内置审查已移除）
 
-输出审查不再内嵌于引擎 chat 代理，改为**调用方 API 接入 + 官方 SDK 流式窗口**（契约详见 [PROTOCOL.zh.md §2.6.5](PROTOCOL.zh.md)）。引擎 `/v1/chat/completions` 退为本地 Ollama 透传门面（不审查、不接云模型）。
+输出审查不再内嵌于引擎 chat 代理，改为**调用方 API 接入 + 官方 SDK 流式窗口**（契约详见 [PROTOCOL.zh.md §2.6.5](PROTOCOL.zh.md)）。引擎不再提供 `/v1/chat/completions`：本地模型直连 Ollama 原生 OpenAI 兼容端点，云端模型由应用直调。
 
 | 组件 | 位置 | 职责 |
 |------|------|------|
@@ -2710,13 +2710,13 @@ fail_open = true            # Engine 不可用时是否放行
 | `ReviewRiskGuard` | engine `eval/` | 输入审查计分去重（同 trace 只计一次，TTL 默认 10 分钟） |
 | `virbius-review-sdk`（Python） | 调用方侧 | `review_input`/`review_output`/`apply_disposal`/`wrap_stream`（窗口化逐窗送审，命中断流） |
 
-**role 副作用矩阵**：`role=input` 喂会话风险（仅 enforce 命中、同 trace 一次）、跳 challenge/计数器/工具历史；`role=output` **零副作用**（读当前风险分，不更新）——流式多窗不会污染会话风险。`tool_call`/`user` 行为不变。
+**role 副作用矩阵**：`role` 为封闭枚举 `input | output | tool_call`（空白缺省= `tool_call` 语义；其他值——含历史 `user`——引擎侧 400 拒绝，HTTP 边界校验见 `EvaluateHttpController`）。`role=input` 喂会话风险（仅 enforce 命中、同 trace 一次）、跳 challenge/计数器/工具历史；`role=output` **零副作用**（读当前风险分，不更新）——流式多窗不会污染会话风险。
 
-**统计口径**：`output-review-stats` 以**回答**为单位（`COUNT(DISTINCT trace_id)`，缺省回退 event_id），另给 `window_events` 原始窗口数——流式 N 窗不会计成 N 个输出。
+**统计口径**：`output-review-stats` 以**回答**为单位（`COUNT(DISTINCT trace_id)`，缺省回退 event_id），另给 `window_events` 原始窗口数——流式 N 窗不会计成 N 个输出。**allow 采样加权**：引擎 allow 事件按 `virbius.audit.sample-rate-allow` 采样（deny 全量），答案级计数对观测到的 allow-only 答案按包含概率 `1-(1-rate)^k` 取逆权重（Horvitz–Thompson，对齐 `bumpRequestStats` 的事件级加权）；`allowed`=估计值、`sampled_allow_answers`=原始观测数，`denied` 恒精确——否则默认 0.1 采样下 `total` 低估 ~10x、`deny_rate` 虚高。
 
-**移除项**（原 chat 内置审查）：`ChatCompletionsController` 的 `virbius` 扩展/审查分支/流式窗口接线、`TraceStepPublisher`（chat 侧 input/output trace step）、配置 `virbius.output-review.{skip-models,refusal-text,fail-closed,streaming.*}`（转由 SDK 配置）与 `virbius.trace.*`。保留 `action-map`。
+**移除项**（原 chat 内置审查）：`ChatCompletionsController` **整体删除**（审查分支先行移除后，剩余的本地 Ollama 透传门面亦无保留价值——生产流量走 APISIX/Higress 网关或 SDK，本地模型直连 Ollama 原生 OpenAI 兼容端点）、`TraceStepPublisher`（chat 侧 input/output trace step）、配置 `virbius.ollama-base-url`、`virbius.output-review.{skip-models,refusal-text,fail-closed,streaming.*}`（转由 SDK 配置）与 `virbius.trace.*`。保留 `action-map`。
 
-配置项见 DEPLOYMENT §10.2（引擎侧）与 SDK README（调用方侧：窗口参数、`fail_open`、拒答文案）。
+配置项见 DEPLOYMENT §10.2（引擎侧）与 SDK README（调用方侧：窗口参数、`fail_open`、429 独立 fail-closed 策略、拒答文案）。
 
 ---
 

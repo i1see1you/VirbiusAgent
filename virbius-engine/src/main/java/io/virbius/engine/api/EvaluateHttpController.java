@@ -6,6 +6,7 @@ import io.virbius.engine.eval.EvaluateResponseDto;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -29,11 +30,18 @@ import org.springframework.web.bind.annotation.RestController;
  *       {@code disposal_action} (+ {@code sanitized_content} for
  *       {@code redact}) which callers apply verbatim.</li>
  * </ul>
- * All other roles ({@code tool_call}, legacy {@code user}, …) keep the full
- * pipeline behavior and an unchanged response shape.
+ *
+ * <p>{@code role} is a closed enum: {@code input | output | tool_call}. Blank
+ * (or absent) defaults to {@code tool_call} semantics; any other value —
+ * including the legacy {@code user} — is rejected with HTTP 400
+ * ({@code unsupported_role}) so a mis-integrated caller fails loudly instead
+ * of silently running an undocumented role.
  */
 @RestController
 public class EvaluateHttpController {
+
+    private static final java.util.Set<String> SUPPORTED_ROLES =
+            java.util.Set.of("input", "output", "tool_call");
 
     private final EvaluateOrchestrator orchestrator;
     private final OutputReviewService outputReview;
@@ -52,6 +60,15 @@ public class EvaluateHttpController {
     public ResponseEntity<?> evaluate(
             @RequestBody EvaluateRequestDto request,
             HttpServletRequest http) {
+        String role = request.role() == null
+                ? "" : request.role().trim().toLowerCase(java.util.Locale.ROOT);
+        if (!role.isBlank() && !SUPPORTED_ROLES.contains(role)) {
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("error", "unsupported_role");
+            body.put("role", request.role());
+            body.put("supported_roles", List.of("input", "output", "tool_call"));
+            return ResponseEntity.badRequest().body(body);
+        }
         java.util.Optional<Duration> limited = rateLimiter.check(
                 request.sessionId(), clientIp(http), request.traceId(), request.streamChunk());
         if (limited.isPresent()) {
@@ -62,8 +79,7 @@ public class EvaluateHttpController {
                     .header("Retry-After", String.valueOf(limited.get().toSeconds()))
                     .body(body);
         }
-        boolean isOutputReview = request.role() != null
-                && "output".equalsIgnoreCase(request.role().trim());
+        boolean isOutputReview = "output".equals(role);
         EvaluateResponseDto response = isOutputReview
                 ? outputReview.review(request)
                 : orchestrator.evaluate(request);

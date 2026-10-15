@@ -66,19 +66,26 @@ class ReviewClientTest(unittest.TestCase):
             v.disposal_action = disposal
             self.assertEqual(expected, client.apply_disposal("original text", v))
 
-    def test_capability_fallback_without_disposal_fields(self):
+    def test_missing_disposal_action_is_a_contract_violation(self):
+        # Engine and SDK ship together: a role=output response without
+        # disposal_action is a contract violation, not a capability gap.
         client, _ = make_client({"effective_action": "allow"})
+        with self.assertRaises(ReviewError):
+            client.review_output("hello")
+
+    def test_fail_open_verdict_derives_disposal(self):
+        # Locally synthesized fail-open verdicts carry no engine contract;
+        # they keep the derived disposal (warn when not blocked).
+        def boom(payload):
+            raise ConnectionError("engine down")
+        client, _ = make_client(boom, fail_open=True)
         v = client.review_output("hello")
         self.assertFalse(v.blocked)
-        self.assertEqual("warn", v.disposal_action)  # derived fallback
-
-        client2, _ = make_client({"effective_action": "deny"})
-        v2 = client2.review_output("bad")
-        self.assertTrue(v2.blocked)
-        self.assertEqual("reject", v2.disposal_action)  # derived fallback
+        self.assertEqual("warn", v.disposal_action)
+        self.assertIn("engine down", v.error)
 
     def test_stream_chunk_flag_and_output_tool(self):
-        client, calls = make_client({"effective_action": "allow"})
+        client, calls = make_client({"effective_action": "allow", "disposal_action": "warn"})
         client.review_output("text", stream_chunk=True, session_id="s", trace_id="t")
         self.assertTrue(calls[0]["stream_chunk"])
         self.assertEqual("chat_completion", calls[0]["tool_name"])
@@ -101,12 +108,14 @@ class ReviewClientTest(unittest.TestCase):
         with self.assertRaises(ReviewError):
             client.review_output("anything")
 
-    def test_rate_limited_fail_open(self):
+    def test_rate_limited_fails_closed(self):
+        # 429 is a deliberate throttle and always fails closed — fail-open
+        # would let a flooding client forward windows unreviewed.
         client, _ = make_client({"error": "rate_limited", "retry_after_seconds": 12})
-        v = client.review_output("anything")
-        self.assertFalse(v.blocked)
-        self.assertIn("rate_limited", v.error)
-        self.assertIn("12", v.error)
+        with self.assertRaises(ReviewError) as ctx:
+            client.review_output("anything")
+        self.assertIn("rate_limited", str(ctx.exception))
+        self.assertIn("12", str(ctx.exception))
 
 
 if __name__ == "__main__":

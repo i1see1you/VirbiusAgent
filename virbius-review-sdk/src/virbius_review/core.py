@@ -48,7 +48,14 @@ def output_verdict(data: dict) -> OutputVerdict:
     blocked = action.lower() in ("deny", "block")
     disposal = data.get("disposal_action")
     if not disposal:
-        # Capability fallback: engine predates the disposal contract.
+        if "error" not in data:
+            # The engine always returns disposal_action for role=output; a
+            # response without it (and without a local fail-open marker) is a
+            # contract violation — fail loudly instead of guessing.
+            raise ReviewError(
+                "engine response for role=output is missing disposal_action "
+                "(contract violation)")
+        # Local fail-open verdict: no engine contract to enforce.
         disposal = "reject" if blocked else "warn"
     return OutputVerdict(
         blocked=blocked,
@@ -71,6 +78,17 @@ def raise_or_fail_open(cfg: ReviewConfig, message: str) -> dict:
     if not cfg.fail_open:
         raise ReviewError(message)
     return allow_on_error(cfg, message)
+
+
+def rate_limited_error(retry_after_seconds) -> None:
+    """Rate limiting (HTTP 429) always fails CLOSED — no fail-open opt-in.
+
+    A throttle is a deliberate decision by the engine, not an outage: with
+    fail-open, an abusive client could flood the limiter and have every
+    subsequent window forwarded unreviewed (a review bypass). The engine and
+    the SDK ship together, so there is no version-skew excuse either.
+    """
+    raise ReviewError(f"rate_limited (retry_after {retry_after_seconds}s)")
 
 
 def apply_disposal(cfg: ReviewConfig, content: str, verdict: OutputVerdict) -> str:

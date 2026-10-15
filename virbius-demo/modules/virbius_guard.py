@@ -35,7 +35,7 @@ def guard_prompt(content, session_id="ctf:5", user_id="ctf-player"):
         "tenant_id": "default",
         "session_id": session_id,
         "content": content,
-        "role": "user",
+        "role": "input",
         "user_id": user_id,
     }
     try:

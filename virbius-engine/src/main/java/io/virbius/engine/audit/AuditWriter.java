@@ -79,6 +79,11 @@ public class AuditWriter {
             }
             event.put("degraded", degraded);
             event.put("intercepted_at", Instant.now().toString());
+            // session_id is not persisted in tb_audit_events but rides the
+            // Kafka payload so AlertService can bind a real session to alerts.
+            if (req.sessionId() != null && !req.sessionId().isBlank()) {
+                event.put("session_id", req.sessionId());
+            }
             if (req.userId() != null && !req.userId().isBlank()) {
                 event.put("user_id", req.userId());
             }

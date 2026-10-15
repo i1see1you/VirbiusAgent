@@ -20,7 +20,7 @@ class StreamReviewTest(unittest.TestCase):
         return list(client.wrap_stream(deltas, **ctx))
 
     def test_passthrough_forwards_only_reviewed_content(self):
-        client = self._client(lambda p: {"effective_action": "allow"},
+        client = self._client(lambda p: {"effective_action": "allow", "disposal_action": "warn"},
                               window_chars=5, context_chars=2)
         events = self._events(client, ["abcde", "fghij"],
                                session_id="s", trace_id="t")
@@ -29,7 +29,7 @@ class StreamReviewTest(unittest.TestCase):
 
     def test_mid_stream_block_terminates(self):
         verdicts = [
-            {"effective_action": "allow"},
+            {"effective_action": "allow", "disposal_action": "warn"},
             {"effective_action": "deny", "reason_code": "OUTPUT_XSS",
              "disposal_action": "reject"},
         ]
@@ -49,7 +49,7 @@ class StreamReviewTest(unittest.TestCase):
         self.assertEqual([Delta("abcde"), Blocked("OUTPUT_XSS", None, 0, "reject")], events)
 
     def test_tail_window_flushed_at_end(self):
-        client = self._client(lambda p: {"effective_action": "allow"},
+        client = self._client(lambda p: {"effective_action": "allow", "disposal_action": "warn"},
                               window_chars=10, context_chars=3)
         events = self._events(client, ["hi", " there", "!"],
                                session_id="s", trace_id="t")
@@ -58,7 +58,7 @@ class StreamReviewTest(unittest.TestCase):
         self.assertEqual([Delta("hi there!"), Done()], events)
 
     def test_stream_first_forwards_before_verdict(self):
-        client = self._client(lambda p: {"effective_action": "allow"},
+        client = self._client(lambda p: {"effective_action": "allow", "disposal_action": "warn"},
                               window_chars=5, context_chars=2, stream_first=True)
         events = self._events(client, ["abcde", "fghij"],
                                session_id="s", trace_id="t")
@@ -84,7 +84,7 @@ class StreamReviewTest(unittest.TestCase):
 
         def transport(payload):
             seen.append(payload)
-            return {"effective_action": "allow"}
+            return {"effective_action": "allow", "disposal_action": "warn"}
 
         client = ReviewClient("http://engine:8082", transport=transport,
                               window_chars=5, context_chars=2)

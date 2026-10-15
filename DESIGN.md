@@ -2698,7 +2698,7 @@ fail_open = true            # whether to allow when Engine is unavailable
 
 #### 13.7.7 Output review as API + SDK (outline B; the engine chat-embedded review was removed)
 
-Output review is no longer embedded in the engine chat proxy: callers integrate via the **evaluate API** and stream via the **official SDK** (contract in [PROTOCOL.md §2.6.5](PROTOCOL.md)). The engine's `/v1/chat/completions` is now a local Ollama passthrough facade (no review, no cloud models).
+Output review is no longer embedded in the engine chat proxy: callers integrate via the **evaluate API** and stream via the **official SDK** (contract in [PROTOCOL.md §2.6.5](PROTOCOL.md)). The engine no longer serves `/v1/chat/completions`: local models are reached directly via Ollama's native OpenAI-compatible endpoint, and cloud models are called by the application.
 
 | Component | Location | Responsibility |
 |------|------|------|
@@ -2711,13 +2711,13 @@ Output review is no longer embedded in the engine chat proxy: callers integrate 
 | `ReviewRiskGuard` | engine `eval/` | input-review risk dedup (once per trace, TTL default 10 min) |
 | `virbius-review-sdk` (Python) | caller side | `review_input`/`review_output`/`apply_disposal`/`wrap_stream` (windowed per-window review, abort upstream on hit) |
 
-**Role side-effect matrix**: `role=input` feeds session risk (enforced hits only, once per trace) and skips challenge/counters/tool history; `role=output` is **zero side effects** (reads the current risk score, never updates) — streaming windows never pollute session risk. `tool_call`/`user` behavior is unchanged.
+**Role side-effect matrix**: `role` is a closed enum `input | output | tool_call` (blank defaults to `tool_call` semantics; any other value — including the historical `user` — is rejected with 400 at the HTTP boundary, see `EvaluateHttpController`). `role=input` feeds session risk (enforced hits only, once per trace) and skips challenge/counters/tool history; `role=output` is **zero side effects** (reads the current risk score, never updates) — streaming windows never pollute session risk.
 
-**Stats**: `output-review-stats` counts **answers** (`COUNT(DISTINCT trace_id)`, falling back to event_id) plus a raw `window_events` count — N windows of one answer are no longer N outputs.
+**Stats**: `output-review-stats` counts **answers** (`COUNT(DISTINCT trace_id)`, falling back to event_id) plus a raw `window_events` count — N windows of one answer are no longer N outputs. **Allow-sampling reweighting**: the engine samples allow events at `virbius.audit.sample-rate-allow` (deny events are complete), so the answer-level counts weight each observed allow-only answer by the inverse of its inclusion probability `1-(1-rate)^k` (Horvitz–Thompson, mirroring `bumpRequestStats`' event-level reweighting); `allowed` = estimate, `sampled_allow_answers` = raw observed count, `denied` stays exact — otherwise the default 0.1 sampling understates `total` ~10x and inflates `deny_rate`.
 
-**Removed** (the former chat-embedded review): the `ChatCompletionsController` `virbius` extension/review branches/streaming wiring, `TraceStepPublisher` (chat-side input/output trace steps), config `virbius.output-review.{skip-models,refusal-text,fail-closed,streaming.*}` (moved to SDK config) and `virbius.trace.*`. `action-map` stays.
+**Removed** (the former chat-embedded review): `ChatCompletionsController` **deleted in full** (after the review branches went, the remaining local-Ollama passthrough facade had no retention value — production traffic flows through the APISIX/Higress gateway or the SDK, and local models are reached directly via Ollama's native OpenAI-compatible endpoint), `TraceStepPublisher` (chat-side input/output trace steps), config `virbius.ollama-base-url`, `virbius.output-review.{skip-models,refusal-text,fail-closed,streaming.*}` (moved to SDK config) and `virbius.trace.*`. `action-map` stays.
 
-Configuration: DEPLOYMENT §10.2 (engine side) and the SDK README (caller side: window params, `fail_open`, refusal text).
+Configuration: DEPLOYMENT §10.2 (engine side) and the SDK README (caller side: window params, `fail_open`, the separate fail-closed policy for 429, refusal text).
 
 ---
 

@@ -12,7 +12,7 @@ from virbius_review.adapters import from_ollama_ndjson, from_openai_sse
 class AsyncClientTest(unittest.TestCase):
     def test_async_review_and_stream(self):
         async def transport(payload):
-            return {"effective_action": "allow"}
+            return {"effective_action": "allow", "disposal_action": "warn"}
 
         async def run():
             async with AsyncReviewClient("http://engine:8082",
@@ -33,8 +33,20 @@ class AsyncClientTest(unittest.TestCase):
         events = asyncio.run(run())
         self.assertEqual([Delta("abcde"), Delta("fghij"), Done()], events)
 
+    def test_async_rate_limited_fails_closed(self):
+        async def transport(payload):
+            return {"error": "rate_limited", "retry_after_seconds": 5}
+
+        async def run():
+            client = AsyncReviewClient("http://engine:8082", transport=transport)
+            await client.review_input_async("hi", session_id="s", trace_id="t")
+
+        from virbius_review import ReviewError
+        with self.assertRaises(ReviewError):
+            asyncio.run(run())
+
     def test_async_stream_block(self):
-        verdicts = [{"effective_action": "allow"},
+        verdicts = [{"effective_action": "allow", "disposal_action": "warn"},
                     {"effective_action": "deny", "disposal_action": "reject"}]
         idx = {"i": 0}
 

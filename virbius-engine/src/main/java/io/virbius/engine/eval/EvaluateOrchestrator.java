@@ -93,13 +93,14 @@ public class EvaluateOrchestrator {
     }
 
     public EvaluateResponseDto evaluate(EvaluateRequestDto req) {
-        // Review-role semantics (see PROTOCOL "evaluate role side-effect matrix"):
+        // Review-role semantics (see PROTOCOL "evaluate role side-effect matrix";
+        // the role enum input|output|tool_call is enforced at the HTTP boundary):
         //   role=input  — content review of a user message; feeds session risk
         //                 (enforced hits only, once per trace) but never creates
         //                 challenges, counters or tool-call history.
         //   role=output — content review of a model answer; ZERO side effects
         //                 (disposal is computed by OutputReviewService).
-        //   other roles (tool_call / user / …) keep the full pipeline behavior.
+        //   role=tool_call (also the blank default) — full pipeline behavior.
         String role = req.role() != null ? req.role().trim().toLowerCase(java.util.Locale.ROOT) : "";
         boolean reviewInput = "input".equals(role);
         boolean reviewOutput = "output".equals(role);

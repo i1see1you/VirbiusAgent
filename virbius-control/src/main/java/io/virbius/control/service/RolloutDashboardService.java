@@ -187,14 +187,27 @@ public class RolloutDashboardService {
      * to event_id) is the unit users care about, so totals/denies are counted
      * per answer. {@code window_events} keeps the raw event count for
      * transparency.
+     *
+     * <p><b>Allow sampling is reweighted</b>: deny events are never sampled, but
+     * the engine publishes allow events at {@code virbius.audit.sample-rate-allow}
+     * (default 0.1) — each published allow event carries {@code sampled_allow=1}
+     * and its {@code sample_rate_allow}. Counting those rows raw would understate
+     * allowed answers by ~1/rate and inflate {@code deny_rate}. An allow-only
+     * answer observed with {@code k} events at rate {@code r} has inclusion
+     * probability {@code 1-(1-r)^k}, so it is weighted by the inverse
+     * (Horvitz–Thompson), mirroring the event-level reweighting already done by
+     * {@code AuditEventIngestor.bumpRequestStats}. {@code denied_answers} is
+     * exact (deny events are complete); {@code allowed_answers} carries the
+     * estimate and {@code sampled_allow_answers} the raw observed count.
      */
     public Map<String, Object> outputReviewAnswerStats(
             String tenantId, java.time.Instant from, java.time.Instant to) {
         StringBuilder sql = new StringBuilder("""
-                SELECT COUNT(DISTINCT COALESCE(trace_id, event_id)) AS answers,
-                       COUNT(DISTINCT CASE WHEN effective_action IN ('deny','block')
-                                 THEN COALESCE(trace_id, event_id) END) AS denied_answers,
-                       COUNT(*) AS window_events
+                SELECT COALESCE(trace_id, event_id) AS answer_id,
+                       MAX(CASE WHEN effective_action IN ('deny','block') THEN 1 ELSE 0 END) AS denied,
+                       COUNT(*) AS event_cnt,
+                       MAX(CASE WHEN sampled_allow = 1
+                                THEN COALESCE(sample_rate_allow, 1.0) ELSE 1.0 END) AS sample_rate
                 FROM tb_audit_events
                 WHERE tenant_id = ? AND scene = 'output'
                 """);
@@ -208,7 +221,44 @@ public class RolloutDashboardService {
             sql.append(" AND intercepted_at <= ?");
             args.add(to);
         }
-        return jdbc.queryForMap(sql.toString(), args.toArray());
+        sql.append(" GROUP BY COALESCE(trace_id, event_id)");
+        List<AnswerRow> rows = jdbc.query(sql.toString(), (rs, i) -> new AnswerRow(
+                rs.getInt("denied") == 1, rs.getLong("event_cnt"), rs.getDouble("sample_rate")),
+                args.toArray());
+        return aggregateAnswerStats(rows);
+    }
+
+    /** Per-answer rollup row (one answer = one trace_id, falling back to event_id). */
+    record AnswerRow(boolean denied, long events, double sampleRate) {}
+
+    /**
+     * Pure aggregation over per-answer rows (unit-tested): denied answers weigh
+     * exactly 1; observed allow-only answers weigh {@code 1/(1-(1-r)^k)}.
+     */
+    static Map<String, Object> aggregateAnswerStats(List<AnswerRow> rows) {
+        long denied = rows.stream().filter(AnswerRow::denied).count();
+        long windowEvents = rows.stream().mapToLong(AnswerRow::events).sum();
+        double allowedEstimate = 0.0;
+        long sampledAllowAnswers = 0;
+        for (AnswerRow r : rows) {
+            if (r.denied()) {
+                continue;
+            }
+            sampledAllowAnswers++;
+            double rate = r.sampleRate();
+            if (rate <= 0.0 || rate > 1.0) {
+                rate = 1.0; // untagged/invalid rate: treat as fully observed
+            }
+            double inclusion = 1.0 - Math.pow(1.0 - rate, Math.max(1L, r.events()));
+            allowedEstimate += 1.0 / inclusion;
+        }
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("answers", denied + Math.round(allowedEstimate));
+        out.put("denied_answers", denied);
+        out.put("allowed_answers", allowedEstimate);
+        out.put("sampled_allow_answers", sampledAllowAnswers);
+        out.put("window_events", windowEvents);
+        return out;
     }
 
     public List<Map<String, Object>> gateLogs(String tenantId, String ruleId, int limit) {

@@ -42,11 +42,11 @@
 >
 > - **方式一：VirbiusLLM 网关（零代码）**：APISIX/Higress `virbius-guard` 插件拦截 `POST /v1/chat/completions`，提取 user 提示词，经 `virbius-gateway-agent`(:9070) 调用 engine `POST /v1/evaluate`，命中即 403。仅需部署 APISIX 插件、配置引擎规则、将 Agent 的 LLM baseUrl 指向网关。生产建议 `fail_mode="close"`，引擎不可用时拒绝而非放行，防止绕过。
 > - **方式二：应用方代码集成（自研 Agent）**：应用代码直接调用 engine `POST /v1/evaluate`（snake_case JSON，字段对齐 `EvaluateRequestDto`），无需部署网关：
->   - **入站 Prompt 检测**（用户 prompt → LLM 前）：`content=用户提示词`、`role="user"`，返回 `effective_action` 为 `block`/`deny` 时拦截；
->   - **输出审查**（LLM 响应 → 用户前）：`content=LLM 生成文本`、`role="output"`，命中 `block`/`deny` 时替换为安全提示或丢弃。
+>   - **入站 Prompt 检测**（用户 prompt → LLM 前）：`content=用户提示词`、`role="input"`，返回 `effective_action` 为 `block`/`deny` 时拦截；
+>   - **输出审查**（LLM 响应 → 用户前）：`content=LLM 生成文本`、`role="output"`，命中 `block`/`deny` 时按响应中的 `disposal_action`（`reject|omit|redact|warn`，`redact` 附 `sanitized_content`）处置。
 >   - 响应字段：`effective_action`（`allow`/`block`/`deny`/`challenge`/`review`）、`max_risk_score`、`reason_code`、`rule_id`、`trace_id`。引擎不可达默认放行（fail-open），fail-close 由应用方自行捕获超时/连接异常。
 >
-> > 注：`role` 字段当前**不影响**规则选择——入站/出站复用同一套 prompt 规则；若需区分规则集，需在 engine 侧增加 role 过滤（尚未实现）。
+> > 注：`role` 为封闭枚举 `input | output | tool_call`（空白缺省= `tool_call` 语义，其他值一律 `400 unsupported_role`）。`role` 决定副作用语义（见 PROTOCOL §2.6.5 role 副作用矩阵）但**不影响 prompt 规则选择**——入站/出站复用同一套 prompt 规则；若需区分规则集，需在 engine 侧增加 role 过滤（尚未实现）。流式输出审查建议直接接入官方 `virbius-review-sdk`（`wrap_stream` 窗口化，429 恒 fail-closed）。
 
 ### 8.2 部署拓扑
 
@@ -625,7 +625,7 @@ dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新�
 | `virbius.audit.retention.enabled` | `true` | 保留归档任务 |
 | `virbius.audit.export.key` | 空 | 导出产物 AES-256-GCM 密钥（base64，解码须 32B）；**不配则导出落 `failed`（fail-closed）** |
 | `virbius.audit.export.allow-plaintext` | `false` | 显式允许明文导出（不推荐，仅调试） |
-| `virbius.alert.risk-threshold` | `80` | 生成告警的风险阈值（且动作须为 block/deny/challenge） |
+| `virbius.alert.risk-threshold` | `80` | 生成告警的风险阈值（且动作须为 block/deny/challenge）；**告警按答案（trace_id）聚合**——流式被拦答案的多个窗口事件只开一条告警 |
 | `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | 原因码→处置（`reject|omit|redact|warn`）映射，未列出走关键字兜底；**统一在引擎解析，所有调用方一致** |
 | `virbius.evaluate.rate-limit.enabled` | `true` | `/v1/evaluate` 限流开关（无鉴权端点的滥用防护） |
 | `virbius.evaluate.rate-limit.per-session-per-min` | `60` | 每 session 每分钟**回答/请求数**（流式窗口按 trace 合并计 1 次） |

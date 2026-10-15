@@ -11,7 +11,7 @@
 #               pipeline verdict (normal -> allow+warn)
 #     B2        streaming-window review (stream_chunk=true) -> disposal
 #     RATE      evaluate rate limiter v2: 30 windows of one trace unthrottled
-#     FACADE    /v1/chat/completions is a pure local LLM facade (no review)
+#     NOCHAT    /v1/chat/completions is REMOVED from the engine (404)
 #     C1        chain pattern: sensitive read -> external egress (chain-exfil)
 #     C2        retry-escape after a block (retry-escape)
 #   Control (dev SQLite + new schema):
@@ -151,7 +151,6 @@ env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
     VIRBIUS_PROMPT_LLM_BASE_URL="http://127.0.0.1:$MOCK_PORT" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$ENGINE_JAR" --server.port="$ENGINE_PORT" \
-      --virbius.ollama-base-url="http://127.0.0.1:$MOCK_PORT" \
     > "$LOGS/engine.log" 2>&1 &
 ENGINE_PID=$!
 
@@ -171,16 +170,6 @@ info "services up."
 
 E="http://127.0.0.1:$ENGINE_PORT"
 C="http://127.0.0.1:$CONTROL_PORT/api/v1/admin/tenants/default"
-
-# chat helper: retry a few times so a cold first-request never flakes the run.
-chat(){ local body="$1" r=""; for _ in 1 2 3 4 5; do
-  r=$(curl -s --max-time 20 -X POST "$E/v1/chat/completions" -H 'Content-Type: application/json' -d "$body");
-  printf '%s' "$r" | grep -q '"choices"' && { printf '%s' "$r"; return 0; };
-  sleep 1; done; printf '%s' "$r"; }
-
-# ── engine scenarios ─────────────────────────────────────────────────────────
-# warm-up (first chat request initializes the passthrough proxy)
-chat '{"model":"m","messages":[{"role":"user","content":"hi"}]}' >/dev/null || true
 
 # Output review is exposed via POST /v1/evaluate with role=output: the engine
 # returns disposal_action (+ sanitized_content for redact) and the caller
@@ -208,10 +197,13 @@ R=$(evout '{"tenant_id":"default","role":"output","tool_name":"chat_completion",
 V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("disposal_action") in ("reject","omit") else "0")' 2>/dev/null || echo 0)
 check "$V" "stream window malicious -> disposal reject/omit"
 
-info "E2E: chat endpoint is a pure local LLM facade (no review)"
-R=$(chat '{"model":"m","messages":[{"role":"user","content":"malicious"}]}')
-V=$(printf '%s' "$R" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("1" if d.get("choices") and "virbius" not in d else "0")' 2>/dev/null || echo 0)
-check "$V" "chat passthrough: no review object, no virbius key"
+info "E2E: chat endpoint removed from the engine"
+V=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$E/v1/chat/completions" -H 'Content-Type: application/json' -d '{"model":"m","messages":[]}')
+check "$([ "$V" = "404" ] || [ "$V" = "405" ] && echo 1 || echo 0)" "POST /v1/chat/completions on the engine -> 404/405 (endpoint removed)"
+
+info "E2E: evaluate role is a closed enum"
+V=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$E/v1/evaluate" -H 'Content-Type: application/json' -d '{"tenant_id":"default","role":"user","tool_name":"chat_input","content":"hi"}')
+check "$([ "$V" = "400" ] && echo 1 || echo 0)" "role=user (legacy) -> 400 unsupported_role"
 
 info "E2E: evaluate rate limit does not throttle streaming windows (v2)"
 V=1

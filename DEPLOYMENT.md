@@ -42,11 +42,11 @@
 >
 > - **Mode 1: VirbiusLLM gateway (zero code)**: The APISIX/Higress `virbius-guard` plugin intercepts `POST /v1/chat/completions`, extracts the user prompt, and calls engine `POST /v1/evaluate` via `virbius-gateway-agent` (:9070); hits return 403. Only requires deploying the APISIX plugin, configuring engine rules, and pointing the Agent's LLM baseUrl at the gateway. For production set `fail_mode="close"` so requests are rejected when the engine is unavailable rather than passed through, preventing bypass.
 > - **Mode 2: Application-side code integration (self-developed Agent)**: The application calls engine `POST /v1/evaluate` directly from code (snake_case JSON, fields aligned with `EvaluateRequestDto`), no gateway deployment needed:
->   - **Inbound prompt check** (before user prompt → LLM): `content=user prompt`, `role="user"`; intercept when the returned `effective_action` is `block`/`deny`;
->   - **Output review** (before LLM response → user): `content=LLM generated text`, `role="output"`; on `block`/`deny`, replace with a safety prompt or drop the response.
+>   - **Inbound prompt check** (before user prompt → LLM): `content=user prompt`, `role="input"`; intercept when the returned `effective_action` is `block`/`deny`;
+>   - **Output review** (before LLM response → user): `content=LLM generated text`, `role="output"`; on `block`/`deny`, apply the response's `disposal_action` (`reject|omit|redact|warn`; `redact` carries `sanitized_content`).
 >   - Response fields: `effective_action` (`allow`/`block`/`deny`/`challenge`/`review`), `max_risk_score`, `reason_code`, `rule_id`, `trace_id`. When the engine is unreachable requests default to pass-through (fail-open); fail-close is implemented by the application catching timeout/connection errors itself.
 >
-> > Note: the `role` field currently does **not** affect rule selection — inbound/output reuse the same set of prompt rules; if distinct rule sets are needed, engine-side role filtering would be required (not yet implemented).
+> > Note: `role` is a closed enum `input | output | tool_call` (blank defaults to `tool_call` semantics; any other value returns `400 unsupported_role`). The role selects the side-effect semantics (see the role side-effect matrix in PROTOCOL §2.6.5) but does **not** affect prompt-rule selection — inbound/output reuse the same prompt rule set; engine-side role filtering is not implemented. For streaming output review, integrate the official `virbius-review-sdk` (`wrap_stream` windowing; 429 always fails closed).
 
 ### 8.2 Deployment Topology
 
@@ -567,7 +567,7 @@ Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lac
 | `virbius.audit.retention.enabled` | `true` | retention archival job |
 | `virbius.audit.export.key` | empty | AES-256-GCM key for export artifacts (base64, must decode to 32B); **when unset, exports land `failed` (fail-closed)** |
 | `virbius.audit.export.allow-plaintext` | `false` | explicitly allow plaintext export (not recommended; debug only) |
-| `virbius.alert.risk-threshold` | `80` | alert generation risk threshold (and action must be block/deny/challenge) |
+| `virbius.alert.risk-threshold` | `80` | alert generation risk threshold (and action must be block/deny/challenge); **alerts aggregate per answer (`trace_id`)** — the window events of one blocked streaming answer open a single alert |
 | `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | reason-code→action (`reject|omit|redact|warn`) map; unlisted codes fall back to keyword matching — **resolved once in the engine, identical for every caller** |
 | `virbius.evaluate.rate-limit.enabled` | `true` | `/v1/evaluate` rate limiting (abuse bound for the unauthenticated endpoint) |
 | `virbius.evaluate.rate-limit.per-session-per-min` | `60` | answers/requests per session per minute (streaming windows share one unit per trace) |

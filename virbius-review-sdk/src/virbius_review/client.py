@@ -20,7 +20,10 @@ class ReviewClient:
     """Synchronous review client (primary; uses ``requests``).
 
     Inject ``transport`` (a ``dict -> dict`` callable) for testing or custom
-    routing; by default it POSTs to ``{engine_url}/v1/evaluate``.
+    routing; by default it POSTs to ``{engine_url}/v1/evaluate``. Custom
+    transports must return the engine's JSON body for HTTP 429 instead of
+    raising — a raised 429 is indistinguishable from a transport failure and
+    then follows the ``fail_open`` policy instead of failing closed.
     """
 
     def __init__(
@@ -81,13 +84,14 @@ class ReviewClient:
     def _call(self, payload: dict) -> dict:
         try:
             data = self._transport(payload)
-        except Exception as exc:  # transport error / 429 / timeout
+        except Exception as exc:  # transport error / timeout / 5xx
             return core.raise_or_fail_open(self.config, str(exc))
         if not isinstance(data, dict):
             return core.raise_or_fail_open(self.config, f"unexpected engine response: {data!r}")
         if data.get("error") == "rate_limited":
-            return core.raise_or_fail_open(
-                self.config, f"rate_limited (retry_after {data.get('retry_after_seconds')}s)")
+            # Deliberate throttle: always fails closed — never a fail-open
+            # verdict, otherwise flooding the limiter would bypass review.
+            core.rate_limited_error(data.get("retry_after_seconds"))
         return data
 
     def _requests_post(self, payload: dict) -> dict:
@@ -98,6 +102,14 @@ class ReviewClient:
             kwargs["headers"] = dict(self.config.extra_headers)
         resp = (self._session or requests).post(
             self.config.engine_url + "/v1/evaluate", json=payload, **kwargs)
+        if resp.status_code == 429:
+            # Return the engine's rate-limit body instead of raising so _call
+            # applies the (default fail-closed) rate-limit policy — a raised
+            # 429 would be indistinguishable from a transport failure.
+            try:
+                return resp.json()
+            except Exception:
+                pass
         resp.raise_for_status()
         return resp.json()
 
@@ -218,8 +230,8 @@ class AsyncReviewClient:
         if not isinstance(data, dict):
             return core.raise_or_fail_open(self.config, f"unexpected engine response: {data!r}")
         if data.get("error") == "rate_limited":
-            return core.raise_or_fail_open(
-                self.config, f"rate_limited (retry_after {data.get('retry_after_seconds')}s)")
+            # Deliberate throttle: always fails closed (see core).
+            core.rate_limited_error(data.get("retry_after_seconds"))
         return data
 
     async def _post(self, payload: dict) -> dict:
@@ -234,6 +246,13 @@ class AsyncReviewClient:
             self._http = httpx.AsyncClient(timeout=self.config.timeout)
         resp = await self._http.post(
             self.config.engine_url + "/v1/evaluate", json=payload)
+        if resp.status_code == 429:
+            # Return the rate-limit body so _call applies the fail-closed
+            # policy instead of treating 429 as a transport failure.
+            try:
+                return resp.json()
+            except Exception:
+                pass
         resp.raise_for_status()
         return resp.json()
 

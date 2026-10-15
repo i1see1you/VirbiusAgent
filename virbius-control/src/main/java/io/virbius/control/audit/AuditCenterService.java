@@ -60,13 +60,20 @@ public class AuditCenterService {
         // Answer-level aggregation: a streaming review emits one event per
         // window, so an "answer" (trace_id, falling back to event_id) is the
         // unit for totals/denies; window_events keeps the raw event count.
+        // Allow events are engine-sampled (sample-rate-allow), so totals
+        // reweight observed allow answers — see RolloutDashboardService.
         Map<String, Object> answerStats =
                 dashboardService.outputReviewAnswerStats(tenantId, from, to);
         long total = ((Number) answerStats.getOrDefault("answers", 0L)).longValue();
         long denied = ((Number) answerStats.getOrDefault("denied_answers", 0L)).longValue();
         long windowEvents = ((Number) answerStats.getOrDefault("window_events", 0L)).longValue();
+        double allowed = ((Number) answerStats.getOrDefault("allowed_answers", 0.0)).doubleValue();
+        long sampledAllowAnswers =
+                ((Number) answerStats.getOrDefault("sampled_allow_answers", 0L)).longValue();
         out.put("total", total);
         out.put("denied", denied);
+        out.put("allowed", allowed);
+        out.put("sampled_allow_answers", sampledAllowAnswers);
         out.put("deny_rate", total == 0 ? 0.0 : denied / (double) total);
         out.put("window_events", windowEvents);
         return out;

@@ -15,6 +15,12 @@ import org.springframework.stereotype.Service;
  * and act as the entry point for traceability: each alert carries a
  * {@code trace_id}, which {@link DecisionBomService} expands into the full
  * trajectory, judgement basis and disposal process.
+ *
+ * <p>Alerts aggregate <b>per answer</b> ({@code trace_id}): a blocked
+ * streaming answer emits one deny audit event per review window, and one
+ * alert per window would flood the console — the Decision BOM already lists
+ * every window event of the trace. Blank {@code trace_id} (uncorrelated
+ * event) falls back to one alert per event.
  */
 @Service
 public class AlertService {
@@ -42,14 +48,16 @@ public class AlertService {
             if (risk < riskThreshold || !enforcing) {
                 return;
             }
-            String eventId = str(event.get("event_id"));
-            String alertId = "alert-" + (eventId.isBlank() ? UUID.randomUUID().toString() : eventId);
+            String alertId = alertIdFor(tenantId, str(event.get("trace_id")), str(event.get("event_id")));
+            String sessionId = str(event.get("session_id"));
             int inserted = jdbc.update(
                     "INSERT INTO tb_alert (alert_id, tenant_id, trace_id, session_id, scene, rule_id, "
                             + "reason_code, risk_score, effective_action, status) "
-                            + "SELECT ?, ?, ?, NULL, ?, ?, ?, ?, ?, 'open' "
+                            + "SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open' "
                             + "WHERE NOT EXISTS (SELECT 1 FROM tb_alert WHERE alert_id = ?)",
-                    alertId, tenantId, str(event.get("trace_id")), str(event.get("scene")),
+                    alertId, tenantId, str(event.get("trace_id")),
+                    sessionId.isBlank() ? null : sessionId,
+                    str(event.get("scene")),
                     str(event.get("rule_id")), str(event.get("reason_code")), risk, action, alertId);
             if (inserted > 0) {
                 log.info("alert raised: tenant={} trace={} rule={} risk={} action={}",
@@ -58,6 +66,22 @@ public class AlertService {
         } catch (Exception e) {
             log.warn("alert generation failed: {}", e.getMessage());
         }
+    }
+
+    /**
+     * One alert per answer: streaming output review emits one deny event per
+     * window, so the alert id keys on {@code (tenant_id, trace_id)} — the
+     * WHERE NOT EXISTS insert then collapses the whole answer to a single
+     * alert (first window wins; every window stays visible in the BOM). The
+     * tenant is part of the id because trace ids are caller-provided and may
+     * repeat across tenants. Blank trace falls back to the event id.
+     */
+    static String alertIdFor(String tenantId, String traceId, String eventId) {
+        if (traceId != null && !traceId.isBlank()) {
+            return "alert-" + tenantId + "-" + traceId;
+        }
+        return "alert-" + (eventId == null || eventId.isBlank()
+                ? UUID.randomUUID().toString() : eventId);
     }
 
     public List<Map<String, Object>> list(String tenantId, String status, int limit) {
