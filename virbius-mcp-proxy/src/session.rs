@@ -413,7 +413,10 @@ mod tests {
 
     #[test]
     fn test_session_manager_cleanup_expired() {
-        let mgr = SessionManager::with_ttl(Duration::from_millis(10));
+        // Large TTL relative to the sleep so the "not expired yet" check has
+        // ample headroom; the expiry sleep overshoots the TTL, which only makes
+        // the session more expired (robust to scheduling jitter either way).
+        let mgr = SessionManager::with_ttl(Duration::from_millis(150));
         let s = Session::from_meta(&serde_json::json!({"app_id": "a"}));
         let sid = s.session_id.clone();
         mgr.insert(sid.clone(), s);
@@ -422,7 +425,7 @@ mod tests {
         assert_eq!(mgr.cleanup_expired().len(), 0);
 
         // Wait for expiry
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(250));
 
         // Now expired
         let expired = mgr.cleanup_expired();
@@ -433,16 +436,27 @@ mod tests {
 
     #[test]
     fn test_touch_extends_ttl() {
-        let mgr = SessionManager::with_ttl(Duration::from_millis(30));
+        // Assert the semantics without racing a sub-TTL wall clock. `touch`
+        // unconditionally refreshes `last_active`, restarting the window; a late
+        // wakeup before the touch only makes the session "more overdue", which
+        // is harmless. (The previous version asserted the session was still
+        // valid with only ~10ms of headroom under a 30ms TTL — flaky whenever
+        // parallel test execution delayed the 20ms sleep past the deadline.)
+        let mgr = SessionManager::with_ttl(Duration::from_millis(200));
         let s = Session::from_meta(&serde_json::json!({"app_id": "a"}));
         let sid = s.session_id.clone();
         mgr.insert(sid.clone(), s);
+        let before = mgr.get(&sid).unwrap().last_active;
 
-        std::thread::sleep(Duration::from_millis(15));
+        // Sleep past the TTL: the session is now due to expire.
+        std::thread::sleep(Duration::from_millis(250));
         mgr.touch(&sid); // extend
-        std::thread::sleep(Duration::from_millis(20)); // 35ms total since insert, 20ms since touch
 
-        // Should still be valid (touched at 15ms, TTL is 30ms)
+        // touch refreshed last_active (semantic assertion, no clock race)…
+        let after = mgr.get(&sid).unwrap().last_active;
+        assert!(after > before, "touch must refresh last_active");
+        // …so a full, fresh TTL window remains and the session is not expired
+        // immediately after the touch (headroom ~= the whole TTL).
         assert_eq!(mgr.cleanup_expired().len(), 0);
     }
 
