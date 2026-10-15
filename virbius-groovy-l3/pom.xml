@@ -14,7 +14,7 @@
   <name>virbius-groovy-l3</name>
 
   <properties>
-    <groovy.version>4.0.21</groovy.version>
+    <groovy.version>5.0.7</groovy.version>
   </properties>
 
   <dependencies>
