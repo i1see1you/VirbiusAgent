@@ -111,7 +111,8 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         }
         if (path.startsWith("/actuator")
                 || path.startsWith("/api/v1/internal/")
-                || path.equals("/api/v1/health")) {
+                || path.equals("/api/v1/health")
+                || path.equals("/api/v1/ready")) {
             return true;
         }
         if (path.startsWith("/ui")) {

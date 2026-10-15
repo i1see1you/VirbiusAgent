@@ -139,7 +139,7 @@ spec:
               value: "*"
           readinessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /api/v1/ready
               port: http
             initialDelaySeconds: 60
             periodSeconds: 15

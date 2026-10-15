@@ -58,6 +58,16 @@ public class HashChainVerifier {
             String prevHash = (String) row.get("prev_hash");
             String currHash = (String) row.get("curr_hash");
 
+            if (seq == 0) {
+                // Unchained row (audit_seq defaults to 0 until the shared head is
+                // stamped — chain failure at ingest, or a crash between the insert
+                // and the chain step that redelivery did not repair). A visible
+                // gap, not silent corruption.
+                return new ChainVerificationResult(false, 0L,
+                        "unchained row: event=" + row.get("event_id"),
+                        rows.size(), verified);
+            }
+
             if (seq != expectedSeq) {
                 return new ChainVerificationResult(false, seq,
                         "seq gap: expected " + expectedSeq + ", got " + seq,

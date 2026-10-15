@@ -103,10 +103,10 @@ public class HashChainOrchestrator {
     }
 
     private void chainBatchMysql(String tenantId, List<Map<String, Object>> events) {
-        jdbc.queryForList(
-                "SELECT seq, last_hash, version FROM tb_audit_chain_state WHERE tenant_id = ? FOR UPDATE",
-                tenantId);
-
+        // No FOR UPDATE here: JdbcTemplate runs auto-commit, so a row lock would be
+        // released when the SELECT returns (and SQLite rejects the syntax outright,
+        // which made this whole fallback path fail on the dev dialect). Mutual
+        // exclusion comes from the version-column CAS on the UPDATE below.
         var rows = jdbc.queryForList(
                 "SELECT seq, last_hash, version FROM tb_audit_chain_state WHERE tenant_id = ?",
                 tenantId);

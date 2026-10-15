@@ -8,7 +8,15 @@ export JAVA_HOME="${JAVA_HOME:-$("/usr/libexec/java_home" -v 17 2>/dev/null || t
 export PATH="${JAVA_HOME:+$JAVA_HOME/bin:}${PATH:-}"
 export VIRBIUS_DATA_DIR="${VIRBIUS_DATA_DIR:-$ROOT/data}"
 export VIRBIUS_REDIS_PORT="${VIRBIUS_REDIS_PORT:-6379}"
-export VIRBIUS_REDIS_URL="${VIRBIUS_REDIS_URL:-redis://127.0.0.1:${VIRBIUS_REDIS_PORT}}"
+# Dedicated Redis DB index for local dev. The audit hash-chain head lives in
+# Redis (virbius:audit:chain:{tenant}) while each control writes rows into its
+# own database: a second control instance (another dev checkout, an E2E run,
+# a leftover process) sharing the same Redis DB and Kafka topics would consume
+# the same events, assign a different audit_seq against the same shared head,
+# and leave both databases with a gappy subset — HashChainVerifier then reports
+# "seq gap". db=0 stays reserved for the E2E harnesses' own isolated runs.
+export VIRBIUS_REDIS_DB="${VIRBIUS_REDIS_DB:-1}"
+export VIRBIUS_REDIS_URL="${VIRBIUS_REDIS_URL:-redis://127.0.0.1:${VIRBIUS_REDIS_PORT}/${VIRBIUS_REDIS_DB}}"
 MVN="${MVN:-mvn}"
 
 LOG_DIR="${LOG_DIR:-/tmp/virbius-agent/logs}"
@@ -46,6 +54,19 @@ cleanup() {
   kill_port 8082 2>/dev/null || true  # engine
 }
 trap cleanup INT TERM
+
+# Refuse to start next to a live control instance. The audit hash chain head is
+# coordinated in shared Redis (virbius:audit:chain:{tenant}) while every control
+# writes its own rows into its own database, so a second instance consuming the
+# same topics assigns a different audit_seq against the same shared head and
+# leaves both databases holding a gappy subset — HashChainVerifier then reports
+# "seq gap" and the audit chain looks tampered when it was merely double-fed.
+if pgrep -f 'virbius-control-.*\.jar' >/dev/null 2>&1; then
+  err "another virbius-control process is already running:"
+  pgrep -fl 'virbius-control-.*\.jar' >&2 || true
+  err "stop it first — it shares the Redis audit chain head and the Kafka consumer group."
+  exit 1
+fi
 
 # ─── Redis ───
 ensure_redis() {
@@ -180,8 +201,8 @@ if [[ "${VIRBIUS_REBUILD_DB:-}" == "1" ]]; then
   fi
   # Also flush Redis so stale policy/challenge data doesn't survive the rebuild
   if command -v redis-cli >/dev/null 2>&1 && redis-cli -p "$VIRBIUS_REDIS_PORT" ping 2>/dev/null | grep -q PONG; then
-    redis-cli -p "$VIRBIUS_REDIS_PORT" FLUSHDB >/dev/null 2>&1
-    ok "Flushed Redis DB (stale challenge exemptions / policy cache cleared)"
+    redis-cli -p "$VIRBIUS_REDIS_PORT" -n "$VIRBIUS_REDIS_DB" FLUSHDB >/dev/null 2>&1
+    ok "Flushed Redis DB ${VIRBIUS_REDIS_DB} (stale challenge exemptions / policy cache cleared)"
   fi
 fi
 

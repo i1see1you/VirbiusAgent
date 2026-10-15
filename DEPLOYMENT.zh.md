@@ -479,7 +479,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 | 侧 | Host | 健康检查 |
 |----|------|----------|
 | 靶场 | `range.virbius.example.com` | `GET /` |
-| 管侧 | `control.virbius.example.com` | `GET /api/v1/health` |
+| 管侧 | `control.virbius.example.com` | `GET /api/v1/health`（存活）；就绪探针用 `GET /api/v1/ready`（要求 Kafka 消费者已入组并持有分区，Helm 已默认） |
 | 云侧 | `engine.virbius.example.com` | `GET /admin/health` |
 | 端侧 | `proxy.virbius.example.com` | `GET /health` |
 

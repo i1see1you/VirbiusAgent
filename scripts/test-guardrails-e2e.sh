@@ -45,11 +45,21 @@
 #   C4    alerts lifecycle: auto-created from the deny audit event -> list ->
 #         get -> ack -> BOM -> 404
 #   C5    session checkpoint read path (written from ingested trace events)
+#   V17    proxy policy: GET normalized defaults -> PUT round-trip -> GET
+#         reflects the saved row; upstream without a url and an invalid
+#         fallback_policy -> 400; a rejected PUT leaves the saved row intact
+#         (tb_proxy_policy read/write + the Redis publish that hot-reloads)
+#   V18    tool_args round-trip: the tool_args produced in the proxy wire
+#         format reads back verbatim through decision-bom trace_steps, the
+#         session timeline and the trace chain endpoint
 #
 # Known gaps / dropped checks (deliberate, with reason):
 #   - sqlite ".tables" schema check: no API lists tables; every new table is
 #     instead exercised functionally (stats/BOM/merkle/export/alerts/checkpoint/
-#     trace-chain/daily-anchor seal).
+#     trace-chain/daily-anchor seal/proxy-policy).
+#   - MySQL-side parity (V16-V18 tables/columns, seed bundle ids): this E2E
+#     runs control on SQLite, so the MySQL schema is guarded by
+#     SchemaDialectParityTest (unit level), not here.
 #   - tampered trace-chain row: not producible through any real flow —
 #     TraceEventIngestor recomputes curr_hash at ingest and no API mutates
 #     tb_agent_trace. The verifier's tamper/gap/unchained branches are covered
@@ -115,6 +125,20 @@ trap cleanup EXIT INT TERM
 for bin in java curl python3 nc docker; do
   command -v "$bin" >/dev/null 2>&1 || { red "missing required tool: $bin"; exit 2; }
 done
+# Refuse to run next to a live control instance. The audit hash chain head is
+# coordinated in shared Redis (virbius:audit:chain:{tenant}) while every control
+# writes its own rows into its own database, so a second instance in the
+# consumer group consumes the same events, assigns a different audit_seq against
+# the same shared head, and leaves both databases holding a gappy subset —
+# HashChainVerifier then reports "seq gap" and every audit-chain assertion
+# fails. That is a real integrity break, not a flake, so fail loudly instead of
+# emitting a misleading red run.
+if pgrep -f 'virbius-control-.*\.jar' >/dev/null 2>&1; then
+  red "another virbius-control process is already running:"
+  pgrep -fl 'virbius-control-.*\.jar' >&2 || true
+  red "stop it first — it shares the Redis audit chain head and the Kafka consumer group."
+  exit 2
+fi
 nc -z "$REDIS_HOST" "$REDIS_PORT" 2>/dev/null \
   || { red "Redis not reachable at $REDIS_HOST:$REDIS_PORT (engine requires it)."; exit 2; }
 if ! nc -z "$KAFKA_HOST" "$KAFKA_PORT" 2>/dev/null; then
@@ -129,14 +153,38 @@ fi
 # publishes) and partition assignment is delayed ~1min — events published during
 # the run would not be ingested until the test is over. Best-effort.
 KAFKA_CID="$(docker ps --format '{{.Names}}' | grep -m1 kafka || true)"
-if [ -n "$KAFKA_CID" ]; then
-  for t in "$AUDIT_TOPIC" "$TRACE_TOPIC"; do
-    docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh \
-      --bootstrap-server localhost:9092 --create --if-not-exists \
-      --topic "$t" --partitions 3 --replication-factor 1 >/dev/null 2>&1 || true
+[ -n "$KAFKA_CID" ] || { red "no kafka container found (needed for the console producer)"; exit 2; }
+for t in "$AUDIT_TOPIC" "$TRACE_TOPIC"; do
+  docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh \
+    --bootstrap-server localhost:9092 --create --if-not-exists \
+    --topic "$t" --partitions 3 --replication-factor 1 >/dev/null 2>&1 || true
+done
+info "Kafka topics ensured ($AUDIT_TOPIC, $TRACE_TOPIC)"
+
+# Test/dev runs a SINGLE control instance (the pgrep guard above enforces it),
+# so this harness uses the shared default consumer groups. Before starting,
+# wait until those groups have DRAINED: a control killed by a previous run
+# lingers as a group member until session.timeout expires, and while it does a
+# fresh start is handed only part of the partitions — the console producer's
+# sticky partitioner would then land the whole file on a partition nobody owns
+# and every downstream assertion would fail on an empty table. With no other
+# member, this run's control owns every partition, so /api/v1/ready is a
+# sufficient readiness signal. `latest` keeps the run independent of whatever
+# topic history earlier runs left behind.
+wait_group_drained() { # $1=group $2=timeout_secs
+  local group="$1" timeout="${2:-90}" n i
+  for i in $(seq 1 "$timeout"); do
+    n=$(docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+         --group "$group" --describe --members 2>/dev/null | awk -v g="$group" '$1==g' | wc -l | tr -d ' ')
+    [ "${n:-0}" -eq 0 ] && return 0
+    sleep 1
   done
-  info "Kafka topics ensured ($AUDIT_TOPIC, $TRACE_TOPIC)"
-fi
+  return 1
+}
+for g in "virbius-audit-ingest" "virbius-trace-ingest"; do
+  wait_group_drained "$g" 90 \
+    || { red "consumer group $g still has a live member — stop the other control first"; exit 2; }
+done
 
 APP_VER="$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')"
 ENGINE_JAR="$ROOT/virbius-engine/target/virbius-engine-${APP_VER}.jar"
@@ -216,6 +264,8 @@ env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
     > "$LOGS/engine.log" 2>&1 &
 ENGINE_PID=$!
 
+# Single control instance (pgrep guard above + group drained before start):
+# the default consumer groups are shared, no per-run group id is needed.
 info "starting control on :$CONTROL_PORT..."
 env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
     VIRBIUS_LICENSE_MASTER_KEY="$VIRBIUS_LICENSE_MASTER_KEY" \
@@ -224,11 +274,13 @@ env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$CONTROL_JAR" --server.port="$CONTROL_PORT" \
       --virbius.audit.export.key="$EXPORT_KEY" \
+      --spring.kafka.consumer.auto-offset-reset=latest \
     > "$LOGS/control.log" 2>&1 &
 CONTROL_PID=$!
 
 wait_http "http://127.0.0.1:$ENGINE_PORT/admin/health" || { red "engine failed to start"; tail -n 30 "$LOGS/engine.log"; exit 2; }
-wait_http "http://127.0.0.1:$CONTROL_PORT/api/v1/health" || { red "control failed to start"; tail -n 30 "$LOGS/control.log"; exit 2; }
+# /ready: waits until the Kafka consumers have joined their (now sole-member) group.
+wait_http "http://127.0.0.1:$CONTROL_PORT/api/v1/ready" || { red "control failed to start"; tail -n 30 "$LOGS/control.log"; exit 2; }
 info "services up."
 
 E="http://127.0.0.1:$ENGINE_PORT"
@@ -496,6 +548,28 @@ check "$(printf '%s' "$V" | jget 'print("1" if d.get("data",{}).get("session_id"
 check "$(printf '%s' "$V" | jget 'print("1" if len(d.get("data",{}).get("audit_events",[]))==0 else "0")')" \
       "BOM trace phase works without audit events (trace-only flow)"
 
+info "E2E: tool_args round-trip through the console (V18 column)"
+# The proxy wire format above carried tool_args; it must read back verbatim
+# through every console surface that reconstructs a decision, otherwise the
+# column exists but is dead. tool_args is returned as the stored TEXT (a JSON
+# string), so assert on the embedded values.
+check "$(printf '%s' "$V" | jget 'print("1" if "/etc/shadow" in str(d.get("data",{}).get("trace_steps",[{}])[0].get("tool_args") or "") else "0")')" \
+      "BOM trace_steps[0].tool_args carries the ingested read_file path"
+check "$(printf '%s' "$V" | jget 'print("1" if "evil.example" in str(d.get("data",{}).get("trace_steps",[{}])[1].get("tool_args") or "") else "0")')" \
+      "BOM trace_steps[1].tool_args carries the ingested curl url"
+
+TL=$(curl -s "$AC/trace/session/$SID/timeline")
+check "$(printf '%s' "$TL" | jget 'print("1" if len(d.get("data",[]))==2 else "0")')" \
+      "session timeline returns the 2 ingested steps"
+check "$(printf '%s' "$TL" | jget 'print("1" if "/etc/shadow" in str(d.get("data",[{}])[0].get("tool_args") or "") else "0")')" \
+      "timeline step 1 tool_args read back from tb_agent_trace"
+check "$(printf '%s' "$TL" | jget 'print("1" if d.get("data",[{}])[0].get("risk_score")==10 else "0")')" \
+      "timeline risk_score normalized to the stored int"
+
+CH=$(curl -s "$AC/trace/$TRACE/chain")
+check "$(printf '%s' "$CH" | jget 'print("1" if len(d.get("data",[]))==2 and "evil.example" in str(d.get("data",[{}])[1].get("tool_args") or "") else "0")')" \
+      "trace chain endpoint returns the same tool_args"
+
 info "E2E: daily-anchor seal (A3) + read-back for the anchored day"
 # The seal Merkle-anchors the day's chained trace-session heads. It now reports
 # what was sealed (not a blind echo) and the anchor can be read back through the
@@ -506,17 +580,29 @@ check "$(printf '%s' "$SEAL" | jget "print('1' if d.get('data',{}).get('sealed_d
       "daily-anchor seal echoes sealed_date=$ANCHOR_DATE"
 check "$(printf '%s' "$SEAL" | jget 'print("1" if d.get("data",{}).get("sealed") and d.get("data",{}).get("tenants_sealed",0)>=1 else "0")')" \
       "daily-anchor seal reports sealed=true + tenants_sealed>=1 (not a blind echo)"
-SEAL_ROOT=$(printf '%s' "$SEAL" | jget 'print(d.get("data",{}).get("root_hash",""))')
+# The seal is global — it anchors every tenant that had trace rows that day —
+# so the response only carries a top-level root_hash when exactly one tenant was
+# sealed. Pull this tenant's root out of anchors[] instead, which is always
+# present, and compare it with the persisted anchor row.
+SEAL_ROOT=$(printf '%s' "$SEAL" | jget "print(next((a.get('root_hash') for a in d.get('data',{}).get('anchors',[]) if a.get('tenant_id')=='$T'), ''))")
 ROOT_BACK=$(curl -s "$AC/audit/daily-anchor/$ANCHOR_DATE" | jget 'print(d.get("data",{}).get("root_hash",""))')
 SESS_BACK=$(curl -s "$AC/audit/daily-anchor/$ANCHOR_DATE" | jget 'print(d.get("data",{}).get("sessions",0))')
-check "$([ -n "$ROOT_BACK" ] && [ "$ROOT_BACK" = "$SEAL_ROOT" ] && echo 1 || echo 0)" \
-      "daily-anchor read-back: GET returns the sealed root_hash"
+check "$([ -n "$SEAL_ROOT" ] && [ "$SEAL_ROOT" = "$ROOT_BACK" ] && echo 1 || echo 0)" \
+      "daily-anchor read-back: GET returns this tenant's sealed root_hash"
 check "$([ "${SESS_BACK:-0}" -ge 1 ] 2>/dev/null && echo 1 || echo 0)" \
       "daily-anchor read-back: sessions >= 1"
 check "$(curl -s "$AC/audit/daily-anchor" | jget 'print("1" if any(a.get("anchor_date")==sys.argv[1] for a in d.get("data",[])) else "0")' "$ANCHOR_DATE")" \
       "daily-anchor list includes the sealed day"
 check "$(curl -s "$AC/audit/daily-anchor/1999-01-01" | jget 'print("1" if d.get("code")==404 else "0")')" \
       "daily-anchor missing day -> 404 code"
+check "$(printf '%s' "$SEAL" | jget 'print("1" if d.get("data",{}).get("events",0)>=1 else "0")')" \
+      "daily-anchor seal reports events >= 1"
+check "$(printf '%s' "$SEAL" | jget "print('1' if not d.get('data',{}).get('failed') else '0')")" \
+      "daily-anchor seal reports no failed tenant"
+check "$(printf '%s' "$SEAL" | jget "print('1' if any(a.get('tenant_id')=='$T' for a in d.get('data',{}).get('anchors',[])) else '0')")" \
+      "daily-anchor anchors[] includes this tenant"
+check "$(curl -s "$AC/audit/daily-anchor/not-a-date" | jget 'print("1" if d.get("code")==400 else "0")')" \
+      "daily-anchor malformed date -> 400 code"
 
 info "E2E: audit hash-chain verify + chain status (A3)"
 V=$(curl -s -X POST "$AC/audit/verify" -H 'Content-Type: application/json' -d '{}')
@@ -535,6 +621,44 @@ V=$(curl -s "$AC/audit/export" | jget 'print("1" if len(d.get("data",[]))>=1 els
 check "$V" "export list shows the job"
 R=$(curl -s "$AC/audit/export/nope")
 check "$(printf '%s' "$R" | jget 'print("1" if d.get("code")==404 else "0")')" "export get missing -> 404 code"
+
+# ── proxy policy: the hot-reloadable policy row via the console API ─────────
+# tb_proxy_policy is read/written by the proxy-policy admin API; it is the row
+# behind the MCP proxy's hot reload (save also pushes a Redis snapshot + stream
+# event). GET of an unsaved tenant must return the normalized defaults, and a
+# PUT must survive a full round trip through the table.
+info "E2E: proxy policy GET returns normalized defaults (V17 tb_proxy_policy)"
+PP=$(curl -s "$AC/proxy-policy")
+check "$(printf '%s' "$PP" | jget 'print("1" if d.get("data",{}).get("session_ttl_secs")==1800 else "0")')" \
+      "proxy-policy defaults: session_ttl_secs==1800"
+check "$(printf '%s' "$PP" | jget 'print("1" if d.get("data",{}).get("fallback_policy")=="minimum_privilege" else "0")')" \
+      "proxy-policy defaults: fallback_policy==minimum_privilege"
+check "$(printf '%s' "$PP" | jget 'print("1" if d.get("data",{}).get("upstreams")==[] else "0")')" \
+      "proxy-policy defaults: empty upstreams list"
+
+info "E2E: proxy policy PUT round-trips through the table"
+R=$(curl -s -X PUT "$AC/proxy-policy" -H 'Content-Type: application/json' \
+    -d '{"session_ttl_secs":3600,"fallback_policy":"audit_only","output_review":{"min_risk_score":60}}')
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("published") else "0")')" \
+      "proxy-policy PUT reports published=true (Redis snapshot + reload event)"
+PP=$(curl -s "$AC/proxy-policy")
+check "$(printf '%s' "$PP" | jget 'print("1" if d.get("data",{}).get("session_ttl_secs")==3600 else "0")')" \
+      "proxy-policy GET reflects the saved session_ttl_secs"
+check "$(printf '%s' "$PP" | jget 'print("1" if d.get("data",{}).get("fallback_policy")=="audit_only" else "0")')" \
+      "proxy-policy GET reflects the saved fallback_policy"
+check "$(printf '%s' "$PP" | jget 'print("1" if d.get("data",{}).get("output_review",{}).get("min_risk_score")==60 else "0")')" \
+      "proxy-policy nested output_review saved and normalized"
+R=$(curl -s -X PUT "$AC/proxy-policy" -H 'Content-Type: application/json' \
+    -d '{"upstreams":[{"name":"only-name"}]}')
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("code")==400 else "0")')" \
+      "proxy-policy upstream without a url -> 400"
+V=$(curl -s -o /dev/null -w '%{http_code}' -X PUT "$AC/proxy-policy" -H 'Content-Type: application/json' \
+    -d '{"fallback_policy":"whatever"}')
+check "$([ "$V" = "400" ] && echo 1 || echo 0)" \
+      "proxy-policy invalid fallback_policy -> 400"
+R=$(curl -s "$AC/proxy-policy")
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("session_ttl_secs")==3600 else "0")')" \
+      "proxy-policy rejected PUT leaves the previously saved row intact"
 
 # ── summary ──────────────────────────────────────────────────────────────────
 echo

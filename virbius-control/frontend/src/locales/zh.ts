@@ -1184,7 +1184,7 @@ export default {
 
   'ai.title': '审计完整性',
   'ai.desc-short': '校验链路完整性、Merkle 证明、导出、输出误拦统计与会话检查点。',
-  'ai.desc': 'A3 决策链路/哈希链校验，A4 Merkle 包含证明，A6 决策 BOM，A7 加密审计导出，A8/B7 输出误拦统计，C5 会话检查点。',
+  'ai.desc': '决策链路/哈希链校验、Merkle 包含证明、决策 BOM、加密审计导出、输出误拦统计、会话检查点。',
   'ai.tab-verify': '完整性校验',
   'ai.tab-proof': 'Merkle 证明',
   'ai.tab-bom': '决策 BOM',
@@ -1250,7 +1250,7 @@ export default {
 
   'al.title': '告警',
   'al.desc-short': '动态风险识别产生的告警；可确认并还原。',
-  'al.desc': 'A3/C4：每条告警关联一个 trace ID，可展开为完整决策 BOM（轨迹、判定依据、处置）。确认操作会记录操作人与时间。',
+  'al.desc': '每条告警关联一个 trace ID，可展开为完整决策 BOM（轨迹、判定依据、处置）。确认操作会记录操作人与时间。',
   'al.filter-status': '状态',
   'al.status-open': '未处理',
   'al.status-acked': '已确认',

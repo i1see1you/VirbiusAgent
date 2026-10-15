@@ -166,7 +166,7 @@ sequenceDiagram
 |------|----------------|------------|------------------|------|
 | `/ui/**`、`/ops`、`/ops.html`、`/ui-hub.html`、legacy `.html` | **authenticated** | 设值 | 跳过（`shouldNotFilter`） | 强制 SSO 登录 |
 | `/js/**`、`/css/**`、`/vendor/**`、favicon | permitAll | - | 跳过 | 静态资源 |
-| `/actuator/**`、`/api/v1/health`、`/api/v1/internal/**`、`/error` | permitAll | - | 跳过 | 基础设施 |
+| `/actuator/**`、`/api/v1/health`、`/api/v1/ready`、`/api/v1/internal/**`、`/error` | permitAll | - | 跳过 | 基础设施 |
 | `/login/**`、`/oauth2/**`、`/logout` | permitAll | - | 跳过 | SSO 流转 |
 | `/api/v1/admin/**`、`/api/v1/edge/**`、`/api/v1/gateway/**`、`/api/v1/tenants/**` | permitAll | 有会话则设值 | **双轨**：Context 已设值则跳过，否则校验 API Key | 浏览器走 SSO，程序化走 API Key |
 | 其他（`/api/v1/challenges` 等） | permitAll | - | 跳过 | 既有未覆盖路径（见 §10.3） |
@@ -261,7 +261,7 @@ SecurityFilterChain filterChain(HttpSecurity http,
             .requestMatchers("/ui/**", "/ops", "/ops.html", "/ui-hub.html",
                              "/access-lists.html", "/policies.html").authenticated()
             .requestMatchers("/js/**", "/css/**", "/vendor/**", "/favicon.ico",
-                             "/actuator/**", "/api/v1/health", "/api/v1/internal/**",
+                             "/actuator/**", "/api/v1/health", "/api/v1/ready", "/api/v1/internal/**",
                              "/error", "/login/**", "/oauth2/**", "/logout").permitAll()
             .requestMatchers("/api/v1/admin/**", "/api/v1/edge/**",
                              "/api/v1/gateway/**", "/api/v1/tenants/**").permitAll()
@@ -485,7 +485,7 @@ UI 启动调 `/me`：
 
 ### 9.2 既有缺口保留
 
-`ApiKeyAuthFilter.shouldNotFilter` 现状放行 `/ui`、`/api/v1/internal/`、`/api/v1/health` 等；SSO 启用后 `/ui` 由 Spring Security 接管，其余放行路径行为不变。`/api/v1/challenges` 仍不在 API Key 覆盖范围（既有缺口，§10.3）。
+`ApiKeyAuthFilter.shouldNotFilter` 现状放行 `/ui`、`/api/v1/internal/`、`/api/v1/health`、`/api/v1/ready` 等；SSO 启用后 `/ui` 由 Spring Security 接管，其余放行路径行为不变。`/api/v1/challenges` 仍不在 API Key 覆盖范围（既有缺口，§10.3）。
 
 ### 9.3 dev 行为不变
 

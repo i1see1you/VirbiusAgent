@@ -11,7 +11,13 @@
 #          -> tb_agent_trace row + per-session hash chain (tb_trace_chain_state)
 #          -> SessionCheckpointService.onTraceEvent (tb_session_checkpoint)
 #     -> admin APIs: /sessions/{id}/checkpoint, /audit/trace-chain/verify,
-#                    /audit/decision-bom/{traceId}
+#                    /audit/decision-bom/{traceId}, /trace/session/{id}/timeline
+#
+# A second session feeds non-int wire risk_score values (20.7, "not-a-number")
+# to prove the ingest chain hash commits the same normalized value the row
+# stores. Otherwise the verifier recomputes from the row and reports a false
+# "curr_hash mismatch: content may have been tampered" for events that were
+# legitimately ingested.
 #
 # All verification is through the control HTTP API — the script never opens the
 # control SQLite file and never runs redis-cli. Producing to Kafka is the
@@ -60,6 +66,20 @@ trap cleanup EXIT INT TERM
 for bin in java curl python3 nc docker; do
   command -v "$bin" >/dev/null 2>&1 || { red "missing required tool: $bin"; exit 2; }
 done
+# Refuse to run next to a live control instance. The audit hash chain head is
+# coordinated in shared Redis (virbius:audit:chain:{tenant}) while every control
+# writes its own rows into its own database, so a second instance in the
+# consumer group consumes the same events, assigns a different audit_seq against
+# the same shared head, and leaves both databases holding a gappy subset —
+# HashChainVerifier then reports "seq gap: expected 1, got 3" and every
+# audit-chain assertion fails. That is a real integrity break, not a flake, so
+# fail loudly instead of emitting a misleading red run.
+if pgrep -f 'virbius-control-.*\.jar' >/dev/null 2>&1; then
+  red "another virbius-control process is already running:"
+  pgrep -fl 'virbius-control-.*\.jar' >&2 || true
+  red "stop it first — it shares the Redis audit chain head and the Kafka consumer group."
+  exit 2
+fi
 nc -z "$REDIS_HOST" "$REDIS_PORT" 2>/dev/null || { red "Redis not reachable at $REDIS_HOST:$REDIS_PORT"; exit 2; }
 if ! nc -z "$KAFKA_HOST" "$KAFKA_PORT" 2>/dev/null; then
   info "Kafka not on $KAFKA_HOST:$KAFKA_PORT — starting via docker-compose.infra.yml..."
@@ -72,6 +92,28 @@ KAFKA_CID="$(docker ps --format '{{.Names}}' | grep -m1 kafka || true)"
 docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 \
   --create --if-not-exists --topic "$TOPIC" --partitions 3 --replication-factor 1 >/dev/null 2>&1 || true
 
+# Test/dev runs a SINGLE control instance (the pgrep guard above enforces it),
+# so this harness uses the shared default consumer groups. Before starting,
+# wait until they have DRAINED: a control killed by a previous run lingers as a
+# group member until session.timeout expires, and while it does a fresh start is
+# handed only part of the partitions — the console producer's sticky partitioner
+# would then land the file on a partition nobody owns and nothing would be read.
+# With no other member this run's control owns every partition, so
+# /api/v1/ready is a sufficient readiness signal; `latest` keeps the run
+# independent of whatever topic history earlier runs left behind.
+wait_group_drained() { # $1=group $2=timeout_secs
+  local group="$1" timeout="${2:-90}" n i
+  for i in $(seq 1 "$timeout"); do
+    n=$(docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
+         --group "$group" --describe --members 2>/dev/null | awk -v g="$group" '$1==g' | wc -l | tr -d ' ')
+    [ "${n:-0}" -eq 0 ] && return 0
+    sleep 1
+  done
+  return 1
+}
+wait_group_drained "virbius-trace-ingest" 90 \
+  || { red "consumer group virbius-trace-ingest still has a live member — stop the other control first"; exit 2; }
+
 APP_VER="$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')"
 CONTROL_JAR="$ROOT/virbius-control/target/virbius-control-${APP_VER}.jar"
 if [ "${SKIP_BUILD:-0}" != "1" ] || [ ! -f "$CONTROL_JAR" ]; then
@@ -83,6 +125,8 @@ fi
 export VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
 export VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
 
+# Single control instance (pgrep guard above + group drained before start):
+# the default consumer group is shared, no per-run group id is needed.
 info "starting control on :$CONTROL_PORT..."
 env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
     KAFKA_BOOTSTRAP_SERVERS="$KAFKA_HOST:$KAFKA_PORT" \
@@ -90,10 +134,12 @@ env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="$REDIS_URL" \
     VIRBIUS_DELEGATED_MASTER_KEY="$VIRBIUS_DELEGATED_MASTER_KEY" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$CONTROL_JAR" --server.port="$CONTROL_PORT" \
+      --spring.kafka.consumer.auto-offset-reset=latest \
     > "$LOGS/control.log" 2>&1 &
 CONTROL_PID=$!
-for _ in $(seq 1 40); do curl -sf --max-time 2 "http://127.0.0.1:$CONTROL_PORT/api/v1/health" >/dev/null 2>&1 && break; sleep 1; done
-curl -sf --max-time 2 "http://127.0.0.1:$CONTROL_PORT/api/v1/health" >/dev/null 2>&1 \
+# /ready: waits until the Kafka consumers have joined their (now sole-member) group.
+for _ in $(seq 1 40); do curl -sf --max-time 2 "http://127.0.0.1:$CONTROL_PORT/api/v1/ready" >/dev/null 2>&1 && break; sleep 1; done
+curl -sf --max-time 2 "http://127.0.0.1:$CONTROL_PORT/api/v1/ready" >/dev/null 2>&1 \
   || { red "control failed to start"; tail -n 30 "$LOGS/control.log"; exit 2; }
 info "control up."
 
@@ -170,6 +216,64 @@ check "$(printf '%s' "$B" | jget 'print("1" if len(d.get("data",{}).get("audit_e
       "BOM trace phase works without any audit events (trace-only flow)"
 check "$(printf '%s' "$B" | jget 'print("1" if d.get("data",{}).get("session_id")==sys.argv[1] else "0")' "$SID")" \
       "BOM session phase resolves the owning session"
+
+# ── risk_score canonicalization: non-int wire values must still chain ───────
+# Regression for an ingest hash/storage asymmetry. computeTraceHash used to
+# hash str(wire risk_score) while the row stored intValOrNull(...), so a float
+# (20.7) or a non-numeric string ("abc") hashed as "20.7"/"abc" at ingest but
+# read back as 20/NULL from the row at verify — TraceChainVerifier then falsely
+# reported "curr_hash mismatch: content may have been tampered" on a
+# legitimately ingested event. The chain hash now commits the same normalized
+# value the row stores (TraceEventIngestor.canonicalRiskScore).
+SID2="sess-chain-risk-$$"
+TRACE2="tr-chain-risk-$$"
+python3 - "$TRACE2" "$SID2" > "$WORK/trace_risk.jsonl" <<'PY'
+import sys, json
+trace, sid = sys.argv[1], sys.argv[2]
+def step(step_id, seq, tool, args, decision, rule, reason, risk):
+    return json.dumps({
+        "trace_id": trace, "session_id": sid, "tenant_id": "default",
+        "step_id": step_id, "parent_step_id": None, "step_seq": seq,
+        "step_type": "tool_call", "layer": "edge",
+        "user_id": "u-chain", "device_id": None,
+        "input_role": None, "input_content_hash": None,
+        "tool_name": tool, "tool_args_hash": "h-" + step_id, "tool_args": json.loads(args),
+        "tool_decision": decision, "rule_id": rule, "reason_code": reason,
+        "risk_score": risk, "tool_status": "ok", "tool_duration_ms": 12,
+        "tool_result_preview": None, "content_size": None,
+        "content_sampled": False, "dlp_masked": False,
+        "upstream_name": "mock-upstream", "app_id": "agent1",
+        "occurred_at": "2026-10-15T01:00:0" + str(seq) + "Z",
+    })
+print(step("r1", 1, "read_file", '{"path":"/etc/hosts"}', "allow", "", "", 20.7))
+print(step("r2", 2, "read_file", '{"path":"/etc/motd"}', "allow", "", "", "not-a-number"))
+PY
+
+info "producing risk_score edge-case steps (float + non-numeric string) -> Kafka $TOPIC (session=$SID2)"
+docker exec -i "$KAFKA_CID" /opt/kafka/bin/kafka-console-producer.sh \
+  --bootstrap-server localhost:9092 --topic "$TOPIC" < "$WORK/trace_risk.jsonl"
+
+info "E2E: non-int wire risk_score still produces a verifiable chain"
+OK2=0
+for _ in $(seq 1 40); do
+  CK2=$(curl -s "$C/sessions/$SID2/checkpoint")
+  N=$(printf '%s' "$CK2" | jget 'print(d.get("data",{}).get("event_count",0))')
+  [ "$N" = "2" ] && { OK2=1; break; }
+  sleep 1
+done
+check "$OK2" "risk-session checkpoint event_count == 2 (both steps ingested)"
+
+V=$(curl -s "$C/audit/trace-chain/verify?session_id=$SID2")
+check "$(printf '%s' "$V" | jget 'print("1" if d.get("data",{}).get("passed") and d.get("data",{}).get("verified_events")==2 else "0")')" \
+      "chain verify: float + non-numeric risk_score pass (no false 'tampered')"
+check "$(printf '%s' "$V" | jget 'print("1" if not d.get("data",{}).get("break_seq") else "0")')" \
+      "no break_seq reported for the non-int risk_score chain"
+
+TL2=$(curl -s "$C/trace/session/$SID2/timeline")
+check "$(printf '%s' "$TL2" | jget 'print("1" if d.get("data",[{}])[0].get("risk_score")==20 else "0")')" \
+      "float wire risk_score 20.7 reads back as the stored int 20"
+check "$(printf '%s' "$TL2" | jget 'print("1" if d.get("data",[{}])[0].get("tool_args") and "/etc/hosts" in str(d.get("data",[{}])[0].get("tool_args")) else "0")')" \
+      "tool_args still round-trips alongside the normalized risk_score"
 
 echo
 echo "=============== trace-chain e2e summary ==============="

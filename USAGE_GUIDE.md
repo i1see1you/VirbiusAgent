@@ -1427,6 +1427,7 @@ curl -s http://localhost:8082/admin/health
 
 ```
 GET /api/v1/health
+GET /api/v1/ready
 GET /api/v1/admin/health
 ```
 

@@ -1184,7 +1184,7 @@ export default {
 
   'ai.title': 'Audit Integrity',
   'ai.desc-short': 'Verify chain integrity, Merkle proofs, exports, output-review stats, and session checkpoints.',
-  'ai.desc': 'A3 trace-chain / hash-chain verification, A4 Merkle inclusion proofs, A6 decision BOM, A7 encrypted audit export, A8/B7 output-review false-positive statistics, and C5 session checkpoints.',
+  'ai.desc': 'Trace-chain / hash-chain verification, Merkle inclusion proofs, decision BOM, encrypted audit export, output-review false-positive statistics, and session checkpoints.',
   'ai.tab-verify': 'Integrity',
   'ai.tab-proof': 'Merkle proof',
   'ai.tab-bom': 'Decision BOM',
@@ -1250,7 +1250,7 @@ export default {
 
   'al.title': 'Alerts',
   'al.desc-short': 'Risk alerts raised by dynamic detection; acknowledge and reconstruct.',
-  'al.desc': 'A3/C4: each alert links to a trace ID that expands into a full Decision BOM (trajectory, judgement basis, disposal). Acknowledge to record operator + time.',
+  'al.desc': 'Each alert links to a trace ID that expands into a full Decision BOM (trajectory, judgement basis, disposal). Acknowledge to record operator + time.',
   'al.filter-status': 'Status',
   'al.status-open': 'Open',
   'al.status-acked': 'Acknowledged',

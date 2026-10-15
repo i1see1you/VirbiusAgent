@@ -166,7 +166,7 @@ Triggering `POST /logout` (with CSRF token or relaxed via configuration) causes 
 |------|----------------|------------|------------------|-------|
 | `/ui/**`, `/ops`, `/ops.html`, `/ui-hub.html`, legacy `.html` | **authenticated** | set | skip (`shouldNotFilter`) | Enforce SSO login |
 | `/js/**`, `/css/**`, `/vendor/**`, favicon | permitAll | - | skip | Static resources |
-| `/actuator/**`, `/api/v1/health`, `/api/v1/internal/**`, `/error` | permitAll | - | skip | Infrastructure |
+| `/actuator/**`, `/api/v1/health`, `/api/v1/ready`, `/api/v1/internal/**`, `/error` | permitAll | - | skip | Infrastructure |
 | `/login/**`, `/oauth2/**`, `/logout` | permitAll | - | skip | SSO flow |
 | `/api/v1/admin/**`, `/api/v1/edge/**`, `/api/v1/gateway/**`, `/api/v1/tenants/**` | permitAll | set if session | **dual-track**: skip if Context set, otherwise validate API Key | Browser via SSO, programmatic via API Key |
 | Other (`/api/v1/challenges` etc.) | permitAll | - | skip | Existing uncovered paths (see §10.3) |
@@ -261,7 +261,7 @@ SecurityFilterChain filterChain(HttpSecurity http,
             .requestMatchers("/ui/**", "/ops", "/ops.html", "/ui-hub.html",
                              "/access-lists.html", "/policies.html").authenticated()
             .requestMatchers("/js/**", "/css/**", "/vendor/**", "/favicon.ico",
-                             "/actuator/**", "/api/v1/health", "/api/v1/internal/**",
+                             "/actuator/**", "/api/v1/health", "/api/v1/ready", "/api/v1/internal/**",
                              "/error", "/login/**", "/oauth2/**", "/logout").permitAll()
             .requestMatchers("/api/v1/admin/**", "/api/v1/edge/**",
                              "/api/v1/gateway/**", "/api/v1/tenants/**").permitAll()
@@ -485,7 +485,7 @@ Option A depends on the IdP being able to deliver tenant attributes. Before go-l
 
 ### 9.2 Existing Gaps Retained
 
-`ApiKeyAuthFilter.shouldNotFilter` currently allows `/ui`, `/api/v1/internal/`, `/api/v1/health`, etc.; after SSO is enabled, `/ui` is taken over by Spring Security, and the remaining allowed paths behave unchanged. `/api/v1/challenges` is still not covered by API Key (existing gap, §10.3).
+`ApiKeyAuthFilter.shouldNotFilter` currently allows `/ui`, `/api/v1/internal/`, `/api/v1/health`, `/api/v1/ready`, etc.; after SSO is enabled, `/ui` is taken over by Spring Security, and the remaining allowed paths behave unchanged. `/api/v1/challenges` is still not covered by API Key (existing gap, §10.3).
 
 ### 9.3 Dev Behavior Unchanged
 

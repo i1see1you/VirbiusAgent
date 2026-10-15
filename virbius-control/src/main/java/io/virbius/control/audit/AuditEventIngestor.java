@@ -53,8 +53,16 @@ public class AuditEventIngestor {
                 event.put("event_id", eventId);
             }
 
-            hashChain.chain(tenantId, event);
-
+            // Insert FIRST, chain SECOND. The chain head lives in shared Redis and
+            // cannot join the DB transaction, so the only safe order is
+            // insert -> advance head -> stamp the row: a redelivery (Kafka is
+            // at-least-once) or a crash can then no longer advance the head
+            // without a row — the old chain-first order turned every duplicate
+            // insert into a permanent seq hole that HashChainVerifier reported
+            // as "seq gap". Mirrors TraceEventIngestor's order. The row starts
+            // with the schema defaults (audit_seq=0, empty hashes); audit_seq=0
+            // marks "not chained yet" and is repaired by the duplicate path
+            // below on redelivery.
             String insertSql = insertIgnorePrefix
                     + " INTO tb_audit_events ("
                     + "  event_id, trace_id, trace_id_source, tenant_id, scene, layer,"
@@ -63,7 +71,7 @@ public class AuditEventIngestor {
                     + "  sample_rate_allow, intercepted_at, user_id, device_id,"
                     + "  agent_aid, app_id, subject_source, token_iss,"
                     + "  audit_seq, prev_hash, curr_hash"
-                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '')";
             int updated = jdbc.update(insertSql,
                     eventId,
                     traceId,
@@ -88,12 +96,29 @@ public class AuditEventIngestor {
                     nullIfBlank(str(event.get("agent_aid"))),
                     nullIfBlank(str(event.get("app_id"))),
                     nullIfBlank(str(event.get("subject_source"))),
-                    nullIfBlank(str(event.get("token_iss"))),
-                    longVal(event.get("audit_seq")),
-                    str(event.get("prev_hash")),
-                    str(event.get("curr_hash")));
+                    nullIfBlank(str(event.get("token_iss"))));
             if (updated == 0) {
-                return IngestResult.duplicated();
+                // Duplicate insert: either a benign redelivery of an already
+                // chained row, or a predecessor that crashed between its insert
+                // and its chain step. Only the latter still needs chaining.
+                Long chained = jdbc.queryForObject(
+                        "SELECT audit_seq FROM tb_audit_events WHERE tenant_id = ? AND event_id = ?",
+                        Long.class, tenantId, eventId);
+                if (chained == null || chained != 0) {
+                    return IngestResult.duplicated();
+                }
+            }
+
+            hashChain.chain(tenantId, event);
+            if (event.get("audit_seq") instanceof Number n && n.longValue() > 0) {
+                jdbc.update(
+                        "UPDATE tb_audit_events SET audit_seq = ?, prev_hash = ?, curr_hash = ? "
+                        + "WHERE tenant_id = ? AND event_id = ?",
+                        n.longValue(),
+                        str(event.get("prev_hash")),
+                        str(event.get("curr_hash")),
+                        tenantId,
+                        eventId);
             }
             bumpRequestStats(tenantId, str(event.get("scene")), str(event.get("layer")), event);
             alertService.onAuditEvent(tenantId, event);
@@ -174,17 +199,6 @@ public class AuditEventIngestor {
 
     private static String nullIfBlank(String s) {
         return s == null || s.isBlank() ? null : s;
-    }
-
-    private static long longVal(Object o) {
-        if (o instanceof Number n) {
-            return n.longValue();
-        }
-        try {
-            return Long.parseLong(str(o));
-        } catch (Exception e) {
-            return 0L;
-        }
     }
 
     private static int intVal(Object o) {

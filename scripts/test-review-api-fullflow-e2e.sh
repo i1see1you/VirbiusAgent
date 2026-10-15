@@ -80,6 +80,20 @@ trap cleanup EXIT INT TERM
 for bin in java curl python3 nc; do
   command -v "$bin" >/dev/null 2>&1 || { red "missing required tool: $bin"; exit 2; }
 done
+# Refuse to run next to a live control instance. The audit hash chain head is
+# coordinated in shared Redis (virbius:audit:chain:{tenant}) while every control
+# writes its own rows into its own database, so a second instance in the
+# consumer group consumes the same events, assigns a different audit_seq against
+# the same shared head, and leaves both databases holding a gappy subset —
+# HashChainVerifier then reports "seq gap" and every audit-chain assertion
+# fails. That is a real integrity break, not a flake, so fail loudly instead of
+# emitting a misleading red run.
+if pgrep -f 'virbius-control-.*\.jar' >/dev/null 2>&1; then
+  red "another virbius-control process is already running:"
+  pgrep -fl 'virbius-control-.*\.jar' >&2 || true
+  red "stop it first — it shares the Redis audit chain head and the Kafka consumer group."
+  exit 2
+fi
 if ! nc -z "$REDIS_HOST" "$REDIS_PORT" 2>/dev/null; then
   red "Redis not reachable at $REDIS_HOST:$REDIS_PORT (engine requires it)."
   exit 2

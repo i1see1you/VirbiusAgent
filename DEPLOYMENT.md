@@ -429,6 +429,72 @@ Gateway Layer Higress effective JSON configuration:
 | **Dev/Test Environment** | ❌ Overkill | SDK Mode (Mode 3) fastest iteration |
 | **Existing Agent In-Cluster Deployment** | ⚠️ Optional | Mode 1 already covers 3 layers, add Gateway Layer as needed |
 
+### 8.5 K8s Helm Deployment
+
+One Helm chart installs the range, edge, cloud, control, operator login (virbius-auth) and MySQL / Kafka / Redis / Ollama (including the VirbiusGuard model import) into an **existing cluster**. It does not install the Ingress Controller, Higress, or Falco.
+
+Chart: `deploy/helm/virbius`. Scripts: `deploy/scripts/k8s-build-push.sh`, `deploy/scripts/k8s-deploy.sh`.
+
+#### Prerequisites
+
+- An image registry you can `docker login` to
+- An Ingress Controller already installed in the cluster (default class `nginx`)
+- `docker`, `helm`, `kubectl` on the local machine
+- A local values file with the secrets filled in (do not commit it to Git)
+
+```bash
+cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
+# edit values-prod.yaml: global.imageRegistry, secrets.*, ingress.hosts, imagePullSecrets
+```
+
+#### One-shot Build, Push, Install
+
+```bash
+./deploy/scripts/k8s-deploy.sh \
+  --registry registry.example.com/virbius \
+  --tag v0.1.0 \
+  --namespace virbius \
+  --values deploy/helm/virbius/values-prod.yaml
+```
+
+Build and push images only:
+
+```bash
+./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v0.1.0
+```
+
+Images already in the registry, install the chart only:
+
+```bash
+./deploy/scripts/k8s-deploy.sh --skip-build \
+  --registry registry.example.com/virbius \
+  --tag v0.1.0 \
+  --values deploy/helm/virbius/values-prod.yaml
+```
+
+#### Four Independent Ingress Hosts (Default)
+
+| Side | Host | Health Check |
+|----|------|----------|
+| Range | `range.virbius.example.com` | `GET /` |
+| Control | `control.virbius.example.com` | `GET /api/v1/health` (liveness); the readiness probe uses `GET /api/v1/ready` (requires the Kafka consumers to have joined and to hold partitions; Helm does this by default) |
+| Cloud | `engine.virbius.example.com` | `GET /admin/health` |
+| Edge | `proxy.virbius.example.com` | `GET /health` |
+
+Point these four names at the Ingress external IP. TLS is off by default; enable `ingress.tls` in values. `/login` on the control host routes to `virbius-auth` (same domain as `/ui/`, so the login cookie is not lost). Default account `admin` / `secrets.authBootstrapPassword`.
+
+In-cluster DNS: `virbius-control:8080`, `virbius-auth:8083`, `virbius-engine:8082`, `virbius-mcp-proxy:9090`, `virbius-demo:8000` (SSE `:9091`). Auth uses MySQL (same database as Control, separate Flyway history table `auth_schema_history`); the JWT key lives on a PVC, so do not scale replicas. Setting `auth.enabled=false` skips deploying Auth, and Control does not enable operator JWT either.
+
+The range agent checkpoint still launches `virbius-mcp-proxy` via stdio inside the pod. The edge host on the Ingress is the TCP entry point for MCP clients outside the cluster; its upstream defaults to `http://virbius-demo:9091`.
+
+In-cluster Ollama is enabled by default: a Job downloads the VirbiusGuard GGUF from HuggingFace (V2.0 F16, ~1.5GB, cached on a PVC, not re-downloaded on upgrade) and runs `ollama create virbiusguard`. Leave `engine.promptLlm.baseUrl` empty to point at `http://{release}-ollama:11434`. In mainland China, switch `ollama.ggufUrl` to ModelScope:
+
+`https://www.modelscope.cn/models/i1see1you/VirbiusGuard/resolve/master/gguf/virbiusguard-v2.0-f16.gguf`
+
+When `ollama.enabled=false` you must fill in `engine.promptLlm.baseUrl`, otherwise `helm` fails outright. When disabling in-cluster MySQL / Kafka / Redis, fill in `mysql.jdbcUrl`, `kafka.bootstrapServers`, `redis.url` respectively, and engine/control will no longer wait on the in-cluster Services. GPU is off by default; set `ollama.gpu.enabled=true` on machines with NVIDIA devices.
+
+`helm uninstall virbius -n virbius` does **not** delete the PVCs.
+
 ---
 
 ## 9. P0 Credential & Datastore Security Baseline
