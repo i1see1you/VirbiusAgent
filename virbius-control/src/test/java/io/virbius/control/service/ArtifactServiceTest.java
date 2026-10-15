@@ -405,23 +405,7 @@ class ArtifactServiceTest {
 
     @Test
     void edgeManifestBlocksFilteredPerApp() {
-        Map<String, Object> metadata = Map.of(
-                "scene_registry",
-                Map.of(
-                        "version",
-                        1,
-                        "scenes",
-                        Map.of(
-                                "beta_chat",
-                                Map.of("app_id", "beta", "default", true, "uris", List.of("/v1/chat")),
-                                "medical-prod_chat",
-                                Map.of(
-                                        "app_id",
-                                        "medical-prod",
-                                        "default",
-                                        true,
-                                        "uris",
-                                        List.of("/v1/chat")))));
+        Map<String, Object> metadata = Map.of();
 
         RuleRevision globalDeny = edgeRule(
                 "edge_global_deny",
@@ -446,9 +430,7 @@ class ArtifactServiceTest {
 
     @Test
     void dlpRulesSeparatedFromKeywordRules() {
-        Map<String, Object> metadata = Map.of(
-                "scene_registry",
-                Map.of("version", 1, "scenes", Map.of()));
+        Map<String, Object> metadata = Map.of();
 
         RuleRevision keyword = edgeRule(
                 "edge_kw",

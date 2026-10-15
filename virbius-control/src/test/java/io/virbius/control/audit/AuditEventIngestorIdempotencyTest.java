@@ -45,6 +45,7 @@ class AuditEventIngestorIdempotencyTest {
                 + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 + "event_id VARCHAR(128), trace_id VARCHAR(128) NOT NULL, trace_id_source VARCHAR(16),"
                 + "tenant_id VARCHAR(64) NOT NULL, scene VARCHAR(64) NOT NULL, layer VARCHAR(16) NOT NULL,"
+                + "tool_name VARCHAR(128),"
                 + "rule_id VARCHAR(128) NOT NULL, rule_revision INTEGER NOT NULL,"
                 + "reason_code VARCHAR(64) NOT NULL, effective_action VARCHAR(16) NOT NULL,"
                 + "max_risk_score INTEGER NOT NULL, rollout_state VARCHAR(16), canary_percent INTEGER,"

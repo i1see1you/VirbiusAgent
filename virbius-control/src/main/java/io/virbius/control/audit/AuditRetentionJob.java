@@ -79,12 +79,12 @@ public class AuditRetentionJob {
         return jdbc.update(
                 """
                 INSERT INTO tb_audit_events_archive
-                    (event_id, trace_id, trace_id_source, tenant_id, scene, layer, rule_id,
+                    (event_id, trace_id, trace_id_source, tenant_id, scene, layer, tool_name, rule_id,
                      rule_revision, reason_code, effective_action, max_risk_score, rollout_state,
                      canary_percent, in_canary_bucket, degraded, sampled_allow, sample_rate_allow,
                      intercepted_at, user_id, device_id, agent_aid, app_id, subject_source, token_iss,
                      audit_seq, prev_hash, curr_hash, created_at)
-                SELECT event_id, trace_id, trace_id_source, tenant_id, scene, layer, rule_id,
+                SELECT event_id, trace_id, trace_id_source, tenant_id, scene, layer, tool_name, rule_id,
                        rule_revision, reason_code, effective_action, max_risk_score, rollout_state,
                        canary_percent, in_canary_bucket, degraded, sampled_allow, sample_rate_allow,
                        intercepted_at, user_id, device_id, agent_aid, app_id, subject_source, token_iss,

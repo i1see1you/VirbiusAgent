@@ -309,7 +309,7 @@ VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依
 | virbius-core | `src/trace.rs` | trace_id 管理 | virbius-core/src/trace.rs |
 | virbius-core | `src/engine.rs` | EngineClient(调 /v1/evaluate) | virbius-core/src/engine.rs |
 | virbius-core | `src/matcher.rs` | 规则匹配 | virbius-core/src/matcher.rs |
-| virbius-gateway | `lib/*.lua` (11 个文件) | access_lists/list_redis/effective/scene_registry/trace/context_vars/config_redis/json_util/file_cache/uri_match/prompt | virbius-gateway/lib/ |
+| virbius-gateway | `lib/*.lua` (10 个文件) | access_lists/list_redis/effective/trace/context_vars/config_redis/json_util/file_cache/uri_match/prompt | virbius-gateway/lib/ |
 | virbius-policy | `ActionMerge.java` | 动作合并 | virbius-policy/ |
 | virbius-policy | `IntentAction.java` | 意图归一化 | virbius-policy/ |
 | virbius-policy | `ListMatcher.java` | 名单匹配 | virbius-policy/ |

@@ -42,12 +42,7 @@ public final class BindScope {
             }
             return out;
         }
-        Map<String, Object> legacy = new LinkedHashMap<>();
-        Object scenes = scope.get("scenes");
-        if (scenes instanceof List<?> list && !list.isEmpty()) {
-            legacy.put("scenes", list);
-        }
-        return legacy;
+        return Map.of();
     }
 
     public static boolean matches(JsonNode body, MatchContext ctx) {
@@ -130,7 +125,7 @@ public final class BindScope {
         return true;
     }
 
-    /** Validates URI pattern grammar shared by gateway.routes and scene_registry.uris. */
+    /** Validates URI pattern grammar used by gateway.routes. */
     public static void validateUriPattern(String pattern) {
         if (pattern == null || pattern.isBlank()) {
             throw new IllegalArgumentException("uri pattern required");
@@ -150,7 +145,7 @@ public final class BindScope {
 
     /**
      * True when every request path matching {@code rulePattern} would also match {@code gatewayPattern}
-     * (gateway entry covers the rule/scene URI constraint).
+     * (gateway entry covers the rule URI constraint).
      */
     public static boolean patternCovers(String gatewayPattern, String rulePattern) {
         validateUriPattern(gatewayPattern);

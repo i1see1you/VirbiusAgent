@@ -1493,26 +1493,18 @@ Higress 在项目中的耦合仅限于 **3 个点**，其余模块完全无关�
 |------|------|
 | `virbius-mcp-proxy`（Rust） | Sidecar 模式下拥有独立安全管线（License + precheck + Engine 调用），东西向流量不经管层 |
 | `virbius-engine`（Java） | 标准 HTTP API（`POST /v1/evaluate`），对调用方无感知 |
-| `virbius-control`（Java） | 通过 Redis 投递 artifact（access-lists + scene-registry），与网关实现无关 |
+| `virbius-control`（Java） | 通过 Redis 投递 access-lists artifact，与网关实现无关 |
 | `virbius-core`（Rust） | 端层嵌入式 precheck SDK，与管层无关 |
 | `virbius-policy`（Java） | 策略匹配引擎，与管层无关 |
 
 #### 3.6.2 已有的多网关支持
 
-编译器已内置 `-g`（网关后端）参数和两套 Emitter 实现：
+编译器当前为受支持网关（Higress）提供单一 Emitter：
 
 ```
 virbius-compiler/src/main/java/io/virbius/compiler/
-  ├── HigressCrdEmitter.java        ← Higress CRD 生成（默认）
-  ├── GatewayApisixEmitter.java     ← APISIX 路由生成（已存在）
-  └── CompilerCli.java              ← -g higress | apisix 切换
-```
-
-```java
-// CompilerCli.java
-@Option(names = {"-g", "--gateway"}, defaultValue = "higress",
-        description = "gateway backend: higress | apisix")
-private String gateway;
+  ├── HigressCrdEmitter.java        ← Higress CRD 生成
+  └── CompilerCli.java              ← --target=gateway 入口
 ```
 
 #### 3.6.3 切换网关需要实现的代码
@@ -1521,7 +1513,7 @@ private String gateway;
 
 **① 新增 Emitter**（约 100–200 行 Java）
 
-参照已有的 `GatewayApisixEmitter`，新建 `GatewayXxxEmitter.java`。Emitter 读取同一份规则 bundle JSON，输出目标网关的路由/插件配置：
+新建 `GatewayXxxEmitter.java`。Emitter 读取同一份规则 bundle JSON，输出目标网关的路由/插件配置：
 
 ```java
 // 示例: GatewayKongEmitter.java
@@ -1567,7 +1559,7 @@ public final class GatewayKongEmitter {
 
 **③ Artifact 投递适配**（可选，约 50 行）
 
-如果新网关支持从 Redis 拉取 artifact（access-lists + scene-registry），则 `GatewayDeliveryService` 无需改动。否则需适配投递方式（如 HTTP push 到 Kong Admin API）。
+如果新网关支持从 Redis 拉取 artifact（access-lists），则 `GatewayDeliveryService` 无需改动。否则需适配投递方式（如 HTTP push 到 Kong Admin API）。
 
 #### 3.6.4 工作量估算
 
@@ -1584,7 +1576,7 @@ public final class GatewayKongEmitter {
 
 1. **MCP Proxy 独立于管层** — Sidecar 模式下，完整安全管线（License 验证 → precheck → Engine 终判 → challenge）在 `virbius-mcp-proxy` 内闭环，不经过管层
 2. **Engine 是标准 HTTP API** — 任何网关只要能发 HTTP `POST /v1/evaluate` 就能接入 virbius-engine
-3. **编译器有多网关架构** — `--gateway` 参数 + Emitter 模式，新增网关只需加一个 Emitter 类
+3. **编译器采用 Emitter 模式** — 新增网关只需加一个 Emitter 类
 4. **Artifact 投递走 Redis** — Control Plane 不直接耦合任何网关实现
 5. **安全插件接口定义清晰** — 5 个核心函数（allowlist、rate-limit、fast-path、engine-call、block）有明确契约，可用任何语言重新实现
 

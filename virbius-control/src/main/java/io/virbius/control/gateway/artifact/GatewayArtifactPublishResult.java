@@ -7,8 +7,6 @@ public record GatewayArtifactPublishResult(
         String storage,
         String pointerKey,
         String accessListsSha256,
-        String sceneRegistrySha256,
         String accessListsLocator,
-        String sceneRegistryLocator,
         boolean localFallbackWritten,
         Map<String, Object> syncAck) {}

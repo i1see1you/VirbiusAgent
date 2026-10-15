@@ -51,9 +51,7 @@ public class GatewayArtifactPublisher {
 
     public GatewayArtifactPublishResult publish(String tenantId, Map<String, Object> bundleMetadata, String trigger) {
         byte[] accessLists = artifactService.buildAccessListsJsonBytes(tenantId, bundleMetadata);
-        byte[] sceneRegistry = artifactService.buildSceneRegistryJsonBytes(tenantId, bundleMetadata);
         String alSha = GatewayArtifactHash.sha256Hex(accessLists);
-        String srSha = GatewayArtifactHash.sha256Hex(sceneRegistry);
         boolean localWritten = false;
         if (properties.isLocalFallback()) {
             artifactService.writeGatewayLocalFiles(tenantId, bundleMetadata);
@@ -66,18 +64,13 @@ public class GatewayArtifactPublisher {
         String bundleVersion = "0.1.0";
         GatewayArtifactBlobStore blobStore = resolveBlobStore();
         blobStore.putBlob(tenantId, revision, GatewayArtifactPart.ACCESS_LISTS, accessLists);
-        blobStore.putBlob(tenantId, revision, GatewayArtifactPart.SCENE_REGISTRY, sceneRegistry);
 
         String alKey = null;
-        String srKey = null;
         String alUrl = null;
-        String srUrl = null;
         if (blobStore.storageType().equals("redis")) {
             alKey = redisStore.locatorFor(tenantId, revision, GatewayArtifactPart.ACCESS_LISTS);
-            srKey = redisStore.locatorFor(tenantId, revision, GatewayArtifactPart.SCENE_REGISTRY);
         } else {
             alUrl = ossStore.locatorFor(tenantId, revision, GatewayArtifactPart.ACCESS_LISTS);
-            srUrl = ossStore.locatorFor(tenantId, revision, GatewayArtifactPart.SCENE_REGISTRY);
         }
 
         GatewayArtifactPointer pointer = new GatewayArtifactPointer(
@@ -89,13 +82,9 @@ public class GatewayArtifactPublisher {
                 "2",
                 blobStore.storageType(),
                 alKey,
-                srKey,
                 alUrl,
-                srUrl,
                 alSha,
-                srSha,
                 accessLists.length,
-                sceneRegistry.length,
                 publishId,
                 trigger != null ? trigger : "manual");
 
@@ -107,7 +96,6 @@ public class GatewayArtifactPublisher {
                 tenantId,
                 revision,
                 alSha,
-                srSha,
                 publishedAt,
                 publishId,
                 pointer.trigger(),
@@ -120,9 +108,7 @@ public class GatewayArtifactPublisher {
                 blobStore.storageType(),
                 pointerKey,
                 alSha,
-                srSha,
                 alKey != null ? alKey : alUrl,
-                srKey != null ? srKey : srUrl,
                 localWritten,
                 syncAck);
     }
@@ -188,11 +174,7 @@ public class GatewayArtifactPublisher {
                 meta.storage(),
                 null,
                 null,
-                null,
-                null,
                 meta.accessListsSha256(),
-                meta.sceneRegistrySha256(),
-                0,
                 0,
                 meta.publishId(),
                 meta.trigger());

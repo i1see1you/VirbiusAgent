@@ -1497,26 +1497,18 @@ Higress coupling is confined to **3 points**. All other modules are completely i
 |--------|--------|
 | `virbius-mcp-proxy` (Rust) | Sidecar MCP proxy with its own security pipeline (License + precheck + Engine call); does not go through the Gateway in Sidecar mode |
 | `virbius-engine` (Java) | Exposes standard HTTP API (`POST /v1/evaluate`); agnostic to the calling gateway |
-| `virbius-control` (Java) | Delivers artifacts (access-lists, scene-registry) via Redis; gateway-agnostic |
+| `virbius-control` (Java) | Delivers access-lists artifacts via Redis; gateway-agnostic |
 | `virbius-core` (Rust) | Edge-layer embedded precheck SDK; no gateway dependency |
 | `virbius-policy` (Java) | Policy matching engine; no gateway dependency |
 
-#### 3.6.2 Existing Multi-Gateway Support
+#### 3.6.2 Existing Gateway Support
 
-The compiler already has a `-g` (gateway backend) flag and two emitter implementations:
+The compiler has a single emitter for the supported gateway (Higress):
 
 ```
 virbius-compiler/src/main/java/io/virbius/compiler/
-  ├── HigressCrdEmitter.java        ← Higress CRD generation (default)
-  ├── GatewayApisixEmitter.java     ← APISIX route generation (already exists)
-  └── CompilerCli.java              ← -g higress | apisix switch
-```
-
-```java
-// CompilerCli.java
-@Option(names = {"-g", "--gateway"}, defaultValue = "higress",
-        description = "gateway backend: higress | apisix")
-private String gateway;
+  ├── HigressCrdEmitter.java        ← Higress CRD generation
+  └── CompilerCli.java              ← --target=gateway entry
 ```
 
 #### 3.6.3 Code Required to Switch Gateways
@@ -1525,7 +1517,7 @@ To switch to another gateway (e.g., Kong, Nginx, or a custom gateway), implement
 
 **① New Emitter** (~100–200 lines Java)
 
-Create a new `GatewayXxxEmitter.java` following the existing `GatewayApisixEmitter` pattern. The emitter reads the same rule bundle JSON and outputs gateway-specific route/plugin configuration:
+Create a new `GatewayXxxEmitter.java`. The emitter reads the same rule bundle JSON and outputs gateway-specific route/plugin configuration:
 
 ```java
 // Example: GatewayKongEmitter.java
@@ -1571,7 +1563,7 @@ Implementation effort by target gateway:
 
 **③ Artifact Delivery Adaptation** (optional, ~50 lines)
 
-If the new gateway supports pulling artifacts from Redis (access-lists + scene-registry), `GatewayDeliveryService` requires no changes. Otherwise, adapt the delivery mechanism (e.g., HTTP push to Kong Admin API).
+If the new gateway supports pulling artifacts from Redis (access-lists), `GatewayDeliveryService` requires no changes. Otherwise, adapt the delivery mechanism (e.g., HTTP push to Kong Admin API).
 
 #### 3.6.4 Work Estimation
 
@@ -1588,7 +1580,7 @@ If the new gateway supports pulling artifacts from Redis (access-lists + scene-r
 
 1. **MCP Proxy is independent of the Gateway** — In Sidecar mode, the entire security pipeline (License verification → precheck → Engine evaluation → challenge) runs inside `virbius-mcp-proxy` without any Gateway involvement
 2. **Engine is a standard HTTP API** — Any gateway that can make HTTP `POST /v1/evaluate` can integrate with virbius-engine
-3. **Compiler has multi-gateway architecture** — The `--gateway` flag + Emitter pattern means adding a new gateway only requires one new Emitter class
+3. **Compiler is emitter-based** — Adding a new gateway only requires one new Emitter class
 4. **Artifact delivery via Redis** — Control Plane does not directly couple to any specific gateway implementation
 5. **Security plugin interface is well-defined** — The 5 core functions (allowlist, rate-limit, fast-path, engine-call, block) have clear contracts that can be reimplemented in any language
 

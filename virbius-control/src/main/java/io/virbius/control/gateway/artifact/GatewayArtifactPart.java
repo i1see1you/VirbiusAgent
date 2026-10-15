@@ -1,8 +1,7 @@
 package io.virbius.control.gateway.artifact;
 
 public enum GatewayArtifactPart {
-    ACCESS_LISTS("access-lists"),
-    SCENE_REGISTRY("scene-registry");
+    ACCESS_LISTS("access-lists");
 
     private final String suffix;
 

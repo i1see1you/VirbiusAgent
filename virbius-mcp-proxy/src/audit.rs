@@ -8,22 +8,25 @@ use tracing::{debug, warn};
 const AUDIT_QUEUE_SIZE: usize = 512;
 const KAFKA_TIMEOUT_SECS: u64 = 5;
 
+/// Wire schema matches virbius-control's `tb_audit_events` / the engine
+/// `AuditWriter` contract (canonical field names). See PROXY_CONFIG.md.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
+    pub event_id: String,
     pub trace_id: String,
     pub layer: String,
     pub event_type: String,
     pub tool_name: String,
-    pub action: String,
+    pub effective_action: String,
     pub rule_id: Option<String>,
-    pub reason: Option<String>,
+    pub reason_code: Option<String>,
     pub session_id: String,
     pub app_id: String,
     pub tenant_id: String,
     pub user_id: Option<String>,
     pub device_id: Option<String>,
-    pub session_risk_score: u32,
-    pub timestamp: String,
+    pub max_risk_score: u32,
+    pub intercepted_at: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transformed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,22 +41,23 @@ impl AuditEvent {
         rule_id: Option<&str>,
         reason: Option<&str>,
     ) -> Self {
-        let timestamp = chrono::Utc::now().to_rfc3339();
+        let intercepted_at = chrono::Utc::now().to_rfc3339();
         Self {
+            event_id: uuid::Uuid::new_v4().to_string(),
             trace_id: session.trace_id.clone(),
             layer: "edge".to_string(),
             event_type: "tool_call".to_string(),
             tool_name: tool_name.to_string(),
-            action: action.to_string(),
+            effective_action: action.to_string(),
             rule_id: rule_id.map(String::from),
-            reason: reason.map(String::from),
+            reason_code: reason.map(String::from),
             session_id: session.session_id.clone(),
             app_id: session.app_id.clone(),
             tenant_id: session.tenant_id.clone(),
             user_id: session.user_id.clone(),
             device_id: session.device_id.clone(),
-            session_risk_score: session.session_risk_score,
-            timestamp,
+            max_risk_score: session.session_risk_score,
+            intercepted_at,
             transformed: None,
             transform_applied: None,
         }
@@ -68,22 +72,23 @@ impl AuditEvent {
         _pii_found: bool,
         _risk_score: Option<i32>,
     ) -> Self {
-        let timestamp = chrono::Utc::now().to_rfc3339();
+        let intercepted_at = chrono::Utc::now().to_rfc3339();
         Self {
+            event_id: uuid::Uuid::new_v4().to_string(),
             trace_id: session.trace_id.clone(),
             layer: "edge".to_string(),
             event_type: "memory_write".to_string(),
             tool_name: tool_name.to_string(),
-            action: action.to_string(),
+            effective_action: action.to_string(),
             rule_id: rule_id.map(String::from),
-            reason: reason.map(String::from),
+            reason_code: reason.map(String::from),
             session_id: session.session_id.clone(),
             app_id: session.app_id.clone(),
             tenant_id: session.tenant_id.clone(),
             user_id: session.user_id.clone(),
             device_id: session.device_id.clone(),
-            session_risk_score: session.session_risk_score,
-            timestamp,
+            max_risk_score: session.session_risk_score,
+            intercepted_at,
             transformed: None,
             transform_applied: None,
         }
@@ -126,7 +131,7 @@ impl AuditSink {
     }
 
     pub async fn report(&self, event: AuditEvent) {
-        if event.action == "allow" && rand_sample() > self.sample_rate {
+        if event.effective_action == "allow" && rand_sample() > self.sample_rate {
             return;
         }
         if let Some(ref tx) = self.sender {
@@ -216,27 +221,28 @@ mod tests {
         let session = make_session();
         let event =
             AuditEvent::tool_call(&session, "read_file", "allow", Some("rule-1"), Some("ok"));
+        assert!(!event.event_id.is_empty());
         assert_eq!(event.trace_id, session.trace_id);
         assert_eq!(event.layer, "edge");
         assert_eq!(event.event_type, "tool_call");
         assert_eq!(event.tool_name, "read_file");
-        assert_eq!(event.action, "allow");
+        assert_eq!(event.effective_action, "allow");
         assert_eq!(event.rule_id.as_deref(), Some("rule-1"));
-        assert_eq!(event.reason.as_deref(), Some("ok"));
+        assert_eq!(event.reason_code.as_deref(), Some("ok"));
         assert_eq!(event.session_id, "sid-1");
         assert_eq!(event.app_id, "app-1");
         assert_eq!(event.tenant_id, "tenant-1");
-        assert_eq!(event.session_risk_score, 0);
-        assert!(!event.timestamp.is_empty());
+        assert_eq!(event.max_risk_score, 0);
+        assert!(!event.intercepted_at.is_empty());
     }
 
     #[test]
     fn test_audit_event_tool_call_no_rule_no_reason() {
         let session = make_session();
         let event = AuditEvent::tool_call(&session, "shell", "block", None, None);
-        assert_eq!(event.action, "block");
+        assert_eq!(event.effective_action, "block");
         assert!(event.rule_id.is_none());
-        assert!(event.reason.is_none());
+        assert!(event.reason_code.is_none());
     }
 
     #[test]
@@ -253,8 +259,8 @@ mod tests {
         );
         assert_eq!(event.event_type, "memory_write");
         assert_eq!(event.tool_name, "sql_query");
-        assert_eq!(event.action, "block");
-        assert_eq!(event.reason.as_deref(), Some("pii"));
+        assert_eq!(event.effective_action, "block");
+        assert_eq!(event.reason_code.as_deref(), Some("pii"));
     }
 
     #[test]
@@ -270,7 +276,7 @@ mod tests {
             None,
         );
         assert_eq!(event.event_type, "memory_write");
-        assert_eq!(event.action, "allow");
+        assert_eq!(event.effective_action, "allow");
         assert_eq!(event.rule_id.as_deref(), Some("kee-1"));
     }
 
@@ -302,9 +308,11 @@ mod tests {
         let event = AuditEvent::tool_call(&session, "rm", "block", None, Some("not allowed"));
         let json = serde_json::to_value(&event).unwrap();
         assert_eq!(json["tool_name"], "rm");
-        assert_eq!(json["action"], "block");
-        assert_eq!(json["reason"], "not allowed");
+        assert_eq!(json["effective_action"], "block");
+        assert_eq!(json["reason_code"], "not allowed");
         assert_eq!(json["layer"], "edge");
         assert_eq!(json["event_type"], "tool_call");
+        assert!(json["event_id"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(json["intercepted_at"].as_str().is_some_and(|s| !s.is_empty()));
     }
 }

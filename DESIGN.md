@@ -307,7 +307,7 @@ VirbiusAgent adopts a **file-level reuse** strategy and does not depend on Virbi
 | virbius-core | `src/trace.rs` | trace_id management | virbius-core/src/trace.rs |
 | virbius-core | `src/engine.rs` | EngineClient (calls /v1/evaluate) | virbius-core/src/engine.rs |
 | virbius-core | `src/matcher.rs` | Rule matching | virbius-core/src/matcher.rs |
-| virbius-gateway | `lib/*.lua` (11 files) | access_lists/list_redis/effective/scene_registry/trace/context_vars/config_redis/json_util/file_cache/uri_match/prompt | virbius-gateway/lib/ |
+| virbius-gateway | `lib/*.lua` (10 files) | access_lists/list_redis/effective/trace/context_vars/config_redis/json_util/file_cache/uri_match/prompt | virbius-gateway/lib/ |
 | virbius-policy | `ActionMerge.java` | Action merging | virbius-policy/ |
 | virbius-policy | `IntentAction.java` | Intent normalization | virbius-policy/ |
 | virbius-policy | `ListMatcher.java` | Allowlist matching | virbius-policy/ |

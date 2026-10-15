@@ -57,7 +57,7 @@ public class OssGatewayArtifactBlobStore implements GatewayArtifactBlobStore {
 
     @Override
     public byte[] getBlob(GatewayArtifactPointer pointer, GatewayArtifactPart part) {
-        String url = part == GatewayArtifactPart.ACCESS_LISTS ? pointer.accessListsUrl() : pointer.sceneRegistryUrl();
+        String url = pointer.accessListsUrl();
         if (url == null || url.isBlank()) {
             throw new IllegalArgumentException("missing oss url for " + part);
         }

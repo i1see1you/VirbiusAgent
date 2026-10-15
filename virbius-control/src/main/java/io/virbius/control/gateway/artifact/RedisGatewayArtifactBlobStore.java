@@ -51,7 +51,7 @@ public class RedisGatewayArtifactBlobStore implements GatewayArtifactBlobStore {
 
     @Override
     public byte[] getBlob(GatewayArtifactPointer pointer, GatewayArtifactPart part) {
-        String key = part == GatewayArtifactPart.ACCESS_LISTS ? pointer.accessListsKey() : pointer.sceneRegistryKey();
+        String key = pointer.accessListsKey();
         if (key == null || key.isBlank()) {
             throw new IllegalArgumentException("missing redis blob key for " + part);
         }
@@ -120,8 +120,6 @@ public class RedisGatewayArtifactBlobStore implements GatewayArtifactBlobStore {
                     long oldRev = Long.parseLong(revStr);
                     jedis.del(GatewayArtifactKeys.blobKey(
                             properties.getRedis().getBlobPrefix(), tenantId, oldRev, GatewayArtifactPart.ACCESS_LISTS));
-                    jedis.del(GatewayArtifactKeys.blobKey(
-                            properties.getRedis().getBlobPrefix(), tenantId, oldRev, GatewayArtifactPart.SCENE_REGISTRY));
                 }
                 if (!old.isEmpty()) {
                     jedis.zrem(historyKey, old.toArray(String[]::new));

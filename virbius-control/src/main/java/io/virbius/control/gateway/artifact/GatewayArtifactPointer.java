@@ -12,13 +12,9 @@ public record GatewayArtifactPointer(
         String schemaVersion,
         String storage,
         String accessListsKey,
-        String sceneRegistryKey,
         String accessListsUrl,
-        String sceneRegistryUrl,
         String accessListsSha256,
-        String sceneRegistrySha256,
         long accessListsBytes,
-        long sceneRegistryBytes,
         String publishId,
         String trigger) {
 
@@ -37,19 +33,11 @@ public record GatewayArtifactPointer(
         if (accessListsKey != null) {
             out.put("access_lists_key", accessListsKey);
         }
-        if (sceneRegistryKey != null) {
-            out.put("scene_registry_key", sceneRegistryKey);
-        }
         if (accessListsUrl != null) {
             out.put("access_lists_url", accessListsUrl);
         }
-        if (sceneRegistryUrl != null) {
-            out.put("scene_registry_url", sceneRegistryUrl);
-        }
         out.put("access_lists_sha256", accessListsSha256);
-        out.put("scene_registry_sha256", sceneRegistrySha256);
         out.put("access_lists_bytes", String.valueOf(accessListsBytes));
-        out.put("scene_registry_bytes", String.valueOf(sceneRegistryBytes));
         if (publishId != null) {
             out.put("publish_id", publishId);
         }
@@ -76,13 +64,9 @@ public record GatewayArtifactPointer(
                 hash.get("schema_version"),
                 hash.get("storage"),
                 hash.get("access_lists_key"),
-                hash.get("scene_registry_key"),
                 hash.get("access_lists_url"),
-                hash.get("scene_registry_url"),
                 hash.get("access_lists_sha256"),
-                hash.get("scene_registry_sha256"),
                 parseLong(hash.get("access_lists_bytes")),
-                parseLong(hash.get("scene_registry_bytes")),
                 hash.get("publish_id"),
                 hash.get("trigger"));
     }

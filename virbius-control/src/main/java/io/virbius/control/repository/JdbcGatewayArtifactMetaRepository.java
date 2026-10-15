@@ -15,7 +15,6 @@ public class JdbcGatewayArtifactMetaRepository implements GatewayArtifactMetaRep
             rs.getString("tenant_id"),
             rs.getLong("artifact_revision"),
             rs.getString("access_lists_sha256"),
-            rs.getString("scene_registry_sha256"),
             rs.getTimestamp("published_at").toInstant(),
             rs.getString("publish_id"),
             rs.getString("trigger"),
@@ -31,7 +30,7 @@ public class JdbcGatewayArtifactMetaRepository implements GatewayArtifactMetaRep
     public Optional<GatewayArtifactMeta> get(String tenantId) {
         List<GatewayArtifactMeta> rows = jdbc.query(
                 """
-                SELECT tenant_id, artifact_revision, access_lists_sha256, scene_registry_sha256,
+                SELECT tenant_id, artifact_revision, access_lists_sha256,
                        published_at, publish_id, `trigger`, storage
                 FROM tb_gateway_artifact_meta
                 WHERE tenant_id = ?
@@ -47,14 +46,13 @@ public class JdbcGatewayArtifactMetaRepository implements GatewayArtifactMetaRep
             jdbc.update(
                     """
                     INSERT INTO tb_gateway_artifact_meta
-                        (tenant_id, artifact_revision, access_lists_sha256, scene_registry_sha256,
+                        (tenant_id, artifact_revision, access_lists_sha256,
                          published_at, publish_id, `trigger`, storage)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     meta.tenantId(),
                     meta.artifactRevision(),
                     meta.accessListsSha256(),
-                    meta.sceneRegistrySha256(),
                     Timestamp.from(meta.publishedAt()),
                     meta.publishId(),
                     meta.trigger(),
@@ -64,13 +62,12 @@ public class JdbcGatewayArtifactMetaRepository implements GatewayArtifactMetaRep
         jdbc.update(
                 """
                 UPDATE tb_gateway_artifact_meta
-                SET artifact_revision = ?, access_lists_sha256 = ?, scene_registry_sha256 = ?,
+                SET artifact_revision = ?, access_lists_sha256 = ?,
                     published_at = ?, publish_id = ?, `trigger` = ?, storage = ?
                 WHERE tenant_id = ?
                 """,
                 meta.artifactRevision(),
                 meta.accessListsSha256(),
-                meta.sceneRegistrySha256(),
                 Timestamp.from(meta.publishedAt()),
                 meta.publishId(),
                 meta.trigger(),

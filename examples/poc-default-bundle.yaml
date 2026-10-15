@@ -9,17 +9,6 @@ gateway:
     - uri: /v1/chat/completions
       methods: [POST]
 
-scene_registry:
-  version: 1
-  fail_on_unknown_app: false
-  fail_on_unresolved_scene: false
-  scenes:
-    demo_chat:
-      app_id: demo-app
-      default: true
-      uris: [/v1/chat/completions]
-      priority: 0
-
 rules:
   - rule_id: edge_l0_content_deny
     layer: edge

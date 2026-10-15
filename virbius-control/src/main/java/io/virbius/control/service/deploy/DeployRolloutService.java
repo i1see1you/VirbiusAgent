@@ -455,7 +455,6 @@ public class DeployRolloutService {
                 if (stableGatewayPtr != null) {
                     long canaryRev = rollout.canaryGatewayRevision();
                     String alKey = gatewayBlobStore.locatorFor(tenantId, canaryRev, GatewayArtifactPart.ACCESS_LISTS);
-                    String srKey = gatewayBlobStore.locatorFor(tenantId, canaryRev, GatewayArtifactPart.SCENE_REGISTRY);
                     GatewayArtifactPointer newPtr = new GatewayArtifactPointer(
                             tenantId,
                             canaryRev,
@@ -465,13 +464,9 @@ public class DeployRolloutService {
                             stableGatewayPtr.schemaVersion(),
                             stableGatewayPtr.storage(),
                             alKey,
-                            srKey,
                             stableGatewayPtr.accessListsUrl(),
-                            stableGatewayPtr.sceneRegistryUrl(),
                             stableGatewayPtr.accessListsSha256(),
-                            stableGatewayPtr.sceneRegistrySha256(),
                             stableGatewayPtr.accessListsBytes(),
-                            stableGatewayPtr.sceneRegistryBytes(),
                             stableGatewayPtr.publishId(),
                             "finalize");
                     gatewayBlobStore.updatePointer(newPtr);

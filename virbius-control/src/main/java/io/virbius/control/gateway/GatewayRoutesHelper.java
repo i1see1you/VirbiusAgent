@@ -114,11 +114,11 @@ public final class GatewayRoutesHelper {
 
     private static void rejectLegacyRouteFields(Map<String, Object> m) {
         if (m.containsKey("scene") || m.containsKey("dynamic_scene")) {
-            throw new IllegalArgumentException("gateway.routes use uri/methods only; scene via scene_registry");
+            throw new IllegalArgumentException("gateway.routes use uri/methods only");
         }
         Object match = m.get("match");
         if (match instanceof Map<?, ?> mm && !mm.isEmpty()) {
-            throw new IllegalArgumentException("gateway.routes must not use match; use scene_registry");
+            throw new IllegalArgumentException("gateway.routes must not use match");
         }
     }
 

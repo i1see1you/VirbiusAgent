@@ -37,7 +37,6 @@ public class GatewayDeliveryService {
         out.put("tenant_id", tenantId);
         out.put("artifact_revision", meta.artifactRevision());
         out.put("access_lists_sha256", meta.accessListsSha256());
-        out.put("scene_registry_sha256", meta.sceneRegistrySha256());
         out.put("published_at", meta.publishedAt().toString());
         out.put("storage", meta.storage() != null ? meta.storage() : "redis");
         out.put("schema_version", "2");
@@ -45,14 +44,8 @@ public class GatewayDeliveryService {
             if (pointer.accessListsKey() != null) {
                 out.put("access_lists_locator", pointer.accessListsKey());
             }
-            if (pointer.sceneRegistryKey() != null) {
-                out.put("scene_registry_locator", pointer.sceneRegistryKey());
-            }
             if (pointer.accessListsUrl() != null) {
                 out.put("access_lists_locator", pointer.accessListsUrl());
-            }
-            if (pointer.sceneRegistryUrl() != null) {
-                out.put("scene_registry_locator", pointer.sceneRegistryUrl());
             }
         }
         return out;
@@ -89,9 +82,7 @@ public class GatewayDeliveryService {
     }
 
     private byte[] readLocalPartBytes(String tenantId, GatewayArtifactPart part) {
-        Path file = part == GatewayArtifactPart.ACCESS_LISTS
-                ? dataDir.resolve("gateway").resolve(tenantId + "-access-lists.json")
-                : dataDir.resolve("gateway").resolve(tenantId + "-scene-registry.json");
+        Path file = dataDir.resolve("gateway").resolve(tenantId + "-access-lists.json");
         if (!Files.isRegularFile(file)) {
             throw new ResourceNotFoundException("gateway artifact file", file.toString());
         }

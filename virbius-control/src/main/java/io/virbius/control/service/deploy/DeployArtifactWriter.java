@@ -66,10 +66,8 @@ public class DeployArtifactWriter {
         try {
             Map<String, Object> bundleMetadata = Map.of();
             byte[] accessLists = artifactService.buildAccessListsJsonBytes(tenantId, bundleMetadata);
-            byte[] sceneRegistry = artifactService.buildSceneRegistryJsonBytes(tenantId, bundleMetadata);
             long revision = gatewayBlobStore.nextRevision(tenantId);
             gatewayBlobStore.putBlob(tenantId, revision, GatewayArtifactPart.ACCESS_LISTS, accessLists);
-            gatewayBlobStore.putBlob(tenantId, revision, GatewayArtifactPart.SCENE_REGISTRY, sceneRegistry);
             log.info("gateway canary artifact written tenant={} revision={} deploy={}",
                     tenantId, revision, deployId);
             return revision;

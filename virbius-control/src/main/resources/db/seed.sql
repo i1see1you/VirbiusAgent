@@ -7,14 +7,14 @@ WHERE NOT EXISTS (SELECT 1 FROM tb_tenants WHERE tenant_id = 'default');
 
 INSERT INTO tb_bundles (tenant_id, bundle_id, version, status, metadata_json)
 SELECT 'default', 'demo-default', '0.1.0', 'draft',
-    '{"scope":{"tenants":["default"],"scenes":["demo_chat"],"apps":["demo-app"]},"scene_registry":{"version":1,"fail_on_unknown_app":false,"fail_on_unresolved_scene":false,"scenes":{"demo_chat":{"app_id":"demo-app","default":true,"uris":["/v1/chat/completions"],"priority":0}}},"gateway":{"evaluate":true,"fail_mode":"open","cloud_scan":{"agent_url":"http://127.0.0.1:9070","timeout_ms":3000},"routes":[{"uri":"/v1/chat/completions","methods":["POST"]}]}}'
+    '{"scope":{"tenants":["default"],"apps":["demo-app"]},"gateway":{"evaluate":true,"fail_mode":"open","cloud_scan":{"agent_url":"http://127.0.0.1:9070","timeout_ms":3000},"routes":[{"uri":"/v1/chat/completions","methods":["POST"]}]}}'
 FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (
     SELECT 1 FROM tb_bundles WHERE tenant_id = 'default' AND bundle_id = 'demo-default' AND version = '0.1.0'
 );
 
 UPDATE tb_bundles
-SET metadata_json = '{"scope":{"tenants":["default"],"scenes":["demo_chat"],"apps":["demo-app"]},"scene_registry":{"version":1,"fail_on_unknown_app":false,"fail_on_unresolved_scene":false,"scenes":{"demo_chat":{"app_id":"demo-app","default":true,"uris":["/v1/chat/completions"],"priority":0}}},"gateway":{"evaluate":true,"fail_mode":"open","cloud_scan":{"agent_url":"http://127.0.0.1:9070","timeout_ms":3000},"routes":[{"uri":"/v1/chat/completions","methods":["POST"]}]}}'
+SET metadata_json = '{"scope":{"tenants":["default"],"apps":["demo-app"]},"gateway":{"evaluate":true,"fail_mode":"open","cloud_scan":{"agent_url":"http://127.0.0.1:9070","timeout_ms":3000},"routes":[{"uri":"/v1/chat/completions","methods":["POST"]}]}}'
 WHERE tenant_id = 'default' AND bundle_id = 'demo-default' AND version = '0.1.0';
 
 -- Named access lists (ListStore -> gateway memory_lists / engine PolicyDataCache)

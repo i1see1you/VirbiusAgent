@@ -9,7 +9,6 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -30,20 +29,14 @@ public class GatewayDeliveryController {
     @GetMapping(value = "/snapshot", produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<byte[]> snapshot(
             @PathVariable("tenantId") String tenantId,
-            @RequestParam(value = "part", defaultValue = "access-lists") String part,
             @RequestHeader(value = HttpHeaders.IF_NONE_MATCH, required = false) String ifNoneMatch) {
         var meta = gatewayDeliveryService.requireMeta(tenantId);
         String etag = String.valueOf(meta.artifactRevision());
         if (ifNoneMatch != null && etag.equals(ifNoneMatch.trim())) {
             return ResponseEntity.status(304).eTag(etag).build();
         }
-        GatewayArtifactPart artifactPart = "scene-registry".equals(part)
-                ? GatewayArtifactPart.SCENE_REGISTRY
-                : GatewayArtifactPart.ACCESS_LISTS;
-        byte[] body = gatewayDeliveryService.readPartBytes(tenantId, artifactPart);
-        String sha = artifactPart == GatewayArtifactPart.ACCESS_LISTS
-                ? meta.accessListsSha256()
-                : meta.sceneRegistrySha256();
+        byte[] body = gatewayDeliveryService.readPartBytes(tenantId, GatewayArtifactPart.ACCESS_LISTS);
+        String sha = meta.accessListsSha256();
         return ResponseEntity.ok()
                 .eTag(etag)
                 .header("X-Content-Sha256", sha)

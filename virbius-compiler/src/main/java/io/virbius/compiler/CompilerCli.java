@@ -27,12 +27,6 @@ public class CompilerCli implements Runnable {
             description = "compile target: all | edge | gateway | cloud")
     private String target;
 
-    @Option(
-            names = {"-g", "--gateway"},
-            defaultValue = "higress",
-            description = "gateway backend when --target=gateway: higress | apisix")
-    private String gateway;
-
     private final ObjectMapper json = new ObjectMapper();
     private final ObjectMapper yaml = new ObjectMapper(new YAMLFactory());
 
@@ -57,18 +51,9 @@ public class CompilerCli implements Runnable {
             }
             if ("gateway".equals(t) || "all".equals(t)) {
                 count += compileLayerRules(root, output, "gateway");
-                Path gwDir = output.resolve("gateway");
-                String gw = gateway == null ? "higress" : gateway.trim().toLowerCase(Locale.ROOT);
-                if ("higress".equals(gw)) {
-                    Path higressDir = gwDir.resolve("higress");
-                    int crdCount = HigressCrdEmitter.emit(root, higressDir, json);
-                    System.out.println("gateway higress CRDs: " + crdCount);
-                } else if ("apisix".equals(gw)) {
-                    GatewayApisixEmitter.emitService(root, gwDir, json);
-                    GatewayApisixEmitter.emitSceneRegistry(root, gwDir, json);
-                    int routeCount = GatewayApisixEmitter.emitRoutes(root, gwDir, json);
-                    System.out.println("gateway apisix routes: " + routeCount);
-                }
+                Path higressDir = output.resolve("gateway").resolve("higress");
+                int crdCount = HigressCrdEmitter.emit(root, higressDir, json);
+                System.out.println("gateway higress CRDs: " + crdCount);
             }
             if ("edge".equals(t)) {
                 System.out.println("compiled edge manifest + " + count + " edge rules -> " + output);

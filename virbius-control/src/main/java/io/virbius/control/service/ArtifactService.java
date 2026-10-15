@@ -95,7 +95,6 @@ public class ArtifactService {
         try {
             if (shouldWriteGatewayLocal()) {
                 paths.put("gateway", writeGateway(tenantId, bundleMetadata).toString());
-                paths.put("scene_registry", writeSceneRegistry(tenantId, bundleMetadata).toString());
             }
             paths.putAll(writeEdge(tenantId, bundleMetadata));
         } catch (Exception e) {
@@ -123,7 +122,6 @@ public class ArtifactService {
     public void writeGatewayLocalFiles(String tenantId, Map<String, Object> bundleMetadata) {
         try {
             writeGateway(tenantId, bundleMetadata);
-            writeSceneRegistry(tenantId, bundleMetadata);
         } catch (Exception e) {
             throw new IllegalStateException("failed to write gateway local files: " + e.getMessage(), e);
         }
@@ -138,38 +136,8 @@ public class ArtifactService {
         }
     }
 
-    public byte[] buildSceneRegistryJsonBytes(String tenantId, Map<String, Object> bundleMetadata) {
-        try {
-            Map<String, Object> block = io.virbius.control.gateway.SceneRegistryHelper.registryBlock(bundleMetadata);
-            if (block.isEmpty()) {
-                block = Map.of("version", 1, "scenes", Map.of());
-            }
-            Map<String, Object> root = new LinkedHashMap<>();
-            root.put("tenant_id", tenantId);
-            root.put("scene_registry", block);
-            return mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(root);
-        } catch (Exception e) {
-            throw new IllegalStateException("failed to build scene-registry json: " + e.getMessage(), e);
-        }
-    }
-
     private boolean shouldWriteGatewayLocal() {
         return !gatewayArtifactEnabled || gatewayArtifactLocalFallback;
-    }
-
-    private java.nio.file.Path writeSceneRegistry(String tenantId, Map<String, Object> bundleMetadata) throws Exception {
-        java.nio.file.Path dir = dataDir.resolve("gateway");
-        java.nio.file.Files.createDirectories(dir);
-        java.nio.file.Path file = dir.resolve(tenantId + "-scene-registry.json");
-        Map<String, Object> block = io.virbius.control.gateway.SceneRegistryHelper.registryBlock(bundleMetadata);
-        if (block.isEmpty()) {
-            block = Map.of("version", 1, "scenes", Map.of());
-        }
-        Map<String, Object> root = new LinkedHashMap<>();
-        root.put("tenant_id", tenantId);
-        root.put("scene_registry", block);
-        mapper.writerWithDefaultPrettyPrinter().writeValue(file.toFile(), root);
-        return file;
     }
 
     private java.nio.file.Path writeGateway(String tenantId, Map<String, Object> bundleMetadata) throws Exception {
@@ -340,10 +308,6 @@ public class ArtifactService {
         List<Map<String, Object>> expressions = buildExpressionBlocks(tenantId);
         if (!expressions.isEmpty()) {
             root.put("expressions", expressions);
-        }
-        Map<String, Object> sceneReg = io.virbius.control.gateway.SceneRegistryHelper.registryBlock(bundleMetadata);
-        if (!sceneReg.isEmpty()) {
-            root.put("scene_registry", sceneReg);
         }
         return root;
     }
