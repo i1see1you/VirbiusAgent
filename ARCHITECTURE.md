@@ -102,7 +102,7 @@ The four layers (Edge, Gateway, Kernel, Cloud) are divided into two categories b
 
 | Phase | Observation (eyes) | Enforcement (hands) |
 |------|-----------|------------|
-| **P0** | Falco (eBPF) + access log + Redis audit stream + STI audit + Prompt Gateway (constitutional injection) | HTTP 403 + allowlist + counting + schema validation + risk threshold disconnect + Runtime License validation |
+| **P0** | Falco (eBPF) + access log + Kafka audit stream + STI audit + Prompt Gateway (constitutional injection) | HTTP 403 + allowlist + counting + schema validation + risk threshold disconnect + Runtime License validation |
 | **P1** | STI Taint small model + Falco http_output three-level correlation + audit integrity | Manual approval flow + adaptive risk model + memory control (Memory Interceptor) |
 | **P2** | Custom eBPF observation (execveat + IPv6) | Landlock + drop caps + gVisor (✅) + TEE (financial grade, pending) |
 

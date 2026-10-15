@@ -637,7 +637,6 @@ dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新�
 > **已移至 SDK 侧**（原引擎 chat 内置审查的配置）：`skip-models`、`refusal-text`、`fail-closed`、`streaming.{window-chars,context-chars,stream-first}` —— 见 `virbius-review-sdk` README。`virbius.trace.*` 已随 `TraceStepPublisher` 删除。
 | `virbius.chain-patterns.enforce` | `false` | 时序链式检测：`false`=dry-run（仅审计），`true`=执行 |
 | `virbius.retry-escape.enforce` | `false` | 重试逃逸检测同上（dry-run by default） |
-| `virbius.trace.publish-enabled` | `true` | Engine 发布 chat `input`/`output` trace step 到控制面（Kafka 不可用时自动降级 no-op） |
 
 > 上述键目前均由代码 `@Value` 提供默认值，`application*.yml` 未显式声明；如需覆盖，用启动参数或同名 `VIRBIUS_*` env。
 

@@ -788,7 +788,7 @@ virbius-mcp-proxy/
 │   ├── session.rs           # Session management (ConnectionId -> Session)
 │   ├── pipeline.rs          # Security Pipeline (License -> precheck -> engine -> audit)
 │   ├── upstream.rs          # Upstream MCP Client (forward requests)
-│   ├── audit.rs             # Audit event reporting (Redis Stream)
+│   ├── audit.rs             # Audit event reporting (Kafka)
 │   └── config.rs            # Configuration loading (TOML + environment variables)
 ├── examples/
 │   └── demo_agent.rs        # Simulated Agent call demo
@@ -1001,7 +1001,7 @@ connections: DashMap<(String, String), UpstreamClient>
 
 #### 2.6.3 Decision Trace Trace Collector
 
-The MCP Proxy has a built-in `TraceCollector` module that collects trace events at two key points in the `tools/call` request lifecycle, writing them asynchronously to Redis Stream `virbius:trace`, consumed by the Control-side `TraceIngestService` for persistence.
+The MCP Proxy has a built-in `TraceCollector` module that collects trace events at two key points in the `tools/call` request lifecycle, writing them asynchronously to the Kafka topic `virbius-trace-events`, consumed by the Control-side `KafkaTraceConsumer` for persistence.
 
 **Collection Points**:
 
@@ -1042,35 +1042,32 @@ step-001 (tool_call: read_file)
 }
 ```
 
-**Configuration** (`config.toml`):
+**Configuration** (`config.toml` / env):
 
 ```toml
 [trace]
-enabled = true          # Default true
-redis_url = "redis://127.0.0.1:6379"
-stream_key = "virbius:trace"
-max_fields_len = 32768  # Max field length (bytes), truncated if exceeded
+enabled = true                        # Default true
+backend = "kafka"                     # Kafka-only (Redis Stream removed)
+kafka_brokers = "127.0.0.1:9092"      # or KAFKA_BOOTSTRAP_SERVERS
+kafka_topic = "virbius-trace-events"
+max_fields_len = 32768                # Max field length (bytes), truncated if exceeded
 ```
 
-**Redis Stream Write**:
+**Kafka Write**:
 
 ```
-XADD virbius:trace * \
-  trace_id 550e8400-... \
-  session_id sess_abc123 \
-  step_id step-002 \
-  parent_step_id step-001 \
-  step_seq 2 \
-  event_type tool_call \
-  tool_name read_file \
-  arguments '{"path":"/etc/hosts"}' \
-  tenant_id tenant-001 \
-  timestamp 2026-07-08T12:00:00.123Z
+topic = "virbius-trace-events"
+value = { "trace_id":"550e8400-...", "session_id":"sess_abc123", "tenant_id":"tenant-001",
+          "step_id":"step-002", "parent_step_id":"step-001", "step_seq":2,
+          "step_type":"tool_call", "layer":"edge", "tool_name":"read_file",
+          "tool_args":{"path":"/etc/hosts"}, "tool_args_hash":"...",
+          "tool_decision":"allow", "risk_score":10, "tool_status":"ok",
+          "app_id":"agent1", "occurred_at":"2026-07-08T12:00:00.123Z" }
 ```
 
 **Control Side Consumption**:
 
-`TraceIngestService` consumes `virbius:trace` using `XREADGROUP`, writes idempotently to the `tb_agent_trace` table via `JdbcTemplate`, with checkpoint (last delivered ID) persisted in `tb_trace_ingest_checkpoint`.
+`KafkaTraceConsumer` (consumer group `virbius-trace-ingest`) consumes `virbius-trace-events` and writes idempotently to `tb_agent_trace` via `TraceEventIngestor`; ordering and offsets are managed by Kafka (no manual checkpoint) and a per-session hash chain is maintained in `tb_trace_chain_state`.
 
 **REST API**:
 

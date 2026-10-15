@@ -87,21 +87,21 @@ Agent Framework
     +-- MCP/A2A 路由 -> MCP Server
     v
 [3] 核层 (Falco) — 旁路
-    +-- 全程旁路监控: syscall/网络/文件事件 -> Redis Audit Stream
+    +-- 全程旁路监控: syscall/网络/文件事件 -> Kafka 审计总线 (virbius-audit-events)
     +-- session_risk > 80 时告警 + 通知管层断连
 ```
 
 ### 6.2 审计事件流
 
 ```
-各层 -> Redis Audit Stream -> virbius-engine (异步消费)
+各层 -> Kafka 审计总线 (virbius-audit-events) -> virbius-control (异步消费)
                               +-- session risk score 更新
                               +-- 告警触发
                               +-- 运营台展示
 
 核层 Falco 事件 (PID) -> daemon 查 Redis pid_trace:{pid} -> 补全 trace_id -> 审计流
 
-MCP Proxy -> Redis Trace Stream (virbius:trace) -> virbius-control TraceIngestService
+MCP Proxy -> Kafka topic (virbius-trace-events) -> virbius-control KafkaTraceConsumer
                                                  +-- 写入 tb_agent_trace
                                                  +-- 运营台决策链路可视化
 ```
@@ -128,24 +128,27 @@ MCP Proxy -> Redis Trace Stream (virbius:trace) -> virbius-control TraceIngestSe
 
 #### 6.2.1 Agent 决策链路追踪流
 
-MCP Proxy 在 `tool_call`（调用前）和 `tool_result`（返回后）两个关键点采集 trace 事件，通过 Redis Stream `virbius:trace` 异步发送到 Control 侧入库：
+MCP Proxy 在 `tool_call`（调用前）和 `tool_result`（返回后）两个关键点采集 trace 事件，通过 Kafka topic `virbius-trace-events` 异步发送到 Control 侧入库：
 
 ```json
 {
   "trace_id": "uuid",
   "session_id": "sess_xxx",
-  "parent_step_id": "step-001",
-  "step_id": "step-002",
-  "step_seq": 2,
-  "event_type": "tool_call | tool_result",
-  "tool_name": "read_file",
-  "arguments": { ... },
-  "result": { ... },
-  "is_error": false,
-  "error_message": null,
-  "duration_ms": 45,
   "tenant_id": "tenant-xxx",
-  "timestamp": "2026-07-08T12:00:00Z"
+  "step_id": "step-002",
+  "parent_step_id": "step-001",
+  "step_seq": 2,
+  "step_type": "tool_call | tool_result",
+  "layer": "edge",
+  "tool_name": "read_file",
+  "tool_args": { ... },
+  "tool_args_hash": "...",
+  "tool_decision": "allow | block | review",
+  "risk_score": 10,
+  "tool_status": "ok | error",
+  "tool_duration_ms": 45,
+  "app_id": "agent1",
+  "occurred_at": "2026-07-08T12:00:00Z"
 }
 ```
 
@@ -154,16 +157,16 @@ MCP Proxy 在 `tool_call`（调用前）和 `tool_result`（返回后）两个�
 ```
 MCP Proxy (router.rs)
   |
-  +-- tool_call 事件 -> TraceCollector -> Redis XADD virbius:trace
-  +-- tool_result 事件 -> TraceCollector -> Redis XADD virbius:trace
+  +-- tool_call 事件 -> TraceCollector -> Kafka produce virbius-trace-events
+  +-- tool_result 事件 -> TraceCollector -> Kafka produce virbius-trace-events
   |
   v
-Redis Stream (virbius:trace)
+Kafka topic (virbius-trace-events)
   |
   v
-virbius-control (TraceIngestService)
-  +-- XREADGROUP 消费 + 检查点管理
-  +-- 幂等写入 tb_agent_trace
+virbius-control (KafkaTraceConsumer -> TraceEventIngestor)
+  +-- 消费组 virbius-trace-ingest 消费（偏移由 Kafka 管理）
+  +-- 幂等写入 tb_agent_trace + 会话哈希链
   |
   v
 REST API /api/v1/admin/tenants/{tenantId}/trace/*
@@ -310,7 +313,7 @@ VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依
 | virbius-policy | `ActionMerge.java` | 动作合并 | virbius-policy/ |
 | virbius-policy | `IntentAction.java` | 意图归一化 | virbius-policy/ |
 | virbius-policy | `ListMatcher.java` | 名单匹配 | virbius-policy/ |
-| virbius-policy | `audit/RedisStreamAuditSink.java` | Redis Stream 审计 | virbius-policy/ |
+| virbius-policy | `audit/KafkaAuditSink.java` | Kafka 审计 | virbius-policy/ |
 
 #### 需扩展（拷贝后修改）
 
@@ -339,7 +342,7 @@ VirbiusAgent 采用**文件级复用**策略，不作为 VirbiusLLM 的项目依
 | `virbius-control` 宪法模块 | Java | 宪法规则管理 + 编译为 prompt 模板 |
 | `virbius-control` Memory Interceptor | Java | P1: 记忆读写拦截 |
 | `virbius-kernel/` | Rust/YAML | Falco 部署 + 模式检测 + 降级逻辑 |
-| virbius-audit Falco 插件 | Go | 自定义 Falco 插件(消费 Redis Stream) |
+| ~~virbius-audit Falco 插件~~ | Go | **已移除**——改由 Engine `FalcoAlertController` 事后三级关联（见 §13.4） |
 
 #### VirbiusAgent 项目结构
 
@@ -366,7 +369,7 @@ VirbiusAgent/
    +-- src/transport/         # stdio + SSE 传输
 |   +-- src/pipeline.rs        # 安全管线
 |   +-- src/session.rs         # 会话管理 (含 step_seq/last_step_id)
-|   +-- src/trace_collector.rs # 决策链路 trace 采集 (TraceEvent + Redis XADD)
+|   +-- src/trace_collector.rs # 决策链路 trace 采集 (TraceEvent + Kafka producer)
 |   +-- src/router.rs          # JSON-RPC 路由 (含 tool_call/tool_result 采集)
 |   +-- src/config.rs          # 配置 (含 TraceSection)
 |

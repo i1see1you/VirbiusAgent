@@ -576,7 +576,6 @@ Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lac
 | `virbius.review.input-risk-dedup-ttl-ms` | `600000` | input-review risk dedup window (once per trace, 10 min) |
 | `virbius.chain-patterns.enforce` | `false` | temporal chain-pattern detection: `false`=dry-run (audit only), `true`=enforce |
 | `virbius.retry-escape.enforce` | `false` | retry-escape detection likewise (dry-run by default) |
-| `virbius.trace.publish-enabled` | `true` | Engine publishes chat `input`/`output` trace steps to Control (degrades to a no-op when Kafka is unavailable) |
 
 > These keys currently get their defaults from code (`@Value`); `application*.yml` does not declare them. Override with a startup argument or the same-named `VIRBIUS_*` env var.
 > **Moved to the SDK** (config of the removed chat-embedded review): `skip-models`, `refusal-text`, `fail-closed`, `streaming.{window-chars,context-chars,stream-first}` — see the `virbius-review-sdk` README. `virbius.trace.*` was removed together with `TraceStepPublisher`.

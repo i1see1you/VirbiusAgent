@@ -14,7 +14,7 @@
   - [trace — Trace Configuration](#trace--trace-configuration)
   - [memory — Memory Interceptor](#memory--memory-interceptor)
 - [Environment Variables](#environment-variables)
-- [Dev Configuration Example (Redis Stream)](#dev-configuration-example-redis-stream)
+- [Dev Configuration Example (Kafka)](#dev-configuration-example-kafka)
 - [Production Configuration Example (Kafka)](#production-configuration-example-kafka)
 - [Backend Selection Logic](#backend-selection-logic)
 - [License Credential Configuration](#license-credential-configuration)
@@ -113,13 +113,11 @@ Records audit events for each tool call decision (allow / block / challenge).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `""` | Backend type: empty (auto-select) or `"kafka"` |
-| `redis_url` | string | `""` | Redis address, format `host:port` |
+| `backend` | string | `""` | Backend type: `"kafka"` (empty auto-selects Kafka when brokers are set, else Disabled) |
+| `redis_url` | string | `""` | Shared Redis address (`host:port`). The audit bus is Kafka-only; this now only backs the policy-subscription / delegated-snapshot default |
 | `kafka_brokers` | string | `""` | Comma-separated Kafka broker list |
 | `kafka_topic` | string | `"virbius-audit-events"` | Kafka topic name |
 | `sample_rate` | f64 | `1.0` | Sampling rate `0.0`–`1.0` (only applies to `allow` events) |
-
-> In Redis mode, events are written to Stream key `virbius:audit:stream`.
 
 ---
 
@@ -129,13 +127,10 @@ Decision chain tracing records the full tool call chain: input → reasoning →
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `backend` | string | `""` | Backend type: empty (auto-select) or `"kafka"` |
-| `redis_url` | string | `""` | Redis address; leave empty to reuse `audit.redis_url` |
+| `backend` | string | `""` | Backend type: `"kafka"` (empty auto-selects Kafka when brokers are set, else Disabled) |
 | `kafka_brokers` | string | `""` | Kafka broker list |
 | `kafka_topic` | string | `"virbius-trace-events"` | Kafka topic name |
 | `enabled` | bool | `true` | Enable/disable tracing |
-
-> In Redis mode, events are written to Stream key `virbius:trace:stream`.
 
 ---
 
@@ -202,23 +197,22 @@ The audit/trace Kafka producers honor these environment variables
 | `VIRBIUS_KAFKA_SASL_USERNAME` / `VIRBIUS_KAFKA_SASL_PASSWORD` | *(empty)* | required for SASL modes |
 | `VIRBIUS_KAFKA_SSL_CA` | *(empty)* | CA bundle path, only used with `SASL_SSL` |
 
-Redis URLs with an embedded password are accepted everywhere the proxy reads
-a Redis URL (audit, trace, policy subscription): `redis://:<password>@host:port`.
+Redis URLs with an embedded password are accepted wherever the proxy reads a
+Redis URL (policy subscription, delegated snapshot): `redis://:<password>@host:port`.
 
 ### Trace
 
 | Environment Variable | Maps To |
 |---------------------|---------|
-| `VIRBIUS_TRACE_REDIS_URL` | `trace.redis_url` |
 | `VIRBIUS_TRACE_BACKEND` | `trace.backend` |
 | `VIRBIUS_TRACE_KAFKA_BROKERS` | `trace.kafka_brokers` |
 | `VIRBIUS_TRACE_KAFKA_TOPIC` | `trace.kafka_topic` |
 
 ---
 
-## Dev Configuration Example (Redis Stream)
+## Dev Configuration Example (Kafka)
 
-Development environments use Redis Stream as the audit and tracing backend:
+Development environments use Kafka as the audit and tracing backend too (Compose-provided broker, `localhost:9092`):
 
 **`virbius-mcp-proxy.toml`:**
 
@@ -250,13 +244,18 @@ min_text_length = 512
 min_risk_score = 50
 fail_open = true
 
-# Audit — Redis Stream
+# Audit — Kafka
 [audit]
-redis_url = "localhost:6379"
+backend = "kafka"
+kafka_brokers = "localhost:9092"
+kafka_topic = "virbius-audit-events"
 sample_rate = 1.0
 
-# Trace — reuses audit.redis_url
+# Trace — Kafka
 [trace]
+backend = "kafka"
+kafka_brokers = "localhost:9092"
+kafka_topic = "virbius-trace-events"
 enabled = true
 ```
 
@@ -269,23 +268,25 @@ export VIRBIUS_ENGINE_URL=http://localhost:8082
 export VIRBIUS_LICENSE_PUBLIC_KEY=/path/to/license_pub.pem
 export VIRBIUS_LICENSE_FILE=/path/to/agent-license.jwt
 export VIRBIUS_REDIS_URL=localhost:6379
+export VIRBIUS_AUDIT_BACKEND=kafka
+export VIRBIUS_AUDIT_KAFKA_BROKERS=localhost:9092
+export VIRBIUS_TRACE_BACKEND=kafka
+export VIRBIUS_TRACE_KAFKA_BROKERS=localhost:9092
 
 cargo run --release -p virbius-mcp-proxy
 ```
 
-**Verifying the audit Stream:**
+**Verifying the Kafka topics:**
 
 ```bash
 # View audit events
-redis-cli XREAD COUNT 10 STREAMS virbius:audit:stream 0
+kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic virbius-audit-events --from-beginning --max-messages 10
 
 # View trace events
-redis-cli XREAD COUNT 10 STREAMS virbius:trace:stream 0
+kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic virbius-trace-events --from-beginning --max-messages 10
 ```
-
-> **Note:** The Redis backend uses raw TCP connections. Password authentication
-> is supported (URL form `redis://:<password>@host:port` — RESP AUTH handshake,
-> binary-safe); TLS is not supported (use Kafka for TLS-transported audit).
 
 ---
 
@@ -383,30 +384,26 @@ kafka-console-consumer.sh --bootstrap-server kafka-1:9092 \
 
 ## Backend Selection Logic
 
-Audit and tracing backends follow the same selection logic:
+Audit and tracing backends follow the same selection logic (Kafka-only):
 
 ```
 backend == "kafka" and kafka_brokers is non-empty
     → Kafka
 
-otherwise redis_url is non-empty (trace falls back to audit.redis_url if empty)
-    → Redis Stream
-
 otherwise
     → Disabled (no events sent)
 ```
 
-| | Redis Stream | Kafka |
-|---|---|---|
-| **Environment** | Development / Testing | Production |
-| **Stream Key** | `virbius:audit:stream` / `virbius:trace:stream` | — |
-| **Topic** | — | `virbius-audit-events` / `virbius-trace-events` |
-| **Authentication** | Password / TLS not supported | Determined by broker config (SASL/SSL) |
-| **Message Key** | — | `tenant_id` (for partition routing) |
-| **Fault Tolerance** | Reconnect on disconnect (5s interval) | `message.timeout.ms=5000` |
-| **Queue Buffer** | 512 (audit) / 1024 (trace) | Same |
+| Item | Value |
+|---|---|
+| **Environment** | dev / staging / prod (Kafka everywhere) |
+| **Topic** | `virbius-audit-events` / `virbius-trace-events` |
+| **Authentication** | Determined by broker config (SASL/SSL, see Kafka SASL above) |
+| **Message Key** | `tenant_id` (for partition routing) |
+| **Fault Tolerance** | `message.timeout.ms=5000`, auto-reconnect |
+| **Queue Buffer** | 512 (audit) / 1024 (trace) |
 
-> Audit and Trace can use different backends independently (e.g., Audit via Kafka, Trace via Redis). If Trace's `redis_url` is empty, it automatically reuses Audit's `redis_url`.
+> The Redis Stream backend has been removed; `audit.redis_url` is retained only as the shared default endpoint for the policy subscription / delegated snapshot.
 
 ---
 

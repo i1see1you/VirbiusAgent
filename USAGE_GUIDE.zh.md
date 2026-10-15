@@ -69,7 +69,7 @@ VirbiusAgent 是一个面向 AI Agent 的深度安全保护平台。它通过四
 | Maven | 3.9+ | Java 构建 |
 | Rust | 1.80+ | `virbius-core`、`virbius-mcp-proxy` |
 | Go | 1.22+ | WASM 插件（网关） |
-| Redis | 7+ | 审计写入、累计计数器、缓存 |
+| Redis | 7+ | 累计计数器、会话缓存、策略订阅、访问名单 |
 | MySQL | 8+ | 生产数据库（开发环境使用 SQLite） |
 
 可选但推荐：
@@ -110,7 +110,7 @@ mvn -pl virbius-engine -am package -DskipTests
 
 ### 2.3 启动依赖服务
 
-**Redis**（用于计数器、审计写入、会话缓存）：
+**Redis**（用于累计计数器、会话缓存、策略订阅、访问名单）：
 
 ```bash
 # 方式 A：Docker
@@ -1097,7 +1097,7 @@ Agent → MCP Proxy → ① 许可证验证 → ② 预检查 → [快速路径?
 - 事件包含：层级、操作、规则、原因、风险分数、发布状态
 
 **Falco 告警集成**：
-- Falco 事件 → Redis 审计流 → 引擎风险评估
+- Falco 事件 → 引擎 `POST /api/internal/falco-alert` → 风险评估
 - 使用 `canary` 百分比配置 Falco 规则以实现逐步发布
 - 在发布面板中查看 Falco 事件
 
@@ -1138,12 +1138,12 @@ VirbiusAgent 使用 Spring Boot Profile 体系区分三套环境：`dev`（本�
 
 | 配置项 | dev | staging | prod |
 |--------|-----|---------|------|
-| **审计发布后端** | Redis Stream | Redis Stream | Kafka |
-| **审计消费后端** | Redis Stream | Redis Stream | Kafka |
-| **链路消费后端** | Redis Stream（`virbius:trace:stream`） | Redis Stream（`virbius:trace:stream`） | Kafka（`virbius-trace-events`） |
-| **Kafka 地址** | 不需要 | 不需要 | `${KAFKA_BOOTSTRAP_SERVERS}`（环境变量） |
+| **审计发布后端** | Kafka | Kafka | Kafka |
+| **审计消费后端** | Kafka | Kafka | Kafka |
+| **链路消费后端** | Kafka（`virbius-trace-events`） | Kafka（`virbius-trace-events`） | Kafka（`virbius-trace-events`） |
+| **Kafka 地址** | `localhost:9092`（Compose 内置） | `${KAFKA_BOOTSTRAP_SERVERS}`（环境变量） | `${KAFKA_BOOTSTRAP_SERVERS}`（环境变量） |
 | **Kafka producer acks** | — | — | `all`（最高可靠性） |
-| **Kafka consumer group** | — | — | `virbius-audit-ingest` |
+| **Kafka consumer group** | `virbius-audit-ingest` / `virbius-trace-ingest` | 同左 | 同左 |
 
 #### 8.0.3 LLM 检测配置（Engine 专属）
 
@@ -1215,7 +1215,7 @@ export VIRBIUS_LICENSE_MASTER_KEY=your-strong-secret-key
 export VIRBIUS_LOG_DIR=/var/log/virbius
 ```
 
-> staging 环境的环境变量与 prod 相同，区别仅在于审计后端使用 Redis Stream 而非 Kafka（staging 的 `KAFKA_BOOTSTRAP_SERVERS` 仅用于 Engine 消费，审计仍走 Redis Stream）。
+> 审计/链路总线在所有环境统一为 Kafka：dev（Compose 内置 broker）、staging、prod 均使用 Kafka topic `virbius-audit-events` / `virbius-trace-events`（Redis Stream 已移除）。
 
 ### 8.1 数据库设置
 

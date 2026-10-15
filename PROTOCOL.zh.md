@@ -788,7 +788,7 @@ virbius-mcp-proxy/
 │   ├── session.rs           # Session management (ConnectionId -> Session)
 │   ├── pipeline.rs          # Security Pipeline (License -> precheck -> engine -> audit)
 │   ├── upstream.rs          # Upstream MCP Client (forward requests)
-│   ├── audit.rs             # Audit event reporting (Redis Stream)
+│   ├── audit.rs             # Audit event reporting (Kafka)
 │   └── config.rs            # Configuration loading (TOML + environment variables)
 ├── examples/
 │   └── demo_agent.rs        # Simulated Agent call demo
@@ -1001,7 +1001,7 @@ connections: DashMap<(String, String), UpstreamClient>
 
 #### 2.6.3 决策追踪 Trace Collector
 
-MCP 代理内置 `TraceCollector` 模块，在 `tools/call` 请求生命周期的两个关键点收集追踪事件，异步写入 Redis Stream `virbius:trace`，由控制端 `TraceIngestService` 消费以实现持久化。
+MCP 代理内置 `TraceCollector` 模块，在 `tools/call` 请求生命周期的两个关键点收集追踪事件，异步写入 Kafka topic `virbius-trace-events`，由控制端 `KafkaTraceConsumer` 消费以实现持久化。
 
 **收集点**：
 
@@ -1042,35 +1042,32 @@ step-001 (tool_call: read_file)
 }
 ```
 
-**配置**（`config.toml`）：
+**配置**（`config.toml` / 环境变量）：
 
 ```toml
 [trace]
-enabled = true          # Default true
-redis_url = "redis://127.0.0.1:6379"
-stream_key = "virbius:trace"
-max_fields_len = 32768  # Max field length (bytes), truncated if exceeded
+enabled = true                        # Default true
+backend = "kafka"                     # Kafka-only (Redis Stream removed)
+kafka_brokers = "127.0.0.1:9092"      # 或 KAFKA_BOOTSTRAP_SERVERS
+kafka_topic = "virbius-trace-events"
+max_fields_len = 32768                # Max field length (bytes), truncated if exceeded
 ```
 
-**Redis Stream 写入**：
+**Kafka 写入**：
 
 ```
-XADD virbius:trace * \
-  trace_id 550e8400-... \
-  session_id sess_abc123 \
-  step_id step-002 \
-  parent_step_id step-001 \
-  step_seq 2 \
-  event_type tool_call \
-  tool_name read_file \
-  arguments '{"path":"/etc/hosts"}' \
-  tenant_id tenant-001 \
-  timestamp 2026-07-08T12:00:00.123Z
+topic = "virbius-trace-events"
+value = { "trace_id":"550e8400-...", "session_id":"sess_abc123", "tenant_id":"tenant-001",
+          "step_id":"step-002", "parent_step_id":"step-001", "step_seq":2,
+          "step_type":"tool_call", "layer":"edge", "tool_name":"read_file",
+          "tool_args":{"path":"/etc/hosts"}, "tool_args_hash":"...",
+          "tool_decision":"allow", "risk_score":10, "tool_status":"ok",
+          "app_id":"agent1", "occurred_at":"2026-07-08T12:00:00.123Z" }
 ```
 
 **控制端消费**：
 
-`TraceIngestService` 使用 `XREADGROUP` 消费 `virbius:trace`，通过 `JdbcTemplate` 幂等地写入 `tb_agent_trace` 表，检查点（最后投递 ID）持久化在 `tb_trace_ingest_checkpoint` 中。
+`KafkaTraceConsumer`（消费组 `virbius-trace-ingest`）消费 `virbius-trace-events`，经 `TraceEventIngestor` 幂等写入 `tb_agent_trace`；顺序与偏移由 Kafka 自身管理（不再有手工检查点），并按会话维护哈希链（`tb_trace_chain_state`）。
 
 **REST API**：
 

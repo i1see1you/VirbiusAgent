@@ -69,7 +69,7 @@ Built on the [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) security plat
 | Maven | 3.9+ | Java build |
 | Rust | 1.80+ | `virbius-core`, `virbius-mcp-proxy` |
 | Go | 1.22+ | WASM plugin (Gateway) |
-| Redis | 7+ | Audit ingest, cumulative counters, cache |
+| Redis | 7+ | cumulative counters, session cache, policy stream, access lists |
 | MySQL | 8+ | Production database (SQLite for dev) |
 
 Optional but recommended:
@@ -110,7 +110,7 @@ mvn -pl virbius-engine -am package -DskipTests
 
 ### 2.3 Start Dependencies
 
-**Redis** (required for counters, audit ingest, session cache):
+**Redis** (required for cumulative counters, session cache, policy stream, access lists):
 
 ```bash
 # Option A: Docker
@@ -1101,7 +1101,7 @@ Agent → MCP Proxy → ① License Verify → ② Precheck → [fast path?]
 - Events include: layer, action, rule, reason, risk score, rollout state
 
 **Falco alert integration**:
-- Falco events → Redis audit stream → engine risk evaluation
+- Falco events → engine `POST /api/internal/falco-alert` → risk evaluation
 - Configure Falco rules with `canary` percentage for gradual rollout
 - View Falco events in the rollout dashboard
 
@@ -1142,12 +1142,12 @@ VirbiusAgent uses Spring Boot profiles to distinguish three environments: `dev` 
 
 | Setting | dev | staging | prod |
 |---------|-----|---------|------|
-| **Audit Publish Backend** | Redis Stream | Redis Stream | Kafka |
-| **Audit Ingest Backend** | Redis Stream | Redis Stream | Kafka |
-| **Trace Ingest Backend** | Redis Stream (`virbius:trace:stream`) | Redis Stream (`virbius:trace:stream`) | Kafka (`virbius-trace-events`) |
-| **Kafka Brokers** | Not required | Not required | `${KAFKA_BOOTSTRAP_SERVERS}` (env) |
+| **Audit Publish Backend** | Kafka | Kafka | Kafka |
+| **Audit Ingest Backend** | Kafka | Kafka | Kafka |
+| **Trace Ingest Backend** | Kafka (`virbius-trace-events`) | Kafka (`virbius-trace-events`) | Kafka (`virbius-trace-events`) |
+| **Kafka Brokers** | `localhost:9092` (Compose-provided) | `${KAFKA_BOOTSTRAP_SERVERS}` (env) | `${KAFKA_BOOTSTRAP_SERVERS}` (env) |
 | **Kafka Producer Acks** | — | — | `all` (highest reliability) |
-| **Kafka Consumer Group** | — | — | `virbius-audit-ingest` |
+| **Kafka Consumer Group** | `virbius-audit-ingest` / `virbius-trace-ingest` | same | same |
 
 #### 8.0.3 LLM Detection (Engine Only)
 
@@ -1219,7 +1219,7 @@ export VIRBIUS_LICENSE_MASTER_KEY=your-strong-secret-key
 export VIRBIUS_LOG_DIR=/var/log/virbius
 ```
 
-> Staging uses the same env vars as prod, except audit backend is Redis Stream instead of Kafka (staging's `KAFKA_BOOTSTRAP_SERVERS` is only for Engine consumption; audit still uses Redis Stream).
+> The audit/trace bus is Kafka in every environment: dev (Compose-provided broker), staging and prod all use the `virbius-audit-events` / `virbius-trace-events` topics (Redis Stream has been removed).
 
 ### 8.1 Database Setup
 

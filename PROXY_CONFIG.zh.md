@@ -12,7 +12,7 @@
   - [trace — 链路追踪配置](#trace--链路追踪配置)
   - [memory — 记忆拦截器](#memory--记忆拦截器)
 - [环境变量](#环境变量)
-- [Dev 环境配置示例（Redis Stream）](#dev-环境配置示例redis-stream)
+- [Dev 环境配置示例（Kafka）](#dev-环境配置示例kafka)
 - [线上环境配置示例（Kafka）](#线上环境配置示例kafka)
 - [后端选择逻辑](#后端选择逻辑)
 - [License 凭证配置](#license-凭证配置)
@@ -111,13 +111,11 @@ Proxy 启动时按以下顺序查找配置文件，找到第一个即加载：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `backend` | string | `""` | 后端类型：留空（自动选择）或 `"kafka"` |
-| `redis_url` | string | `""` | Redis 地址，格式 `host:port` |
+| `backend` | string | `""` | 后端类型：`"kafka"`（留空时 broker 非空则自动选 Kafka，否则 Disabled） |
+| `redis_url` | string | `""` | 共享 Redis 地址（`host:port`）。审计总线已 Kafka-only；此值现仅作策略订阅 / delegated 快照的默认回退 |
 | `kafka_brokers` | string | `""` | Kafka broker 列表，逗号分隔 |
 | `kafka_topic` | string | `"virbius-audit-events"` | Kafka topic 名称 |
 | `sample_rate` | f64 | `1.0` | 采样率 `0.0`~`1.0`（仅对 `allow` 事件生效） |
-
-> Redis 模式下写入 Stream key `virbius:audit:stream`。
 
 ---
 
@@ -127,13 +125,10 @@ Proxy 启动时按以下顺序查找配置文件，找到第一个即加载：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `backend` | string | `""` | 后端类型：留空（自动选择）或 `"kafka"` |
-| `redis_url` | string | `""` | Redis 地址，留空则复用 `audit.redis_url` |
+| `backend` | string | `""` | 后端类型：`"kafka"`（留空时 broker 非空则自动选 Kafka，否则 Disabled） |
 | `kafka_brokers` | string | `""` | Kafka broker 列表 |
 | `kafka_topic` | string | `"virbius-trace-events"` | Kafka topic 名称 |
 | `enabled` | bool | `true` | 启用/禁用追踪 |
-
-> Redis 模式下写入 Stream key `virbius:trace:stream`。
 
 ---
 
@@ -199,23 +194,22 @@ export VIRBIUS_UPSTREAMS='[{"name":"fs","url":"http://localhost:8001","sse_path"
 | `VIRBIUS_KAFKA_SASL_USERNAME` / `VIRBIUS_KAFKA_SASL_PASSWORD` | *(空)* | SASL 模式必填 |
 | `VIRBIUS_KAFKA_SSL_CA` | *(空)* | CA 证书路径，仅 `SASL_SSL` 使用 |
 
-代理读取 Redis URL 的所有位置（审计、trace、策略订阅）均接受带密码形式：
+代理读取 Redis URL 的位置（策略订阅、delegated 快照）均接受带密码形式：
 `redis://:<password>@host:port`。
 
 ### 链路追踪
 
 | 环境变量 | 对应配置项 |
 |----------|-----------|
-| `VIRBIUS_TRACE_REDIS_URL` | `trace.redis_url` |
 | `VIRBIUS_TRACE_BACKEND` | `trace.backend` |
 | `VIRBIUS_TRACE_KAFKA_BROKERS` | `trace.kafka_brokers` |
 | `VIRBIUS_TRACE_KAFKA_TOPIC` | `trace.kafka_topic` |
 
 ---
 
-## Dev 环境配置示例（Redis Stream）
+## Dev 环境配置示例（Kafka）
 
-开发环境使用 Redis Stream 作为审计和追踪后端：
+开发环境同样使用 Kafka 作为审计和追踪后端（Compose 内置 broker，`localhost:9092`）：
 
 **`virbius-mcp-proxy.toml`：**
 
@@ -247,13 +241,18 @@ min_text_length = 512
 min_risk_score = 50
 fail_open = true
 
-# Audit — Redis Stream
+# Audit — Kafka
 [audit]
-redis_url = "localhost:6379"
+backend = "kafka"
+kafka_brokers = "localhost:9092"
+kafka_topic = "virbius-audit-events"
 sample_rate = 1.0
 
-# Trace — 复用 audit.redis_url
+# Trace — Kafka
 [trace]
+backend = "kafka"
+kafka_brokers = "localhost:9092"
+kafka_topic = "virbius-trace-events"
 enabled = true
 ```
 
@@ -266,23 +265,25 @@ export VIRBIUS_ENGINE_URL=http://localhost:8082
 export VIRBIUS_LICENSE_PUBLIC_KEY=/path/to/license_pub.pem
 export VIRBIUS_LICENSE_FILE=/path/to/agent-license.jwt
 export VIRBIUS_REDIS_URL=localhost:6379
+export VIRBIUS_AUDIT_BACKEND=kafka
+export VIRBIUS_AUDIT_KAFKA_BROKERS=localhost:9092
+export VIRBIUS_TRACE_BACKEND=kafka
+export VIRBIUS_TRACE_KAFKA_BROKERS=localhost:9092
 
 cargo run --release -p virbius-mcp-proxy
 ```
 
-**验证审计 Stream：**
+**验证 Kafka topic：**
 
 ```bash
 # 查看审计事件
-redis-cli XREAD COUNT 10 STREAMS virbius:audit:stream 0
+kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic virbius-audit-events --from-beginning --max-messages 10
 
 # 查看追踪事件
-redis-cli XREAD COUNT 10 STREAMS virbius:trace:stream 0
+kafka-console-consumer.sh --bootstrap-server localhost:9092 \
+  --topic virbius-trace-events --from-beginning --max-messages 10
 ```
-
-> **注意：** Redis 后端使用裸 TCP 连接。支持密码认证（URL 形如
-> `redis://:<password>@host:port`，RESP AUTH 握手，二进制安全）；不支持 TLS
-> （需要传输加密的审计请用 Kafka）。
 
 ---
 
@@ -380,30 +381,26 @@ kafka-console-consumer.sh --bootstrap-server kafka-1:9092 \
 
 ## 后端选择逻辑
 
-审计和追踪的后端选择遵循相同逻辑：
+审计和追踪的后端选择逻辑（两者一致，Kafka-only）：
 
 ```
 backend == "kafka" 且 kafka_brokers 非空
     → Kafka
 
-否则 redis_url 非空（trace 为空则复用 audit.redis_url）
-    → Redis Stream
-
 否则
     → Disabled（不发送）
 ```
 
-| | Redis Stream | Kafka |
-|---|---|---|
-| **适用环境** | 开发 / 测试 | 生产 |
-| **Stream Key** | `virbius:audit:stream` / `virbius:trace:stream` | — |
-| **Topic** | — | `virbius-audit-events` / `virbius-trace-events` |
-| **认证** | 不支持密码 / TLS | 由 broker 配置决定（SASL/SSL） |
-| **消息 Key** | — | `tenant_id`（用于分区路由） |
-| **容错** | 断线重连（5 秒间隔） | `message.timeout.ms=5000` |
-| **队列缓冲** | 512（audit） / 1024（trace） | 同左 |
+| 项 | 值 |
+|---|---|
+| **适用环境** | dev / staging / prod（统一 Kafka） |
+| **Topic** | `virbius-audit-events` / `virbius-trace-events` |
+| **认证** | 由 broker 配置决定（SASL/SSL，见上方 Kafka SASL） |
+| **消息 Key** | `tenant_id`（用于分区路由） |
+| **容错** | `message.timeout.ms=5000`，断线自动重连 |
+| **队列缓冲** | 512（audit） / 1024（trace） |
 
-> Audit 和 Trace 可以独立配置不同后端（例如 Audit 用 Kafka，Trace 用 Redis）。Trace 的 `redis_url` 留空时自动复用 Audit 的 `redis_url`。
+> Redis Stream 后端已移除；`audit.redis_url` 仍作为策略订阅 / delegated 快照的共享默认端点保留。
 
 ---
 

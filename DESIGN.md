@@ -87,21 +87,21 @@ Agent Framework
     +-- MCP/A2A routing -> MCP Server
     v
 [3] Kernel Layer (Falco) — bypass
-    +-- Full bypass monitoring: syscall/network/file events -> Redis Audit Stream
+    +-- Full bypass monitoring: syscall/network/file events -> Kafka audit bus (virbius-audit-events)
     +-- Alert when session_risk > 80 + notify gateway layer to disconnect
 ```
 
 ### 6.2 Audit Event Flow
 
 ```
-Each layer -> Redis Audit Stream -> virbius-engine (async consumption)
+Each layer -> Kafka audit bus (virbius-audit-events) -> virbius-control (async consumption)
                                   +-- session risk score update
                                   +-- alert triggering
                                   +-- ops console display
 
 Kernel Layer Falco events (PID) -> daemon query Redis pid_trace:{pid} -> complement trace_id -> audit stream
 
-MCP Proxy -> Redis Trace Stream (virbius:trace) -> virbius-control TraceIngestService
+MCP Proxy -> Kafka topic (virbius-trace-events) -> virbius-control KafkaTraceConsumer
                                                  +-- write to tb_agent_trace
                                                  +-- ops console decision chain visualization
 ```
@@ -128,24 +128,27 @@ Audit event format (unified trace_id):
 
 #### 6.2.1 Agent Decision Chain Trace Flow
 
-MCP Proxy collects trace events at two key points — `tool_call` (before invocation) and `tool_result` (after return) — and sends them asynchronously via Redis Stream `virbius:trace` to the Control side for storage:
+MCP Proxy collects trace events at two key points — `tool_call` (before invocation) and `tool_result` (after return) — and sends them asynchronously via the Kafka topic `virbius-trace-events` to the Control side for storage:
 
 ```json
 {
   "trace_id": "uuid",
   "session_id": "sess_xxx",
-  "parent_step_id": "step-001",
-  "step_id": "step-002",
-  "step_seq": 2,
-  "event_type": "tool_call | tool_result",
-  "tool_name": "read_file",
-  "arguments": { ... },
-  "result": { ... },
-  "is_error": false,
-  "error_message": null,
-  "duration_ms": 45,
   "tenant_id": "tenant-xxx",
-  "timestamp": "2026-07-08T12:00:00Z"
+  "step_id": "step-002",
+  "parent_step_id": "step-001",
+  "step_seq": 2,
+  "step_type": "tool_call | tool_result",
+  "layer": "edge",
+  "tool_name": "read_file",
+  "tool_args": { ... },
+  "tool_args_hash": "...",
+  "tool_decision": "allow | block | review",
+  "risk_score": 10,
+  "tool_status": "ok | error",
+  "tool_duration_ms": 45,
+  "app_id": "agent1",
+  "occurred_at": "2026-07-08T12:00:00Z"
 }
 ```
 
@@ -154,16 +157,16 @@ MCP Proxy collects trace events at two key points — `tool_call` (before invoca
 ```
 MCP Proxy (router.rs)
   |
-  +-- tool_call event -> TraceCollector -> Redis XADD virbius:trace
-  +-- tool_result event -> TraceCollector -> Redis XADD virbius:trace
+  +-- tool_call event -> TraceCollector -> Kafka produce virbius-trace-events
+  +-- tool_result event -> TraceCollector -> Kafka produce virbius-trace-events
   |
   v
-Redis Stream (virbius:trace)
+Kafka topic (virbius-trace-events)
   |
   v
-virbius-control (TraceIngestService)
-  +-- XREADGROUP consumption + checkpoint management
-  +-- Idempotent write to tb_agent_trace
+virbius-control (KafkaTraceConsumer -> TraceEventIngestor)
+  +-- consumer group virbius-trace-ingest (offsets managed by Kafka)
+  +-- idempotent write to tb_agent_trace + per-session hash chain
   |
   v
 REST API /api/v1/admin/tenants/{tenantId}/trace/*
@@ -308,7 +311,7 @@ VirbiusAgent adopts a **file-level reuse** strategy and does not depend on Virbi
 | virbius-policy | `ActionMerge.java` | Action merging | virbius-policy/ |
 | virbius-policy | `IntentAction.java` | Intent normalization | virbius-policy/ |
 | virbius-policy | `ListMatcher.java` | Allowlist matching | virbius-policy/ |
-| virbius-policy | `audit/RedisStreamAuditSink.java` | Redis Stream audit | virbius-policy/ |
+| virbius-policy | `audit/KafkaAuditSink.java` | Kafka audit | virbius-policy/ |
 
 #### Needs Extension (copy and modify)
 
@@ -337,7 +340,7 @@ VirbiusAgent adopts a **file-level reuse** strategy and does not depend on Virbi
 | `virbius-control` Constitution module | Java | Constitution rule management + compilation to prompt templates |
 | `virbius-control` Memory Interceptor | Java | P1: Memory read/write interception |
 | `virbius-kernel/` | Rust/YAML | Falco deployment + mode detection + degradation logic |
-| virbius-audit Falco plugin | Go | Custom Falco plugin (consumes Redis Stream) |
+| ~~virbius-audit Falco plugin~~ | Go | **Removed** — replaced by post-hoc correlation in the Engine `FalcoAlertController` (see §13.4) |
 
 #### VirbiusAgent Project Structure
 
@@ -364,7 +367,7 @@ VirbiusAgent/
    +-- src/transport/         # stdio + SSE transport
 |   +-- src/pipeline.rs        # Security pipeline
 |   +-- src/session.rs         # Session management (includes step_seq/last_step_id)
-|   +-- src/trace_collector.rs # Decision chain trace collection (TraceEvent + Redis XADD)
+|   +-- src/trace_collector.rs # Decision chain trace collection (TraceEvent + Kafka producer)
 |   +-- src/router.rs          # JSON-RPC routing (includes tool_call/tool_result collection)
 |   +-- src/config.rs          # Configuration (includes TraceSection)
 |

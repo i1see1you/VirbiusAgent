@@ -102,7 +102,7 @@ Agent Framework (LangChain / OpenAI SDK / AutoGen / ...)
 
 | 阶段 | 观测(eyes) | 阻断(hands) |
 |------|-----------|------------|
-| **P0** | Falco(eBPF) + access log + Redis 审计流 + STI 审计 + Prompt Gateway(宪法注入) | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 + Runtime License 校验 |
+| **P0** | Falco(eBPF) + access log + Kafka 审计流 + STI 审计 + Prompt Gateway(宪法注入) | HTTP 403 + allowlist + 计数 + schema 校验 + risk 阈值断连 + Runtime License 校验 |
 | **P1** | STI Taint 小模型 + Falco http_output 三级关联 + 审计完整性 | 人工审批流 + 自适应 risk 模型 + 记忆管控(Memory Interceptor) |
 | **P2** | eBPF 自定义观测(execveat + IPv6) | Landlock + drop caps + gVisor (✅) + TEE(金融级, 待实现) |
 
