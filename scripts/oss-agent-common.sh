@@ -45,7 +45,7 @@ skip(){ printf '\033[0;33m[SKIP]\033[0m %s\n' "$*"; }
 check(){ if [ "$1" = "1" ]; then PASS=$((PASS+1)); green "  PASS  $2"; else FAIL=$((FAIL+1)); red "  FAIL  $2"; fi; }
 jget(){ "$PY" -c "import sys,json;d=json.load(sys.stdin);$1" "${2:-}" 2>/dev/null || echo "PARSE_ERROR"; }
 
-oa_wait_http(){ local url="$1" tries="${2:-40}" i; for i in $(seq 1 "$tries"); do curl -sf --max-time 2 "$url" >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
+oa_wait_http(){ local url="$1" tries="${2:-40}"; for _ in $(seq 1 "$tries"); do curl -sf --max-time 2 "$url" >/dev/null 2>&1 && return 0; sleep 1; done; return 1; }
 oa_free_port(){ local port="$1" pids; pids="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"; [ -z "$pids" ] && return 0; info "freeing port $port (stale: $pids)"; kill $pids 2>/dev/null || true; for _ in $(seq 1 20); do lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 || break; sleep 0.5; done; lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1 && { red "port $port still occupied"; exit 2; }; }
 oa_assert_alive(){ kill -0 "$1" 2>/dev/null; }
 
@@ -98,8 +98,9 @@ oa_boot_engine_control(){
   [ -f "$OA_CONTROL_JAR" ] || { red "control jar missing"; exit 2; }
   [ -f "$OA_ENGINE_JAR" ] || { red "engine jar missing"; exit 2; }
 
-  export VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
-  export VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+  VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+  VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+  export VIRBIUS_LICENSE_MASTER_KEY VIRBIUS_DELEGATED_MASTER_KEY
 
   oa_free_port "$ENGINE_PORT"
   info "starting engine on :$ENGINE_PORT..."

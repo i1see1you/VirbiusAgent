@@ -87,7 +87,9 @@ impl VirbiusErrorCode {
             Self::LicenseInvalid | Self::LicenseRequired => "The agent credential was rejected",
             Self::RateExceeded | Self::RiskThreshold => "The tool call was not executed",
             Self::ChallengeRequired => "Approval is required before this tool call runs",
-            Self::SchemaViolation | Self::ArgTransformFailed => "The tool call could not be executed",
+            Self::SchemaViolation | Self::ArgTransformFailed => {
+                "The tool call could not be executed"
+            }
             _ => "The tool call was blocked by policy",
         };
         format!("{lead}: {d}.")
@@ -239,8 +241,14 @@ mod tests {
         assert_eq!(err["error"]["data"]["session_risk_score"], 75);
         // Machine code + human sentence, and the top-level message is the human one.
         assert_eq!(err["error"]["data"]["reason_code"], "rate_exceeded");
-        assert_eq!(err["error"]["data"]["reason"], "The tool call was not executed: too many requests.");
-        assert_eq!(err["error"]["message"], "The tool call was not executed: too many requests.");
+        assert_eq!(
+            err["error"]["data"]["reason"],
+            "The tool call was not executed: too many requests."
+        );
+        assert_eq!(
+            err["error"]["message"],
+            "The tool call was not executed: too many requests."
+        );
         // rule_id stays internal.
         assert!(err["error"]["data"]["rule_id"].is_null());
     }
@@ -256,24 +264,42 @@ mod tests {
             None,
         );
         assert_eq!(err["error"]["data"]["reason_code"], "license_required");
-        assert_eq!(err["error"]["message"], "The agent credential was rejected: license_required.");
+        assert_eq!(
+            err["error"]["message"],
+            "The agent credential was rejected: license_required."
+        );
     }
 
     #[test]
     fn test_human_message_categories() {
         use VirbiusErrorCode::*;
-        assert!(NotInAllowlist.human_message(Some("tool 'x' not in license allowlist"))
+        assert!(NotInAllowlist
+            .human_message(Some("tool 'x' not in license allowlist"))
             .starts_with("The tool call was blocked by policy:"));
-        assert!(LicenseInvalid.human_message(None).starts_with("The agent credential was rejected:"));
-        assert!(RateExceeded.human_message(None).starts_with("The tool call was not executed:"));
-        assert!(ChallengeRequired.human_message(None).starts_with("Approval is required"));
-        assert!(SchemaViolation.human_message(None).starts_with("The tool call could not be executed:"));
+        assert!(LicenseInvalid
+            .human_message(None)
+            .starts_with("The agent credential was rejected:"));
+        assert!(RateExceeded
+            .human_message(None)
+            .starts_with("The tool call was not executed:"));
+        assert!(ChallengeRequired
+            .human_message(None)
+            .starts_with("Approval is required"));
+        assert!(SchemaViolation
+            .human_message(None)
+            .starts_with("The tool call could not be executed:"));
         // blank detail falls back to the machine code, never an empty sentence
-        assert_eq!(NotInAllowlist.human_message(Some("  ")), "The tool call was blocked by policy: not_in_allowlist.");
+        assert_eq!(
+            NotInAllowlist.human_message(Some("  ")),
+            "The tool call was blocked by policy: not_in_allowlist."
+        );
         // very long detail is capped at the source
         let long = "x".repeat(2000);
         let msg = NotInAllowlist.human_message(Some(&long));
-        assert_eq!(msg.chars().count(), "The tool call was blocked by policy: ".len() + 512 + 1);
+        assert_eq!(
+            msg.chars().count(),
+            "The tool call was blocked by policy: ".len() + 512 + 1
+        );
     }
 
     #[test]

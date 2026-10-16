@@ -538,7 +538,8 @@ impl ProxyConfig {
         {
             cfg.security.control_base_url = base.clone();
         }
-        if std::env::var_os("VIRBIUS_AUTH_CONTROL_URL").is_none() && cfg.auth.control_base_url.is_empty()
+        if std::env::var_os("VIRBIUS_AUTH_CONTROL_URL").is_none()
+            && cfg.auth.control_base_url.is_empty()
         {
             cfg.auth.control_base_url = base.clone();
         }

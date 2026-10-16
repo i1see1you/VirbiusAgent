@@ -130,9 +130,7 @@ pub async fn route_request(
                     match upstream_mgr.get_or_connect_single(&session_id).await {
                         Ok(upstream) => match upstream.forward(request).await {
                             Ok(resp) => Some(resp),
-                            Err(e) => {
-                                Some(upstream_rpc_error(&id, "upstream error", &e))
-                            }
+                            Err(e) => Some(upstream_rpc_error(&id, "upstream error", &e)),
                         },
                         Err(e) => Some(upstream_rpc_error(&id, "upstream connect error", &e)),
                     }
@@ -215,6 +213,9 @@ fn virbius_status_response(
     })
 }
 
+// Session wiring is passed as explicit params; bundling them into a struct
+// would obscure the call sites more than it helps.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_initialize(
     id: &Value,
     params: &Value,
@@ -269,9 +270,7 @@ pub(crate) async fn handle_initialize(
         // ── Single-upstream mode (original behavior) ──
         let upstream = match upstream_mgr.get_or_connect_single(&logical_sid).await {
             Ok(u) => u,
-            Err(e) => {
-                return Some(upstream_rpc_error(id, "upstream connect failed", &e))
-            }
+            Err(e) => return Some(upstream_rpc_error(id, "upstream connect failed", &e)),
         };
 
         // On reconnect, skip upstream re-initialization if the connection
@@ -453,9 +452,7 @@ async fn handle_tools_list(
         // ── Single-upstream mode (original behavior) ──
         let upstream = match upstream_mgr.get_or_connect_single(session_id).await {
             Ok(u) => u,
-            Err(e) => {
-                return Some(upstream_rpc_error(id, "upstream connect failed", &e))
-            }
+            Err(e) => return Some(upstream_rpc_error(id, "upstream connect failed", &e)),
         };
 
         let forward_req = serde_json::json!({
@@ -917,9 +914,7 @@ async fn handle_tools_call(
                     .await
                 {
                     Ok(u) => u,
-                    Err(e) => {
-                        return Some(upstream_rpc_error(id, "upstream connect failed", &e))
-                    }
+                    Err(e) => return Some(upstream_rpc_error(id, "upstream connect failed", &e)),
                 };
 
                 let forward_params =
@@ -1122,9 +1117,7 @@ async fn handle_tools_call(
                 .await
             {
                 Ok(u) => u,
-                Err(e) => {
-                    return Some(upstream_rpc_error(id, "upstream connect failed", &e))
-                }
+                Err(e) => return Some(upstream_rpc_error(id, "upstream connect failed", &e)),
             };
 
             // Build forwarded request with original tool name and rewritten args
@@ -1572,7 +1565,10 @@ async fn review_tool_output(
     // B6: STI taint check first — dedicated indirect-injection detection on tool
     // returns (malicious instructions embedded in external data). A taint block
     // is terminal for this result.
-    match pipeline.sti_check_tool_result(session, tool_name, &text).await {
+    match pipeline
+        .sti_check_tool_result(session, tool_name, &text)
+        .await
+    {
         Ok(sti) => {
             if sti.action == "block" {
                 let reason = sti
@@ -1953,7 +1949,9 @@ async fn execute_in_sandbox(
             tool_name,
             "",
             0,
-            Some("local tool execution is disabled while the delegated credential plane is enabled"),
+            Some(
+                "local tool execution is disabled while the delegated credential plane is enabled",
+            ),
         );
     }
 
@@ -2171,7 +2169,9 @@ async fn execute_in_sandbox(
             tool_name,
             "",
             0,
-            Some("local tool execution is disabled while the delegated credential plane is enabled"),
+            Some(
+                "local tool execution is disabled while the delegated credential plane is enabled",
+            ),
         );
     }
 

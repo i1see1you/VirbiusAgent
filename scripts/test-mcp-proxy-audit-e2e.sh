@@ -62,8 +62,8 @@ check(){ if [ "$1" = "1" ]; then PASS=$((PASS+1)); green "  PASS  $2"; else FAIL
 jget(){ python3 -c "import sys,json;d=json.load(sys.stdin);$1" "${2:-}" 2>/dev/null || echo "PARSE_ERROR"; }
 
 wait_http(){ # $1=url $2=tries
-  local url="$1" tries="${2:-40}" i
-  for i in $(seq 1 "$tries"); do
+  local url="$1" tries="${2:-40}"
+  for _ in $(seq 1 "$tries"); do
     curl -sf --max-time 2 "$url" >/dev/null 2>&1 && return 0
     sleep 1
   done
@@ -129,8 +129,8 @@ docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh --bootstrap-server local
   --create --if-not-exists --topic "$TOPIC" --partitions 3 --replication-factor 1 >/dev/null 2>&1 || true
 
 wait_group_drained() { # $1=group $2=timeout_secs
-  local group="$1" timeout="${2:-90}" i n
-  for i in $(seq 1 "$timeout"); do
+  local group="$1" timeout="${2:-90}" n
+  for _ in $(seq 1 "$timeout"); do
     n=$(docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
          --group "$group" --describe --members 2>/dev/null | awk -v g="$group" '$1==g' | wc -l | tr -d ' ')
     [ "${n:-0}" -eq 0 ] && return 0
@@ -158,8 +158,9 @@ if [ "${SKIP_BUILD:-0}" != "1" ] || [ ! -f "$PROXY_BIN" ]; then
 fi
 [ -f "$PROXY_BIN" ] || { red "proxy binary missing: $PROXY_BIN"; exit 2; }
 
-export VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
-export VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+export VIRBIUS_LICENSE_MASTER_KEY VIRBIUS_DELEGATED_MASTER_KEY
 
 free_port "$ENGINE_PORT"
 info "starting engine on :$ENGINE_PORT..."
@@ -411,10 +412,6 @@ info "driving MCP session against the proxy (initialize -> $ALLOW_TOOL -> $BLOCK
 CLIENT_OUT="$(python3 "$WORK/mcp.py" client "$PROXY_PORT" "$ALLOW_TOOL" "$BLOCK_TOOL")" || true
 printf '%s\n' "$CLIENT_OUT" > "$WORK/client.json"
 echo "$CLIENT_OUT" | python3 -m json.tool 2>/dev/null > "$WORK/client.pretty" || true
-
-ALLOW_ERR="$(printf '%s' "$CLIENT_OUT" | jget 'print(d.get("allow",{}).get("error"))')"
-BLOCK_ERR="$(printf '%s' "$CLIENT_OUT" | jget 'print(d.get("block",{}).get("error"))')"
-BLOCK_CODE="$(printf '%s' "$CLIENT_OUT" | jget 'print((d.get("block",{}).get("error") or {}).get("code",""))')"
 
 info "E2E: real proxy handled the MCP session"
 check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if d.get("initialize_error") in (None,"") else "0")')" \

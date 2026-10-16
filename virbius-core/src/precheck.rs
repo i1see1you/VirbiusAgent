@@ -74,7 +74,10 @@ pub fn precheck(license: &License, tool_call: &ToolCall) -> PrecheckResult {
             if let Err(err) = validate_args(&tool_call.args, schema) {
                 return PrecheckResult::deny_code(
                     "schema_violation",
-                    format!("args validation failed for '{}': {}", tool_call.tool_name, err),
+                    format!(
+                        "args validation failed for '{}': {}",
+                        tool_call.tool_name, err
+                    ),
                 );
             }
         }

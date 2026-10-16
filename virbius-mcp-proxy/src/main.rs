@@ -150,8 +150,13 @@ async fn main() {
         refresh_margin_percent: cfg.auth.refresh_margin_percent,
     };
     if auth_cfg.enabled() {
-        info!("evaluate-token auth enabled (control={})", cfg.auth.control_base_url);
-        pipeline_inner.use_auth(Arc::new(virbius_mcp_proxy::auth::TokenManager::new(auth_cfg)));
+        info!(
+            "evaluate-token auth enabled (control={})",
+            cfg.auth.control_base_url
+        );
+        pipeline_inner.use_auth(Arc::new(virbius_mcp_proxy::auth::TokenManager::new(
+            auth_cfg,
+        )));
     }
     let pipeline = Arc::new(pipeline_inner);
 

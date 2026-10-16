@@ -40,7 +40,10 @@ pub struct License {
 pub enum LicenseError {
     InvalidFormat,
     /// The JWT's `app_id` does not match the app_id the session presented.
-    AppIdMismatch { jwt: String, session: String },
+    AppIdMismatch {
+        jwt: String,
+        session: String,
+    },
     /// The public key PEM could not be parsed (e.g. a stray trailing blank
     /// line in the file). Carries the underlying parse error.
     KeyParseFailed(String),
@@ -106,8 +109,7 @@ impl License {
             .map_err(|e| LicenseError::KeyParseFailed(e.to_string()))?;
         let message = format!("{}.{}", header_b64, payload_b64);
         let sig_bytes = decode_b64url(sig_b64).map_err(|_| LicenseError::InvalidFormat)?;
-        let sig =
-            Signature::from_slice(&sig_bytes).map_err(|_| LicenseError::InvalidFormat)?;
+        let sig = Signature::from_slice(&sig_bytes).map_err(|_| LicenseError::InvalidFormat)?;
         pub_key
             .verify(message.as_bytes(), &sig)
             .map_err(|_| LicenseError::SignatureInvalid)?;

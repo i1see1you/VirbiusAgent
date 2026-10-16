@@ -194,12 +194,9 @@ mod tests {
         let waker = Waker::noop();
         let mut cx = Context::from_waker(waker);
         let mut fut = std::pin::pin!(fut);
-        loop {
-            match fut.as_mut().poll(&mut cx) {
-                Poll::Ready(v) => return v,
-                Poll::Pending => panic!("future unexpectedly pending in test"),
-            }
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(v) => v,
+            Poll::Pending => panic!("future unexpectedly pending in test"),
         }
     }
 }
-

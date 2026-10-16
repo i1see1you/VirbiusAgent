@@ -200,8 +200,9 @@ fi
 [ -f "$CONTROL_JAR" ] || { red "control jar missing: $CONTROL_JAR"; exit 2; }
 
 # ── keys ─────────────────────────────────────────────────────────────────────
-export VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
-export VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+export VIRBIUS_LICENSE_MASTER_KEY VIRBIUS_DELEGATED_MASTER_KEY
 EXPORT_KEY="$(openssl rand -base64 32 2>/dev/null || python3 -c 'import os,base64;print(base64.b64encode(os.urandom(32)).decode())')"
 
 # ── mock Ollama ──────────────────────────────────────────────────────────────

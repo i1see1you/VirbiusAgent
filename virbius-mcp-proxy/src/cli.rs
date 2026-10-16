@@ -179,7 +179,10 @@ pub fn parse_cli() -> Cli {
         _ => unreachable!(),
     };
 
-    Cli { config_path, command }
+    Cli {
+        config_path,
+        command,
+    }
 }
 
 // ─── doctor ─────────────────────────────────────────────────────────────
@@ -220,7 +223,9 @@ pub async fn doctor(cfg: ProxyConfig) -> i32 {
     // ── license public key ──
     let mut pem = String::new();
     if cfg.security.license_public_key.is_empty() {
-        println!("  [WARN] license_public_key not configured — agent-supplied licenses cannot verify");
+        println!(
+            "  [WARN] license_public_key not configured — agent-supplied licenses cannot verify"
+        );
     } else {
         match std::fs::read_to_string(&cfg.security.license_public_key) {
             Ok(raw) => match virbius_core::license::validate_public_key_pem(&raw) {
@@ -258,7 +263,10 @@ pub async fn doctor(cfg: ProxyConfig) -> i32 {
                 let jwt = raw.trim();
                 match crate::session::extract_claims_from_jwt(jwt) {
                     None => {
-                        println!("  [FAIL] license_file {} : malformed JWT", cfg.security.license_file);
+                        println!(
+                            "  [FAIL] license_file {} : malformed JWT",
+                            cfg.security.license_file
+                        );
                         failures += 1;
                     }
                     Some(claims) => {
@@ -269,7 +277,10 @@ pub async fn doctor(cfg: ProxyConfig) -> i32 {
                             .to_string();
                         println!(
                             "  license         : app_id={app_id} tenant={} tools={}",
-                            claims.get("tenant_id").and_then(|v| v.as_str()).unwrap_or("?"),
+                            claims
+                                .get("tenant_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?"),
                             claims
                                 .get("allowed_tools")
                                 .and_then(|v| v.as_array())
@@ -318,7 +329,10 @@ pub async fn doctor(cfg: ProxyConfig) -> i32 {
         .timeout(std::time::Duration::from_secs(3))
         .build();
     if let Ok(client) = client {
-        let engine = format!("{}/admin/health", cfg.security.engine_url.trim_end_matches('/'));
+        let engine = format!(
+            "{}/admin/health",
+            cfg.security.engine_url.trim_end_matches('/')
+        );
         probe(&client, "engine", &engine).await;
         let control = format!(
             "{}/api/v1/health",
@@ -350,7 +364,10 @@ async fn probe(client: &reqwest::Client, what: &str, url: &str) {
     // Any HTTP response means the endpoint is reachable (404 still proves
     // the server is there); only transport errors count as unreachable.
     match client.get(url).send().await {
-        Ok(resp) => println!("  reachable       : {what} (HTTP {})", resp.status().as_u16()),
+        Ok(resp) => println!(
+            "  reachable       : {what} (HTTP {})",
+            resp.status().as_u16()
+        ),
         Err(e) => println!("  [WARN] unreachable: {what} at {url} ({e})"),
     }
 }
@@ -435,7 +452,10 @@ pub async fn enroll(args: &EnrollArgs, cfg: ProxyConfig) -> i32 {
         )
         .await;
         if st >= 400 {
-            println!("warn: tool registry '{tool}' -> HTTP {st} {} (continuing)", brief(&body));
+            println!(
+                "warn: tool registry '{tool}' -> HTTP {st} {} (continuing)",
+                brief(&body)
+            );
         }
     }
 
@@ -505,7 +525,10 @@ pub async fn enroll(args: &EnrollArgs, cfg: ProxyConfig) -> i32 {
     )
     .await;
     if kst >= 400 {
-        eprintln!("error: public-key fetch failed: HTTP {kst} {}", brief(&kbody));
+        eprintln!(
+            "error: public-key fetch failed: HTTP {kst} {}",
+            brief(&kbody)
+        );
         return 1;
     }
     let pem_raw = kbody
@@ -558,7 +581,11 @@ pub async fn enroll(args: &EnrollArgs, cfg: ProxyConfig) -> i32 {
         format!("{} tool(s): {}", tools.len(), tools.join(","))
     };
     println!("enrolled app '{app_id}' (tenant '{tenant}')");
-    println!("  license : {} ({} bytes, mode 0600)", jwt_path.display(), jwt.len());
+    println!(
+        "  license : {} ({} bytes, mode 0600)",
+        jwt_path.display(),
+        jwt.len()
+    );
     println!("  pubkey  : {} (mode 0600)", pem_path.display());
     println!("  window  : {tool_list}");
     println!("  expiry  : in {exp_days} day(s)");
@@ -589,7 +616,11 @@ async fn revoke_active(
     if st >= 400 {
         return Err(format!("license list failed: HTTP {st} {}", brief(&body)));
     }
-    let rows = body.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+    let rows = body
+        .get("data")
+        .and_then(|d| d.as_array())
+        .cloned()
+        .unwrap_or_default();
     for row in rows {
         let app = row.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
         let lid = row
@@ -687,9 +718,17 @@ mod tests {
 
     #[test]
     fn tools_are_sorted_and_deduped() {
-        let raw = vec!["b".to_string(), "a".to_string(), "b".to_string(), "".to_string()];
+        let raw = vec![
+            "b".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "".to_string(),
+        ];
         // parse_cli filters empties at split time; normalize_tools covers the rest
         let cleaned: Vec<String> = raw.into_iter().filter(|s| !s.is_empty()).collect();
-        assert_eq!(normalize_tools(&cleaned), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            normalize_tools(&cleaned),
+            vec!["a".to_string(), "b".to_string()]
+        );
     }
 }

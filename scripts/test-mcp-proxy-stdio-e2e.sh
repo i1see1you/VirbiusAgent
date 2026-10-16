@@ -84,6 +84,8 @@ fi
 oa_free_port "$UPSTREAM_PORT"
 info "starting upstream MCP SSE server on :$UPSTREAM_PORT..."
 "$PY" "$OA_WORK/upstream.py" "$UPSTREAM_PORT" > "$OA_LOGS/upstream.log" 2>&1 &
+# read indirectly via ${!v} in oa_cleanup
+# shellcheck disable=SC2034
 OA_UPSTREAM_PID=$!
 for _ in $(seq 1 20); do nc -z 127.0.0.1 "$UPSTREAM_PORT" 2>/dev/null && break; sleep 0.5; done
 nc -z 127.0.0.1 "$UPSTREAM_PORT" 2>/dev/null || { red "upstream failed to start"; tail -20 "$OA_LOGS/upstream.log"; exit 2; }

@@ -178,14 +178,22 @@ pub struct RecentDecision {
 /// Capacity of the recent-decisions ring.
 pub const RECENT_DECISIONS_CAP: usize = 50;
 
-fn recent_decisions_store() -> &'static std::sync::Mutex<std::collections::VecDeque<RecentDecision>> {
-    static STORE: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<RecentDecision>>> =
-        std::sync::OnceLock::new();
-    STORE.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::with_capacity(RECENT_DECISIONS_CAP)))
+fn recent_decisions_store() -> &'static std::sync::Mutex<std::collections::VecDeque<RecentDecision>>
+{
+    static STORE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::VecDeque<RecentDecision>>,
+    > = std::sync::OnceLock::new();
+    STORE.get_or_init(|| {
+        std::sync::Mutex::new(std::collections::VecDeque::with_capacity(
+            RECENT_DECISIONS_CAP,
+        ))
+    })
 }
 
 fn record_recent(event: &AuditEvent) {
-    let mut store = recent_decisions_store().lock().unwrap_or_else(|e| e.into_inner());
+    let mut store = recent_decisions_store()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     if store.len() == RECENT_DECISIONS_CAP {
         store.pop_front();
     }
@@ -201,7 +209,9 @@ fn record_recent(event: &AuditEvent) {
 
 /// Snapshot of the most recent proxy decisions, oldest first.
 pub fn recent_decisions() -> Vec<RecentDecision> {
-    let store = recent_decisions_store().lock().unwrap_or_else(|e| e.into_inner());
+    let store = recent_decisions_store()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     store.iter().cloned().collect()
 }
 
@@ -370,6 +380,8 @@ mod tests {
         assert_eq!(json["layer"], "edge");
         assert_eq!(json["event_type"], "tool_call");
         assert!(json["event_id"].as_str().is_some_and(|s| !s.is_empty()));
-        assert!(json["intercepted_at"].as_str().is_some_and(|s| !s.is_empty()));
+        assert!(json["intercepted_at"]
+            .as_str()
+            .is_some_and(|s| !s.is_empty()));
     }
 }

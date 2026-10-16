@@ -63,8 +63,9 @@ if [ "${SKIP_BUILD:-0}" != "1" ] || [ ! -f "$ENGINE_JAR" ] || [ ! -f "$CONTROL_J
   mvn -q -pl virbius-engine,virbius-control -am package -DskipTests -Dskip.installnodenpm -Dskip.npm || { red "build failed"; exit 2; }
 fi
 
-export VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
-export VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+export VIRBIUS_LICENSE_MASTER_KEY VIRBIUS_DELEGATED_MASTER_KEY
 
 # mock Ollama (guard LLM used only by role=input/output pipelines).
 cat > "$WORK/mock_ollama.py" <<PY
@@ -127,7 +128,6 @@ L=$(curl -s -X POST "$CADM/licenses/issue" -H 'Content-Type: application/json' \
   -d '{"app_id":"app-auth-1","agent_name":"e2e-auth","allowed_tools":["read_file"],"risk_quota":80,"tool_rate_limit":50,"expiry_seconds":3600}')
 JWT=$(printf '%s' "$L" | jget 'print(d.get("data",{}).get("jwt",""))')
 LIC_ID=$(printf '%s' "$L" | jget 'print(d.get("data",{}).get("license_id",""))')
-AGENT=$(printf '%s' "$L" | jget 'print(d.get("data",{}).get("agent_aid",""))')
 [ "${E2E_DEBUG:-0}" = "1" ] && printf 'DBG license=%s\n' "$L" >&2
 check "$([ -n "$JWT" ] && echo 1 || echo 0)" "license issued via 运营台 API"
 

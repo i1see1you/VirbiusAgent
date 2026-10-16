@@ -198,10 +198,7 @@ impl EngineClient {
         if !token.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {token}"));
         }
-        let resp = builder
-            .send()
-            .await
-            .map_err(EngineError::Http)?;
+        let resp = builder.send().await.map_err(EngineError::Http)?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -221,17 +218,12 @@ impl EngineClient {
         timeout: Duration,
         token: &str,
     ) -> Result<ToolResultResponse, EngineError> {
-        let url = self
-            .url
-            .replace("/v1/evaluate", "/v1/evaluate/tool-result");
+        let url = self.url.replace("/v1/evaluate", "/v1/evaluate/tool-result");
         let mut builder = self.http.post(&url).json(req).timeout(timeout);
         if !token.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {token}"));
         }
-        let resp = builder
-            .send()
-            .await
-            .map_err(EngineError::Http)?;
+        let resp = builder.send().await.map_err(EngineError::Http)?;
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let body = resp.text().await.unwrap_or_default();
@@ -311,7 +303,8 @@ impl SecurityPipeline {
     async fn auth_token(&self, session: &Session) -> String {
         match &self.auth {
             Some(mgr) if mgr.enabled() => {
-                mgr.token_for(&session.license_jwt, &session.session_id).await
+                mgr.token_for(&session.license_jwt, &session.session_id)
+                    .await
             }
             _ => String::new(),
         }
@@ -674,10 +667,7 @@ impl SecurityPipeline {
         if !token.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {token}"));
         }
-        let resp = builder
-            .send()
-            .await
-            .map_err(EngineError::Http)?;
+        let resp = builder.send().await.map_err(EngineError::Http)?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -720,10 +710,7 @@ impl SecurityPipeline {
         if !token.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {token}"));
         }
-        let resp = builder
-            .send()
-            .await
-            .map_err(EngineError::Http)?;
+        let resp = builder.send().await.map_err(EngineError::Http)?;
 
         if !resp.status().is_success() {
             return Ok(false);
@@ -847,7 +834,11 @@ impl SecurityPipeline {
             vars,
         };
         self.engine
-            .evaluate(&req, self.timeout_for(&session.tenant_id), &self.auth_token(session).await)
+            .evaluate(
+                &req,
+                self.timeout_for(&session.tenant_id),
+                &self.auth_token(session).await,
+            )
             .await
     }
 
@@ -874,7 +865,11 @@ impl SecurityPipeline {
             session_risk_score: session.session_risk_score,
         };
         self.engine
-            .sti_check(&req, self.timeout_for(&session.tenant_id), &self.auth_token(session).await)
+            .sti_check(
+                &req,
+                self.timeout_for(&session.tenant_id),
+                &self.auth_token(session).await,
+            )
             .await
     }
 }
@@ -1092,7 +1087,8 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            code: None,            fast_path: true,
+            code: None,
+            fast_path: true,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
@@ -1108,7 +1104,8 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            code: None,            fast_path: true,
+            code: None,
+            fast_path: true,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
@@ -1125,7 +1122,8 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            code: None,            fast_path: true,
+            code: None,
+            fast_path: true,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
@@ -1140,7 +1138,8 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            code: None,            fast_path: true,
+            code: None,
+            fast_path: true,
             sandbox_type: "docker".to_string(),
             timeout_ms: 5000,
         };
@@ -1155,7 +1154,8 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            code: None,            fast_path: false,
+            code: None,
+            fast_path: false,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
@@ -1172,7 +1172,8 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            code: None,            fast_path: true,
+            code: None,
+            fast_path: true,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };

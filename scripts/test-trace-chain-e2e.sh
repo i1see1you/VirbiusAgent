@@ -102,8 +102,8 @@ docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-topics.sh --bootstrap-server local
 # /api/v1/ready is a sufficient readiness signal; `latest` keeps the run
 # independent of whatever topic history earlier runs left behind.
 wait_group_drained() { # $1=group $2=timeout_secs
-  local group="$1" timeout="${2:-90}" n i
-  for i in $(seq 1 "$timeout"); do
+  local group="$1" timeout="${2:-90}" n
+  for _ in $(seq 1 "$timeout"); do
     n=$(docker exec "$KAFKA_CID" /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
          --group "$group" --describe --members 2>/dev/null | awk -v g="$group" '$1==g' | wc -l | tr -d ' ')
     [ "${n:-0}" -eq 0 ] && return 0
@@ -122,8 +122,9 @@ if [ "${SKIP_BUILD:-0}" != "1" ] || [ ! -f "$CONTROL_JAR" ]; then
 fi
 [ -f "$CONTROL_JAR" ] || { red "control jar missing: $CONTROL_JAR"; exit 2; }
 
-export VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
-export VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+VIRBIUS_LICENSE_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+VIRBIUS_DELEGATED_MASTER_KEY="$(od -An -tx1 -N32 /dev/urandom | tr -d ' \n')"
+export VIRBIUS_LICENSE_MASTER_KEY VIRBIUS_DELEGATED_MASTER_KEY
 
 # Single control instance (pgrep guard above + group drained before start):
 # the default consumer group is shared, no per-run group id is needed.
