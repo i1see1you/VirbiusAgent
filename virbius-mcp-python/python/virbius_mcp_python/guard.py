@@ -116,10 +116,11 @@ class VirbiusDenied(PermissionError):
     """Raised by :meth:`VirbiusGuard.guard` when a tool call is refused.
 
     Subclasses ``PermissionError``. Carries the stable machine ``reason_code``
-    plus, when built via :meth:`from_decision`, the full :class:`VirbiusDecision`
-    and an optional ``audit_ref`` (a caller-supplied correlation id — the
-    in-process pre-check does not emit an audit record synchronously, so
-    :meth:`audit_record` returns whatever was passed, else ``None``).
+    and, when built via :meth:`from_decision`, the full :class:`VirbiusDecision`.
+
+    The in-process pre-check emits no audit record synchronously, so a denial
+    carries no audit reference — correlating a denial with the control-plane
+    audit trail is the caller's job (it already owns its trace/session id).
     """
 
     def __init__(
@@ -128,27 +129,20 @@ class VirbiusDenied(PermissionError):
         reason_code: Optional[str] = None,
         *,
         decision: Optional[VirbiusDecision] = None,
-        audit_ref: Any = None,
     ) -> None:
         super().__init__(message)
         self.reason_code = reason_code
         self.decision = decision
-        self.audit_ref = audit_ref
 
     @classmethod
-    def from_decision(cls, decision: VirbiusDecision, *, audit_ref: Any = None) -> "VirbiusDenied":
+    def from_decision(cls, decision: VirbiusDecision) -> "VirbiusDenied":
         """Build a denial from a :class:`VirbiusDecision` (message single-sourced)."""
         reason = decision.reason or "denied by policy"
         return cls(
             policy_blocked_message(reason),
             reason_code=decision.reason_code,
             decision=decision,
-            audit_ref=audit_ref,
         )
-
-    def audit_record(self) -> Any:
-        """The decision's audit reference, if any (``None`` by default)."""
-        return self.audit_ref
 
 
 def policy_blocked_message(reason: str) -> str:

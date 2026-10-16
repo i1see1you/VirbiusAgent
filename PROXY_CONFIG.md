@@ -641,9 +641,9 @@ MCPServerSse({"url": proxy_sse_url}, failure_error_function=virbius_tool_error)
 
 In-process SDK mode (`govern` / `VirbiusGuard.openai_tool`) reveals it
 automatically and type-safely: a denial raises `VirbiusDenied` (a `PermissionError`
-subclass that carries `reason_code`, the structured `decision`, and an optional
-`audit_ref` via `from_decision`), which is surfaced; any other exception keeps the
-generic line so a user tool's internal error text never reaches the model.
+subclass that carries `reason_code` and the structured `decision`), which is
+surfaced; any other exception keeps the generic line so a user tool's internal
+error text never reaches the model.
 
 The wording itself is single-sourced in `virbius_mcp_python.policy_blocked_message(reason)`
 (used by `VirbiusGuard.guard()`), and the choice to surface a human sentence

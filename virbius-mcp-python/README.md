@@ -11,7 +11,7 @@
 | 组 | 函数 | 作用 |
 |---|---|---|
 | 规则/生命周期 | `configure_rules` / `reload_rules` | 加载 edge manifest（offline/control/cloud）；热更新 |
-| 框架无关入口 | `govern(fn)` / `VirbiusGuard` | 包装任意 callable 或框架工具，逐调用预检；拒绝抛 `VirbiusDenied`（`from_decision` 可带结构化判定 + 可选 `audit_ref`） |
+| 框架无关入口 | `govern(fn)` / `VirbiusGuard` | 包装任意 callable 或框架工具，逐调用预检；拒绝抛 `VirbiusDenied`（`from_decision` 携带结构化判定） |
 | 工具预检 | `precheck_tool` / `verify_license` | License allowlist + args schema 预检（`VirbiusDecision`）；License 校验 |
 | 内容扫描 | `scan_edge` | 端层规则扫描 → `action ∈ allow/block/review/challenge` |
 | Prompt/DLP | `enhance_prompt` / `desensitize` / `restore` | 宪法注入、PII 输入脱敏与输出还原 |
@@ -112,9 +112,10 @@ LangChain 的 `StructuredTool` + `ToolException`）。
 
 `precheck()` 返回 **`VirbiusDecision`**（对齐 AGT 的 `evaluation`/`verdict`）：属性优先
 （`d.allowed` / `d.reason_code` / `d.fast_path` / `d.sandbox_type`），同时保留下标与 `get`
-（`d["allowed"]`），`d.to_dict()` 可序列化。拒绝则经 **`VirbiusDenied.from_decision(decision, *, audit_ref=None)`**
-构造，携带结构化 `decision` 与可选 `audit_ref`（`exc.audit_record()`）。进程内 `precheck` **不**同步产出
-审计记录，故 `audit_ref` 由调用方按需传入（如 `trace_id`/`session_id`）。
+（`d["allowed"]`），`d.to_dict()` 可序列化。拒绝则经 **`VirbiusDenied.from_decision(decision)`**
+构造，携带结构化 `decision`（文案仍由 `policy_blocked_message` 单源）。进程内 `precheck` **不**同步
+产出审计记录，拒绝里**不带**审计引用——把拒绝与控制面审计链关联是调用方的职责（其本就持有
+`trace_id`/`session_id`）。
 
 ### 自检（doctor）
 
@@ -135,7 +136,7 @@ Agents SDK / LangChain 默认会把工具报错藏成通用文案（"出错了�
 两个适配器都已内置处理：
 
 - **OpenAI Agents SDK**：`guard.openai_tool` / `guard.openai_tools([...])` 自动挂 `openai_tool_error`
-  —— 拒绝抛 `VirbiusDenied`（`PermissionError` 子类，带 `reason_code`，并携带结构化 `decision` 与可选 `audit_ref`）并把人话透给模型；
+  —— 拒绝抛 `VirbiusDenied`（`PermissionError` 子类，带 `reason_code`，并携带结构化 `decision`）并把人话透给模型；
   **其他异常**回落通用文案，不泄漏工具内部错误。
 - **LangChain**：`guard.langchain_tool` / `guard.langchain_tools([...])` 把拒绝转成 `ToolException` +
   `handle_tool_error=langchain_tool_error`，模型读到**同一句**人话；其他异常照常上抛，不泄漏。

@@ -410,12 +410,14 @@ def test_denial_from_decision_carries_structured_context():
         allowed=False, reason="tool 'x' not in license allowlist",
         reason_code="not_in_allowlist",
     )
-    exc = v.VirbiusDenied.from_decision(decision, audit_ref="trace-123")
+    exc = v.VirbiusDenied.from_decision(decision)
     assert str(exc) == v.policy_blocked_message("tool 'x' not in license allowlist")
     assert exc.reason_code == "not_in_allowlist"
     assert exc.decision is decision
-    assert exc.audit_record() == "trace-123"
     assert isinstance(exc, PermissionError)
+    # No audit reference is carried in-process (phase 2 will add a real one).
+    assert not hasattr(exc, "audit_ref")
+    assert not hasattr(exc, "audit_record")
 
 
 def test_guard_raises_decision_backed_denial():
@@ -425,4 +427,3 @@ def test_guard_raises_decision_backed_denial():
     assert ei.value.decision is not None
     assert ei.value.decision.allowed is False
     assert ei.value.reason_code == ei.value.decision.reason_code
-    assert ei.value.audit_record() is None           # no audit ref wired in-process

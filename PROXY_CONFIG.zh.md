@@ -623,7 +623,7 @@ MCPServerSse({"url": proxy_sse_url}, failure_error_function=virbius_tool_error)
 ```
 
 进程内 SDK 模式（`govern` / `VirbiusGuard.openai_tool`）自动且按**类型**揭示：拒绝抛 `VirbiusDenied`
-（`PermissionError` 子类，携带 `reason_code`、结构化 `decision` 与可选 `audit_ref`，由 `from_decision`
+（`PermissionError` 子类，携带 `reason_code` 与结构化 `decision`，由 `from_decision`
 构造）并被透出；其他异常保持通用文案，绝不把用户工具的内部错误文本交给模型。
 
 文案本身由 `virbius_mcp_python.policy_blocked_message(reason)` **单点构造**（`VirbiusGuard.guard()`
