@@ -18,9 +18,13 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(BusinessException.class)
     public ResponseEntity<ApiResult<Void>> handleBusiness(BusinessException e) {
         log.warn("business error: {}", e.getMessage());
-        HttpStatus status = e.getCode() == 404 ? HttpStatus.NOT_FOUND
-                : e.getCode() == 409 ? HttpStatus.CONFLICT
-                : HttpStatus.BAD_REQUEST;
+        // Map the domain code to its HTTP status (401/403/404/409/423/429/502/503...).
+        // Only unknown or non-error codes fall back to 400; the body always carries
+        // the original code.
+        HttpStatus status = HttpStatus.resolve(e.getCode());
+        if (status == null || !status.isError()) {
+            status = HttpStatus.BAD_REQUEST;
+        }
         return ResponseEntity.status(status).body(ApiResult.error(e.getCode(), e.getMessage()));
     }
 
