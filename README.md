@@ -70,6 +70,7 @@ flowchart TD
 | **Hash Chain Audit** | Tamper-proof audit log with SHA-256 hash chain integrity verification |
 | **Memory Interceptor** | Desensitize sensitive data written to Agent memory |
 | **Output Review** | PII/credential leak detection in tool return values |
+| **Review API + Python SDK** | Input/output review as an engine API with a dedicated Python SDK (`virbius-review-sdk`): dispositions, streaming review windows, sync + async |
 | **Falco Rules Management** | Custom eBPF rules managed through console with canary deployment |
 | **Native Tool Integration** | LangChain callback observation (Mode A) + native-tool enforcement SDK (Mode B): tool inventory, coverage classification, warnings |
 
@@ -95,23 +96,23 @@ We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student mo
 
 ### Comparison with Industry Solutions
 
-| Capability | VirbiusAgent | Microsoft AGT | NeMo Guardrails | Guardrails AI | Snyk Agent Scan |
-|-----------|:------------:|:-------------:|:---------------:|:-------------:|:---------------:|
-| **Architecture** | 4-layer (Edge–Gateway–Kernel–Cloud) | SDK governance kernel (policy → identity → audit) | SDK / framework (rails) | SDK / library (validators) | CLI scanner |
-| **Defense-in-depth** | ✅ Edge precheck → Gateway enforce → Kernel observe → Cloud adjudicate | ⚠️ Optional layers (policy → identity → sandbox → audit) | ❌ Single checkpoint | ❌ Single checkpoint | ❌ Single scan point |
-| **Detection method** | Rules + ML models (hybrid) | Policy/rules (YAML/OPA/Cedar) + prompt-injection audit | Colang rules + optional ML | ML model + validators | ML + static analysis (scan-time) |
-| **Rule engine** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ✅ Policy engine (YAML/OPA/Cedar) | ✅ Colang rails | ⚠️ Limited validators | ⚠️ Scanner rules |
-| **Runtime observability** | ✅ eBPF / Falco (syscall-level) | ⚠️ App-level audit trail (no kernel) | ❌ | ❌ | ❌ |
-| **MCP protocol support** | ✅ Native (stdio/SSE proxy) | ✅ MCP security gateway | ⚠️ Tool-calling rails only | ❌ | ✅ Scans MCP servers |
-| **Tool-call security** | ✅ Core focus (precheck → adjudicate → audit) | ✅ Deterministic in-app interception | ⚠️ Dialog / tool rails | ⚠️ Input/output validation only | ⚠️ Scan-time (tool poisoning) |
-| **Human-in-the-loop** | ✅ Challenge → approve → token-gated execution | ✅ Approval policies | ❌ | ❌ | ❌ |
-| **Decision trace** | ✅ Full-chain causal visualization | ✅ Tamper-evident audit log | ⚠️ Logs / tracing | ⚠️ Logs | ⚠️ Scan report |
-| **DLP (PII masking)** | ✅ Edge-layer, sub-ms, offline | ❌ | ⚠️ Custom actions | ✅ Validators | ⚠️ Scan-time detection |
-| **Sandbox isolation** | ✅ Landlock / gVisor | ✅ Execution sandbox (privilege rings) | ❌ | ❌ | ❌ |
-| **Deployment** | Self-hosted (Sidecar / Remote / SDK) | SDK / library (pip/npm/NuGet) | SDK (Python) | SDK (Python) | CLI / uvx / binary |
-| **Open source** | ✅ MIT | ✅ MIT | ✅ Apache-2.0 | ✅ Apache-2.0 | ✅ Apache-2.0 |
+| Capability | VirbiusAgent | Microsoft AGT | Meta LlamaFirewall | IBM ContextForge |
+|-----------|:------------:|:-------------:|:------------------:|:----------------:|
+| **Architecture** | 4-layer (Edge–Gateway–Kernel–Cloud) | SDK governance kernel (policy → identity → audit) | SDK guardrail stack (in-process scanners) | Gateway/proxy (MCP/A2A/REST federation registry) |
+| **Defense-in-depth** | ✅ Edge precheck → Gateway enforce → Kernel observe → Cloud adjudicate | ⚠️ Optional layers (policy → identity → sandbox → audit) | ⚠️ Layered scanners (prompt/alignment/code) but in-process only | ⚠️ Gateway-centric (auth/rate-limit/plugins) |
+| **Detection method** | Rules + ML models (hybrid) | Policy/rules (YAML/OPA/Cedar) + prompt-injection audit | ML classifiers + LLM reasoning audit (PromptGuard 2 / AlignmentCheck) | Config + plugins (auth, rate limit, guardrails) — mostly deterministic |
+| **Rule engine** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ✅ Policy engine (YAML/OPA/Cedar) | ⚠️ Scanner config + regex filters (no risk-rule DSL) | ⚠️ Plugin/config engine (no risk-rule DSL) |
+| **Runtime observability** | ✅ eBPF / Falco (syscall-level) | ⚠️ App-level audit trail (no kernel) | ❌ | ⚠️ OpenTelemetry tracing (app-level) |
+| **MCP protocol support** | ✅ Native (stdio/SSE proxy) | ✅ MCP security gateway | ⚠️ Agent-framework guardrail (OpenAI / LangChain), not MCP-native | ✅ Native (MCP + A2A + REST/gRPC federation) |
+| **Tool-call security** | ✅ Core focus (precheck → adjudicate → audit) | ✅ Deterministic in-app interception | ⚠️ Scans agent reasoning/output, not a per-tool allowlist | ⚠️ Gateway auth/rate-limit + plugin guardrails |
+| **Human-in-the-loop** | ✅ Challenge → approve → token-gated execution | ✅ Approval policies | ❌ | ❌ |
+| **Decision trace** | ✅ Full-chain causal visualization | ✅ Tamper-evident audit log | ⚠️ Logs / scan results | ⚠️ OTel tracing |
+| **DLP (PII masking)** | ✅ Edge-layer, sub-ms, offline | ❌ | ❌ | ❌ |
+| **Sandbox isolation** | ✅ Landlock / gVisor | ✅ Execution sandbox (privilege rings) | ❌ | ❌ |
+| **Deployment** | Self-hosted (Sidecar / Remote / SDK) | SDK / library (pip/npm/NuGet) | SDK (Python) | Self-hosted (PyPI / Docker / Helm) |
+| **Open source** | ✅ MIT | ✅ MIT | ✅ Open source (Llama Community License) | ✅ Apache-2.0 |
 
-> Competitor summaries are drawn from public repos/docs (Microsoft Agent Governance Toolkit — MIT, public preview; NVIDIA NeMo Guardrails — Apache-2.0; Guardrails AI — Apache-2.0; Snyk Agent Scan, formerly Invariant Labs `mcp-scan` — Apache-2.0) and may drift as upstreams evolve.
+> Competitor summaries are drawn from public repos/docs (Microsoft Agent Governance Toolkit — MIT, public preview; Meta LlamaFirewall — open source under the Llama Community License; IBM ContextForge / `mcp-context-forge` — Apache-2.0) and may drift as upstreams evolve.
 
 ### Key Differentiators
 
@@ -275,6 +276,7 @@ flowchart TB
 | **virbius-mcp-proxy** | 9090 | Rust (axum) | MCP stdio/SSE proxy: multi-upstream routing, security pipeline, session management. |
 | **virbius-mcp-python** | Embedded | Python (PyO3) | Native-tool **enforcement** SDK: License precheck, args schema, edge rules (Mode B). |
 | **virbius-integrate** | Embedded | Python | Native-tool **observation** plugin (LangChain callback): inventory/classification/timeline (Mode A). |
+| **virbius-review-sdk** | Embedded | Python | Content-review SDK: input/output review over the engine `/v1/evaluate` — dispositions, streaming review windows; sync + async clients. |
 | **virbius-mcp-node** | Embedded | Rust (napi-rs) | Native-tool **enforcement** SDK for Node.js/TS agents (Mode B). |
 | **virbius-gateway** | WASM plugin | Go | Higress WASM: rate limiting, HTTP enforcement, challenge token validation. |
 | **virbius-engine** | 8082 | Java (Spring Boot) | Cloud execution: Prompt injection detection, Groovy L3 adjudication, STI semantic audit. |
@@ -438,12 +440,13 @@ The four layers differ in **execution location, latency, and purpose**. Guiding 
 ## Project Structure
 
 ```
-virbius-agent/
+VirbiusAgent/
 ├── virbius-core/          # Rust SDK — prechecks, DLP, license
 ├── virbius-mcp-proxy/     # Rust MCP proxy server
 ├── virbius-mcp-python/    # Python (PyO3) — native-tool enforcement SDK (Mode B)
 ├── virbius-mcp-node/      # Rust (napi-rs) — Node.js MCP bindings
 ├── virbius-integrate/     # Python — LangChain callback observation plugin (Mode A)
+├── virbius-review-sdk/    # Python — input/output review SDK (engine /v1/evaluate)
 ├── virbius-kernel/        # Go (plugin) + Rust (sidecar) — Falco plugin, sandbox
 ├── virbius-gateway/       # Go WASM plugin for Higress
 ├── virbius-expr/          # Go — expression evaluator/compiler
@@ -462,6 +465,8 @@ virbius-agent/
 |----------|-------------|
 | [QUICKSTART.md](QUICKSTART.md) | Choose an integration mode (proxy / gateway / SDK embed) + 5-minute quickstart |
 | [USAGE_GUIDE.md](USAGE_GUIDE.md) | User guide — installation, integration, rule authoring, operations |
+| [NATIVE_TOOL_INTEGRATION.md](NATIVE_TOOL_INTEGRATION.md) | Native-tool integration — Mode A observe / Mode B enforce, coverage classification, warnings |
+| [virbius-review-sdk/README.md](virbius-review-sdk/README.md) | Python review SDK — input/output review over the engine (sync + async, streaming windows) |
 | [rule-examples.en.md](rule-examples.en.md) | Risk rule configuration examples — complete guide for 12 typical rules |
 | [DESIGN.md](DESIGN.md) | System architecture design document |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Detailed architecture documentation |
@@ -469,6 +474,7 @@ virbius-agent/
 | [PROTOCOL.md](PROTOCOL.md) | MCP proxy protocol specification |
 | [PROXY_CONFIG.md](PROXY_CONFIG.md) | MCP proxy configuration reference |
 | [SSO_INTEGRATION.md](SSO_INTEGRATION.md) | Unified login (OAuth2/OIDC) integration design - dual-track SSO + API Key auth |
+| [FAQ-agent-scenarios.md](FAQ-agent-scenarios.md) | FAQ — common agent-security scenarios |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ## Contributing

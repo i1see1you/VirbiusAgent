@@ -70,6 +70,7 @@ flowchart TD
 | Hash Chain 审计完整性 | SHA-256 哈希链审计日志防篡改 |
 | 记忆管控 | Agent 写入记忆前的敏感数据脱敏 |
 | 输出审查 | 工具返回值中的 PII/凭据泄漏检测 |
+| **审查 API + Python SDK** | 引擎 API 化的输入/输出审查 + 专用 Python SDK（`virbius-review-sdk`）：disposition、流式审查窗口、同步 + 异步 |
 | Falco 规则管理 | 运营台统一管理 eBPF 规则，支持灰度部署 |
 | **原生工具集成** | LangChain 回调观测（模式 A）+ 原生工具执法 SDK（模式 B）：工具清单、覆盖分级、警示 |
 
@@ -95,23 +96,23 @@ flowchart TD
 
 ### 与同类产品对比
 
-| 能力 | VirbiusAgent | Microsoft AGT | NeMo Guardrails | Guardrails AI | Snyk Agent Scan |
-|------|:------------:|:-------------:|:---------------:|:-------------:|:---------------:|
-| **架构** | 四层（端—管—核—云） | SDK 治理内核（策略 → 身份 → 审计） | SDK / 框架（rails） | SDK / 库（验证器） | CLI 扫描器 |
-| **纵深防御** | ✅ 端预检 → 管阻断 → 核观测 → 云终判 | ⚠️ 可选分层（策略 → 身份 → 沙箱 → 审计） | ❌ 单点检查 | ❌ 单点检查 | ❌ 单点扫描 |
-| **检测方式** | 规则 + ML 模型（混合） | 策略/规则（YAML/OPA/Cedar）+ Prompt 注入审计 | Colang 规则 + 可选 ML | ML 模型 + 验证器 | ML + 静态分析（扫描期） |
-| **规则引擎** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ✅ 策略引擎（YAML/OPA/Cedar） | ✅ Colang rails | ⚠️ 有限验证器 | ⚠️ 扫描规则 |
-| **运行时观测** | ✅ eBPF / Falco（syscall 级） | ⚠️ 应用层审计日志（非内核） | ❌ | ❌ | ❌ |
-| **MCP 协议支持** | ✅ 原生（stdio/SSE 代理） | ✅ MCP 安全网关 | ⚠️ 仅工具调用 rails | ❌ | ✅ 扫描 MCP 服务器 |
-| **工具调用安全** | ✅ 核心能力（预检 → 终判 → 审计） | ✅ 应用内确定性拦截 | ⚠️ 对话 / 工具 rails | ⚠️ 仅输入输出校验 | ⚠️ 扫描期（工具投毒） |
-| **人工审批** | ✅ 挑战 → 审批 → token 验证放行 | ✅ 审批策略 | ❌ | ❌ | ❌ |
-| **决策链路追踪** | ✅ 全链路因果可视化 | ✅ 防篡改审计日志 | ⚠️ 日志 / 追踪 | ⚠️ 日志 | ⚠️ 扫描报告 |
-| **DLP（PII 脱敏）** | ✅ 端层、亚毫秒、可离线 | ❌ | ⚠️ 自定义动作 | ✅ 验证器 | ⚠️ 扫描期检测 |
-| **沙箱隔离** | ✅ Landlock / gVisor | ✅ 执行沙箱（特权环） | ❌ | ❌ | ❌ |
-| **部署方式** | 自部署（Sidecar / 远程 / SDK） | SDK / 库（pip/npm/NuGet） | SDK（Python） | SDK（Python） | CLI / uvx / 二进制 |
-| **开源** | ✅ MIT | ✅ MIT | ✅ Apache-2.0 | ✅ Apache-2.0 | ✅ Apache-2.0 |
+| 能力 | VirbiusAgent | Microsoft AGT | Meta LlamaFirewall | IBM ContextForge |
+|------|:------------:|:-------------:|:------------------:|:----------------:|
+| **架构** | 四层（端—管—核—云） | SDK 治理内核（策略 → 身份 → 审计） | SDK 护栏栈（进程内扫描器） | 网关/代理（MCP/A2A/REST 联邦注册中心） |
+| **纵深防御** | ✅ 端预检 → 管阻断 → 核观测 → 云终判 | ⚠️ 可选分层（策略 → 身份 → 沙箱 → 审计） | ⚠️ 分层扫描器（prompt/对齐/代码）但仅进程内 | ⚠️ 网关为中心（认证/限流/插件） |
+| **检测方式** | 规则 + ML 模型（混合） | 策略/规则（YAML/OPA/Cedar）+ Prompt 注入审计 | ML 分类器 + LLM 推理审计（PromptGuard 2 / AlignmentCheck） | 配置 + 插件（认证、限流、护栏）——以确定性为主 |
+| **规则引擎** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ✅ 策略引擎（YAML/OPA/Cedar） | ⚠️ 扫描器配置 + 正则过滤（无风险规则 DSL） | ⚠️ 插件/配置引擎（无风险规则 DSL） |
+| **运行时观测** | ✅ eBPF / Falco（syscall 级） | ⚠️ 应用层审计日志（非内核） | ❌ | ⚠️ OpenTelemetry 追踪（应用层） |
+| **MCP 协议支持** | ✅ 原生（stdio/SSE 代理） | ✅ MCP 安全网关 | ⚠️ 智能体框架护栏（OpenAI/LangChain），非 MCP 原生 | ✅ 原生（MCP + A2A + REST/gRPC 联邦） |
+| **工具调用安全** | ✅ 核心能力（预检 → 终判 → 审计） | ✅ 应用内确定性拦截 | ⚠️ 扫描智能体推理/输出，非逐工具 allowlist | ⚠️ 网关认证/限流 + 插件护栏 |
+| **人工审批** | ✅ 挑战 → 审批 → token 验证放行 | ✅ 审批策略 | ❌ | ❌ |
+| **决策链路追踪** | ✅ 全链路因果可视化 | ✅ 防篡改审计日志 | ⚠️ 日志 / 扫描结果 | ⚠️ OTel 追踪 |
+| **DLP（PII 脱敏）** | ✅ 端层、亚毫秒、可离线 | ❌ | ❌ | ❌ |
+| **沙箱隔离** | ✅ Landlock / gVisor | ✅ 执行沙箱（特权环） | ❌ | ❌ |
+| **部署方式** | 自部署（Sidecar / 远程 / SDK） | SDK / 库（pip/npm/NuGet） | SDK（Python） | 自部署（PyPI / Docker / Helm） |
+| **开源** | ✅ MIT | ✅ MIT | ✅ 开源（Llama Community License） | ✅ Apache-2.0 |
 
-> 竞品信息摘自上列项目的公开仓库/文档（Microsoft Agent Governance Toolkit — MIT，公开预览；NVIDIA NeMo Guardrails — Apache-2.0；Guardrails AI — Apache-2.0；Snyk Agent Scan，原 Invariant Labs `mcp-scan` — Apache-2.0），可能随上游迭代变动。
+> 竞品信息摘自上列项目的公开仓库/文档（Microsoft Agent Governance Toolkit — MIT，公开预览；Meta LlamaFirewall — 开源，Llama Community License；IBM ContextForge / `mcp-context-forge` — Apache-2.0），可能随上游迭代变动。
 
 ### 核心差异化
 
@@ -273,6 +274,7 @@ flowchart TB
 | virbius-mcp-proxy | 9090 | Rust (axum) | MCP stdio/SSE 代理：多上游路由、安全管线、会话管理。 |
 | virbius-mcp-python | 内嵌 | Python (PyO3) | 原生工具**执法** SDK：License 预检、参数 schema、边缘规则（模式 B）。 |
 | virbius-integrate | 内嵌 | Python | 原生工具**观测**插件（LangChain callback）：工具清单/分级/观测时间轴（模式 A）。 |
+| virbius-review-sdk | 内嵌 | Python | 内容审查 SDK：基于引擎 `/v1/evaluate` 的输入/输出审查——disposition、流式审查窗口；同步 + 异步客户端。 |
 | virbius-mcp-node | 内嵌 | Rust (napi-rs) | 面向 Node.js/TS Agent 的原生工具**执法** SDK（模式 B）。 |
 | virbius-gateway | WASM 插件 | Go | Higress WASM：限流、HTTP 阻断、审批 token 验证。 |
 | virbius-engine | 8082 | Java (Spring Boot) | 云端执行：Prompt 注入检测、Groovy L3 终判、STI 语义审计。 |
@@ -434,12 +436,13 @@ Agent 工具调用
 ## 项目结构
 
 ```
-virbius-agent/
+VirbiusAgent/
 ├── virbius-core/          # Rust SDK — 预检、DLP、许可证
 ├── virbius-mcp-proxy/     # Rust MCP 代理服务器
 ├── virbius-mcp-python/    # Python (PyO3) — 原生工具执法 SDK（模式 B）
 ├── virbius-mcp-node/      # Rust (napi-rs) — Node.js MCP 绑定
 ├── virbius-integrate/     # Python — LangChain 回调观测插件（模式 A）
+├── virbius-review-sdk/    # Python — 输入/输出审查 SDK（引擎 /v1/evaluate）
 ├── virbius-kernel/        # Go(插件) + Rust(边车) — Falco 插件、沙箱
 ├── virbius-gateway/       # Go WASM 插件（Higress）
 ├── virbius-expr/          # Go — 表达式求值/编译
@@ -458,6 +461,8 @@ virbius-agent/
 |------|------|
 | [QUICKSTART.zh.md](QUICKSTART.zh.md) | 接入选型（三种模式：proxy / 网关 / SDK 嵌入）+ 5 分钟快速开始 |
 | [USAGE_GUIDE.zh.md](USAGE_GUIDE.zh.md) | 使用指南 — 安装、集成、规则编写、运维 |
+| [NATIVE_TOOL_INTEGRATION.zh.md](NATIVE_TOOL_INTEGRATION.zh.md) | 原生工具集成 — 模式 A 观测 / 模式 B 执法、覆盖分级、警示 |
+| [virbius-review-sdk/README.md](virbius-review-sdk/README.md) | Python 审查 SDK — 基于引擎的输入/输出审查（同步 + 异步、流式窗口） |
 | [rule-examples.zh.md](rule-examples.zh.md) | 风险规则配置示例 — 12 条典型规则的完整配置指南 |
 | [DESIGN.zh.md](DESIGN.zh.md) | 系统架构设计文档 |
 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md) | 详细架构说明 |
@@ -465,6 +470,7 @@ virbius-agent/
 | [PROTOCOL.zh.md](PROTOCOL.zh.md) | MCP 代理协议规范 |
 | [PROXY_CONFIG.zh.md](PROXY_CONFIG.zh.md) | MCP 代理配置参考 |
 | [SSO_INTEGRATION.zh.md](SSO_INTEGRATION.zh.md) | 统一登录（OAuth2/OIDC）接入方案 - SSO 双轨认证设计 |
+| [FAQ-agent-scenarios.md](FAQ-agent-scenarios.md) | 常见问题 — Agent 安全典型场景 |
 | [CHANGELOG.md](CHANGELOG.md)（英文） | 版本历史 |
 
 > 语言说明：以上文档均提供中文版，点击链接即可查看；CHANGELOG 目前仅提供英文版。
