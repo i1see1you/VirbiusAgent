@@ -2,6 +2,7 @@
 name = "virbius-mcp-python"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "VirbiusAgent Python MCP bindings via PyO3"
 
 [lib]

@@ -2,6 +2,7 @@
 name = "virbius-mcp-node"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 description = "VirbiusAgent Node.js MCP bindings via napi-rs"
 
 [lib]
