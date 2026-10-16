@@ -190,6 +190,8 @@ curl -s http://localhost:8082/admin/health
 
 VirbiusAgent 支持三种集成模式。根据您的部署上下文选择（见 DEPLOYMENT.md §8.3）：
 
+> **初次接入？** 先看 [QUICKSTART.zh.md](QUICKSTART.zh.md) —— 一页选型 + 5 分钟快速开始，再回到本节看逐步细节。
+
 > **另见**：面向 LangChain **原生工具**的接入（**模式 A 观测 / 模式 B 执法**、覆盖分级与警示）见 [NATIVE_TOOL_INTEGRATION.zh.md](NATIVE_TOOL_INTEGRATION.zh.md)。下表为三种**强制执行**接入方式。
 
 | 维度 | 模式 1：MCP 代理（Sidecar） | 模式 2：Higress（远程） | 模式 3：SDK 嵌入 |
@@ -207,6 +209,23 @@ VirbiusAgent 支持三种集成模式。根据您的部署上下文选择（见 
 **步骤 1：配置并启动代理**
 
 代理从 TOML 文件（当前目录下的 `virbius-mcp-proxy.toml`，或 `/etc/virbius/mcp-proxy.toml`）和/或环境变量读取配置。完整配置参考见 [PROXY_CONFIG.md](PROXY_CONFIG.md)。
+
+**最快路径 —— 一次性领取凭证 + 自检：**
+
+```bash
+# 从运营台领取 license + 公钥（管理凭证仅走环境变量）
+VIRBIUS_ADMIN_API_KEY=... virbius-mcp-proxy enroll \
+  --control http://control:8080 --tenant acme --app-id crm-agent \
+  --tools read_file,search --out-dir /etc/virbius
+
+# 接入 Agent 前，先校验配置、license 与连通性
+virbius-mcp-proxy doctor
+```
+
+设 `VIRBIUS_BASE_URL=http://control:8080` 后会自动推导 control、token 换取与 engine 三个端点，
+运行时环境就只剩 `VIRBIUS_BASE_URL` + `VIRBIUS_LICENSE_FILE` + `VIRBIUS_LICENSE_PUBLIC_KEY`。
+也可用 `--config <path>` 显式指定配置文件（不再只认固定文件名）；`--config` / `doctor` / `enroll`
+详见 PROXY_CONFIG.md。
 
 **使用环境变量快速启动（无需配置文件）：**
 

@@ -190,6 +190,8 @@ Verify the Ops Console is accessible at [http://localhost:8080](http://localhost
 
 VirbiusAgent supports three integration modes. Choose based on your deployment context (see DEPLOYMENT.md §8.3):
 
+> **New here?** Start with [QUICKSTART.md](QUICKSTART.md) — a one-page mode choice + 5-minute quickstart, then come back here for step-by-step detail.
+
 > **See also**: For LangChain **native tools** (Mode A observe / Mode B enforce, with coverage classification and warnings), see [NATIVE_TOOL_INTEGRATION.md](NATIVE_TOOL_INTEGRATION.md). The table below covers the three **enforcement** integration paths.
 
 | Dimension | Mode 1: MCP Proxy (Sidecar) | Mode 2: Higress (Remote) | Mode 3: SDK Embedding |
@@ -209,6 +211,24 @@ This is the recommended mode for most users. It requires zero code changes to th
 The proxy reads configuration from a TOML file (`virbius-mcp-proxy.toml` in the
 current directory, or `/etc/virbius/mcp-proxy.toml`) and/or environment variables.
 See [PROXY_CONFIG.md](PROXY_CONFIG.md) for the full configuration reference.
+
+**Fastest path — one-time credential fetch + self-check:**
+
+```bash
+# Fetch a license + public key from control (admin credential via env only)
+VIRBIUS_ADMIN_API_KEY=... virbius-mcp-proxy enroll \
+  --control http://control:8080 --tenant acme --app-id crm-agent \
+  --tools read_file,search --out-dir /etc/virbius
+
+# Validate config, license and connectivity before wiring it into the Agent
+virbius-mcp-proxy doctor
+```
+
+`VIRBIUS_BASE_URL=http://control:8080` then derives the control, token-exchange
+and engine endpoints, so the runtime environment collapses to `VIRBIUS_BASE_URL`
++ `VIRBIUS_LICENSE_FILE` + `VIRBIUS_LICENSE_PUBLIC_KEY`. An explicit
+`--config <path>` may be used instead of the default search paths; `--config`,
+`doctor` and `enroll` are described in PROXY_CONFIG.md.
 
 **Quick start with environment variables (no config file needed):**
 

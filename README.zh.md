@@ -456,6 +456,7 @@ virbius-agent/
 
 | 文档 | 说明 |
 |------|------|
+| [QUICKSTART.zh.md](QUICKSTART.zh.md) | 接入选型（三种模式：proxy / 网关 / SDK 嵌入）+ 5 分钟快速开始 |
 | [USAGE_GUIDE.zh.md](USAGE_GUIDE.zh.md) | 使用指南 — 安装、集成、规则编写、运维 |
 | [rule-examples.zh.md](rule-examples.zh.md) | 风险规则配置示例 — 12 条典型规则的完整配置指南 |
 | [DESIGN.zh.md](DESIGN.zh.md) | 系统架构设计文档 |

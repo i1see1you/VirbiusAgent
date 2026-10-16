@@ -5,6 +5,7 @@
 /// and call `router::route_request` directly.
 pub mod audit;
 pub mod auth;
+pub mod cli;
 pub mod config;
 pub mod delegated;
 pub mod egress;

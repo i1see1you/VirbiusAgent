@@ -11,7 +11,7 @@
 | | 模式 A：观测（advisory） | 模式 B：执法（enforce） |
 |---|---|---|
 | 实现 | `virbius-integrate`（LangChain `BaseCallbackHandler`） | `virbius-mcp-python`（SDK `precheck`）/ `virbius-mcp-proxy` |
-| 接入方式 | 构造期一行 `callbacks=[VirbiusAuditCallback(...)]` | SDK 在工具边界调 `precheck_tool`，或经代理 |
+| 接入方式 | 构造期一行 `callbacks=[VirbiusAuditCallback(...)]` | 用 `govern(fn)` / `guard.precheck` 包装工具（拒绝抛 `VirbiusDenied`），或经代理 |
 | 能力 | 看得见、能审计、可盘点；风险分级 + 推荐模式 | 前置拦截：License allowlist、参数 schema、Guard 裁决 |
 | 是否阻断 | **否**（不阻断、不执法） | **是** |
 | 进审计链 | 否（独立通道，claim 级） | 是（走审计 / 决策链） |
@@ -145,6 +145,11 @@ r = v.precheck_tool("read_file", json.dumps({"path": "/tmp/a"}), jwt, pem, "crm-
 if not r["allowed"]:
     raise PermissionError(r["reason"])
 ```
+
+> **推荐封装**：框架无关的 `govern(fn)` 可包装任意 callable（无需框架；拒绝抛 `VirbiusDenied`）；
+> `VirbiusGuard.from_env()` 把 license 材料装进对象（读取与 proxy 同名的环境变量），不必每次调用
+> 都传 `jwt/pem/app_id`；一行式框架适配为 `@guard.openai_tool` / `@guard.langchain_tool` /
+> `@guard.guarded`（见 [virbius-mcp-python/README.md](virbius-mcp-python/README.md)）。
 
 - 校验顺序：**License allowlist →（有 `tool_policy` 时）参数 schema → 快速通道/沙箱标记**。
 - 规则来源：`configure_rules` 支持 **offline（本地 manifest）** 与 **control/cloud（从控制面拉取并缓存）**；`reload_rules()` 重新拉取。

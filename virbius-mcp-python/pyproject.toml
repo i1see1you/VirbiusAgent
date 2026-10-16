@@ -21,5 +21,10 @@ test = ["pytest>=8"]
 
 [tool.maturin]
 manifest-path = "Cargo.toml"
-module-name = "virbius_mcp_python"
+# Mixed Rust/Python package: the PyO3 extension ships as the `_native`
+# submodule and `python/virbius_mcp_python/__init__.py` re-exports it, so
+# pure-Python helpers (guard.py: VirbiusGuard + framework decorators) can live
+# in the same importable package.
+module-name = "virbius_mcp_python._native"
+python-source = "python"
 features = ["pyo3/extension-module"]

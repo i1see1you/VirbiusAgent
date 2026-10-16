@@ -460,6 +460,7 @@ virbius-agent/
 
 | Document | Description |
 |----------|-------------|
+| [QUICKSTART.md](QUICKSTART.md) | Choose an integration mode (proxy / gateway / SDK embed) + 5-minute quickstart |
 | [USAGE_GUIDE.md](USAGE_GUIDE.md) | User guide — installation, integration, rule authoring, operations |
 | [rule-examples.en.md](rule-examples.en.md) | Risk rule configuration examples — complete guide for 12 typical rules |
 | [DESIGN.md](DESIGN.md) | System architecture design document |

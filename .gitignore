@@ -102,3 +102,6 @@ docs/memory/
 
 # Evaluation module — split to i1see1you/VirbiusEvaluation
 virbius-evaluation/
+
+# maturin editable-install artifacts (built into the mixed python-source tree)
+virbius-mcp-python/python/virbius_mcp_python/*.so

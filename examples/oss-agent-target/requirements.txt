@@ -1,0 +1,14 @@
+# Python deps for the OSS-agent target (examples/oss-agent-target).
+#
+# NOTE: virbius-mcp-python is a PyO3 extension built from this repo via maturin
+# (not pip-installable from an index); virbius-review-sdk is installed editable
+# from the local path. Use scripts/oss-agent-setup.sh to provision the venv.
+#
+# Driving LLM credentials are env-injected at runtime, never listed or committed.
+
+openai-agents>=0.24
+langchain-core>=0.3        # for the LangChain adapter demo (`sdk langchain`)
+maturin>=1.7,<2.0
+
+# local, editable (installed by scripts/oss-agent-setup.sh):
+# -e ../../virbius-review-sdk

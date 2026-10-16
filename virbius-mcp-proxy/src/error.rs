@@ -59,6 +59,39 @@ impl VirbiusErrorCode {
             Self::RateExceeded => 429,
         }
     }
+
+    /// A human-readable sentence for the error `message` / `data.reason`.
+    ///
+    /// `detail` is the reason the path knows (a precheck sentence, the license
+    /// `Display` text, or the engine's `reason_code`); it falls back to the
+    /// machine code so the sentence is never empty. The machine code always also
+    /// travels in `data.reason_code` — machines read that, humans/LLMs read this.
+    /// The wording is deliberately plain and factual (no imperative "do not
+    /// retry"): the fact of a policy refusal already implies futility, and we do
+    /// not want product/instruction phrasing baked into the wire protocol.
+    pub fn human_message(&self, detail: Option<&str>) -> String {
+        let raw = detail
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| self.message());
+        // Cap the detail: the message reaches the LLM, and some details (e.g. a
+        // license Display carrying long app ids) can be very long. Truncate at
+        // the source so `message` and `data.reason` stay identical.
+        const DETAIL_MAX_CHARS: usize = 512;
+        let d: String = if raw.chars().count() > DETAIL_MAX_CHARS {
+            raw.chars().take(DETAIL_MAX_CHARS).collect()
+        } else {
+            raw.to_string()
+        };
+        let lead = match self {
+            Self::LicenseInvalid | Self::LicenseRequired => "The agent credential was rejected",
+            Self::RateExceeded | Self::RiskThreshold => "The tool call was not executed",
+            Self::ChallengeRequired => "Approval is required before this tool call runs",
+            Self::SchemaViolation | Self::ArgTransformFailed => "The tool call could not be executed",
+            _ => "The tool call was blocked by policy",
+        };
+        format!("{lead}: {d}.")
+    }
 }
 
 /// Build a JSON-RPC 2.0 error response.
@@ -78,7 +111,10 @@ pub fn jsonrpc_error(
     })
 }
 
-/// Convenience: build error with standard data fields.
+/// Convenience: build a Virbius policy/operational error with the standard data
+/// fields. `message` and `data.reason` carry a human sentence; `data.reason_code`
+/// carries the stable machine code. `rule_id` is intentionally internal and not
+/// surfaced here.
 pub fn jsonrpc_error_simple(
     code: VirbiusErrorCode,
     id: serde_json::Value,
@@ -87,17 +123,25 @@ pub fn jsonrpc_error_simple(
     session_risk: u32,
     reason: Option<&str>,
 ) -> serde_json::Value {
-    let mut data = serde_json::json!({
+    let human = code.human_message(reason);
+    let data = serde_json::json!({
         "tool_name": tool_name,
         "rule_id": null,
         "trace_id": trace_id,
         "session_risk_score": session_risk,
         "http_analog": code.http_analog(),
+        "reason_code": code.message(),
+        "reason": human,
     });
-    if let Some(r) = reason {
-        data["reason"] = serde_json::Value::String(r.to_string());
-    }
-    jsonrpc_error(code, id, data)
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code as i32,
+            "message": human,
+            "data": data,
+        }
+    })
 }
 
 #[cfg(test)]
@@ -180,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn test_jsonrpc_error_simple_includes_http_analog() {
+    fn test_jsonrpc_error_simple_carries_human_message_and_code() {
         let err = jsonrpc_error_simple(
             VirbiusErrorCode::RateExceeded,
             serde_json::json!(1),
@@ -193,11 +237,16 @@ mod tests {
         assert_eq!(err["error"]["data"]["tool_name"], "http_get");
         assert_eq!(err["error"]["data"]["trace_id"], "trace-abc");
         assert_eq!(err["error"]["data"]["session_risk_score"], 75);
-        assert_eq!(err["error"]["data"]["reason"], "too many requests");
+        // Machine code + human sentence, and the top-level message is the human one.
+        assert_eq!(err["error"]["data"]["reason_code"], "rate_exceeded");
+        assert_eq!(err["error"]["data"]["reason"], "The tool call was not executed: too many requests.");
+        assert_eq!(err["error"]["message"], "The tool call was not executed: too many requests.");
+        // rule_id stays internal.
+        assert!(err["error"]["data"]["rule_id"].is_null());
     }
 
     #[test]
-    fn test_jsonrpc_error_simple_no_reason() {
+    fn test_jsonrpc_error_simple_no_reason_falls_back_to_code() {
         let err = jsonrpc_error_simple(
             VirbiusErrorCode::LicenseRequired,
             serde_json::json!(null),
@@ -206,7 +255,25 @@ mod tests {
             0,
             None,
         );
-        assert!(err["error"]["data"].get("reason").is_none());
+        assert_eq!(err["error"]["data"]["reason_code"], "license_required");
+        assert_eq!(err["error"]["message"], "The agent credential was rejected: license_required.");
+    }
+
+    #[test]
+    fn test_human_message_categories() {
+        use VirbiusErrorCode::*;
+        assert!(NotInAllowlist.human_message(Some("tool 'x' not in license allowlist"))
+            .starts_with("The tool call was blocked by policy:"));
+        assert!(LicenseInvalid.human_message(None).starts_with("The agent credential was rejected:"));
+        assert!(RateExceeded.human_message(None).starts_with("The tool call was not executed:"));
+        assert!(ChallengeRequired.human_message(None).starts_with("Approval is required"));
+        assert!(SchemaViolation.human_message(None).starts_with("The tool call could not be executed:"));
+        // blank detail falls back to the machine code, never an empty sentence
+        assert_eq!(NotInAllowlist.human_message(Some("  ")), "The tool call was blocked by policy: not_in_allowlist.");
+        // very long detail is capped at the source
+        let long = "x".repeat(2000);
+        let msg = NotInAllowlist.human_message(Some(&long));
+        assert_eq!(msg.chars().count(), "The tool call was blocked by policy: ".len() + 512 + 1);
     }
 
     #[test]

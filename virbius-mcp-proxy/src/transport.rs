@@ -126,6 +126,22 @@ impl StdioTransport {
 
 // ─── HTTP/SSE Server (axum-based) ────────────────────────────
 
+/// Static, config-derived facts served on `GET /status` (operator surface:
+/// "what is this proxy and how is it wired"), plus process start time.
+#[derive(Clone)]
+pub struct StatusInfo {
+    pub started_at: std::time::Instant,
+    pub listen: String,
+    /// (upstream name, url)
+    pub upstreams: Vec<(String, String)>,
+    pub engine_url: String,
+    pub control_url: String,
+    /// Empty when the evaluate-token exchange is disabled.
+    pub auth_control_url: String,
+    pub audit_backend: String,
+    pub trace_backend: String,
+}
+
 /// Shared state for the axum HTTP server, passed to all handlers via `State`.
 #[derive(Clone)]
 pub struct AppState {
@@ -143,6 +159,8 @@ pub struct AppState {
     pub sse_sessions: Arc<DashMap<String, mpsc::Sender<Value>>>,
     /// Transport connection ID -> logical session ID mapping
     pub conn_to_session: Arc<DashMap<String, String>>,
+    /// Config snapshot + start time for `GET /status`.
+    pub status: Arc<StatusInfo>,
 }
 
 /// Create the axum router with all routes.
@@ -150,6 +168,8 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         // Health check endpoint (for Docker HEALTHCHECK and orchestration)
         .route("/health", get(handle_health))
+        // Operator surface: config summary + fallback license + recent decisions
+        .route("/status", get(handle_status))
         // MCP SSE protocol
         .route("/sse", get(handle_sse))
         .route("/messages/", post(handle_post_message))
@@ -164,6 +184,61 @@ pub fn create_router(state: AppState) -> Router {
 /// and orchestrators (docker-compose, Kubernetes) to determine liveness.
 async fn handle_health() -> impl IntoResponse {
     Json(serde_json::json!({"status": "ok"}))
+}
+
+/// GET /status — operator-facing snapshot: how the proxy is wired, whether the
+/// fallback license verifies, and the most recent decisions (including allows
+/// the audit sampling dropped). Read-only; never exposes secrets (no JWT, no
+/// key material, no broker credentials).
+async fn handle_status(State(state): State<AppState>) -> impl IntoResponse {
+    let s = &state.status;
+    let license = fallback_license_summary(&state);
+    Json(serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "uptime_secs": s.started_at.elapsed().as_secs(),
+        "transport": s.listen,
+        "upstreams": s.upstreams.iter()
+            .map(|(name, url)| serde_json::json!({"name": name, "url": url}))
+            .collect::<Vec<_>>(),
+        "engine_url": s.engine_url,
+        "control_url": s.control_url,
+        "evaluate_token_auth": {
+            "enabled": !s.auth_control_url.is_empty(),
+            "control_url": s.auth_control_url,
+        },
+        "audit_backend": s.audit_backend,
+        "trace_backend": s.trace_backend,
+        "sessions_active": state.session_mgr.len(),
+        "fallback_license": license,
+        "recent_decisions": crate::audit::recent_decisions(),
+    }))
+}
+
+/// Decode (and, when a public key is configured, verify) the fallback license
+/// for display. Claims are decoded without verification first because
+/// `License::verify` needs the expected `app_id` as input.
+fn fallback_license_summary(state: &AppState) -> Value {
+    let jwt = state.fallback_license_jwt.as_str();
+    if jwt.is_empty() {
+        return Value::Null;
+    }
+    let Some(claims) = crate::session::extract_claims_from_jwt(jwt) else {
+        return serde_json::json!({"decoded": false, "error": "malformed JWT"});
+    };
+    let app_id = claims.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
+    let exp = claims.get("exp").and_then(|v| v.as_i64()).unwrap_or(0);
+    let verified = match virbius_core::License::verify(jwt, &state.public_key_pem, app_id) {
+        Ok(_) => serde_json::json!({"ok": true}),
+        Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
+    };
+    serde_json::json!({
+        "decoded": true,
+        "app_id": app_id,
+        "tenant_id": claims.get("tenant_id").and_then(|v| v.as_str()),
+        "allowed_tools": claims.get("allowed_tools").cloned().unwrap_or(serde_json::json!([])),
+        "expires_at": exp,
+        "verified": verified,
+    })
 }
 
 /// GET /sse — Establish SSE connection (MCP SSE server protocol).

@@ -93,6 +93,17 @@ pub async fn route_request(
             .await
         }
         _ => {
+            // stdio has no HTTP surface, so expose the same runtime snapshot as
+            // GET /status over JSON-RPC. Deliberately a local, namespaced method
+            // (never forwarded upstream).
+            if method == "virbius/status" {
+                return Some(virbius_status_response(
+                    &id,
+                    session_mgr,
+                    public_key_pem,
+                    fallback_license_jwt,
+                ));
+            }
             // Transparent forward for all other methods
             if is_notification {
                 if upstream_mgr.is_single_for(&session_id) {
@@ -120,14 +131,10 @@ pub async fn route_request(
                         Ok(upstream) => match upstream.forward(request).await {
                             Ok(resp) => Some(resp),
                             Err(e) => {
-                                Some(jsonrpc_error(-32603, &id, &format!("upstream error: {e}")))
+                                Some(upstream_rpc_error(&id, "upstream error", &e))
                             }
                         },
-                        Err(e) => Some(jsonrpc_error(
-                            -32603,
-                            &id,
-                            &format!("upstream connect error: {e}"),
-                        )),
+                        Err(e) => Some(upstream_rpc_error(&id, "upstream connect error", &e)),
                     }
                 } else {
                     // Multi-upstream: forward to first upstream that succeeds
@@ -137,11 +144,13 @@ pub async fn route_request(
                             Ok(upstream) => match upstream.forward(request).await {
                                 Ok(resp) => return Some(resp),
                                 Err(e) => {
-                                    last_err = Some(format!("upstream {name}: {e}"));
+                                    warn!("upstream {name} forward failed: {e}");
+                                    last_err = Some(format!("upstream {name} forward failed"));
                                 }
                             },
                             Err(e) => {
-                                last_err = Some(format!("upstream {name} connect: {e}"));
+                                warn!("upstream {name} connect failed: {e}");
+                                last_err = Some(format!("upstream {name} connect failed"));
                             }
                         }
                     }
@@ -165,6 +174,47 @@ pub async fn route_request(
 /// On reconnect (same logical session ID already in SessionManager), accumulated
 /// state (risk_score, tool_call_count, trace_id, step_seq) is preserved.
 #[allow(clippy::too_many_arguments)]
+/// Build the `virbius/status` JSON-RPC response (stdio has no HTTP surface).
+/// Mirrors the operator-visible parts of `GET /status` that don't need HTTP
+/// config: the fallback license summary + the recent-decisions ring.
+fn virbius_status_response(
+    id: &Value,
+    session_mgr: &SessionManager,
+    public_key_pem: &str,
+    fallback_license_jwt: &str,
+) -> Value {
+    let license = if fallback_license_jwt.is_empty() {
+        Value::Null
+    } else if let Some(claims) = crate::session::extract_claims_from_jwt(fallback_license_jwt) {
+        let app_id = claims.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
+        let verified =
+            match virbius_core::License::verify(fallback_license_jwt, public_key_pem, app_id) {
+                Ok(_) => serde_json::json!({"ok": true}),
+                Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
+            };
+        serde_json::json!({
+            "decoded": true,
+            "app_id": app_id,
+            "tenant_id": claims.get("tenant_id").and_then(|v| v.as_str()),
+            "allowed_tools": claims.get("allowed_tools").cloned().unwrap_or(serde_json::json!([])),
+            "expires_at": claims.get("exp").and_then(|v| v.as_i64()).unwrap_or(0),
+            "verified": verified,
+        })
+    } else {
+        serde_json::json!({"decoded": false, "error": "malformed JWT"})
+    };
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": {
+            "version": env!("CARGO_PKG_VERSION"),
+            "sessions_active": session_mgr.len(),
+            "fallback_license": license,
+            "recent_decisions": crate::audit::recent_decisions(),
+        }
+    })
+}
+
 pub(crate) async fn handle_initialize(
     id: &Value,
     params: &Value,
@@ -220,11 +270,7 @@ pub(crate) async fn handle_initialize(
         let upstream = match upstream_mgr.get_or_connect_single(&logical_sid).await {
             Ok(u) => u,
             Err(e) => {
-                return Some(jsonrpc_error(
-                    -32603,
-                    id,
-                    &format!("upstream connect failed: {e}"),
-                ))
+                return Some(upstream_rpc_error(id, "upstream connect failed", &e))
             }
         };
 
@@ -266,11 +312,7 @@ pub(crate) async fn handle_initialize(
                 }
                 Some(inject_proxy_capabilities(resp))
             }
-            Err(e) => Some(jsonrpc_error(
-                -32603,
-                id,
-                &format!("upstream initialize failed: {e}"),
-            )),
+            Err(e) => Some(upstream_rpc_error(id, "upstream initialize failed", &e)),
         }
     } else {
         // ── Multi-upstream mode ──
@@ -412,11 +454,7 @@ async fn handle_tools_list(
         let upstream = match upstream_mgr.get_or_connect_single(session_id).await {
             Ok(u) => u,
             Err(e) => {
-                return Some(jsonrpc_error(
-                    -32603,
-                    id,
-                    &format!("upstream connect failed: {e}"),
-                ))
+                return Some(upstream_rpc_error(id, "upstream connect failed", &e))
             }
         };
 
@@ -428,11 +466,7 @@ async fn handle_tools_list(
 
         match upstream.forward(&forward_req).await {
             Ok(resp) => filter_tools_list(inject_local_tools(resp), &session),
-            Err(e) => Some(jsonrpc_error(
-                -32603,
-                id,
-                &format!("upstream tools/list failed: {e}"),
-            )),
+            Err(e) => Some(upstream_rpc_error(id, "upstream tools/list failed", &e)),
         }
     } else {
         // ── Multi-upstream mode ──
@@ -884,11 +918,7 @@ async fn handle_tools_call(
                 {
                     Ok(u) => u,
                     Err(e) => {
-                        return Some(jsonrpc_error(
-                            -32603,
-                            id,
-                            &format!("upstream connect failed: {e}"),
-                        ))
+                        return Some(upstream_rpc_error(id, "upstream connect failed", &e))
                     }
                 };
 
@@ -917,11 +947,7 @@ async fn handle_tools_call(
                         return Some(resp);
                     }
                     Err(e) => {
-                        return Some(jsonrpc_error(
-                            -32603,
-                            id,
-                            &format!("upstream tools/call failed: {e}"),
-                        ))
+                        return Some(upstream_rpc_error(id, "upstream tools/call failed", &e))
                     }
                 }
             }
@@ -1097,11 +1123,7 @@ async fn handle_tools_call(
             {
                 Ok(u) => u,
                 Err(e) => {
-                    return Some(jsonrpc_error(
-                        -32603,
-                        id,
-                        &format!("upstream connect failed: {e}"),
-                    ))
+                    return Some(upstream_rpc_error(id, "upstream connect failed", &e))
                 }
             };
 
@@ -1172,11 +1194,7 @@ async fn handle_tools_call(
                     trace_collector.record(tr_event).await;
                     session.set_last_step_id(result_step_id);
                     session_mgr.update(session_id.to_string(), session);
-                    Some(jsonrpc_error(
-                        -32603,
-                        id,
-                        &format!("upstream tools/call failed: {e}"),
-                    ))
+                    Some(upstream_rpc_error(id, "upstream tools/call failed", &e))
                 }
             }
         }
@@ -1243,23 +1261,26 @@ async fn handle_tools_call(
             );
             trace_collector.record(tc_event).await;
 
-            // Return JSON-RPC error -32011 with challenge details
+            // Return JSON-RPC error -32011 with challenge details. As with every
+            // Virbius error: message/reason are human, reason_code is the machine
+            // token, rule_id stays internal.
+            let human = VirbiusErrorCode::ChallengeRequired.human_message(Some(&reason));
             let data = serde_json::json!({
                 "tool_name": original_tool_name,
-                "rule_id": rule_id,
                 "trace_id": session.trace_id,
                 "session_risk_score": risk_score,
                 "http_analog": 403,
                 "challenge_id": challenge_id,
                 "args_hash": args_hash,
-                "reason": reason,
+                "reason_code": VirbiusErrorCode::ChallengeRequired.message(),
+                "reason": human.clone(),
             });
             Some(serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
                 "error": {
                     "code": VirbiusErrorCode::ChallengeRequired as i32,
-                    "message": VirbiusErrorCode::ChallengeRequired.message(),
+                    "message": human,
                     "data": data
                 }
             }))
@@ -1368,6 +1389,17 @@ fn inject_proxy_capabilities(mut resp: Value) -> Value {
 }
 
 /// Build a JSON-RPC error response (internal server error).
+/// Standard JSON-RPC error for an upstream/transport failure.
+///
+/// The client-facing `message` is a **fixed, safe** string: it must never embed
+/// the raw error (`{e}`), which can carry internal hosts/URLs, because a
+/// pass-through failure formatter may hand the message straight to the LLM. The
+/// detail is logged for operators instead.
+fn upstream_rpc_error(id: &Value, what: &str, e: &dyn std::fmt::Display) -> Value {
+    warn!("{what}: {e}");
+    jsonrpc_error(-32603, id, &format!("Upstream MCP server error ({what})."))
+}
+
 fn jsonrpc_error(code: i32, id: &Value, message: &str) -> Value {
     serde_json::json!({
         "jsonrpc": "2.0",
@@ -1915,10 +1947,13 @@ async fn execute_in_sandbox(
     // D-I (v2.5-min): while the delegated credential plane is enabled,
     // local-exec tools are denied outright regardless of sandbox config.
     if !crate::delegated::local_exec_allowed() {
-        return crate::error::jsonrpc_error(
+        return crate::error::jsonrpc_error_simple(
             crate::error::VirbiusErrorCode::DelegatedLocalExecDisabled,
             id.clone(),
-            serde_json::json!({ "tool_name": tool_name }),
+            tool_name,
+            "",
+            0,
+            Some("local tool execution is disabled while the delegated credential plane is enabled"),
         );
     }
 
@@ -2130,10 +2165,13 @@ async fn execute_in_sandbox(
     // D-I (v2.5-min): while the delegated credential plane is enabled,
     // local-exec tools are denied outright regardless of sandbox config.
     if !crate::delegated::local_exec_allowed() {
-        return crate::error::jsonrpc_error(
+        return crate::error::jsonrpc_error_simple(
             crate::error::VirbiusErrorCode::DelegatedLocalExecDisabled,
             id.clone(),
-            serde_json::json!({ "tool_name": tool_name }),
+            tool_name,
+            "",
+            0,
+            Some("local tool execution is disabled while the delegated credential plane is enabled"),
         );
     }
 

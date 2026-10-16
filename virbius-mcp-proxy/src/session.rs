@@ -189,7 +189,7 @@ impl Session {
 /// filtering in `tools/list` and fallback license injection. The actual
 /// security enforcement happens at `tools/call` time via full License
 /// verification in the security pipeline.
-fn extract_claims_from_jwt(jwt: &str) -> Option<serde_json::Value> {
+pub(crate) fn extract_claims_from_jwt(jwt: &str) -> Option<serde_json::Value> {
     let parts: Vec<&str> = jwt.split('.').collect();
     if parts.len() != 3 {
         return None;

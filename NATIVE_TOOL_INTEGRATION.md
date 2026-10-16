@@ -11,7 +11,7 @@ This document covers both integration paths for LangChain native tools, coverage
 | | Mode A: observe (advisory) | Mode B: enforce |
 |---|---|---|
 | Implementation | `virbius-integrate` (LangChain `BaseCallbackHandler`) | `virbius-mcp-python` (SDK `precheck`) / `virbius-mcp-proxy` |
-| Wiring | one line at construction: `callbacks=[VirbiusAuditCallback(...)]` | SDK calls `precheck_tool` at the tool boundary, or route via the proxy |
+| Wiring | one line at construction: `callbacks=[VirbiusAuditCallback(...)]` | wrap the tool with `govern(fn)` / `guard.precheck` (denials raise `VirbiusDenied`), or route via the proxy |
 | Capability | visible, auditable, inventoriable; risk classification + recommended mode | pre-execution interception: License allowlist, args schema, Guard adjudication |
 | Blocks calls | **No** (never blocks, never enforces) | **Yes** |
 | Enters audit chain | No (independent channel, claim-grade) | Yes (audit / decision chain) |
@@ -143,6 +143,13 @@ r = v.precheck_tool("read_file", json.dumps({"path": "/tmp/a"}), jwt, pem, "crm-
 if not r["allowed"]:
     raise PermissionError(r["reason"])
 ```
+
+> **Recommended wrapper**: the framework-agnostic `govern(fn)` wraps any callable
+> (no framework needed; a denial raises `VirbiusDenied`), and `VirbiusGuard.from_env()`
+> holds the license material (reading the same env vars the proxy uses) so you
+> don't pass `jwt/pem/app_id` on every call; the one-line framework adapters are
+> `@guard.openai_tool` / `@guard.langchain_tool` / `@guard.guarded`
+> (see [virbius-mcp-python/README.md](virbius-mcp-python/README.md)).
 
 - Check order: **License allowlist → (when a `tool_policy` exists) args schema → fast-path/sandbox markers**.
 - Rule source: `configure_rules` supports **offline** (local manifest) and **control/cloud** (pulled from the control plane and cached); `reload_rules()` re-pulls.

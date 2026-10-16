@@ -7,6 +7,8 @@ use virbius_core::{precheck, License, ToolCall};
 pub struct PrecheckOutput {
     pub allowed: bool,
     pub reason: Option<String>,
+    /// Stable machine code when denied (e.g. `not_in_allowlist`).
+    pub code: Option<String>,
     pub fast_path: bool,
     pub sandbox_type: String,
 }
@@ -30,7 +32,7 @@ pub fn precheck_tool(
     app_id: String,
 ) -> Result<PrecheckOutput> {
     let lic = License::verify(&license_jwt, &public_key_pem, &app_id)
-        .map_err(|e| Error::from_reason(format!("License error: {:?}", e)))?;
+        .map_err(|e| Error::from_reason(format!("License error: {e}")))?;
 
     let args: serde_json::Value = serde_json::from_str(&args_json)
         .map_err(|e| Error::from_reason(format!("Invalid args JSON: {}", e)))?;
@@ -45,6 +47,7 @@ pub fn precheck_tool(
     Ok(PrecheckOutput {
         allowed: result.allowed,
         reason: result.reason,
+        code: result.code,
         fast_path: result.fast_path,
         sandbox_type: result.sandbox_type,
     })
@@ -53,7 +56,7 @@ pub fn precheck_tool(
 #[napi]
 pub fn verify_license(jwt: String, public_key_pem: String, app_id: String) -> Result<LicenseInfo> {
     let lic = License::verify(&jwt, &public_key_pem, &app_id)
-        .map_err(|e| Error::from_reason(format!("License error: {:?}", e)))?;
+        .map_err(|e| Error::from_reason(format!("License error: {e}")))?;
 
     Ok(LicenseInfo {
         app_id: lic.claims.app_id,

@@ -33,6 +33,14 @@ pub struct AuditEvent {
     pub transform_applied: Option<serde_json::Value>,
 }
 
+/// Control's `tb_audit_events.reason_code` is VARCHAR(64); richer deny reasons
+/// (e.g. the license app_id-mismatch text) would make MySQL strict mode reject
+/// the whole audit row. Cap the wire value; the full text still reaches the
+/// JSON-RPC caller.
+fn reason_for_wire(reason: Option<&str>) -> Option<String> {
+    reason.map(|r| r.chars().take(64).collect())
+}
+
 impl AuditEvent {
     pub fn tool_call(
         session: &crate::session::Session,
@@ -50,7 +58,7 @@ impl AuditEvent {
             tool_name: tool_name.to_string(),
             effective_action: action.to_string(),
             rule_id: rule_id.map(String::from),
-            reason_code: reason.map(String::from),
+            reason_code: reason_for_wire(reason),
             session_id: session.session_id.clone(),
             app_id: session.app_id.clone(),
             tenant_id: session.tenant_id.clone(),
@@ -81,7 +89,7 @@ impl AuditEvent {
             tool_name: tool_name.to_string(),
             effective_action: action.to_string(),
             rule_id: rule_id.map(String::from),
-            reason_code: reason.map(String::from),
+            reason_code: reason_for_wire(reason),
             session_id: session.session_id.clone(),
             app_id: session.app_id.clone(),
             tenant_id: session.tenant_id.clone(),
@@ -131,6 +139,9 @@ impl AuditSink {
     }
 
     pub async fn report(&self, event: AuditEvent) {
+        // Status ring first: it must reflect every decision, even ones the
+        // sampling below drops from the audit bus.
+        record_recent(&event);
         if event.effective_action == "allow" && rand_sample() > self.sample_rate {
             return;
         }
@@ -147,6 +158,52 @@ impl AuditSink {
 }
 
 pub type SharedAuditSink = Arc<AuditSink>;
+
+// ─── Recent decisions (GET /status surface) ────────────────────────────
+
+/// One entry of the bounded recent-decisions ring surfaced on `GET /status`.
+/// Deliberately records EVERY decision — including allows dropped by the
+/// audit sampling — so operators can see "what did the proxy just decide and
+/// why" without grepping Kafka.
+#[derive(Debug, Clone, Serialize)]
+pub struct RecentDecision {
+    pub intercepted_at: String,
+    pub event_type: String,
+    pub tool_name: String,
+    pub effective_action: String,
+    pub reason_code: Option<String>,
+    pub trace_id: String,
+}
+
+/// Capacity of the recent-decisions ring.
+pub const RECENT_DECISIONS_CAP: usize = 50;
+
+fn recent_decisions_store() -> &'static std::sync::Mutex<std::collections::VecDeque<RecentDecision>> {
+    static STORE: std::sync::OnceLock<std::sync::Mutex<std::collections::VecDeque<RecentDecision>>> =
+        std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::with_capacity(RECENT_DECISIONS_CAP)))
+}
+
+fn record_recent(event: &AuditEvent) {
+    let mut store = recent_decisions_store().lock().unwrap_or_else(|e| e.into_inner());
+    if store.len() == RECENT_DECISIONS_CAP {
+        store.pop_front();
+    }
+    store.push_back(RecentDecision {
+        intercepted_at: event.intercepted_at.clone(),
+        event_type: event.event_type.clone(),
+        tool_name: event.tool_name.clone(),
+        effective_action: event.effective_action.clone(),
+        reason_code: event.reason_code.clone(),
+        trace_id: event.trace_id.clone(),
+    });
+}
+
+/// Snapshot of the most recent proxy decisions, oldest first.
+pub fn recent_decisions() -> Vec<RecentDecision> {
+    let store = recent_decisions_store().lock().unwrap_or_else(|e| e.into_inner());
+    store.iter().cloned().collect()
+}
 
 // ─── Kafka worker ──────────────────────────────────────────────────────
 

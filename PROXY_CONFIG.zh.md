@@ -17,6 +17,8 @@
 - [后端选择逻辑](#后端选择逻辑)
 - [License 凭证配置](#license-凭证配置)
 - [启动方式](#启动方式)
+- [命令行](#命令行)
+- [常见报错对照表](#常见报错对照表)
 
 ---
 
@@ -31,7 +33,10 @@ Proxy 启动时按以下顺序查找配置文件，找到第一个即加载：
 
 如果两个文件都不存在，使用全部默认值 + 环境变量覆盖。
 
-> **文件名固定**，不支持 `--config` 命令行参数自定义路径。可通过环境变量覆盖所有配置项。
+> **`--config <path>` 显式指定**：显式给出的配置文件**必须**可读且可解析——路径写错或
+> TOML 损坏会直接 `exit(2)`，不会静默回退默认值。未指定时按上表搜索：搜索路径上存在
+> 但解析失败的文件会**打印 warning** 后继续用默认值（旧行为是完全静默）。所有配置项
+> 仍可被环境变量覆盖。
 
 ---
 
@@ -64,7 +69,7 @@ Proxy 启动时按以下顺序查找配置文件，找到第一个即加载：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `control_base_url` | string | `"http://localhost:8080"` | Control Plane 地址（预留） |
+| `control_base_url` | string | `"http://localhost:8080"` | Control Plane 地址 —— `enroll` 默认目标，也可由 `VIRBIUS_BASE_URL` 推导 |
 | `engine_url` | string | `"http://localhost:8082"` | 风控引擎地址 |
 | `license_public_key` | string | `""` | License 公钥 PEM 文件路径（Ed25519） |
 | `license_file` | string | `""` | License JWT 文件路径（回退凭证） |
@@ -173,6 +178,13 @@ export VIRBIUS_UPSTREAMS='[{"name":"fs","url":"http://localhost:8001","sse_path"
 | `VIRBIUS_LICENSE_PUBLIC_KEY` | `security.license_public_key` |
 | `VIRBIUS_LICENSE_FILE` | `security.license_file` |
 | `VIRBIUS_FALLBACK_POLICY` | `security.fallback_policy` |
+| `VIRBIUS_AUTH_CONTROL_URL` | `auth.control_base_url`（evaluate-token 换取） |
+
+### 单一基地址（可选，opt-in）
+
+| 环境变量 | 作用 |
+|----------|------|
+| `VIRBIUS_BASE_URL` | 一个变量推导三个端点：`control_base_url` 与 `auth.control_base_url` = 该地址本身；`engine_url` = 同主机 `:8082`。仅替换仍是内置默认值的项——显式设置的上面的变量或配置文件里的值**总是优先**。适合单机部署把环境变量数量从 3 个减到 1 个。 |
 
 ### 审计
 
@@ -502,3 +514,119 @@ docker run -d \
   -v /etc/virbius/agent-license.jwt:/etc/virbius/agent-license.jwt:ro \
   virbius/mcp-proxy:latest
 ```
+
+---
+
+## 命令行
+
+```
+virbius-mcp-proxy [--config <path>] [run]      # 运行（默认）
+virbius-mcp-proxy doctor [--config <path>]     # 起飞前自检
+virbius-mcp-proxy enroll [选项]                # 从运营台一键领取 license + 公钥
+virbius-mcp-proxy --help / --version
+```
+
+### doctor — 起飞前自检
+
+一条命令回答"为什么连不上"：配置摘要、公钥可解析性、license 可验证性（含剩余天数）、
+engine/control/token-exchange/upstream 连通性探测。连通性问题只算 **WARN**（proxy 有
+failover），配置/license 问题算 **FAIL**（退出码 1）。
+
+```bash
+VIRBIUS_LICENSE_FILE=/etc/virbius/agent-license.jwt \
+VIRBIUS_LICENSE_PUBLIC_KEY=/etc/virbius/license_pub.pem \
+VIRBIUS_BASE_URL=http://virbius-control:8080 \
+virbius-mcp-proxy doctor
+```
+
+### enroll — 一键领取凭证
+
+把"手工拼 license.jwt + license_pub.pem"变成一条命令：建租户（幂等）→ 注册工具 → 签发
+license → 拉取公钥 → 落盘。
+
+```bash
+virbius-mcp-proxy enroll \
+  --control http://127.0.0.1:8080 \
+  --tenant my-tenant --app-id my-agent \
+  --tools read_file,search \
+  --out-dir /etc/virbius
+```
+
+安全设计：
+
+- 管理凭证**只**从环境变量 `VIRBIUS_ADMIN_API_KEY` 读取（以 `X-Virbius-Api-Key` 头发送），
+  不提供命令行参数——避免 shell 历史 / `ps` 泄漏。
+- 两个文件以 **0600** 权限写入；PEM 归一为恰好一个结尾换行。
+- **绝不打印 JWT 本体**，只打印 app_id/租户/工具窗口/有效期和文件路径。
+- 对已有 active license 的 app 重复 enroll 会 409；加 `--revoke` 先吊销旧票再签发。
+
+### GET /status — 运行时运维面（tcp/http 模式）
+
+`GET http://<proxy>:9090/status` 返回：版本、uptime、upstream/engine/control 接线、
+audit/trace 后端、**fallback license 摘要与验签结果**、最近 50 条裁决（含被审计采样
+丢弃的 allow）。只读、不暴露任何密钥材料。排查"proxy 到底拦了什么、为什么"先看这里，
+不用去翻 Kafka。
+
+---
+
+## 常见报错对照表
+
+| 报错 | 含义 | 自查 |
+|------|------|------|
+| `license app_id mismatch: jwt='…', session='…'` | license 绑定的 app_id 与会话声明的不一致 | `_meta.app_id` 与签发时 `--app-id` 是否一致 |
+| `license public key PEM unparseable: …` | 公钥文件解析失败（常见：结尾多空行——现在会自动 trim，仍失败说明内容不是 Ed25519 PEM） | `doctor` 校验文件；从运营台重新下载或用 `enroll` 落盘 |
+| `license signature invalid` | Ed25519 验签失败 | 公钥与签发方不配对（rotate-key 后旧 PEM）；重新拉公钥 |
+| `license expired` | license 过期 | 运营台重签 + `enroll --revoke` |
+| `-32001 license_invalid` | 上面任一 license 类失败 | 看具体 reason 文本 |
+| `-32004 not_in_allowlist` | 工具不在 license 白名单 | 运营台把工具加入 allowed_tools 重签，或让 Agent 只用白名单工具 |
+| engine 401 `missing_token` | 引擎要求 evaluate token，而 proxy 未配置换取端点 | 设 `VIRBIUS_AUTH_CONTROL_URL`，或用 `VIRBIUS_BASE_URL` 一并推导 |
+| `-32603 Upstream MCP server error (…)` | 上游 MCP Server 不可达/失败 | `doctor` 看 upstream 探测；检查 upstream_url/sse_path |
+
+### stdio 模式（无 HTTP 面）
+
+多数 MCP 客户端（Claude Desktop 等）把 proxy 当作 stdio sidecar 拉起，没有 HTTP 端口。
+此时运维面走同一条 JSON-RPC 线：发
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"virbius/status"}
+```
+
+返回 `{version, sessions_active, fallback_license{app_id,tenant_id,allowed_tools,verified}, recent_decisions[]}`
+——等价于 `GET /status`（本地方法，绝不转发到上游）。`doctor` 在 stdio 模式下同样可用（它是
+命令行自检）。
+
+### 错误形状 & 把拦截结果传给 LLM
+
+每个 Virbius 失败都是 JSON-RPC error，其 `message`（与 `data.reason`）是**人话**；
+稳定机器码在 `data.reason_code`（以及数字 `error.code`）。`rule_id` 属内部，**不对外**。
+
+```jsonc
+"error": {
+  "code": -32004,
+  "message": "The tool call was blocked by policy: tool 'danger_exec' not in license allowlist.",
+  "data": {
+    "reason_code": "not_in_allowlist",
+    "reason": "The tool call was blocked by policy: tool 'danger_exec' not in license allowlist.",
+    "tool_name": "danger_exec", "trace_id": "…", "session_risk_score": 0, "http_analog": 403
+  }
+}
+```
+
+标准 JSON-RPC 错误（`-32603` 上游/传输、解析错误）保持简短固定文案——**绝不嵌入上游原始错误文本**。
+
+OpenAI Agents SDK 的**默认** `failure_error_function` 会把 message 换成通用文案、埋掉原因。
+传入**透传** formatter 即可原样揭示 proxy 的 message（不检测、不改写）：
+
+```python
+from virbius_mcp_python import virbius_tool_error
+MCPServerSse({"url": proxy_sse_url}, failure_error_function=virbius_tool_error)
+```
+
+进程内 SDK 模式（`govern` / `VirbiusGuard.openai_tool`）自动且按**类型**揭示：拒绝抛 `VirbiusDenied`
+（`PermissionError` 子类，携带 `reason_code`、结构化 `decision` 与可选 `audit_ref`，由 `from_decision`
+构造）并被透出；其他异常保持通用文案，绝不把用户工具的内部错误文本交给模型。
+
+文案本身由 `virbius_mcp_python.policy_blocked_message(reason)` **单点构造**（`VirbiusGuard.guard()`
+使用）。"用事实性人话而非 SDK 默认文案"这一取舍有 A/B 实测支撑：同一 Agent、温度 0 下，SDK 默认的
+"Please try again." 会诱导模型**重试策略拒绝**，Virbius 文案不会。复现：`scripts/test-error-wording-ab.sh`
+（信息型，无 key 时 SKIP）。

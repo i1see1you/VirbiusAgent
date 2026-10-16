@@ -3,6 +3,7 @@ from typing import Any, Optional, TypedDict
 class PrecheckResult(TypedDict):
     allowed: bool
     reason: Optional[str]
+    code: Optional[str]
     fast_path: bool
     sandbox_type: str
 

@@ -6,8 +6,11 @@ use virbius_core::{
 };
 
 /// Python module for VirbiusAgent MCP integration.
+///
+/// Ships as the ``virbius_mcp_python._native`` submodule (mixed
+/// Rust/Python package layout); the package ``__init__`` re-exports it.
 #[pymodule]
-fn virbius_mcp_python(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _native(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(precheck_tool, m)?)?;
     m.add_function(wrap_pyfunction!(verify_license, m)?)?;
     m.add_function(wrap_pyfunction!(desensitize, m)?)?;
@@ -121,7 +124,7 @@ fn precheck_tool(
     app_id: String,
 ) -> PyResult<PyObject> {
     let license = License::verify(&license_jwt, &public_key_pem, &app_id)
-        .map_err(|e| PyValueError::new_err(format!("License error: {:?}", e)))?;
+        .map_err(|e| PyValueError::new_err(format!("License error: {e}")))?;
 
     let args: serde_json::Value = serde_json::from_str(&args_json)
         .map_err(|e| PyValueError::new_err(format!("Invalid args JSON: {}", e)))?;
@@ -138,6 +141,7 @@ fn precheck_tool(
         let dict = pyo3::types::PyDict::new_bound(py);
         dict.set_item("allowed", result.allowed)?;
         dict.set_item("reason", result.reason)?;
+        dict.set_item("code", result.code)?;
         dict.set_item("fast_path", result.fast_path)?;
         dict.set_item("sandbox_type", &result.sandbox_type)?;
         Ok(dict.into())
@@ -148,7 +152,7 @@ fn precheck_tool(
 #[pyfunction]
 fn verify_license(jwt: String, public_key_pem: String, app_id: String) -> PyResult<PyObject> {
     let license = License::verify(&jwt, &public_key_pem, &app_id)
-        .map_err(|e| PyValueError::new_err(format!("License error: {:?}", e)))?;
+        .map_err(|e| PyValueError::new_err(format!("License error: {e}")))?;
 
     Python::with_gil(|py| {
         let dict = pyo3::types::PyDict::new_bound(py);

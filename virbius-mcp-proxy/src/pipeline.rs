@@ -8,7 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 
-use virbius_core::license::{License, LicenseError};
+use virbius_core::license::License;
 use virbius_core::precheck::{self, PrecheckResult, ToolCall};
 
 use crate::audit::{AuditEvent, SharedAuditSink};
@@ -410,16 +410,12 @@ impl SecurityPipeline {
                         .await;
                 }
                 Err(e) => {
-                    let reason = format!("{:?}", e);
+                    // Display carries the taxonomy context (app_id mismatch vs
+                    // key-parse vs signature) straight into the deny reason.
+                    let reason = e.to_string();
                     self.audit_tool_call(session, tool_name, "block", None, Some(&reason))
                         .await;
-                    let code = match e {
-                        LicenseError::Expired
-                        | LicenseError::Revoked(_)
-                        | LicenseError::InvalidSignature => VirbiusErrorCode::LicenseInvalid,
-                        _ => VirbiusErrorCode::LicenseInvalid,
-                    };
-                    return PipelineResult::deny(code, &reason);
+                    return PipelineResult::deny(VirbiusErrorCode::LicenseInvalid, &reason);
                 }
             }
         }
@@ -1096,7 +1092,7 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            fast_path: true,
+            code: None,            fast_path: true,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
@@ -1112,7 +1108,7 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            fast_path: true,
+            code: None,            fast_path: true,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
@@ -1129,7 +1125,7 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            fast_path: true,
+            code: None,            fast_path: true,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
@@ -1144,7 +1140,7 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            fast_path: true,
+            code: None,            fast_path: true,
             sandbox_type: "docker".to_string(),
             timeout_ms: 5000,
         };
@@ -1159,7 +1155,7 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            fast_path: false,
+            code: None,            fast_path: false,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };
@@ -1176,7 +1172,7 @@ mod tests {
         let pre = PrecheckResult {
             allowed: true,
             reason: None,
-            fast_path: true,
+            code: None,            fast_path: true,
             sandbox_type: "none".to_string(),
             timeout_ms: 5000,
         };

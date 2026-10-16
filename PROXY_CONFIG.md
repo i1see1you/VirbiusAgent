@@ -19,6 +19,8 @@
 - [Backend Selection Logic](#backend-selection-logic)
 - [License Credential Configuration](#license-credential-configuration)
 - [Startup Modes](#startup-modes)
+- [Command line](#command-line)
+- [Common errors](#common-errors)
 
 ---
 
@@ -33,7 +35,12 @@ The proxy searches for a configuration file in the following order and loads the
 
 If neither file exists, all defaults are used with environment variable overrides.
 
-> **The filename is fixed** — there is no `--config` CLI flag. All configuration can be overridden via environment variables.
+> **`--config <path>` is explicit**: a file given via `--config` MUST be readable
+> and parse — a typo'd path or malformed TOML exits(2) instead of silently
+> falling back to defaults. Without it the search table applies; a search-path
+> file that exists but fails to parse now prints a **warning** (it used to be
+> completely silent). All configuration can still be overridden via environment
+> variables.
 
 ---
 
@@ -66,7 +73,7 @@ If neither file exists, all defaults are used with environment variable override
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `control_base_url` | string | `"http://localhost:8080"` | Control Plane URL (reserved) |
+| `control_base_url` | string | `"http://localhost:8080"` | Control Plane URL — used by `enroll` as the default target and derived from `VIRBIUS_BASE_URL` |
 | `engine_url` | string | `"http://localhost:8082"` | Risk engine URL |
 | `license_public_key` | string | `""` | Path to License public key PEM file (Ed25519) |
 | `license_file` | string | `""` | Path to License JWT file (fallback credential) |
@@ -175,6 +182,13 @@ export VIRBIUS_UPSTREAMS='[{"name":"fs","url":"http://localhost:8001","sse_path"
 | `VIRBIUS_LICENSE_PUBLIC_KEY` | `security.license_public_key` |
 | `VIRBIUS_LICENSE_FILE` | `security.license_file` |
 | `VIRBIUS_FALLBACK_POLICY` | `security.fallback_policy` |
+| `VIRBIUS_AUTH_CONTROL_URL` | `auth.control_base_url` (evaluate-token exchange) |
+
+#### Single base URL (opt-in)
+
+| Environment Variable | Maps To |
+|---------------------|---------|
+| `VIRBIUS_BASE_URL` | Derives three endpoints from one value: `control_base_url` and `auth.control_base_url` become the base itself, `engine_url` becomes the same host on `:8082`. Only values still at their built-in defaults are replaced — explicit variables above or config-file values always win. Cuts the env-var count to one for single-host deployments. |
 
 ### Audit
 
@@ -505,3 +519,135 @@ docker run -d \
   -v /etc/virbius/agent-license.jwt:/etc/virbius/agent-license.jwt:ro \
   virbius/mcp-proxy:latest
 ```
+
+---
+
+## Command line
+
+```
+virbius-mcp-proxy [--config <path>] [run]      # run (default)
+virbius-mcp-proxy doctor [--config <path>]     # pre-flight self-check
+virbius-mcp-proxy enroll [options]             # fetch license + public key from control
+virbius-mcp-proxy --help / --version
+```
+
+### doctor — pre-flight self-check
+
+One command answers "why won't this connect": config summary, public-key parse
+check, license verification (with days remaining) and connectivity probes for
+engine / control / token-exchange / upstreams. Connectivity problems are
+**WARN**-only (the proxy fail-overs); config/license problems are **FAIL**
+(exit code 1).
+
+```bash
+VIRBIUS_LICENSE_FILE=/etc/virbius/agent-license.jwt \
+VIRBIUS_LICENSE_PUBLIC_KEY=/etc/virbius/license_pub.pem \
+VIRBIUS_BASE_URL=http://virbius-control:8080 \
+virbius-mcp-proxy doctor
+```
+
+### enroll — one-command credential fetch
+
+Turns "hand-assemble license.jwt + license_pub.pem" into one command: ensure the
+tenant (idempotent) → register tools → issue the license → fetch the public key
+→ write both files.
+
+```bash
+virbius-mcp-proxy enroll \
+  --control http://127.0.0.1:8080 \
+  --tenant my-tenant --app-id my-agent \
+  --tools read_file,search \
+  --out-dir /etc/virbius
+```
+
+Security posture:
+
+- The admin credential is read **only** from the `VIRBIUS_ADMIN_API_KEY` env var
+  (sent as `X-Virbius-Api-Key`). There is deliberately no CLI flag — flags leak
+  through shell history and `ps`.
+- Both files are written mode **0600**; the PEM is normalised to exactly one
+  trailing newline.
+- The **JWT itself is never printed** — only app_id / tenant / tool window /
+  validity and the file paths.
+- Re-enrolling an app that already has an active license returns 409; pass
+  `--revoke` to revoke the old license and reissue.
+
+### GET /status — runtime operator surface (tcp/http mode)
+
+`GET http://<proxy>:9090/status` returns: version, uptime, upstream/engine/
+control wiring, audit/trace backends, the **fallback license summary and
+verification result**, and the last 50 decisions (including allows the audit
+sampling dropped). Read-only; never exposes key material. Check here first when
+asking "what did the proxy just decide and why" — no Kafka grepping required.
+
+---
+
+## Common errors
+
+| Error | Meaning | Check |
+|-------|---------|-------|
+| `license app_id mismatch: jwt='…', session='…'` | The license's app_id differs from the session's | Does `_meta.app_id` match the `--app-id` used at issuance? |
+| `license public key PEM unparseable: …` | The public-key file failed to parse (a trailing blank line is now auto-trimmed, so a failure means the content is not an Ed25519 PEM) | Validate with `doctor`; re-download from control or write it via `enroll` |
+| `license signature invalid` | Ed25519 verification failed | Key does not pair with the issuer (stale PEM after rotate-key); refetch the public key |
+| `license expired` | The license has expired | Reissue in the console, then `enroll --revoke` |
+| `-32001 license_invalid` | Any of the license failures above | Read the specific reason text |
+| `-32004 not_in_allowlist` | Tool is not in the license allowlist | Add the tool to allowed_tools and reissue, or restrict the agent to allowlisted tools |
+| engine 401 `missing_token` | The engine requires an evaluate token but the proxy has no exchange endpoint configured | Set `VIRBIUS_AUTH_CONTROL_URL`, or let `VIRBIUS_BASE_URL` derive it |
+| `-32603 Upstream MCP server error (…)` | The upstream MCP server is unreachable/failed | See the upstream probe in `doctor`; check upstream_url / sse_path |
+
+### stdio mode (no HTTP surface)
+
+Most MCP clients (Claude Desktop, etc.) spawn the proxy as a stdio sidecar. There
+is no HTTP port there, so the operator surface rides the same JSON-RPC wire: send
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"virbius/status"}
+```
+
+and get back `{version, sessions_active, fallback_license{app_id,tenant_id,allowed_tools,verified}, recent_decisions[]}`
+— the stdio equivalent of `GET /status` (it is a local method; never forwarded
+upstream). `doctor` works identically in stdio mode (it is a CLI self-check).
+
+### Error shape & surfacing denials to the LLM
+
+Every Virbius failure is a JSON-RPC error whose `message` (and `data.reason`) is a
+**human sentence**; the stable machine token lives in `data.reason_code` (and the
+numeric `error.code`). `rule_id` is internal and never surfaced.
+
+```jsonc
+"error": {
+  "code": -32004,
+  "message": "The tool call was blocked by policy: tool 'danger_exec' not in license allowlist.",
+  "data": {
+    "reason_code": "not_in_allowlist",
+    "reason": "The tool call was blocked by policy: tool 'danger_exec' not in license allowlist.",
+    "tool_name": "danger_exec", "trace_id": "…", "session_risk_score": 0, "http_analog": 403
+  }
+}
+```
+
+Standard JSON-RPC errors (`-32603` upstream/transport, parse errors) keep a short
+fixed message — they never embed raw upstream error text.
+
+The OpenAI Agents SDK's **default** `failure_error_function` replaces the message
+with a generic "An error occurred … try again", hiding the reason. Pass a
+pass-through formatter to reveal the proxy's message verbatim (no detection, no
+rewriting):
+
+```python
+from virbius_mcp_python import virbius_tool_error
+MCPServerSse({"url": proxy_sse_url}, failure_error_function=virbius_tool_error)
+```
+
+In-process SDK mode (`govern` / `VirbiusGuard.openai_tool`) reveals it
+automatically and type-safely: a denial raises `VirbiusDenied` (a `PermissionError`
+subclass that carries `reason_code`, the structured `decision`, and an optional
+`audit_ref` via `from_decision`), which is surfaced; any other exception keeps the
+generic line so a user tool's internal error text never reaches the model.
+
+The wording itself is single-sourced in `virbius_mcp_python.policy_blocked_message(reason)`
+(used by `VirbiusGuard.guard()`), and the choice to surface a human sentence
+rather than the SDK default is A/B-validated: on the same agent at temperature 0,
+the SDK's "Please try again." nudge made the model retry a policy refusal, while
+the Virbius wording did not. Reproduce with `scripts/test-error-wording-ab.sh`
+(informational; SKIPs without a key).

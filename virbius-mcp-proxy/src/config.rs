@@ -193,6 +193,23 @@ fn default_control_url() -> String {
 fn default_engine_url() -> String {
     "http://localhost:8082".to_string()
 }
+
+/// `scheme://host[:anyport]` -> `scheme://host:<port>` (IPv6 literals with
+/// brackets keep their brackets; a bare IPv6 without brackets is not supported).
+fn same_host_port(base: &str, port: &str) -> Option<String> {
+    let (scheme, rest) = base.split_once("://")?;
+    let host = if let Some(after) = rest.strip_prefix('[') {
+        // "[ipv6]:port" — keep the bracketed literal, drop the port.
+        let close = after.find(']')? + 2; // ']' position within `rest`, +1 for it
+        rest.get(..close)?
+    } else {
+        rest.split(':').next().unwrap_or(rest)
+    };
+    if scheme.is_empty() || host.is_empty() {
+        return None;
+    }
+    Some(format!("{scheme}://{host}:{port}"))
+}
 fn default_fallback() -> String {
     "minimum_privilege".to_string()
 }
@@ -356,7 +373,16 @@ impl Default for AuditSection {
 impl ProxyConfig {
     /// Load from TOML file if it exists, then apply environment variable overrides.
     pub fn load() -> Self {
-        let mut cfg = Self::load_from_file();
+        Self::load_from(None)
+    }
+
+    /// `explicit` is the `--config <path>` file: when given it MUST be readable
+    /// and parse — a typo'd path or malformed TOML exits(2) instead of silently
+    /// falling back to defaults. (The legacy search paths keep their old
+    /// best-effort behaviour, but now warn when a file exists yet fails to
+    /// parse, instead of quietly ignoring it.)
+    pub fn load_from(explicit: Option<&std::path::Path>) -> Self {
+        let mut cfg = Self::load_from_file(explicit);
 
         // Environment variable overrides
         if let Ok(v) = std::env::var("VIRBIUS_UPSTREAM_URL") {
@@ -480,10 +506,69 @@ impl ProxyConfig {
             }];
         }
 
+        Self::apply_base_url(&mut cfg);
+
         cfg
     }
 
-    fn load_from_file() -> Self {
+    /// Opt-in single-base endpoint derivation (`VIRBIUS_BASE_URL`).
+    ///
+    /// Setting `VIRBIUS_BASE_URL=<control base>` lets one variable stand in for
+    /// three in the common single-host deployment:
+    ///
+    ///   - `security.control_base_url` = the base itself
+    ///   - `auth.control_base_url`     = the base itself (enables evaluate-token
+    ///     exchange — otherwise a separate `VIRBIUS_AUTH_CONTROL_URL`)
+    ///   - `security.engine_url`       = `{scheme}://{host}:8082`
+    ///
+    /// Purely additive defaults: an explicit `VIRBIUS_CONTROL_URL`,
+    /// `VIRBIUS_AUTH_CONTROL_URL`, `VIRBIUS_ENGINE_URL` or config-file value
+    /// always wins; derivation only replaces values that are still the
+    /// built-in defaults.
+    fn apply_base_url(cfg: &mut Self) {
+        let Ok(base) = std::env::var("VIRBIUS_BASE_URL") else {
+            return;
+        };
+        let base = base.trim().trim_end_matches('/').to_string();
+        if base.is_empty() {
+            return;
+        }
+        if std::env::var_os("VIRBIUS_CONTROL_URL").is_none()
+            && cfg.security.control_base_url == default_control_url()
+        {
+            cfg.security.control_base_url = base.clone();
+        }
+        if std::env::var_os("VIRBIUS_AUTH_CONTROL_URL").is_none() && cfg.auth.control_base_url.is_empty()
+        {
+            cfg.auth.control_base_url = base.clone();
+        }
+        if std::env::var_os("VIRBIUS_ENGINE_URL").is_none()
+            && cfg.security.engine_url == default_engine_url()
+        {
+            if let Some(engine) = same_host_port(&base, "8082") {
+                cfg.security.engine_url = engine;
+            }
+        }
+    }
+
+    fn load_from_file(explicit: Option<&std::path::Path>) -> Self {
+        if let Some(path) = explicit {
+            let shown = path.display();
+            let raw = match std::fs::read_to_string(path) {
+                Ok(raw) => raw,
+                Err(e) => {
+                    eprintln!("error: --config {shown}: cannot read: {e}");
+                    std::process::exit(2);
+                }
+            };
+            return match toml::from_str::<ProxyConfig>(&raw) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    eprintln!("error: --config {shown}: parse failed: {e}");
+                    std::process::exit(2);
+                }
+            };
+        }
         // Try config file paths
         let candidates = [
             PathBuf::from("virbius-mcp-proxy.toml"),
@@ -492,8 +577,12 @@ impl ProxyConfig {
         for path in &candidates {
             if path.exists() {
                 if let Ok(raw) = std::fs::read_to_string(path) {
-                    if let Ok(cfg) = toml::from_str::<ProxyConfig>(&raw) {
-                        return cfg;
+                    match toml::from_str::<ProxyConfig>(&raw) {
+                        Ok(cfg) => return cfg,
+                        Err(e) => eprintln!(
+                            "warning: config file {} exists but failed to parse ({e}); continuing with defaults",
+                            path.display()
+                        ),
                     }
                 }
             }
@@ -630,6 +719,65 @@ impl Default for MemorySection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_same_host_port() {
+        assert_eq!(
+            same_host_port("http://127.0.0.1:8080", "8082").as_deref(),
+            Some("http://127.0.0.1:8082")
+        );
+        assert_eq!(
+            same_host_port("https://virbius.example.com", "8082").as_deref(),
+            Some("https://virbius.example.com:8082")
+        );
+        assert_eq!(
+            same_host_port("http://[::1]:9000", "8082").as_deref(),
+            Some("http://[::1]:8082")
+        );
+        assert_eq!(same_host_port("garbage", "8082"), None);
+    }
+
+    // Single test: it mutates process env. (Explicit env vars are applied by
+    // load_from()'s override section BEFORE apply_base_url runs; here we set
+    // the field directly to emulate that, then assert derivation never
+    // overwrites an explicitly-configured value.)
+    #[test]
+    fn test_apply_base_url_derives_and_respects_explicit() {
+        // Derived: all three endpoints follow the base when still at defaults.
+        std::env::set_var("VIRBIUS_BASE_URL", "http://10.0.0.9:8080/");
+        let mut cfg = ProxyConfig::default();
+        ProxyConfig::apply_base_url(&mut cfg);
+        assert_eq!(cfg.security.control_base_url, "http://10.0.0.9:8080");
+        assert_eq!(cfg.auth.control_base_url, "http://10.0.0.9:8080");
+        assert_eq!(cfg.security.engine_url, "http://10.0.0.9:8082");
+
+        // Explicit env wins over derivation: the override section already
+        // applied the values, and apply_base_url must not touch them.
+        std::env::set_var("VIRBIUS_ENGINE_URL", "http://elsewhere:9999");
+        std::env::set_var("VIRBIUS_AUTH_CONTROL_URL", "http://auth:1234");
+        let mut cfg = ProxyConfig::default();
+        cfg.security.engine_url = "http://elsewhere:9999".to_string(); // as load() would
+        cfg.auth.control_base_url = "http://auth:1234".to_string(); // as load() would
+        ProxyConfig::apply_base_url(&mut cfg);
+        assert_eq!(cfg.security.engine_url, "http://elsewhere:9999");
+        assert_eq!(cfg.auth.control_base_url, "http://auth:1234");
+        assert_eq!(cfg.security.control_base_url, "http://10.0.0.9:8080");
+
+        // Explicit config-file value (non-default) wins too.
+        let mut cfg = ProxyConfig::default();
+        cfg.security.control_base_url = "http://from-file:7777".to_string();
+        ProxyConfig::apply_base_url(&mut cfg);
+        assert_eq!(cfg.security.control_base_url, "http://from-file:7777");
+
+        // No base set -> nothing derived.
+        std::env::remove_var("VIRBIUS_BASE_URL");
+        std::env::remove_var("VIRBIUS_ENGINE_URL");
+        std::env::remove_var("VIRBIUS_AUTH_CONTROL_URL");
+        let mut cfg = ProxyConfig::default();
+        ProxyConfig::apply_base_url(&mut cfg);
+        assert_eq!(cfg.security.control_base_url, default_control_url());
+        assert!(cfg.auth.control_base_url.is_empty());
+    }
 
     #[test]
     fn test_default_config_values() {

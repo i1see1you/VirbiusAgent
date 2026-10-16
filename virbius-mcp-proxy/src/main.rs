@@ -19,6 +19,21 @@ use virbius_mcp_proxy::upstream::UpstreamManager;
 
 #[tokio::main]
 async fn main() {
+    // ── CLI surface: [--config <path>] [doctor|enroll …] ──
+    // Parsed BEFORE tracing init so `doctor` / `enroll` output stays clean.
+    let cli = virbius_mcp_proxy::cli::parse_cli();
+    match &cli.command {
+        virbius_mcp_proxy::cli::Command::Run => {}
+        virbius_mcp_proxy::cli::Command::Doctor => {
+            let cfg = ProxyConfig::load_from(cli.config_path.as_deref());
+            std::process::exit(virbius_mcp_proxy::cli::doctor(cfg).await);
+        }
+        virbius_mcp_proxy::cli::Command::Enroll(args) => {
+            let cfg = ProxyConfig::load_from(cli.config_path.as_deref());
+            std::process::exit(virbius_mcp_proxy::cli::enroll(args, cfg).await);
+        }
+    }
+
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -27,7 +42,7 @@ async fn main() {
         )
         .init();
 
-    let cfg = ProxyConfig::load();
+    let cfg = ProxyConfig::load_from(cli.config_path.as_deref());
     info!(
         "virbius-mcp-proxy starting (transport={})",
         cfg.proxy.listen
@@ -165,6 +180,32 @@ async fn main() {
 
     // Start transport
     let listen = cfg.proxy.listen.clone();
+    // Config snapshot for GET /status (operator surface): built here where the
+    // full config is in scope, passed down to the HTTP transport.
+    let status_info = Arc::new(virbius_mcp_proxy::transport::StatusInfo {
+        started_at: std::time::Instant::now(),
+        listen: cfg.proxy.listen.clone(),
+        upstreams: cfg
+            .proxy
+            .upstreams
+            .iter()
+            .map(|u| (u.name.clone(), u.url.clone()))
+            .collect(),
+        engine_url: cfg.security.engine_url.clone(),
+        control_url: cfg.security.control_base_url.clone(),
+        auth_control_url: cfg.auth.control_base_url.clone(),
+        audit_backend: if cfg.audit_use_kafka() {
+            format!("kafka({})", cfg.audit.kafka_topic)
+        } else {
+            "disabled".to_string()
+        },
+        trace_backend: if cfg.trace_use_kafka() {
+            format!("kafka({})", cfg.trace.kafka_topic)
+        } else {
+            "disabled".to_string()
+        },
+    });
+
     if listen == "stdio" {
         run_stdio(
             session_mgr,
@@ -194,6 +235,7 @@ async fn main() {
             fallback_license_jwt,
             trace_collector,
             conn_to_session,
+            status_info,
         )
         .await;
     } else {
@@ -296,6 +338,7 @@ async fn run_sse(
     fallback_license_jwt: String,
     trace_collector: Arc<TraceCollector>,
     conn_to_session: Arc<DashMap<String, String>>,
+    status: Arc<virbius_mcp_proxy::transport::StatusInfo>,
 ) {
     info!("SSE/HTTP transport mode on {}", addr);
 
@@ -331,6 +374,7 @@ async fn run_sse(
         trace_collector,
         sse_sessions: Arc::new(DashMap::new()),
         conn_to_session,
+        status,
     };
 
     let app = transport::create_router(state);
