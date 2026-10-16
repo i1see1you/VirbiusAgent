@@ -22,11 +22,23 @@ public record GuardDetectProperties(
         int taintMaxContentLength,
         int timeoutMs,
         boolean failOpen,
-        List<String> taintBlockCategories) {
+        List<String> taintBlockCategories,
+        List<String> injectionExcludeCategories) {
 
     /** Safety labels treated as indirect injection in tool returns when unset. */
     private static final List<String> DEFAULT_TAINT_BLOCK_CATEGORIES =
             List.of("Jailbreak", "Agent Tool Misuse");
+
+    /**
+     * Input-gate injection categories that must NOT block when unset.
+     *
+     * <p>PII in a user prompt is legitimate (and DLP/masking's job), and
+     * agent-tool-misuse is only meaningful once a tool call exists — judging it
+     * on the raw user input over-refuses benign agent tasks. Everything else
+     * still blocks, so an unknown/new category stays fail-safe.
+     */
+    private static final List<String> DEFAULT_INJECTION_EXCLUDE_CATEGORIES =
+            List.of("PII", "Agent Tool Misuse");
 
     public GuardDetectProperties {
         if (taintMinContentLength <= 0) {
@@ -38,13 +50,18 @@ public record GuardDetectProperties(
         if (timeoutMs <= 0) {
             timeoutMs = 5000;
         }
-        List<String> categories = taintBlockCategories == null
+        taintBlockCategories = normalize(taintBlockCategories, DEFAULT_TAINT_BLOCK_CATEGORIES);
+        injectionExcludeCategories =
+                normalize(injectionExcludeCategories, DEFAULT_INJECTION_EXCLUDE_CATEGORIES);
+    }
+
+    private static List<String> normalize(List<String> configured, List<String> fallback) {
+        List<String> cleaned = configured == null
                 ? List.of()
-                : taintBlockCategories.stream()
+                : configured.stream()
                         .map(String::trim)
                         .filter(s -> !s.isEmpty())
                         .toList();
-        taintBlockCategories =
-                categories.isEmpty() ? DEFAULT_TAINT_BLOCK_CATEGORIES : categories;
+        return cleaned.isEmpty() ? fallback : cleaned;
     }
 }

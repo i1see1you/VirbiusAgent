@@ -96,6 +96,12 @@ virbius:
     # Guard categories whose tool-return hits are treated as indirect injection
     # and blocked (the rest, e.g. PII, are allowed; PII is DLP/masking's job).
     taint-block-categories: ${VIRBIUS_TAINT_BLOCK_CATEGORIES:Jailbreak,Agent Tool Misuse}
+    # Input-gate injection categories that do NOT block. User-provided PII is
+    # legitimate (DLP/masking's job) and agent-tool-misuse is only meaningful
+    # once a tool call exists; judging it on raw user input over-refuses benign
+    # agent tasks. Symmetric in shape with taint-block-categories, but an
+    # exclude list so any unknown/new category still fails safe (blocks).
+    injection-exclude-categories: ${VIRBIUS_INJECTION_EXCLUDE_CATEGORIES:PII,Agent Tool Misuse}
     timeout-ms: ${VIRBIUS_GUARD_LLM_TIMEOUT_MS:5000}
     fail-open: true
     taint-min-content-length: 512

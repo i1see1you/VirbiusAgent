@@ -45,7 +45,8 @@ class StiTaintDetectorTest {
                 8192,
                 5000,
                 true,
-                List.of("Jailbreak", "Agent Tool Misuse"));
+                List.of("Jailbreak", "Agent Tool Misuse"),
+                List.of("PII", "Agent Tool Misuse"));
         llmClient = mock(PromptLlmClient.class);
         detector = new StiTaintDetector(props, llmClient, new PromptAuditJsonParser(new ObjectMapper()));
     }
@@ -97,7 +98,8 @@ class StiTaintDetectorTest {
                 8192,
                 5000,
                 true,
-                List.of("PII"));
+                List.of("PII"),
+                List.of("PII", "Agent Tool Misuse"));
         StiTaintDetector customDetector =
                 new StiTaintDetector(custom, llmClient, new PromptAuditJsonParser(new ObjectMapper()));
 

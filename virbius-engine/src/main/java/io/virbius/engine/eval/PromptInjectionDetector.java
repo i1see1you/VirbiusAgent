@@ -70,8 +70,30 @@ public class PromptInjectionDetector {
             return InjectionDetectionResult.clean();
         }
 
+        // Input-gate policy: some categories the model flags are not input
+        // injection — user-provided PII (DLP/masking's job) and agent-tool-misuse
+        // phrasing (only meaningful once a tool call exists) are ignored here.
+        if (isExcludedCategory(audit)) {
+            log.info("injection-detect hit ignored (category excluded at input gate): category={}",
+                    audit.triggeredId() != null ? audit.triggeredId() : audit.reason());
+            return InjectionDetectionResult.clean();
+        }
+
         String reason = audit.reason() != null ? audit.reason() : "llm_injection_detected";
         return new InjectionDetectionResult(true, reason, 30, "llm:" + reason);
+    }
+
+    /**
+     * A hit is ignored when its category is configured in
+     * {@code injection-exclude-categories}. Mirrors
+     * {@link StiTaintDetector}'s category check so input and tool gates share
+     * one shape: match either the structured {@code triggered_id} or the
+     * normalized {@code reason} (the parser folds {@code triggered_id} into
+     * {@code reason} when the former is absent).
+     */
+    private boolean isExcludedCategory(PromptAuditResult audit) {
+        var excluded = guardProps.injectionExcludeCategories();
+        return excluded.contains(audit.triggeredId()) || excluded.contains(audit.reason());
     }
 
     /**
