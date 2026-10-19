@@ -9,6 +9,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -26,6 +27,9 @@ import org.springframework.stereotype.Component;
  * <p>{@link #seal(LocalDate)} returns a {@link SealResult} describing what was
  * actually sealed (counts + per-tenant roots + failures) so the admin API can
  * report the outcome instead of echoing the requested date unconditionally.
+ *
+ * <p>Multi-replica: two replicas sealing the same tenant-day converge — the
+ * first writer wins and the loser reports the stored anchor instead of failing.
  */
 @Component
 public class DailyAnchorJob {
@@ -131,15 +135,31 @@ public class DailyAnchorJob {
         }
         String root = MerkleUtil.root(MerkleUtil.buildLevels(leaves));
         int eventCount = events == null ? 0 : events;
-        jdbc.update("DELETE FROM tb_audit_daily_anchor WHERE tenant_id = ? AND anchor_date = ?",
-                tenantId, day.toString());
-        jdbc.update(
-                "INSERT INTO tb_audit_daily_anchor (tenant_id, anchor_date, root_hash, sessions, events) "
-                        + "VALUES (?, ?, ?, ?, ?)",
-                tenantId, day.toString(), root, leaves.size(), eventCount);
-        log.info("daily anchor sealed: tenant={} day={} sessions={} events={} root={}",
-                tenantId, day, leaves.size(), eventCount, root);
-        return new SealedAnchor(tenantId, root, leaves.size(), eventCount);
+        // Sealed tenant-days are immutable (insert-if-absent): a DELETE+INSERT pair
+        // would let a slower replica overwrite an already-committed seal (and any
+        // external timestamping of it). Re-sealing a sealed day is idempotent —
+        // the stored anchor is returned instead.
+        try {
+            jdbc.update(
+                    "INSERT INTO tb_audit_daily_anchor (tenant_id, anchor_date, root_hash, sessions, events) "
+                            + "VALUES (?, ?, ?, ?, ?)",
+                    tenantId, day.toString(), root, leaves.size(), eventCount);
+            log.info("daily anchor sealed: tenant={} day={} sessions={} events={} root={}",
+                    tenantId, day, leaves.size(), eventCount, root);
+            return new SealedAnchor(tenantId, root, leaves.size(), eventCount);
+        } catch (DuplicateKeyException raced) {
+            // Another replica sealed this tenant-day first — the stored anchor wins.
+            Map<String, Object> existing = get(tenantId, day);
+            if (existing != null) {
+                log.info("daily anchor race lost: tenant={} day={} — keeping stored root", tenantId, day);
+                return new SealedAnchor(
+                        tenantId,
+                        String.valueOf(existing.get("root_hash")),
+                        ((Number) existing.get("sessions")).intValue(),
+                        ((Number) existing.get("events")).intValue());
+            }
+            throw raced;
+        }
     }
 
     /** All seals on record for a tenant, newest day first. */

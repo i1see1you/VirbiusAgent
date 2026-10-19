@@ -2,7 +2,11 @@ fullnameOverride: virbius
 
 global:
   imageRegistry: "hb.grainmind.cn/library"
-  imageTag: latest
+  # Pin the release tag (the release pipeline publishes `${github.ref_name}` = `v1.0.0`;
+  # keep this in sync with the example file and k8s-deploy.sh). Do not ship `latest`:
+  # Kubernetes forces imagePullPolicy=Always for it, so a rescheduled pod silently
+  # pulls a newer image and the API contract can change under a running install.
+  imageTag: "v1.0.0"
   imagePullSecrets: []
   waitImage: hb.grainmind.cn/library/busybox:1.36
 
@@ -107,8 +111,22 @@ ollama:
 
 control:
   replicaCount: 1
+  # Machine guard (see templates/control.yaml): replicaCount > 1 requires shared
+  # storage for the local-file artifacts (edge manifests / audit exports live in
+  # VIRBIUS_DATA_DIR). The no-code way: mount /data on shared NFS at the same
+  # path on every replica (see DEPLOYMENT §8.5). Flip to true once that is in place.
+  sharedStorageEnabled: false
+  # Allow-audit log path. Empty = ${virbius.data-dir}/audit-allow.jsonl.
+  # With replicaCount > 1 point this at a per-replica *local* path (the logback
+  # rolling file must not live on the shared NFS) — see DEPLOYMENT §8.5.
+  auditAllowPath: ""
   persistence:
     size: 5Gi
+    # ReadWriteOnce by default. For control.replicaCount > 1 (with
+    # sharedStorageEnabled=true) set ReadWriteMany on an RWX-capable StorageClass
+    # (e.g. NFS) and, if needed, storageClass — see DEPLOYMENT §8.5.
+    accessMode: ReadWriteOnce
+    storageClass: ""
   resources:
     requests:
       cpu: 200m

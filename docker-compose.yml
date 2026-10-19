@@ -173,9 +173,10 @@ services:
       VIRBIUS_AUTH_ISSUER: http://virbius-auth:8083
       VIRBIUS_AUTH_RETURN_URI: ${VIRBIUS_AUTH_RETURN_URI:-http://127.0.0.1:8080/ui/callback}
       VIRBIUS_AUTH_RETURN_URI_TLS: ${VIRBIUS_AUTH_RETURN_URI_TLS:-https://127.0.0.1:8080/ui/callback}
-      # virbius-auth is a TEST-ONLY module (production integrates user SSO and
-      # does not deploy it). admin/admin is a local-dev convenience default —
-      # never set these in any non-dev deployment.
+      # virbius-auth is the only implemented operator login today (SSO is not
+      # implemented yet — see SSO_INTEGRATION.md). admin/admin is a local-dev
+      # convenience default — never set these in any non-dev deployment; run a
+      # single replica in production (its signing key is a per-pod file).
       VIRBIUS_AUTH_BOOTSTRAP_USERNAME: ${VIRBIUS_AUTH_BOOTSTRAP_USERNAME:-admin}
       VIRBIUS_AUTH_BOOTSTRAP_PASSWORD: ${VIRBIUS_AUTH_BOOTSTRAP_PASSWORD:-admin}
     volumes:

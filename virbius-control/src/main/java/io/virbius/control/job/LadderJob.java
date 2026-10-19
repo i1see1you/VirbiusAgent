@@ -1,6 +1,7 @@
 package io.virbius.control.job;
 
 import io.virbius.control.common.exception.BusinessException;
+import io.virbius.control.config.ControlJedisPools;
 import io.virbius.control.domain.RuleRevision;
 import io.virbius.control.domain.TenantRolloutPolicy;
 import io.virbius.control.domain.enums.RolloutState;
@@ -16,6 +17,13 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+/**
+ * Auto canary-ladder advance. Multi-replica note: the mutation is serialized by
+ * the per-tenant deploy lock inside {@code PublishOrchestrator} (423 → skip),
+ * but that lock degrades to "proceed without lock" when Redis errors — exactly
+ * the failover window. Since this job is auto-advance (delaying one tick is
+ * free), it refuses to run while Redis is unhealthy instead of racing.
+ */
 @Component
 public class LadderJob {
 
@@ -26,22 +34,28 @@ public class LadderJob {
     private final TenantRolloutPolicyRepository policyRepository;
     private final RolloutService rolloutService;
     private final PublishOrchestrator orchestrator;
+    private final ControlJedisPools jedisPools;
 
     public LadderJob(
             JdbcTemplate jdbc,
             RegistryRepository registry,
             TenantRolloutPolicyRepository policyRepository,
             RolloutService rolloutService,
-            PublishOrchestrator orchestrator) {
+            PublishOrchestrator orchestrator,
+            ControlJedisPools jedisPools) {
         this.jdbc = jdbc;
         this.registry = registry;
         this.policyRepository = policyRepository;
         this.rolloutService = rolloutService;
         this.orchestrator = orchestrator;
+        this.jedisPools = jedisPools;
     }
 
     @Scheduled(fixedDelayString = "${virbius.rollout.ladder.poll-ms:900000}")
     public void tick() {
+        if (!redisHealthy()) {
+            return;
+        }
         List<Map<String, Object>> running = jdbc.queryForList(
                 "SELECT tenant_id, rule_id FROM tb_rule_ladder_state WHERE ladder_status = 'running'");
         for (Map<String, Object> row : running) {
@@ -51,6 +65,26 @@ public class LadderJob {
                 step(tenantId, ruleId);
             } catch (Exception ignored) {
             }
+        }
+    }
+
+    /**
+     * Skip the auto-advance while Redis is unreachable: the deploy lock backing
+     * {@code applyRollout} degrades to an unprotected local owner in that state,
+     * so two replicas could double-advance the ladder. An absent pool (dev,
+     * no-Redis) keeps the legacy single-replica behavior.
+     */
+    private boolean redisHealthy() {
+        var poolOpt = jedisPools.pool();
+        if (poolOpt.isEmpty()) {
+            return true;
+        }
+        try (var jedis = poolOpt.get().getResource()) {
+            jedis.ping();
+            return true;
+        } catch (Exception e) {
+            log.warn("redis unhealthy ({}), skipping ladder auto-advance this tick", e.getMessage());
+            return false;
         }
     }
 

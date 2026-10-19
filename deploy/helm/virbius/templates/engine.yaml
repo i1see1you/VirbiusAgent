@@ -61,6 +61,14 @@ spec:
             {{- include "virbius.kafkaSaslEnv" . | nindent 12 }}
             - name: VIRBIUS_REDIS_URL
               value: {{ include "virbius.redisUrl" . | quote }}
+            # Unique per-pod instance id: drives per-instance Redis stream consumer
+            # groups (engine-cache-*, engine-deploy-*) and the canary bucket. MUST
+            # be unique per replica — a shared value would merge consumer groups
+            # and split broadcast messages between replicas.
+            - name: VIRBIUS_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: VIRBIUS_CONTROL_BASE_URL
               value: http://{{ include "virbius.fullname" . }}-control:8080
             - name: VIRBIUS_PROMPT_LLM_BASE_URL
@@ -81,12 +89,25 @@ spec:
               value: "*"
             - name: no_proxy
               value: "*"
-          readinessProbe:
+          # Cold start (Redis connect + subscriber join + rule seeding) can outlast the
+          # liveness initialDelay on a loaded cluster. The startup probe gates liveness
+          # and readiness until /admin/health answers, so a slow start no longer
+          # restart-loops the pod; readiness still gates traffic on /admin/ready.
+          startupProbe:
             httpGet:
               path: /admin/health
               port: http
-            initialDelaySeconds: 60
-            periodSeconds: 15
+            periodSeconds: 10
+            failureThreshold: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              # Gates on Redis reachability + cache-reload consumer group ready,
+              # so a fresh replica does not serve with an unseeded rule cache.
+              path: /admin/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
             timeoutSeconds: 5
           livenessProbe:
             httpGet:

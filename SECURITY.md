@@ -4,7 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 0.x (development) | ✅ Security fixes applied to main branch |
+| 1.0.x | ✅ Security fixes land on the latest 1.0.x patch release |
+| < 1.0 (pre-GA development) | ❌ Not supported |
 
 ## Reporting a Vulnerability
 
@@ -60,9 +61,12 @@ Additional properties:
   SHA-256 rows are upgraded transparently on first authentication.
 - License private keys are encrypted with an HKDF-derived key (envelope
   version `v1:`); legacy ciphertext still decrypts with the old derivation.
-- virbius-auth is a **test-environment module**: the dev compose keeps a
-  commented `admin/admin` convenience default (never set in non-dev
-  deployments); production integrates user SSO and does not deploy it.
+- `virbius-auth` is the **only implemented operator login today** (local password +
+  self-signed JWT); the dev compose keeps a commented `admin/admin` convenience
+  default (never set in non-dev deployments). **SSO is not implemented yet** (design
+  finalized — see `SSO_INTEGRATION.md`); production should run virbius-auth as a
+  single replica (its signing key is a per-pod file) or keep the console on an
+  isolated network.
 
 Known accepted risks (upgrade triggers documented in DEPLOYMENT.md):
 

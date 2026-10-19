@@ -448,7 +448,7 @@ VirbiusAgent/
 ├── virbius-expr/          # Go — 表达式求值/编译
 ├── virbius-control/       # Java Spring Boot 控制面
 ├── virbius-engine/        # Java Spring Boot 安全引擎
-├── virbius-auth/          # Java Spring Boot — 运营者认证（登录/token/SSO）
+├── virbius-auth/          # Java Spring Boot — 运营者登录（本地口令 + JWT）
 ├── virbius-compiler/      # Java 编译模块
 ├── virbius-policy/        # Java 策略领域模型
 ├── virbius-groovy-l3/     # Java Groovy L3 终判器
@@ -467,9 +467,11 @@ VirbiusAgent/
 | [DESIGN.zh.md](DESIGN.zh.md) | 系统架构设计文档 |
 | [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md) | 详细架构说明 |
 | [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md) | 部署拓扑与运维 |
+| [deploy/onprem/README.zh.md](deploy/onprem/README.zh.md) | 客户现场三机部署（离线包、外置 MySQL/Kafka/Redis/vLLM） |
 | [PROTOCOL.zh.md](PROTOCOL.zh.md) | MCP 代理协议规范 |
+| [API_REFERENCE.zh.md](API_REFERENCE.zh.md) | REST API 稳定性契约（错误信封、认证、状态码、版本策略） |
 | [PROXY_CONFIG.zh.md](PROXY_CONFIG.zh.md) | MCP 代理配置参考 |
-| [SSO_INTEGRATION.zh.md](SSO_INTEGRATION.zh.md) | 统一登录（OAuth2/OIDC）接入方案 - SSO 双轨认证设计 |
+| [SSO_INTEGRATION.zh.md](SSO_INTEGRATION.zh.md) | 统一登录（OAuth2/OIDC）— auth-broker 方案（已定稿，尚未实现） |
 | [FAQ-agent-scenarios.md](FAQ-agent-scenarios.md) | 常见问题 — Agent 安全典型场景 |
 | [CHANGELOG.md](CHANGELOG.md)（英文） | 版本历史 |
 

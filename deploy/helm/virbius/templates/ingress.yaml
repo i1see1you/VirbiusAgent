@@ -55,7 +55,10 @@ spec:
     - host: {{ .Values.ingress.hosts.engine | quote }}
       http:
         paths:
-          - path: /
+          # Only the decision API is exposed. /actuator/* (metrics, health) and
+          # /admin/* (readiness detail, cache reload) stay pod-internal — probes
+          # hit the pod IP directly, so nothing outside the cluster needs them.
+          - path: /v1
             pathType: Prefix
             backend:
               service:

@@ -97,9 +97,23 @@ public class EvaluateTokenService {
                 kid = EvaluateTokenSigner.newKid();
                 publicKeyPem = kp.publicKeyPem();
                 rawPrivate = licenseSigner.decryptPrivateKey(kp.encryptedPrivateKey());
-                repo.saveIssuer(new IssuerKey(kid, "control", publicKeyPem,
-                        kp.encryptedPrivateKey(), "active"));
-                log.info("evaluate-token signer generated and registered (kid={})", kid);
+                try {
+                    repo.saveIssuer(new IssuerKey(kid, "control", publicKeyPem,
+                            kp.encryptedPrivateKey(), "active"));
+                    log.info("evaluate-token signer generated and registered (kid={})", kid);
+                } catch (org.springframework.dao.DuplicateKeyException raced) {
+                    // Two control replicas cold-started with no active issuer and each
+                    // generated a key. The unique active_guard index (V19) makes the
+                    // second insert fail; the loser loads and activates the winner's
+                    // key so every replica signs with the same kid.
+                    IssuerKey winner = repo.findActiveIssuer().orElseThrow(
+                            () -> new IllegalStateException(
+                                    "evaluate-token issuer race lost but no active issuer found", raced));
+                    kid = winner.kid();
+                    publicKeyPem = winner.publicKeyPem();
+                    rawPrivate = licenseSigner.decryptPrivateKey(winner.encryptedPrivateKey());
+                    log.info("evaluate-token issuer race lost, loaded winner (kid={})", kid);
+                }
             }
             tokenSigner.activate(kid, publicKeyPem, rawPrivate);
             publishIssuers();

@@ -27,6 +27,8 @@ public class RuleCacheSeeder {
     private final PolicyDataCache policyData;
     private final JedisPool jedisPool;
     private final List<String> configuredTenants;
+    /** True once the startup seeding pass has completed (feeds /admin/ready). */
+    private volatile boolean seeded;
 
     public RuleCacheSeeder(
             RuleCache cache,
@@ -44,13 +46,23 @@ public class RuleCacheSeeder {
     @PostConstruct
     public void load() {
         Set<String> tenants = discoverTenants();
-        int seeded = 0;
+        int count = 0;
         for (String tenant : tenants) {
             if (seedTenant(tenant)) {
-                seeded++;
+                count++;
             }
         }
-        log.info("seed complete: {}/{} tenants seeded", seeded, tenants.size());
+        seeded = true;
+        if (!tenants.isEmpty() && count == 0) {
+            log.warn("seed pass found {} tenant(s) but seeded 0 — snapshots missing or Redis read errors; "
+                    + "/admin/ready is gated on the cache-reload subscriber, not this pass", tenants.size());
+        }
+        log.info("seed complete: {}/{} tenants seeded", count, tenants.size());
+    }
+
+    /** Readiness signal: the startup seeding pass finished. */
+    public boolean isSeeded() {
+        return seeded;
     }
 
     private boolean seedTenant(String tenantId) {

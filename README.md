@@ -452,7 +452,7 @@ VirbiusAgent/
 ├── virbius-expr/          # Go — expression evaluator/compiler
 ├── virbius-control/       # Java Spring Boot control plane
 ├── virbius-engine/        # Java Spring Boot security engine
-├── virbius-auth/          # Java Spring Boot — operator auth (login/token/SSO)
+├── virbius-auth/          # Java Spring Boot — operator login (local password + JWT)
 ├── virbius-compiler/      # Java bundle compiler
 ├── virbius-policy/        # Java policy domain model
 ├── virbius-groovy-l3/     # Java Groovy L3 adjudicator
@@ -471,9 +471,11 @@ VirbiusAgent/
 | [DESIGN.md](DESIGN.md) | System architecture design document |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Detailed architecture documentation |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Deployment topology and operations |
+| [deploy/onprem/README.md](deploy/onprem/README.md) | Customer-site three-host deployment (offline bundles, external MySQL/Kafka/Redis/vLLM) |
 | [PROTOCOL.md](PROTOCOL.md) | MCP proxy protocol specification |
+| [API_REFERENCE.md](API_REFERENCE.md) | REST API stability contract (envelope, auth, status codes, versioning) |
 | [PROXY_CONFIG.md](PROXY_CONFIG.md) | MCP proxy configuration reference |
-| [SSO_INTEGRATION.md](SSO_INTEGRATION.md) | Unified login (OAuth2/OIDC) integration design - dual-track SSO + API Key auth |
+| [SSO_INTEGRATION.md](SSO_INTEGRATION.md) | Unified login (OAuth2/OIDC) — auth-broker design (finalized, not yet implemented) |
 | [FAQ-agent-scenarios.md](FAQ-agent-scenarios.md) | FAQ — common agent-security scenarios |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 

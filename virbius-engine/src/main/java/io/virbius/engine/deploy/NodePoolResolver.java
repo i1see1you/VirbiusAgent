@@ -41,6 +41,14 @@ public class NodePoolResolver {
         this.instanceId = resolveInstanceId(instanceId, hostname);
         this.instanceBucket = computeBucket(this.instanceId);
         log.info("NodePoolResolver instance={} bucket={}", this.instanceId, this.instanceBucket);
+        if ((instanceId == null || instanceId.isBlank()) && (hostname == null || hostname.isBlank())) {
+            log.error("VIRBIUS_INSTANCE_ID and hostname are both blank — instance id fell back to '{}'. "
+                            + "Per-instance Redis consumer groups (engine-cache-*/engine-deploy-*) and the "
+                            + "canary bucket rely on a UNIQUE id per replica; in containers HOSTNAME covers "
+                            + "this, but bare-metal/systemd HA deployments MUST set VIRBIUS_INSTANCE_ID "
+                            + "or two replicas can collide.",
+                    this.instanceId);
+        }
     }
 
     /** Returns the instance's bucket (0-99). */
@@ -83,7 +91,7 @@ public class NodePoolResolver {
 
     // ---------------------------------------------------------------
 
-    private static String resolveInstanceId(String configured, String hostname) {
+    static String resolveInstanceId(String configured, String hostname) {
         if (configured != null && !configured.isBlank()) {
             return configured;
         }

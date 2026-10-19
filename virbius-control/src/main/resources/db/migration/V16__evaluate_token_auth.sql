@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS tb_evaluate_token_issuers (
     kid                   VARCHAR(64)  PRIMARY KEY,
     key_type              VARCHAR(16)  NOT NULL DEFAULT 'control',
     public_key_pem        TEXT         NOT NULL,
-    encrypted_private_key TEXT         NOT NULL DEFAULT '',
+    encrypted_private_key TEXT         NOT NULL,
     status                VARCHAR(16)  NOT NULL DEFAULT 'active',
     description           VARCHAR(255) NOT NULL DEFAULT '',
     created_at            TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -34,10 +34,12 @@ CREATE TABLE IF NOT EXISTS tb_evaluate_tokens (
     CHECK (status IN ('active', 'revoked'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_tb_evaluate_tokens_subject
+-- Plain CREATE INDEX: MySQL 8 rejects `CREATE INDEX IF NOT EXISTS` (MariaDB-only).
+-- Flyway applies this migration exactly once, so the guard is unnecessary.
+CREATE INDEX idx_tb_evaluate_tokens_subject
     ON tb_evaluate_tokens (subject, status);
 
-CREATE INDEX IF NOT EXISTS idx_tb_evaluate_tokens_expiry
+CREATE INDEX idx_tb_evaluate_tokens_expiry
     ON tb_evaluate_tokens (expires_at);
 
 ALTER TABLE tb_license_revocations ADD COLUMN agent_aid VARCHAR(256);

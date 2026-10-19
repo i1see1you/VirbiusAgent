@@ -1,6 +1,7 @@
 package io.virbius.control.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.virbius.control.common.response.ApiResult;
 import io.virbius.control.domain.ChallengeApprovalRecord;
 import io.virbius.control.repository.ChallengeApprovalRepository;
 import java.net.URI;
@@ -17,6 +18,7 @@ import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -46,7 +48,7 @@ public class ChallengeController {
     }
 
     @GetMapping
-    public ResponseEntity<List<Map>> listChallenges(
+    public ResponseEntity<?> listChallenges(
             @RequestParam(name = "tenant_id", defaultValue = "default") String tenantId,
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "50") int max) {
@@ -100,15 +102,15 @@ public class ChallengeController {
                 List<Map> challenges = mapper.readValue(resp.body(), List.class);
                 return ResponseEntity.ok(challenges);
             }
-            return ResponseEntity.status(resp.statusCode()).build();
+            return errorResponse(resp.statusCode(), "engine returned HTTP " + resp.statusCode());
         } catch (Exception e) {
-            log.error("failed to list challenges: {}", e.getMessage());
-            return ResponseEntity.internalServerError().build();
+            log.error("failed to list challenges", e);
+            return errorResponse(500, "challenge service unavailable");
         }
     }
 
     @GetMapping("/{id}/status")
-    public ResponseEntity<Map> getStatus(@PathVariable String id) {
+    public ResponseEntity<?> getStatus(@PathVariable String id) {
         try {
             URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
                     .pathSegment("v1", "challenge", id, "status")
@@ -126,28 +128,25 @@ public class ChallengeController {
                 Map result = mapper.readValue(resp.body(), Map.class);
                 return ResponseEntity.ok(result);
             }
-            return ResponseEntity.status(resp.statusCode()).build();
+            return errorResponse(resp.statusCode(), "engine returned HTTP " + resp.statusCode());
         } catch (Exception e) {
-            log.error("failed to get challenge status: {}", e.getMessage());
-            return ResponseEntity.internalServerError().build();
+            log.error("failed to get challenge status", e);
+            return errorResponse(500, "challenge service unavailable");
         }
     }
 
     @PostMapping("/{id}/approve")
-    public ResponseEntity<Map> approve(
+    public ResponseEntity<?> approve(
             @PathVariable String id,
             @RequestBody Map<String, String> body) {
         try {
             // Fetch the current challenge record before approving
             Map record = fetchStatus(id);
             if (record == null) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "challenge not found"));
+                return errorResponse(400, "challenge not found");
             }
             if (!"pending".equals(record.get("status"))) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "challenge is not pending",
-                                "current_status", record.get("status")));
+                return notPending(record);
             }
 
             URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
@@ -163,6 +162,10 @@ public class ChallengeController {
                     .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
                     .build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                log.warn("engine returned status {} for approve {}", resp.statusCode(), id);
+                return errorResponse(resp.statusCode(), "engine returned HTTP " + resp.statusCode());
+            }
             @SuppressWarnings("unchecked")
             Map result = mapper.readValue(resp.body(), Map.class);
 
@@ -198,25 +201,22 @@ public class ChallengeController {
 
             return ResponseEntity.status(resp.statusCode()).body(result);
         } catch (Exception e) {
-            log.error("failed to approve challenge: {}", e.getMessage());
-            return ResponseEntity.internalServerError().build();
+            log.error("failed to approve challenge {}", id, e);
+            return errorResponse(500, "challenge service unavailable");
         }
     }
 
     @PostMapping("/{id}/reject")
-    public ResponseEntity<Map> reject(
+    public ResponseEntity<?> reject(
             @PathVariable String id,
             @RequestBody Map<String, String> body) {
         try {
             Map record = fetchStatus(id);
             if (record == null) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "challenge not found"));
+                return errorResponse(400, "challenge not found");
             }
             if (!"pending".equals(record.get("status"))) {
-                return ResponseEntity.badRequest()
-                        .body(Map.of("error", "challenge is not pending",
-                                "current_status", record.get("status")));
+                return notPending(record);
             }
 
             URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
@@ -232,6 +232,10 @@ public class ChallengeController {
                     .POST(HttpRequest.BodyPublishers.ofString(json, StandardCharsets.UTF_8))
                     .build();
             HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            if (resp.statusCode() != 200) {
+                log.warn("engine returned status {} for reject {}", resp.statusCode(), id);
+                return errorResponse(resp.statusCode(), "engine returned HTTP " + resp.statusCode());
+            }
             @SuppressWarnings("unchecked")
             Map result = mapper.readValue(resp.body(), Map.class);
 
@@ -266,35 +270,57 @@ public class ChallengeController {
 
             return ResponseEntity.status(resp.statusCode()).body(result);
         } catch (Exception e) {
-            log.error("failed to reject challenge: {}", e.getMessage());
-            return ResponseEntity.internalServerError().build();
+            log.error("failed to reject challenge {}", id, e);
+            return errorResponse(500, "challenge service unavailable");
         }
     }
 
     // -- helpers --
 
+    /**
+     * Fetches the challenge status. Returns {@code null} only when the engine answers
+     * 404 (the challenge genuinely does not exist); any other non-200 response throws,
+     * so approve/reject surface a 500 instead of a misleading 400 "challenge not found"
+     * while the engine is unhealthy.
+     */
     @SuppressWarnings("unchecked")
-    private Map<String, Object> fetchStatus(String challengeId) {
-        try {
-            URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
-                    .pathSegment("v1", "challenge", challengeId, "status")
-                    .build()
-                    .encode()
-                    .toUri();
-            HttpRequest req = HttpRequest.newBuilder()
-                    .uri(uri)
-                    .timeout(Duration.ofSeconds(5))
-                    .GET()
-                    .build();
-            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
-            if (resp.statusCode() == 200) {
-                return mapper.readValue(resp.body(), Map.class);
-            }
-            return null;
-        } catch (Exception e) {
-            log.warn("failed to fetch challenge status {}: {}", challengeId, e.getMessage());
+    private Map<String, Object> fetchStatus(String challengeId) throws Exception {
+        URI uri = UriComponentsBuilder.fromUriString(engineBaseUrl)
+                .pathSegment("v1", "challenge", challengeId, "status")
+                .build()
+                .encode()
+                .toUri();
+        HttpRequest req = HttpRequest.newBuilder()
+                .uri(uri)
+                .timeout(Duration.ofSeconds(5))
+                .GET()
+                .build();
+        HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+        if (resp.statusCode() == 200) {
+            return mapper.readValue(resp.body(), Map.class);
+        }
+        if (resp.statusCode() == 404) {
             return null;
         }
+        throw new IllegalStateException("engine returned HTTP " + resp.statusCode());
+    }
+
+    /**
+     * Error bodies use the same {@code ApiResult} envelope ({@code code}/{@code message}) as
+     * every other control route, so callers parse one shape. The body is never empty — an
+     * empty body is what broke {@code res.json()} on the console.
+     */
+    private ResponseEntity<ApiResult<Void>> errorResponse(int status, String message) {
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResult.error(status, message));
+    }
+
+    private ResponseEntity<ApiResult<Map<String, String>>> notPending(Map<String, Object> record) {
+        return ResponseEntity.status(400)
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(ApiResult.error(400, "challenge is not pending",
+                        Map.of("current_status", String.valueOf(record.get("status")))));
     }
 
     private static String str(Object v) {

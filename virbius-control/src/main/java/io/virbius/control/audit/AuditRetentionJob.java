@@ -8,6 +8,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -19,7 +20,9 @@ import org.springframework.stereotype.Component;
  * deploy/scripts/audit-insert-only-grants.sql) so evaluation environments never
  * lose the "complete historical link" the outline's preconditions require.
  *
- * <p>Idempotent: rows already present in the archive are skipped by business key.
+ * <p>Idempotent: rows already present in the archive are skipped by business
+ * key, and a {@link DuplicateKeyException} from a concurrent run on another
+ * control replica is tolerated per tenant instead of aborting the whole run.
  */
 @Component
 public class AuditRetentionJob {
@@ -65,9 +68,17 @@ public class AuditRetentionJob {
             }
             Instant cutoff = Instant.now().minus(days, ChronoUnit.DAYS);
             if ("audit_events".equals(table)) {
-                archivedAudit += archiveAuditEvents(tenantId, cutoff);
+                try {
+                    archivedAudit += archiveAuditEvents(tenantId, cutoff);
+                } catch (DuplicateKeyException raced) {
+                    log.info("audit archive raced with a concurrent run for tenant={} — skipped", tenantId);
+                }
             } else if ("agent_trace".equals(table)) {
-                archivedTrace += archiveTrace(tenantId, cutoff);
+                try {
+                    archivedTrace += archiveTrace(tenantId, cutoff);
+                } catch (DuplicateKeyException raced) {
+                    log.info("trace archive raced with a concurrent run for tenant={} — skipped", tenantId);
+                }
             }
         }
         summary.put("archived_audit_events", archivedAudit);

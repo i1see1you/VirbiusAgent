@@ -7,7 +7,7 @@
   <parent>
     <groupId>io.virbius</groupId>
     <artifactId>virbius-parent</artifactId>
-    <version>0.2.0-SNAPSHOT</version>
+    <version>1.0.0</version>
   </parent>
 
   <artifactId>virbius-control</artifactId>
@@ -109,6 +109,9 @@
         <version>1.15.1</version>
         <configuration>
           <workingDirectory>frontend</workingDirectory>
+          <!-- nodejs.org is unreachable from CN build hosts; the npmmirror
+               binary mirror is reachable globally. -->
+          <nodeDownloadRoot>https://registry.npmmirror.com/-/binary/node/</nodeDownloadRoot>
         </configuration>
         <executions>
           <execution>

@@ -1,3 +1,9 @@
+{{- if and (gt (int .Values.control.replicaCount) 1) (not .Values.control.sharedStorageEnabled) }}
+{{- fail "control.replicaCount > 1 is unsafe with per-replica local storage: edge manifests and audit exports are written to /data (an RWO PVC), so replica A's writes are invisible to replica B (stale manifests after publish; exports fail to download from other replicas). Mount /data on shared NFS at the same absolute path on every replica (see DEPLOYMENT §8.5), then set control.sharedStorageEnabled=true to lift this guard." }}
+{{- end }}
+{{- if and (gt (int .Values.control.replicaCount) 1) (ne .Values.control.persistence.accessMode "ReadWriteMany") }}
+{{- fail "control.replicaCount > 1 also requires control.persistence.accessMode=ReadWriteMany (and, if needed, storageClass pointing at an RWX/NFS class): a ReadWriteOnce volume cannot be mounted by two replicas, so the second control pod would stay Pending or attach stale local state. See DEPLOYMENT §8.5." }}
+{{- end }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -6,7 +12,10 @@ metadata:
     {{- include "virbius.labels" . | nindent 4 }}
     app.kubernetes.io/component: control
 spec:
-  accessModes: ["ReadWriteOnce"]
+  accessModes: ["{{ .Values.control.persistence.accessMode | default "ReadWriteOnce" }}"]
+  {{- with .Values.control.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.control.persistence.size }}
@@ -125,6 +134,12 @@ spec:
               value: /data
             - name: VIRBIUS_LOG_DIR
               value: /var/log/virbius
+            {{- if .Values.control.auditAllowPath }}
+            # Per-replica local path for the allow-audit log (logback rolling files
+            # must not be shared over NFS); see DEPLOYMENT §8.5.
+            - name: VIRBIUS_AUDIT_ALLOW_PATH
+              value: {{ .Values.control.auditAllowPath | quote }}
+            {{- end }}
             - name: HTTP_PROXY
               value: ""
             - name: HTTPS_PROXY

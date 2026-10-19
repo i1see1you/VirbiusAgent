@@ -241,4 +241,24 @@ class SessionRiskManagerTest {
         verify(pipeline).set(eq("session:sess-new:risk_score"), eq("10"));
         verify(pipeline, times(2)).sync();
     }
+
+    /** V5: getRiskScore's swallowed Redis error emits the fallback counter. */
+    @Test
+    void getRiskScoreErrorEmitsFallbackMetric() {
+        var reg = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        io.micrometer.core.instrument.Metrics.addRegistry(reg);
+        try {
+            when(jedis.get(anyString())).thenThrow(new RuntimeException("redis down"));
+
+            manager.getRiskScore("s-metric");
+
+            org.junit.jupiter.api.Assertions.assertNotNull(reg
+                    .find("virbius.redis.fallback").tag("component", "session-risk-read").counter());
+        } finally {
+            io.micrometer.core.instrument.Metrics.removeRegistry(reg);
+            io.micrometer.core.instrument.Metrics.globalRegistry.remove(
+                    io.micrometer.core.instrument.Metrics.globalRegistry
+                            .find("virbius.redis.fallback").tag("component", "session-risk-read").meter());
+        }
+    }
 }

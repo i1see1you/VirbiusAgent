@@ -2,6 +2,7 @@ package io.virbius.engine.eval;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.virbius.engine.cache.PolicyDataCache;
+import io.virbius.engine.metrics.RedisFallbackMetrics;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
@@ -234,6 +235,7 @@ public class SessionRiskManager {
 
         } catch (Exception e) {
             log.error("Failed to update risk score for session={}: {}", sessionId, e.getMessage());
+            RedisFallbackMetrics.record("session-risk-update");
             return 0; // fail-open: don't block on risk computation failure
         }
     }
@@ -327,6 +329,11 @@ public class SessionRiskManager {
             String val = jedis.get(KEY_RISK_SCORE.formatted(sessionId));
             return parseInt(val, 0);
         } catch (Exception e) {
+            // Silent fail-open used to hide Redis outages: a high-risk session
+            // would read as 0. Warn + metric so the posture matrix drill can see it.
+            log.warn("Failed to read risk score for session={} (returning 0): {}",
+                    sessionId, e.getMessage());
+            RedisFallbackMetrics.record("session-risk-read");
             return 0;
         }
     }

@@ -53,7 +53,35 @@ COPY virbius-control/ virbius-control/
 COPY virbius-auth/ virbius-auth/
 COPY virbius-compiler/ virbius-compiler/
 
-RUN mvn package -DskipTests -B -q
+# Clear proxy env vars inherited from the Docker daemon config (a daemon-injected
+# proxy is typically unreachable inside the build container — npm dies with
+# ECONNREFUSED, and its crash exits 0, surfacing later as "vue-tsc: not found").
+# BuildKit injects the client proxy into RUN steps and overrides ENV, so the
+# network-calling RUN below also clears them per-command.
+ENV HTTP_PROXY=""
+ENV HTTPS_PROXY=""
+ENV http_proxy=""
+ENV https_proxy=""
+ENV ALL_PROXY=""
+ENV all_proxy=""
+
+# npm registry for the console UI build; npmmirror default matches the
+# MAVEN_MIRROR=aliyun convention (registry.npmjs.org is unreachable from CN build
+# hosts). Override with --build-arg NPM_REGISTRY= to use the default registry.
+ARG NPM_REGISTRY="https://registry.npmmirror.com"
+RUN if [ -n "$NPM_REGISTRY" ]; then \
+      printf 'registry=%s\n' "$NPM_REGISTRY" > virbius-control/frontend/.npmrc; \
+    fi
+
+RUN HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
+    mvn package -DskipTests -B -q
+
+# Guard the runtime stages' wildcard COPY: each module must produce exactly one
+# main jar (a 0 or ≥2 match would fail the COPY, or silently package the wrong jar).
+RUN set -e; for m in virbius-engine virbius-control virbius-auth; do \
+      n=$(ls /build/$m/target/$m-*.jar 2>/dev/null | grep -vc '\.original$' || true); \
+      [ "$n" = "1" ] || { echo "expected exactly 1 $m jar, found $n"; exit 1; }; \
+    done
 
 # ── Stage 2: Rust build (workspace) ─────────────────────────────────────────
 FROM rust:1.94-slim-bookworm AS rust-build
@@ -88,7 +116,8 @@ RUN if [ "$CRATES_MIRROR" = "cn" ]; then \
     fi
 
 # Install system deps for native libs (apt mirror switch when APT_MIRROR=cn)
-RUN if [ "$APT_MIRROR" = "cn" ]; then \
+RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
+    if [ "$APT_MIRROR" = "cn" ]; then \
       sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
         /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
       sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \
@@ -96,7 +125,6 @@ RUN if [ "$APT_MIRROR" = "cn" ]; then \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev g++ python3 make && rm -rf /var/lib/apt/lists/*
-
 # Copy all source and build
 COPY Cargo.toml Cargo.lock* ./
 COPY virbius-core/Cargo.toml virbius-core/
@@ -111,14 +139,18 @@ COPY virbius-mcp-node/src virbius-mcp-node/src
 COPY virbius-mcp-python/src virbius-mcp-python/src
 COPY virbius-core/include virbius-core/include
 
-RUN cargo build --release -p virbius-mcp-proxy
+# BuildKit injects the client proxy into RUN steps and overrides the ENV clears
+# above, so clear them per-command for the network-calling build step.
+RUN HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
+    cargo build --release -p virbius-mcp-proxy
 
 # ── Stage 3: virbius-engine runtime ─────────────────────────────────────────
 FROM eclipse-temurin:17-jre-jammy AS virbius-engine
 WORKDIR /app
 
 ARG APT_MIRROR=""
-RUN if [ "$APT_MIRROR" = "cn" ]; then \
+RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
+    if [ "$APT_MIRROR" = "cn" ]; then \
       sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \
         /etc/apt/sources.list 2>/dev/null || true; \
     fi && \
@@ -127,7 +159,7 @@ RUN if [ "$APT_MIRROR" = "cn" ]; then \
 
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
 
-COPY --from=java-build /build/virbius-engine/target/virbius-engine-0.1.0-SNAPSHOT.jar app.jar
+COPY --from=java-build /build/virbius-engine/target/virbius-engine-*.jar app.jar
 
 RUN mkdir -p /data /var/log/virbius && chown -R virbius:virbius /app /data /var/log/virbius
 
@@ -149,7 +181,8 @@ FROM eclipse-temurin:17-jre-jammy AS virbius-control
 WORKDIR /app
 
 ARG APT_MIRROR=""
-RUN if [ "$APT_MIRROR" = "cn" ]; then \
+RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
+    if [ "$APT_MIRROR" = "cn" ]; then \
       sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \
         /etc/apt/sources.list 2>/dev/null || true; \
     fi && \
@@ -158,7 +191,7 @@ RUN if [ "$APT_MIRROR" = "cn" ]; then \
 
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
 
-COPY --from=java-build /build/virbius-control/target/virbius-control-0.1.0-SNAPSHOT.jar app.jar
+COPY --from=java-build /build/virbius-control/target/virbius-control-*.jar app.jar
 
 RUN mkdir -p /data /var/log/virbius && chown -R virbius:virbius /app /data /var/log/virbius
 
@@ -180,7 +213,8 @@ FROM eclipse-temurin:17-jre-jammy AS virbius-auth
 WORKDIR /app
 
 ARG APT_MIRROR=""
-RUN if [ "$APT_MIRROR" = "cn" ]; then \
+RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
+    if [ "$APT_MIRROR" = "cn" ]; then \
       sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \
         /etc/apt/sources.list 2>/dev/null || true; \
     fi && \
@@ -189,7 +223,7 @@ RUN if [ "$APT_MIRROR" = "cn" ]; then \
 
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
 
-COPY --from=java-build /build/virbius-auth/target/virbius-auth-0.1.0-SNAPSHOT.jar app.jar
+COPY --from=java-build /build/virbius-auth/target/virbius-auth-*.jar app.jar
 
 RUN mkdir -p /data /var/log/virbius && chown -R virbius:virbius /app /data /var/log/virbius
 
@@ -219,7 +253,8 @@ ENV ALL_PROXY=""
 ENV all_proxy=""
 
 ARG APT_MIRROR=""
-RUN if [ "$APT_MIRROR" = "cn" ]; then \
+RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
+    if [ "$APT_MIRROR" = "cn" ]; then \
       sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com|g' \
         /etc/apt/sources.list.d/debian.sources 2>/dev/null || true; \
       sed -i 's|archive.ubuntu.com|mirrors.aliyun.com|g; s|security.ubuntu.com|mirrors.aliyun.com|g' \

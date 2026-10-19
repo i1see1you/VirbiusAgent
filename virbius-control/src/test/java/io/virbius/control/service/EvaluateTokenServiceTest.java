@@ -5,7 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -211,5 +213,30 @@ class EvaluateTokenServiceTest {
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.revokeByJti("nope", "x"));
         assertEquals(404, ex.getCode());
+    }
+
+    /** T3: two-replica cold start — the loser of the single-active-issuer race
+     *  (V19 unique index) must load and activate the winner's key. */
+    @Test
+    void initRaceLoadsWinnerKeyWhenSaveIssuerConflicts() {
+        EvaluateTokenRepository raceRepo = mock(EvaluateTokenRepository.class);
+        EvaluateTokenSigner raceSigner = new EvaluateTokenSigner();
+        LicenseSigner.KeyPairResult winnerKp = licenseSigner.generateKeyPair();
+        String winnerKid = EvaluateTokenSigner.newKid();
+        IssuerKey winner = new IssuerKey(
+                winnerKid, "control", winnerKp.publicKeyPem(), winnerKp.encryptedPrivateKey(), "active");
+
+        when(raceRepo.findActiveIssuer())
+                .thenReturn(Optional.empty())        // cold start: no active issuer yet
+                .thenReturn(Optional.of(winner));    // after losing the race: winner is present
+        doThrow(new org.springframework.dao.DuplicateKeyException("active_guard unique"))
+                .when(raceRepo).saveIssuer(any());
+        when(raceRepo.listIssuersByStatus("active")).thenReturn(List.of(winner));
+
+        EvaluateTokenService raced = new EvaluateTokenService(
+                raceRepo, licenseRepo, licenseSigner, raceSigner, publisher, 900, 24, 100);
+        raced.init();
+
+        assertEquals(winnerKid, raced.activeKid(), "loser must sign with the winner's kid");
     }
 }

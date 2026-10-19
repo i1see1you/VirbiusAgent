@@ -164,4 +164,8 @@ management:
   endpoints:
     web:
       exposure:
+        # Actuator stays health-only by default: the engine Ingress routes only
+        # `/v1` to the app port, so this endpoint set is not on the public host.
+        # The prod profile opts in (health,prometheus) for in-cluster scraping;
+        # staging drills should scrape via a private management port (1.1).
         include: health

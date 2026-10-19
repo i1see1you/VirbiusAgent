@@ -16,3 +16,19 @@ scripts/
 *.jsonl
 .dockerignore
 docker-compose.yml
+# Host-built Node artifacts must never enter the build context: a macOS
+# frontend/node makes the frontend-maven-plugin skip its Linux Node download
+# and npm then exits 127 inside the container; host node_modules are the wrong
+# platform and are reinstalled by `npm ci` anyway.
+**/node_modules/
+virbius-control/frontend/node/
+# Heavy directories no image build COPYs — keep the build context small (the
+# daemon ingests every non-ignored byte; virbius-guard training data alone is
+# ~100 GB and will fill the Docker Desktop disk).
+virbius-guard/
+virbius-intent/
+virbius-eval/
+virbius-integrate/
+docs/
+examples/
+deploy/

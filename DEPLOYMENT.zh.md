@@ -5,7 +5,7 @@
 | 项目 | 说明 |
 |------|------|
 | 文档版本 | v3.6 |
-| 状态 | 草案 |
+| 状态 | 已发布（1.0.0） |
 | 关联 | [DESIGN.zh.md](DESIGN.zh.md)（索引） · [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md) |
 
 > 本文件包含 §8 部署视图（组件端口 + 部署拓扑 + 接入方式对比 + 四层全覆盖组合部署）。
@@ -24,16 +24,16 @@
 | **Higress** (管层 Ingress) | 80/443 | 独立部署 / K8s | 南北向（入站） |
 | **Higress** (管层 Egress) | 8081 | 独立部署 / K8s | 南北向（出站） |
 | **MCP Server** (Python/Node) | 8080+ | 独立部署 / K8s | — |
-
-> **多上游支持**：MCP Proxy 支持同时连接多个 MCP Server（P1 新增），通过工具名路由 `tools/call`。
-> 单上游模式向下兼容（旧 `upstream_url` 配置自动归一化），多上游时冲突工具名自动加前缀 `{upstream}__{tool}`。
-> 详细方案见 [PROTOCOL.md §2.6.2](PROTOCOL.md#262-multi-upstream)（英文）。
 | **virbius-engine** | 8082 | 云侧 | — |
 | **virbius-control** | 8080 | 云侧 | — |
 | **Falco** (核层观测) | 无（DaemonSet） | Agent 所在宿主机 | 旁路 |
 | **virbius-kernel-daemon** | 9090 | Agent 所在宿主机 | 旁路 |
 | **Redis** | 6379 | 云侧 | — |
 | **Database** | — | 云侧 | — |
+
+> **多上游支持**：MCP Proxy 支持同时连接多个 MCP Server（P1 新增），通过工具名路由 `tools/call`。
+> 单上游模式向下兼容（旧 `upstream_url` 配置自动归一化），多上游时冲突工具名自动加前缀 `{upstream}__{tool}`。
+> 详细方案见 [PROTOCOL.md §2.6.2](PROTOCOL.md#262-multi-upstream)（英文）。
 
 > **删除原设计的 AgentGateway (9080)**：MCP 路由由 Higress 承担。
 > **删除原设计的 virbius-gateway-agent (9070)**：安全预检由 Higress WASM 插件承担。
@@ -454,7 +454,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 ```bash
 ./deploy/scripts/k8s-deploy.sh \
   --registry registry.example.com/virbius \
-  --tag v0.1.0 \
+  --tag v1.0.0 \
   --namespace virbius \
   --values deploy/helm/virbius/values-prod.yaml
 ```
@@ -462,7 +462,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 只构建推送镜像：
 
 ```bash
-./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v0.1.0
+./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v1.0.0
 ```
 
 镜像已在仓库、只装 Chart：
@@ -470,7 +470,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 ```bash
 ./deploy/scripts/k8s-deploy.sh --skip-build \
   --registry registry.example.com/virbius \
-  --tag v0.1.0 \
+  --tag v1.0.0 \
   --values deploy/helm/virbius/values-prod.yaml
 ```
 
@@ -480,14 +480,31 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 |----|------|----------|
 | 靶场 | `range.virbius.example.com` | `GET /` |
 | 管侧 | `control.virbius.example.com` | `GET /api/v1/health`（存活）；就绪探针用 `GET /api/v1/ready`（要求 Kafka 消费者已入组并持有分区，Helm 已默认） |
-| 云侧 | `engine.virbius.example.com` | `GET /admin/health` |
+| 云侧 | `engine.virbius.example.com` | 仅对外路由 `/v1`；存活 `GET /admin/health`、就绪 `GET /admin/ready`（要求 Redis 可达且 cache-reload 消费组已建立）均为**Pod 内部**路径——探针直连 Pod IP，不经 Ingress |
 | 端侧 | `proxy.virbius.example.com` | `GET /health` |
 
 把这四个名字指到 Ingress 的外部 IP。TLS 默认关闭，在 values 里打开 `ingress.tls`。管侧 host 上的 `/login` 转到 `virbius-auth`（与 `/ui/` 同域，避免登录 cookie 丢失）。默认账号 `admin` / `secrets.authBootstrapPassword`。
 
+云侧 host **只转发 `/v1`**：`/actuator/*`（指标、健康）与 `/admin/*`（就绪明细、缓存重载）不经 Ingress 暴露。探针直连 Pod IP，集群外无需这些路径；确需外部抓取 `/actuator/prometheus` 时，请从集群内抓取（或另加受 NetworkPolicy 保护、显式限定路径的 Ingress 规则），不要重新放开 `/`。
+
 集群内 DNS：`virbius-control:8080`、`virbius-auth:8083`、`virbius-engine:8082`、`virbius-mcp-proxy:9090`、`virbius-demo:8000`（SSE `:9091`）。Auth 用 MySQL（与 Control 同库，独立 Flyway 历史表 `auth_schema_history`），JWT 密钥落在 PVC 上，不要扩副本。设 `auth.enabled=false` 则不部署 Auth、Control 也不开 operator JWT。
 
+#### 扩展到多副本（HA）
+
+**多副本（HA）**：engine/control 已按无状态化改造，可安全扩副本。要点：
+
+1. **engine**——每个副本由 Helm 注入唯一 `VIRBIUS_INSTANCE_ID`（取自 `metadata.name`），驱动 per-instance Redis 消费组（`engine-cache-*`/`engine-deploy-*`，广播语义）。**不要**给多个副本设同一个 `VIRBIUS_INSTANCE_ID`，否则消费组会合并、广播消息被拆分。
+2. **control**——扩副本必须先把本地文件换到共享 NFS：edge manifest 与审计导出目前写在每副本本地 `VIRBIUS_DATA_DIR`（Helm 为 RWO PVC），不共享时副本间不一致——发布后另一副本仍返回**旧 manifest**（200+旧 sha，静默陈旧）、导出在非创建副本上下载失败。做法：各副本 `VIRBIUS_DATA_DIR` 挂**同一 NFS、同一绝对路径**（容器 uid 可写）；`control.auditAllowPath`（渲染为 `VIRBIUS_AUDIT_ALLOW_PATH`）指向**每副本本地**（logback 滚动日志不可共享）；必要时调小 NFS `actimeo` 或用 `noac`。Helm 机器守卫：`control.replicaCount > 1` 且未设 `control.sharedStorageEnabled=true` 会直接 `helm fail`（置 true 即声明已具备上述共享存储）；后续文件外置到 DB 的正式方案落地后可去掉 NFS 依赖。
+3. **限流**——`/v1/evaluate` 限流为 per-replica 语义（见 §10.2）。
+
 靶场 Agent 关卡仍在 Pod 内用 stdio 拉起 `virbius-mcp-proxy`。Ingress 上的端侧是给集群外 MCP 客户端的 TCP 入口，upstream 默认 `http://virbius-demo:9091`。
+
+**已装环境改多副本（PVC `accessMode` 不可变）**：上面的守卫要求 `control.persistence.accessMode=ReadWriteMany`，但 Kubernetes 不允许改已存在 PVC 的 `accessModes`——`helm upgrade` 会以 `spec is immutable` 失败。要么首次安装就选 RWX StorageClass，要么按下列步骤迁移卷：
+
+1. `kubectl scale deploy/virbius-control -n virbius --replicas=0`
+2. 先**把 `/data` 拷出旧卷**（用 debug pod 执行 `kubectl cp virbius-control-data:/data ./control-data-backup`）。`helm uninstall` 会保留 PVC，但显式 `kubectl delete pvc` 会遵循 StorageClass 回收策略，可能直接销毁数据。
+3. `kubectl delete pvc virbius-control-data -n virbius`，再 `helm upgrade` 并设 `control.persistence.accessMode=ReadWriteMany`（+ RWX class 的 `storageClass`）与 `control.sharedStorageEnabled=true`；把备份的 `/data` 恢复到 `virbius-control-data`。
+4. 扩容前先把 `control.auditAllowPath` 指向每副本本地路径（见上），再 `kubectl scale deploy/virbius-control --replicas=2`。
 
 默认启用集群内 Ollama：Job 从 HuggingFace 下载 VirbiusGuard GGUF（V2.0 F16，约 1.5GB，PVC 缓存，升级不重复下）并 `ollama create virbiusguard`。`engine.promptLlm.baseUrl` 留空即指向 `http://{release}-ollama:11434`。国内把 `ollama.ggufUrl` 换成 ModelScope：
 
@@ -496,6 +513,10 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 设 `ollama.enabled=false` 时必须填写 `engine.promptLlm.baseUrl`，否则 `helm` 会直接失败。关掉集群内 MySQL / Kafka / Redis 时分别填 `mysql.jdbcUrl`、`kafka.bootstrapServers`、`redis.url`，engine/control 不会再死等集群内 Service。GPU 默认关；有 NVIDIA 设备时设 `ollama.gpu.enabled=true`。
 
 `helm uninstall virbius -n virbius` **不会**删除 PVC。
+
+### 8.6 客户现场三机部署（无 K8s，客户统一环境提供基础设施）
+
+**MySQL / Kafka / Redis / vLLM 由客户统一环境提供**、三机只装 VirbiusAgent 组件（control+auth、engine、mcp-proxy）时，直接使用 [`deploy/onprem/`](deploy/onprem/README.zh.md) 的按机 compose 资产与现场手册（[English](deploy/onprem/README.md)）：角色分配、跨机防火墙端口矩阵、离线镜像 tar 包（`deploy/scripts/offline-bundle.sh`）、TLS 终结、提示词模型两种形态（本机 Ollama GGUF 经 hf-mirror/ModelScope，或客户 vLLM + safetensors 权重）、启动顺序、备份与现场验收清单。K8s 路径等价用法见手册附录。
 
 ---
 
@@ -546,9 +567,8 @@ PLAINTEXT，即 **审计/trace 载荷在集群内网明文传输**。P0 接受�
   `VIRBIUS_API_KEY_ENABLED` 兼容一版，已标记废弃）。
 - prod/staging 默认开启 API-Key 认证；全部认证机制关闭时启动失败
   （隐式 dev 管理员仅限 dev profile）。
-- `virbius-auth` 仅测试环境使用：dev compose 保留带注释的 `admin/admin`
-  便利默认值（仅限测试环境——任何非 dev 部署都不要设置）；线上接用户 SSO
-  且不部署该模块（见 SSO_INTEGRATION.md）。
+- `virbius-auth` 是当前**唯一已实现的运营台登录**（本地口令 + 自签 JWT）；dev compose 保留带注释的 `admin/admin` 便利默认值（仅限测试环境——任何非 dev 部署都不要设置）。生产应部署 auth **单副本**（签名密钥为每 Pod 本地文件，见 §8.5），或将控制台限制在内网。
+- **SSO 尚未实现**：仓内无任何 SSO 代码（`virbius-auth` 亦不含 SSO）。企业 OAuth2/OIDC 接入为设计定稿、待实现，见 `SSO_INTEGRATION.md`（v0.2，auth-broker 路线）。
 
 ### 9.5 升级说明
 
@@ -557,6 +577,12 @@ PLAINTEXT，即 **审计/trace 载荷在集群内网明文传输**。P0 接受�
 - 存量 `private_key_enc` 仍按旧派生解密；新签发密钥使用 `v1:` HKDF 信封。
 - 旧本地开发库可用 `virbius.license.allow-insecure-dev-key=true`
   （**仅 dev profile**）在换强密钥前继续启动。
+- **evaluate-token issuer 去重（`V19`）**——升级后若库中存在多于一条 `active` issuer
+  行，会被收敛为一条（生成列 `active_guard` + 唯一索引），保留 `created_at` 最早的一行
+  （并列取 `kid` 最小者）。由被淘汰 issuer 签发的 token 将验签失败，持有方会看到 `401`，
+  直到重新换取——窗口上限为 token TTL（`virbius.evaluate-token.ttl-seconds`，默认 `900`
+  即 15 分钟）。若调用方不会在 `401` 后自动重换，请在升级前主动触发一次换取（或等待
+  超过一个 TTL），以避免最长 15 分钟的拒绝窗口。dev 库由 `db/schema.sql` 重建，见 §10.1。
 
 ### 9.6 代客凭证平面（v2.5）部署与运维
 
@@ -613,16 +639,18 @@ PLAINTEXT，即 **审计/trace 载荷在集群内网明文传输**。P0 接受�
 | `V16__evaluate_token_auth.sql` | 评估令牌鉴权：`tb_evaluate_token_issuers`、`tb_evaluate_tokens`；审计表与归档表加 `agent_aid`/`app_id`/`subject_source`/`token_iss`；`tb_license_revocations` 加 `agent_aid`/`expires_at` |
 | `V17__proxy_policy.sql` | `tb_proxy_policy`（此前仅存在于 SQLite；MySQL 上代理策略接口报 "table doesn't exist"） |
 | `V18__trace_tool_args.sql` | `tb_agent_trace.tool_args` + `tb_agent_trace_archive.tool_args`（此前仅存在于 SQLite；MySQL 上 trace 入库失败） |
+| `V19__evaluate_token_issuer_unique.sql` | 凭证签发单活（多副本）：`tb_evaluate_token_issuers` 加生成列 `active_guard` + 唯一索引，存储层保证最多一个 `active` issuer；迁移含存量去重（保留最早一条，tie 取 kid 最小） |
 | `virbius-auth` `V1__baseline.sql` | auth 的 MySQL 基线（`tb_operator_user`、`tb_auth_code`）；prod 用 Flyway，独立历史表 `auth_schema_history` |
 
 `SchemaDialectParityTest`（`virbius-control` 与 `virbius-auth` 各一份）在 `db/schema.sql`（SQLite/dev）与 `db/migration/*.sql`（MySQL/prod）表或列不一致时令构建失败。
 
-dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新列/新表**，需以 `VIRBIUS_REBUILD_DB=1 ./scripts/run-local.sh` 重建（会删库并 `FLUSHDB`）。
+dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新列/新表**，需以 `VIRBIUS_REBUILD_DB=1 ./scripts/run-local.sh` 重建（会删库并 `FLUSHDB`）。运行中的 control 若连旧库，会在创建索引时启动失败（V19 `active_guard`）——这正是"需重建"的信号。
 
 ### 10.2 新增配置项
 
 | 键 | 默认 | 说明 |
 |---|---|---|
+| `virbius.admin.ready-latch`（engine） | `true` | `/admin/ready` 首次 ready 后锁存，避免 Redis 瞬时抖动把所有副本踢出 Service；设 `false` 则每次探针重新判定（Redis 宕机即 NotReady，更偏 fail-closed，代价是抖动时批量摘除） |
 | `virbius.audit.hash-chain.enabled` | `true` | 审计事件哈希链开关 |
 | `virbius.audit.hash-chain.verify-enabled` | `true` | 定时全链校验 |
 | `virbius.audit.hash-chain.verify-interval-ms` | `3600000` | 校验周期（1h） |
@@ -658,6 +686,8 @@ dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新�
 | `virbius.retry-escape.enforce` | `false` | 重试逃逸检测同上（dry-run by default） |
 
 > 上述键目前均由代码 `@Value` 提供默认值，`application*.yml` 未显式声明；如需覆盖，用启动参数或同名 `VIRBIUS_*` env。
+> **多副本语义（限流）**：`/v1/evaluate` 限流器与 control 的 evaluate-token 换取限速（`virbius.evaluate-token.exchange.rate-limit-per-license-per-min`）均为**进程内**计数（best-effort 滥用边界，非精确配额）。多副本部署时上表相应配额为**每副本**值，全局有效配额 = 配置值 × 副本数；需要精确全局配额时先按「全局值 / 副本数」摊薄配置，或改用 Redis 化限流器。
+> **运维环境变量（未在上表）**：`VIRBIUS_DATA_DIR`（本地文件态根目录：edge manifest、审计导出、allow 日志）与 `VIRBIUS_AUDIT_ALLOW_PATH`（allow 审计日志路径，默认 `${virbius.data-dir}/audit-allow.jsonl`；Helm 由 `control.auditAllowPath` 渲染）；多副本时的处理见 §8.5。
 
 ### 10.2.1 调用者认证运维要点（P0-min）
 

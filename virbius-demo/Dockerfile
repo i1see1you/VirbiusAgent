@@ -49,7 +49,8 @@ RUN if [ "$CRATES_MIRROR" = "cn" ]; then \
         > /usr/local/cargo/config.toml; \
     fi
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
+    apt-get update && apt-get install -y --no-install-recommends \
     pkg-config libssl-dev g++ python3 python3-pip make \
     && rm -rf /var/lib/apt/lists/* \
     && pip3 install --no-cache-dir --break-system-packages maturin
@@ -76,10 +77,12 @@ COPY virbius-mcp-node/build.rs virbius-mcp-node/
 COPY virbius-kernel/src virbius-kernel/src
 
 # Build the proxy binary.
-RUN cargo build --release -p virbius-mcp-proxy
+RUN HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
+    cargo build --release -p virbius-mcp-proxy
 
 # Build the PyO3 wheel (outputs to /build/target/wheels/).
-RUN cd virbius-mcp-python && maturin build --release
+RUN HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
+    sh -c 'cd virbius-mcp-python && maturin build --release'
 
 # ---- Stage 2: runtime ----
 # NOTE: must match the Python version used in the rust-build stage (bookworm = py3.11),
@@ -87,16 +90,18 @@ RUN cd virbius-mcp-python && maturin build --release
 FROM ${PYTHON_BASE}
 WORKDIR /app
 
-# Optional build-time proxy (same ARG/ENV as the rust-build stage).
-ARG http_proxy=""
-ARG https_proxy=""
-ENV HTTP_PROXY="$http_proxy" HTTPS_PROXY="$https_proxy" \
-    http_proxy="$http_proxy" https_proxy="$https_proxy" \
+# A build-time proxy is opt-in and must never persist into the runtime image;
+# the Docker client's config.json proxy injection must not poison it either
+# (BuildKit injects it into RUN steps, overriding ENV clears — hence the
+# per-command clears on the network-calling RUNs).
+ENV HTTP_PROXY="" HTTPS_PROXY="" \
+    http_proxy="" https_proxy="" \
     ALL_PROXY="" all_proxy=""
 
 # curl for healthchecks/wait loops inside the entrypoint.
 # libssl3: the Rust proxy (reqwest default-tls -> native-tls) links OpenSSL at runtime.
-RUN apt-get update && apt-get install -y --no-install-recommends curl libssl3 \
+RUN HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
+    apt-get update && apt-get install -y --no-install-recommends curl libssl3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the built Rust artifacts.
@@ -108,7 +113,8 @@ COPY --from=rust-build /build/target/release/virbius-mcp-proxy /usr/local/bin/vi
 #   --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 ARG PIP_INDEX_URL=""
 COPY virbius-demo/requirements.txt ./
-RUN if [ -n "$PIP_INDEX_URL" ]; then \
+RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
+    if [ -n "$PIP_INDEX_URL" ]; then \
       pip install --no-cache-dir -i "$PIP_INDEX_URL" -r requirements.txt \
       && pip install --no-cache-dir -i "$PIP_INDEX_URL" --force-reinstall /tmp/wheels/*.whl; \
     else \

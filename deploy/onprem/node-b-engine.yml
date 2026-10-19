@@ -1,0 +1,79 @@
+# Node B — 决策面：virbius-engine（可多副本）+ 可选本机 Ollama（模型选项A）
+# 用法：scp 本文件与 .env 到 B 机同目录，`docker compose --env-file .env -f node-b-engine.yml up -d`
+# 依赖：客户 Redis / Kafka 可达；A 机 control 已启动（engine 从 Redis 拉 control 发布的 issuer）。
+name: virbius-onprem-b
+
+services:
+  virbius-engine:
+    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-engine:${IMAGE_TAG:-v1.0.0}
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      # ── 客户 Kafka（SASL） ──
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS}
+      KAFKA_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-256}
+      KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:?set KAFKA_SASL_USERNAME}
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:?set KAFKA_SASL_PASSWORD}
+      # ── 客户 Redis ──
+      VIRBIUS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}
+      # ── 跨机指向 A 机 control ──
+      VIRBIUS_CONTROL_BASE_URL: http://${NODE_A}:8080
+      # ── 提示词审查模型：选项A=本机 Ollama；选项B=客户 vLLM（.env 里二选一） ──
+      VIRBIUS_PROMPT_LLM_BASE_URL: ${PROMPT_LLM_BASE_URL:-http://ollama:11434}
+      VIRBIUS_PROMPT_LLM_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-virbiusguard}
+      VIRBIUS_PROMPT_LLM_TIMEOUT_MS: "30000"
+      # 本 compose 固定发布 8082，单机单副本；横向扩容请加主机（手册 §1）。
+      # 多副本唯一实例 id：compose 容器 hostname 天然唯一，无需显式设置。
+      # 若手动 docker run 起多个副本，必须各设不同的 VIRBIUS_INSTANCE_ID。
+      VIRBIUS_LOG_DIR: /var/log/virbius
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+    volumes:
+      - engine-logs:/var/log/virbius
+    ports:
+      - "8082:8082"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "--noproxy", "*", "http://localhost:8082/admin/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ── 模型选项A：本机 Ollama（仅 PROMPT_LLM_MODE=ollama 时启用） ──
+  #   docker compose --env-file .env -f node-b-engine.yml --profile llm-local up -d
+  ollama:
+    profiles: ["llm-local"]
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.10}
+    volumes:
+      - ollama-data:/root/.ollama
+      - ./models:/models:ro
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # 一次性任务：把预下载的 GGUF 导入为 virbiusguard（幂等，已存在则跳过）
+  ollama-init:
+    profiles: ["llm-local"]
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.10}
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ./models:/models:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama --host http://ollama:11434 show virbiusguard >/dev/null 2>&1 \
+          && echo "model already exists" \
+          || ollama --host http://ollama:11434 create virbiusguard -f /models/Modelfile
+
+volumes:
+  engine-logs:
+  ollama-data:

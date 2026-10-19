@@ -155,13 +155,13 @@ bash scripts/run-local.sh
 cd virbius-control
 mvn spring-boot:run -Dspring-boot.run.profiles=local
 # 或使用打包的 JAR：
-java -jar target/virbius-control-0.1.0-SNAPSHOT.jar --spring.profiles.active=dev
+java -jar target/virbius-control-1.0.0.jar --spring.profiles.active=dev
 
 # 2. 在另一个终端中，启动 virbius-engine（端口 8082）
 cd virbius-engine
 mvn spring-boot:run -Dspring-boot.run.profiles=local
 # 或使用打包的 JAR：
-java -jar target/virbius-engine-0.1.0-SNAPSHOT.jar --spring.profiles.active=dev
+java -jar target/virbius-engine-1.0.0.jar --spring.profiles.active=dev
 
 # 3. 启动 MCP 代理（端口 9090）——可选，用于 sidecar 模式
 cd virbius-mcp-proxy
@@ -1207,12 +1207,12 @@ VirbiusAgent 使用 Spring Boot Profile 体系区分三套环境：`dev`（本�
 
 #### 8.0.7 环境变量速查
 
-生产环境（prod）需要设置的完整环境变量清单：
+生产环境（prod）的核心环境变量（必填项的权威清单与校验规则见 [DEPLOYMENT.zh.md §9.1](DEPLOYMENT.zh.md)）：
 
 ```bash
 # ── 数据库 ──
 export SPRING_PROFILES_ACTIVE=prod
-export VIRBIUS_JDBC_URL=jdbc:mysql://mysql-host:3306/virbius?useSSL=true
+export VIRBIUS_JDBC_URL=jdbc:mariadb://mysql-host:3306/virbius?sslMode=REQUIRED&serverTimezone=UTC
 export VIRBIUS_JDBC_USER=virbius
 export VIRBIUS_JDBC_PASSWORD=your_password
 

@@ -544,13 +544,19 @@ CREATE TABLE IF NOT EXISTS tb_evaluate_token_issuers (
     kid                   VARCHAR(64)  PRIMARY KEY,
     key_type              VARCHAR(16)  NOT NULL DEFAULT 'control',
     public_key_pem        TEXT         NOT NULL,
-    encrypted_private_key TEXT         NOT NULL DEFAULT '',
+    encrypted_private_key TEXT         NOT NULL,
     status                VARCHAR(16)  NOT NULL DEFAULT 'active',
     description           VARCHAR(255) NOT NULL DEFAULT '',
     created_at            TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     retired_at            TIMESTAMP,
+    active_guard          VARCHAR(64) GENERATED ALWAYS AS (
+                             CASE WHEN status = 'active' THEN '__SINGLETON__' ELSE kid END
+                         ) STORED,
     CHECK (status IN ('active', 'retired'))
 );
+-- At most one active issuer, storage-enforced (see V19 for rationale).
+CREATE UNIQUE INDEX IF NOT EXISTS uk_evaluate_token_issuers_active
+    ON tb_evaluate_token_issuers (active_guard);
 
 CREATE TABLE IF NOT EXISTS tb_evaluate_tokens (
     jti           VARCHAR(64)  PRIMARY KEY,
@@ -651,6 +657,9 @@ CREATE TABLE IF NOT EXISTS tb_audit_events_archive (
     created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     archived_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+-- Dev-only parity gap: MySQL gets this via CREATE TABLE ... LIKE tb_audit_events
+-- (which copies uq_tb_audit_events_event_id); the explicit SQLite table needs it.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_tb_audit_events_archive_event_id ON tb_audit_events_archive (event_id);
 
 CREATE TABLE IF NOT EXISTS tb_agent_trace_archive (
     id               INTEGER      PRIMARY KEY,

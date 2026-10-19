@@ -25,6 +25,8 @@ public class CacheReloadSubscriber {
     private static final Logger log = LoggerFactory.getLogger(CacheReloadSubscriber.class);
     private static final ObjectMapper JSON = new ObjectMapper();
     private static final String STREAM_KEY = "virbius:engine:cache-reload";
+    /** Reap prefix-matching groups idle this long (a live replica reads every <=5s). */
+    private static final long STALE_IDLE_MS = 1_800_000L;
 
     private final String consumerGroup;
     private static final String CONSUMER_NAME = "engine-consumer";
@@ -38,6 +40,8 @@ public class CacheReloadSubscriber {
         return t;
     });
     private volatile boolean running = true;
+    /** True once the consumer group is established and the first read completed. */
+    private volatile boolean ready = false;
 
     public CacheReloadSubscriber(RuleCache cache, PolicyDataCache policyData,
                                  JedisPool jedisPool, NodePoolResolver nodePoolResolver) {
@@ -45,6 +49,11 @@ public class CacheReloadSubscriber {
         this.policyData = policyData;
         this.jedisPool = jedisPool;
         this.consumerGroup = "engine-cache-" + nodePoolResolver.instanceId();
+    }
+
+    /** Readiness signal for /admin/ready: group created and first read done. */
+    public boolean isReady() {
+        return ready;
     }
 
     @PostConstruct
@@ -56,9 +65,19 @@ public class CacheReloadSubscriber {
     public void shutdown() {
         running = false;
         executor.shutdownNow();
+        try (var jedis = jedisPool.getResource()) {
+            // Ack pending, then destroy: leaves the leaving group clean and stops the
+            // (per-pod) group leaking. A message missed while this replica is down is
+            // recovered by the startup rule seeder / snapshot, not by this drain.
+            StreamGroupJanitor.drainPending(jedis, STREAM_KEY, consumerGroup);
+            jedis.xgroupDestroy(STREAM_KEY, consumerGroup);
+        } catch (Exception ignored) {
+            // best-effort cleanup; a crashed pod may still leak its group (startup reap handles it)
+        }
     }
 
     private void consume() {
+        reapStaleGroups();
         while (running) {
             try {
                 ensureGroup();
@@ -75,6 +94,7 @@ public class CacheReloadSubscriber {
                         jedis.xack(STREAM_KEY, consumerGroup, entry.getID());
                     }
                 }
+                ready = true;
             } catch (redis.clients.jedis.exceptions.JedisConnectionException e) {
                 if (running) {
                     log.warn("redis connection lost, retrying in 3s...");
@@ -90,6 +110,14 @@ public class CacheReloadSubscriber {
     private void ensureGroup() {
         try (var jedis = jedisPool.getResource()) {
             jedis.xgroupCreate(STREAM_KEY, consumerGroup, StreamEntryID.LAST_ENTRY, true);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Startup pass: destroy per-instance groups left behind by dead pods. */
+    private void reapStaleGroups() {
+        try (var jedis = jedisPool.getResource()) {
+            StreamGroupJanitor.reapStaleGroups(jedis, STREAM_KEY, "engine-cache-", consumerGroup, STALE_IDLE_MS);
         } catch (Exception ignored) {
         }
     }

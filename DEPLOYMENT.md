@@ -5,7 +5,7 @@
 | Item | Description |
 |------|------|
 | Document Version | v3.6 |
-| Status | Draft |
+| Status | Released (1.0.0) |
 | Related | [DESIGN.md](DESIGN.md) (Index) · [ARCHITECTURE.md](ARCHITECTURE.md) |
 
 > This document contains §8 Deployment View (Component Ports + Deployment Topology + Integration Approach Comparison + Four-Layer Full Coverage Combined Deployment).
@@ -24,16 +24,16 @@
 | **Higress** (Gateway Layer Ingress) | 80/443 | Standalone / K8s | North-South (Inbound) |
 | **Higress** (Gateway Layer Egress) | 8081 | Standalone / K8s | North-South (Outbound) |
 | **MCP Server** (Python/Node) | 8080+ | Standalone / K8s | — |
-
-> **Multi-Upstream Support**: MCP Proxy supports connecting to multiple MCP Servers simultaneously (added in P1), routing through tool name via `tools/call`.
-> Single-upstream mode is backward compatible (legacy `upstream_url` config is auto-normalized); conflicting tool names in multi-upstream mode are automatically prefixed with `{upstream}__{tool}`.
-> See [PROTOCOL.md §2.6.2](PROTOCOL.md#262-multi-upstream) for details.
 | **virbius-engine** | 8082 | Cloud Side | — |
 | **virbius-control** | 8080 | Cloud Side | — |
 | **Falco** (Kernel Layer Observation) | None (DaemonSet) | Agent Host Machine | Bypass |
 | **virbius-kernel-daemon** | 9090 | Agent Host Machine | Bypass |
 | **Redis** | 6379 | Cloud Side | — |
 | **Database** | — | Cloud Side | — |
+
+> **Multi-Upstream Support**: MCP Proxy supports connecting to multiple MCP Servers simultaneously (added in P1), routing through tool name via `tools/call`.
+> Single-upstream mode is backward compatible (legacy `upstream_url` config is auto-normalized); conflicting tool names in multi-upstream mode are automatically prefixed with `{upstream}__{tool}`.
+> See [PROTOCOL.md §2.6.2](PROTOCOL.md#262-multi-upstream) for details.
 
 > **Removed original AgentGateway (9080)**: MCP routing is handled by Higress.
 > **Removed original virbius-gateway-agent (9070)**: Security precheck is handled by the Higress WASM plugin.
@@ -452,7 +452,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 ```bash
 ./deploy/scripts/k8s-deploy.sh \
   --registry registry.example.com/virbius \
-  --tag v0.1.0 \
+  --tag v1.0.0 \
   --namespace virbius \
   --values deploy/helm/virbius/values-prod.yaml
 ```
@@ -460,7 +460,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 Build and push images only:
 
 ```bash
-./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v0.1.0
+./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v1.0.0
 ```
 
 Images already in the registry, install the chart only:
@@ -468,7 +468,7 @@ Images already in the registry, install the chart only:
 ```bash
 ./deploy/scripts/k8s-deploy.sh --skip-build \
   --registry registry.example.com/virbius \
-  --tag v0.1.0 \
+  --tag v1.0.0 \
   --values deploy/helm/virbius/values-prod.yaml
 ```
 
@@ -478,14 +478,31 @@ Images already in the registry, install the chart only:
 |----|------|----------|
 | Range | `range.virbius.example.com` | `GET /` |
 | Control | `control.virbius.example.com` | `GET /api/v1/health` (liveness); the readiness probe uses `GET /api/v1/ready` (requires the Kafka consumers to have joined and to hold partitions; Helm does this by default) |
-| Cloud | `engine.virbius.example.com` | `GET /admin/health` |
+| Cloud | `engine.virbius.example.com` | only `/v1` is routed externally; liveness `GET /admin/health` and readiness `GET /admin/ready` (Redis reachable and the cache-reload consumer group established) are **pod-internal** — probes hit the pod IP, not the Ingress |
 | Edge | `proxy.virbius.example.com` | `GET /health` |
 
 Point these four names at the Ingress external IP. TLS is off by default; enable `ingress.tls` in values. `/login` on the control host routes to `virbius-auth` (same domain as `/ui/`, so the login cookie is not lost). Default account `admin` / `secrets.authBootstrapPassword`.
 
+The engine host forwards **only `/v1`**: `/actuator/*` (metrics, health) and `/admin/*` (readiness detail, cache reload) are not reachable through the Ingress. Probes target the pod IP, so nothing outside the cluster needs those paths; if you must scrape `/actuator/prometheus` externally, do it from inside the cluster (or add an explicit NetworkPolicy-guarded Ingress rule) rather than re-opening `/`.
+
 In-cluster DNS: `virbius-control:8080`, `virbius-auth:8083`, `virbius-engine:8082`, `virbius-mcp-proxy:9090`, `virbius-demo:8000` (SSE `:9091`). Auth uses MySQL (same database as Control, separate Flyway history table `auth_schema_history`); the JWT key lives on a PVC, so do not scale replicas. Setting `auth.enabled=false` skips deploying Auth, and Control does not enable operator JWT either.
 
+#### Scaling to multiple replicas (HA)
+
+**Multiple replicas (HA)**: engine/control are statelessness-hardened and can safely be scaled. Key points:
+
+1. **engine** — Helm injects a unique `VIRBIUS_INSTANCE_ID` per replica (from `metadata.name`), driving per-instance Redis consumer groups (`engine-cache-*`/`engine-deploy-*`, broadcast semantics). Do **not** give several replicas the same `VIRBIUS_INSTANCE_ID`, or the groups merge and broadcast messages get split.
+2. **control** — scaling requires moving its local files to shared NFS first: edge manifests and audit exports are written to each replica's local `VIRBIUS_DATA_DIR` (an RWO PVC in Helm); unshared, replicas diverge — after a publish another replica keeps serving the **old manifest** (HTTP 200 with the old sha, silently stale), and an export fails to download from any replica other than its creator. How: mount the **same NFS at the same absolute path** as `VIRBIUS_DATA_DIR` on every replica (writable by the container uid); point `control.auditAllowPath` (renders `VIRBIUS_AUDIT_ALLOW_PATH`) at a **per-replica local** path (logback rolling logs must not be shared); tune NFS `actimeo` down or use `noac` when the stale-read window matters. Helm guard: `control.replicaCount > 1` without `control.sharedStorageEnabled=true` fails outright (setting it true asserts the shared storage above is in place); the follow-up file-externalization design (content into the DB) removes the NFS dependency once it lands.
+3. **rate limiting** — `/v1/evaluate` limiting is per-replica (see §10.2).
+
 The range agent checkpoint still launches `virbius-mcp-proxy` via stdio inside the pod. The edge host on the Ingress is the TCP entry point for MCP clients outside the cluster; its upstream defaults to `http://virbius-demo:9091`.
+
+**Switching an existing install to HA (PVC `accessMode` is immutable)**: the guard above requires `control.persistence.accessMode=ReadWriteMany`, but Kubernetes does not allow patching `accessModes` on an existing PVC — `helm upgrade` fails with `spec is immutable`. Plan for it on first install (pick an RWX StorageClass) or migrate the volume:
+
+1. `kubectl scale deploy/virbius-control -n virbius --replicas=0`
+2. Copy `/data` **off the old volume first** (`kubectl cp virbius-control-data:/data ./control-data-backup` via a debug pod). `helm uninstall` keeps PVCs, but an explicit `kubectl delete pvc` honours the StorageClass reclaim policy and can destroy the data.
+3. `kubectl delete pvc virbius-control-data -n virbius`, then `helm upgrade` with `control.persistence.accessMode=ReadWriteMany` (+ `storageClass` on your RWX class) and `control.sharedStorageEnabled=true`; restore the backed-up `/data` into `virbius-control-data`.
+4. Set `control.auditAllowPath` to a per-replica local path before scaling out (see above), then `kubectl scale deploy/virbius-control --replicas=2`.
 
 In-cluster Ollama is enabled by default: a Job downloads the VirbiusGuard GGUF from HuggingFace (V2.0 F16, ~1.5GB, cached on a PVC, not re-downloaded on upgrade) and runs `ollama create virbiusguard`. Leave `engine.promptLlm.baseUrl` empty to point at `http://{release}-ollama:11434`. In mainland China, switch `ollama.ggufUrl` to ModelScope:
 
@@ -494,6 +511,10 @@ In-cluster Ollama is enabled by default: a Job downloads the VirbiusGuard GGUF f
 When `ollama.enabled=false` you must fill in `engine.promptLlm.baseUrl`, otherwise `helm` fails outright. When disabling in-cluster MySQL / Kafka / Redis, fill in `mysql.jdbcUrl`, `kafka.bootstrapServers`, `redis.url` respectively, and engine/control will no longer wait on the in-cluster Services. GPU is off by default; set `ollama.gpu.enabled=true` on machines with NVIDIA devices.
 
 `helm uninstall virbius -n virbius` does **not** delete the PVCs.
+
+### 8.6 On-Prem Three-Host Deployment (customer site, no K8s)
+
+For customer-site deployments where **MySQL / Kafka / Redis / vLLM come from the customer's shared platform** and only the VirbiusAgent components (control + auth, engine, mcp-proxy) are installed on three hosts, use the ready-made per-host compose assets and the field runbook under [`deploy/onprem/`](deploy/onprem/README.md) ([中文现场版](deploy/onprem/README.zh.md)): host roles, cross-host firewall/port matrix, offline image tar bundles (`deploy/scripts/offline-bundle.sh`), TLS termination, prompt-model options (local Ollama GGUF via hf-mirror/ModelScope, or customer vLLM with safetensors weights), boot order, backup and the on-site acceptance checklist. The same directory works on K8s (external-infra values snippet in the runbook appendix).
 
 ---
 
@@ -552,10 +573,8 @@ Accepted for P0 with these conditions:
 - Prod/staging start with API-key auth **on**; running with every auth
   mechanism disabled fails startup (the implicit dev admin principal is
   dev-profile only).
-- `virbius-auth` is test-only: the dev compose keeps a commented `admin/admin`
-  convenience default (test environments only — never set these in non-dev
-  deployments); production integrates user SSO and does not deploy the module
-  (see SSO_INTEGRATION.md).
+- `virbius-auth` is the **only implemented operator login today** (local password + self-signed JWT); the dev compose keeps a commented `admin/admin` convenience default (test environments only — never set these in non-dev deployments). Production should run auth as a **single replica** (its signing key is a per-pod file — see §8.5) or keep the console on an isolated network.
+- **SSO is not implemented yet**: there is no SSO code in the repo (`virbius-auth` contains none either). Corporate OAuth2/OIDC integration is design-finalized, pending implementation — see `SSO_INTEGRATION.md` (v0.2, auth-broker route).
 
 ### 9.5 Upgrade notes
 
@@ -565,6 +584,15 @@ Accepted for P0 with these conditions:
   re-issued keys use the `v1:` HKDF envelope.
 - Legacy local dev databases may set `virbius.license.allow-insecure-dev-key=true`
   (**dev profile only**) to keep booting with a weak master key while rotating.
+- **Evaluate-token issuer de-duplication (`V19`)** — upgrading a database that
+  carries more than one `active` issuer row collapses them to a single row
+  (`active_guard` + unique index); the keeper is the row with the earliest
+  `created_at` (tie-break: smallest `kid`). Tokens minted by a dropped issuer stop
+  verifying, so callers holding one see `401` until they re-exchange — bounded by
+  the token TTL (`virbius.evaluate-token.ttl-seconds`, default `900` = 15 min).
+  If your callers do not re-exchange on a `401` automatically, force one right
+  before the upgrade (or drain past the TTL) to avoid a 15-minute denial window.
+  Dev databases are rebuilt from `db/schema.sql`; see §10.1.
 
 ### 9.6 Delegated credential plane (v2.5) deployment & operations
 
@@ -621,16 +649,18 @@ This section covers the datastore, configuration and ops actions for the evaluat
 | `V16__evaluate_token_auth.sql` | evaluate-token auth: `tb_evaluate_token_issuers`, `tb_evaluate_tokens`; audit + archive gain `agent_aid`/`app_id`/`subject_source`/`token_iss`; `tb_license_revocations` gains `agent_aid`/`expires_at` |
 | `V17__proxy_policy.sql` | `tb_proxy_policy` (previously SQLite-only; the proxy-policy admin API failed with "table doesn't exist" on MySQL) |
 | `V18__trace_tool_args.sql` | `tb_agent_trace.tool_args` + `tb_agent_trace_archive.tool_args` (previously SQLite-only; trace ingest failed on MySQL) |
+| `V19__evaluate_token_issuer_unique.sql` | single-active issuer (multi-replica): `tb_evaluate_token_issuers` gains a generated column `active_guard` + a unique index, so storage allows at most one `active` issuer; the migration first de-duplicates existing rows (keeps the earliest, tie-broken by smallest kid) |
 | `virbius-auth` `V1__baseline.sql` | auth MySQL baseline (`tb_operator_user`, `tb_auth_code`); prod uses Flyway with a distinct history table `auth_schema_history` |
 
 A `SchemaDialectParityTest` (in both `virbius-control` and `virbius-auth`) fails the build if `db/schema.sql` (SQLite/dev) and `db/migration/*.sql` (MySQL/prod) drift in tables or columns.
 
-Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lacks these new columns/tables**, so rebuild with `VIRBIUS_REBUILD_DB=1 ./scripts/run-local.sh` (deletes the DB and `FLUSHDB`).
+Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lacks these new columns/tables**, so rebuild with `VIRBIUS_REBUILD_DB=1 ./scripts/run-local.sh` (deletes the DB and `FLUSHDB`). A running control against an old DB fails at index creation (V19 `active_guard`) — that failure is the "rebuild needed" signal.
 
 ### 10.2 New configuration keys
 
 | Key | Default | Description |
 |---|---|---|
+| `virbius.admin.ready-latch` (engine) | `true` | once `/admin/ready` has been observed ready, latch it so a transient Redis blip cannot pull every replica from the Service; `false` re-evaluates on each probe (a Redis outage then flips the pod NotReady — stronger fail-closed posture, at the cost of mass eviction on a blip) |
 | `virbius.audit.hash-chain.enabled` | `true` | audit-event hash chain |
 | `virbius.audit.hash-chain.verify-enabled` | `true` | scheduled full-chain verification |
 | `virbius.audit.hash-chain.verify-interval-ms` | `3600000` | verification interval (1h) |
@@ -663,6 +693,8 @@ Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lac
 | `VIRBIUS_JDBC_INIT_SQL` (control/auth · prod/staging) | `SET time_zone = '+00:00'` | per-connection init SQL; pins MySQL/MariaDB sessions to UTC so `NOW()`/`CURRENT_TIMESTAMP` match the ISO-UTC strings the app writes (SQLite is already UTC) |
 
 > These keys currently get their defaults from code (`@Value`); `application*.yml` does not declare them. Override with a startup argument or the same-named `VIRBIUS_*` env var.
+> **Multi-replica semantics (rate limits)**: the `/v1/evaluate` limiter and the control evaluate-token exchange limit (`virbius.evaluate-token.exchange.rate-limit-per-license-per-min`) both count **within each process** (best-effort abuse bounds, not exact quotas). With N replicas the values above are **per-replica**; the effective global quota = configured value × replica count. For exact global quotas, divide the config by the replica count first, or adopt a Redis-backed limiter.
+> **Operational env vars (not in the table above)**: `VIRBIUS_DATA_DIR` (local file-state root: edge manifests, audit exports, the allow log) and `VIRBIUS_AUDIT_ALLOW_PATH` (allow-audit log path, default `${virbius.data-dir}/audit-allow.jsonl`; Helm renders it from `control.auditAllowPath`); multi-replica handling in §8.5.
 
 ### 10.2.1 Caller-auth operations (P0-min)
 

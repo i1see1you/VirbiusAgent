@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "virbius-review-sdk"
-version = "0.1.0"
+version = "1.0.0"
 description = "Official VirbiusAgent review SDK: input/output review over the engine /v1/evaluate API with streaming sliding-window support"
 readme = "README.md"
 requires-python = ">=3.9"

@@ -22,6 +22,32 @@ function redirectToLoginIfUnauthorized(res: Response): void {
   window.location.assign('/ui/login');
 }
 
+// Parse a response defensively: never call res.json() on an empty or non-JSON
+// body (a 5xx with Content-Length: 0 used to surface as "Unexpected end of JSON
+// input"). On !ok, extract the server's error message when present.
+async function readJson(res: Response, label: string): Promise<any> {
+  if (res.status === 204) return undefined;
+  const text = await res.text();
+  if (!res.ok) {
+    let detail = text.trim();
+    if (detail) {
+      try {
+        const j = JSON.parse(detail);
+        detail = j?.error || j?.message || detail;
+      } catch {
+        // keep raw text
+      }
+    }
+    throw new Error(`${label}: HTTP ${res.status}${detail ? ' — ' + String(detail).slice(0, 200) : ''}`);
+  }
+  if (!text.trim()) throw new Error(`${label}: empty response (HTTP ${res.status})`);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${label}: invalid JSON (HTTP ${res.status})`);
+  }
+}
+
 export interface AdminOpts {
   method?: string;
   body?: string | FormData;
@@ -39,7 +65,7 @@ export async function adminFetch<T = any>(url: string, opts: AdminOpts = {}): Pr
     headers: authHeaders(opts.headers, isFormData)
   });
   redirectToLoginIfUnauthorized(res);
-  const j = await res.json();
+  const j = await readJson(res, 'request failed');
   if (j && typeof j === 'object' && 'code' in j) {
     if (j.code !== 0) throw new Error(j.message || ('HTTP ' + res.status));
     return j.data as T;
@@ -67,7 +93,7 @@ export async function rawJson<T = any>(url: string, opts: AdminOpts = {}): Promi
     headers: authHeaders(opts.headers)
   });
   redirectToLoginIfUnauthorized(res);
-  return (await res.json()) as T;
+  return (await readJson(res, 'request failed')) as T;
 }
 
 // Tenant-scoped multipart upload (browser sets the boundary): returns unwrapped data.

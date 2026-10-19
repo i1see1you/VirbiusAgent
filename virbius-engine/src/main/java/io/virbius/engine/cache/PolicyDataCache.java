@@ -4,9 +4,9 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.virbius.groovy.l3.ScriptEnvironment;
 import io.virbius.policy.ValueSource;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -16,7 +16,9 @@ public class PolicyDataCache {
 
     private static final Logger log = LoggerFactory.getLogger(PolicyDataCache.class);
 
-    private final Map<String, TenantPolicyData> byTenant = new HashMap<>();
+    // Replaced from HashMap: mutated by the stream-subscriber thread and read by
+    // request threads concurrently; multi-replica safe requires thread safety first.
+    private final Map<String, TenantPolicyData> byTenant = new ConcurrentHashMap<>();
 
     public PolicyDataCache() {
     }

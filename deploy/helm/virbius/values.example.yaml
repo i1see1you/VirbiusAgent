@@ -2,14 +2,14 @@
 #   cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 #
 # Then:
-#   ./deploy/scripts/k8s-deploy.sh --registry registry.example.com/virbius --tag v0.1.0 \
+#   ./deploy/scripts/k8s-deploy.sh --registry registry.example.com/virbius --tag v1.0.0 \
 #     --values deploy/helm/virbius/values-prod.yaml
 
 fullnameOverride: virbius
 
 global:
   imageRegistry: registry.example.com/virbius
-  imageTag: v0.1.0
+  imageTag: v1.0.0
   imagePullSecrets:
     - name: registry-pull-secret
 
@@ -30,6 +30,23 @@ engine:
   promptLlm:
     baseUrl: ""   # empty + ollama.enabled → in-cluster Ollama; required if ollama.enabled=false
     model: virbiusguard   # /v1/memory/check; keep in sync with ollama.model
+
+control:
+  replicaCount: 1
+  # Machine guard (templates/control.yaml): replicaCount > 1 is refused unless
+  # sharedStorageEnabled=true. Edge manifests and audit exports live in
+  # VIRBIUS_DATA_DIR (/data). Before scaling: set persistence.accessMode to
+  # ReadWriteMany (and storageClass to your RWX class, e.g. NFS) so both replicas
+  # share /data (see DEPLOYMENT §8.5), point VIRBIUS_AUDIT_ALLOW_PATH at a
+  # per-replica local path, then set sharedStorageEnabled true.
+  sharedStorageEnabled: false
+  # Allow-audit log path (empty = ${virbius.data-dir}/audit-allow.jsonl). For
+  # replicaCount > 1 use a per-replica local path, e.g. /var/log/virbius/audit-allow.jsonl.
+  auditAllowPath: ""
+  persistence:
+    size: 5Gi
+    accessMode: ReadWriteOnce   # set ReadWriteMany + storageClass for multi-replica
+    storageClass: ""
 
 mysql:
   enabled: true
@@ -56,8 +73,9 @@ kafka:
   # bootstrapServers: kafka.example:9092   # required if enabled=false
   saslEnabled: true    # SCRAM credentials: secrets.kafkaSaslUsername / kafkaSaslPassword
 
-# virbius-auth is test-environment only; production integrates user SSO.
-# For a prod-like deployment set auth.enabled: false and use operator JWT/SSO.
+# virbius-auth is the only implemented operator login today (SSO is not implemented —
+# see SSO_INTEGRATION.md). Keep it enabled and run a single replica (its signing key is
+# a per-pod file), or set auth.enabled=false only if operators use external SSO yourself.
 auth:
   enabled: true
 

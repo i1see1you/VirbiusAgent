@@ -155,13 +155,13 @@ This script:
 cd virbius-control
 mvn spring-boot:run -Dspring-boot.run.profiles=local
 # Or using the packaged JAR:
-java -jar target/virbius-control-0.1.0-SNAPSHOT.jar --spring.profiles.active=dev
+java -jar target/virbius-control-1.0.0.jar --spring.profiles.active=dev
 
 # 2. In a separate terminal, start virbius-engine (port 8082)
 cd virbius-engine
 mvn spring-boot:run -Dspring-boot.run.profiles=local
 # Or using the packaged JAR:
-java -jar target/virbius-engine-0.1.0-SNAPSHOT.jar --spring.profiles.active=dev
+java -jar target/virbius-engine-1.0.0.jar --spring.profiles.active=dev
 
 # 3. Start MCP proxy (port 9090) -- optional, for sidecar mode
 cd virbius-mcp-proxy
@@ -1212,12 +1212,12 @@ VirbiusAgent uses Spring Boot profiles to distinguish three environments: `dev` 
 
 #### 8.0.7 Environment Variables Cheatsheet
 
-Complete list of environment variables required for production (prod):
+Core environment variables for production (prod) — the authoritative required-key list with validation rules is [DEPLOYMENT.md §9.1](DEPLOYMENT.md):
 
 ```bash
 # ── Database ──
 export SPRING_PROFILES_ACTIVE=prod
-export VIRBIUS_JDBC_URL=jdbc:mysql://mysql-host:3306/virbius?useSSL=true
+export VIRBIUS_JDBC_URL=jdbc:mariadb://mysql-host:3306/virbius?sslMode=REQUIRED&serverTimezone=UTC
 export VIRBIUS_JDBC_USER=virbius
 export VIRBIUS_JDBC_PASSWORD=your_password
 

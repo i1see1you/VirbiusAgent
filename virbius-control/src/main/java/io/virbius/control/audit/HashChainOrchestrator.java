@@ -59,6 +59,22 @@ public class HashChainOrchestrator {
             }
         } catch (Exception e) {
             log.warn("hash chain failed for tenant {}: {}", tenantId, e.getMessage());
+            clearChainFields(events);
+        }
+    }
+
+    /**
+     * On any give-up path the events must NOT keep the seq/hashes written during
+     * failed attempts: the ingestor persists whatever audit_seq the event carries,
+     * so stale attempt values would fork the chain in the database while the chain
+     * state itself never advanced. Clearing them makes the ingestor skip the
+     * UPDATE (its guard is {@code audit_seq > 0}).
+     */
+    private static void clearChainFields(List<Map<String, Object>> events) {
+        for (Map<String, Object> event : events) {
+            event.remove("audit_seq");
+            event.remove("prev_hash");
+            event.remove("curr_hash");
         }
     }
 
@@ -107,48 +123,60 @@ public class HashChainOrchestrator {
         // released when the SELECT returns (and SQLite rejects the syntax outright,
         // which made this whole fallback path fail on the dev dialect). Mutual
         // exclusion comes from the version-column CAS on the UPDATE below.
-        var rows = jdbc.queryForList(
-                "SELECT seq, last_hash, version FROM tb_audit_chain_state WHERE tenant_id = ?",
-                tenantId);
+        // Retry is bounded: unbounded recursion under persistent multi-replica
+        // contention could exhaust the stack; on exhaustion the batch is dropped
+        // with a warn (same posture as the outer catch in chainBatch).
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            var rows = jdbc.queryForList(
+                    "SELECT seq, last_hash, version FROM tb_audit_chain_state WHERE tenant_id = ?",
+                    tenantId);
 
-        long seq;
-        String prevHash;
-        int version;
+            long seq;
+            String prevHash;
+            int version;
 
-        if (rows.isEmpty()) {
-            seq = 0;
-            prevHash = GENESIS_HASH;
-            version = 0;
-            jdbc.update("INSERT INTO tb_audit_chain_state (tenant_id, seq, last_hash, version) VALUES (?, 0, ?, 0)",
-                    tenantId, GENESIS_HASH);
-        } else {
-            Map<String, Object> row = rows.get(0);
-            seq = ((Number) row.get("seq")).longValue();
-            prevHash = (String) row.get("last_hash");
-            if (prevHash == null || prevHash.isEmpty()) {
+            if (rows.isEmpty()) {
+                seq = 0;
                 prevHash = GENESIS_HASH;
+                version = 0;
+                try {
+                    jdbc.update("INSERT INTO tb_audit_chain_state (tenant_id, seq, last_hash, version) VALUES (?, 0, ?, 0)",
+                            tenantId, GENESIS_HASH);
+                } catch (org.springframework.dao.DuplicateKeyException raced) {
+                    // Another replica created the state row first; re-read and retry.
+                    continue;
+                }
+            } else {
+                Map<String, Object> row = rows.get(0);
+                seq = ((Number) row.get("seq")).longValue();
+                prevHash = (String) row.get("last_hash");
+                if (prevHash == null || prevHash.isEmpty()) {
+                    prevHash = GENESIS_HASH;
+                }
+                version = ((Number) row.get("version")).intValue();
             }
-            version = ((Number) row.get("version")).intValue();
-        }
 
-        for (Map<String, Object> event : events) {
-            seq++;
-            String currHash = computeHash(prevHash, seq, event);
-            event.put("audit_seq", seq);
-            event.put("prev_hash", prevHash);
-            event.put("curr_hash", currHash);
-            prevHash = currHash;
-        }
+            for (Map<String, Object> event : events) {
+                seq++;
+                String currHash = computeHash(prevHash, seq, event);
+                event.put("audit_seq", seq);
+                event.put("prev_hash", prevHash);
+                event.put("curr_hash", currHash);
+                prevHash = currHash;
+            }
 
-        int updated = jdbc.update(
-                "UPDATE tb_audit_chain_state SET seq = ?, last_hash = ?, version = version + 1, updated_at = ? " +
-                "WHERE tenant_id = ? AND version = ?",
-                seq, prevHash, Instant.now().toString(), tenantId, version);
+            int updated = jdbc.update(
+                    "UPDATE tb_audit_chain_state SET seq = ?, last_hash = ?, version = version + 1, updated_at = ? " +
+                    "WHERE tenant_id = ? AND version = ?",
+                    seq, prevHash, Instant.now().toString(), tenantId, version);
 
-        if (updated == 0) {
-            log.warn("mysql CAS failed for tenant {}, retrying", tenantId);
-            chainBatchMysql(tenantId, events);
+            if (updated > 0) {
+                return;
+            }
+            log.warn("mysql CAS failed for tenant {} (attempt {}/3)", tenantId, attempt);
         }
+        log.warn("mysql CAS exhausted for tenant {}, giving up this batch", tenantId);
+        clearChainFields(events);
     }
 
     public ChainHead getChainHead(String tenantId) {

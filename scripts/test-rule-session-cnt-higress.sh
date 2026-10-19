@@ -14,6 +14,16 @@
 #   3. If expression matches → block (403)
 #   4. Otherwise → forward to engine for further evaluation
 #
+# API-only verification (no direct sqlite/redis access from the test):
+#   - Threshold semantics are proved through the operator console:
+#     POST /api/v1/admin/tenants/{t}/rules/simulate with
+#     fixture.overrides.cumulative.{name} (high → block, low → allow).
+#   - Natural counter growth is proved by driving real calls through
+#     Higress (engine ingest) and observing the gateway block by behavior.
+#   - Cumulative definitions, rule state and the gateway artifact pointer
+#     are read from Control APIs; Redis liveness comes from engine
+#     /admin/ready (redis=up).
+#
 # Prerequisites:
 #   - Docker Desktop running
 #   - Virbius services (Redis, Engine, Control) running via docker-compose
@@ -102,13 +112,21 @@ if ! curl -sf "$ENGINE_URL/admin/health" >/dev/null 2>&1; then
 fi
 ok "Virbius Engine reachable: $ENGINE_URL"
 
-# Check Redis
-if ! docker exec "$REDIS_CONTAINER" redis-cli ping >/dev/null 2>&1; then
-  err "Redis container '$REDIS_CONTAINER' is not running or not accessible"
-  err "Start services with: docker compose up -d redis"
+# Check Redis reachability through the engine API (no direct redis-cli)
+REDIS_STATE=$(curl -s "$ENGINE_URL/admin/ready" 2>/dev/null | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    print('up' if d.get('redis') == 'up' else 'down')
+except Exception:
+    print('down')
+" 2>/dev/null || echo "down")
+if [[ "$REDIS_STATE" != "up" ]]; then
+  err "Engine reports Redis is not up (GET $ENGINE_URL/admin/ready → redis != up)"
+  err "Start services with: docker compose up -d redis virbius-engine virbius-control"
   exit 1
 fi
-ok "Redis reachable"
+ok "Redis reachable (via engine /admin/ready)"
 
 # Check tinygo for WASM build
 if ! $SKIP_BUILD; then
@@ -597,61 +615,114 @@ docker logs "$HIGRESS_CONTAINER" 2>&1 | tail -10 || true
 echo ""
 
 # ═══════════════════════════════════════════════════════════════
-# Step 6: Pre-populate Redis with cumulative counter
+# Step 6: Prove cumulative threshold via Control /rules/simulate
 # ═══════════════════════════════════════════════════════════════
-info "Step 6: Pre-populate Redis cumulative counter"
+info "Step 6: Prove cumulative threshold via Control /rules/simulate (API-only)"
 
-# The cumulative counter key format: virbius:cum:{tenant}:{cumulativeName}:{dimensionValue}
-# We need to know the cumulative name and dimension used by rule_session_cnt
-# Try to get cumulative definitions from Control API
+# Cumulative definitions live in Control; runtime counter values do NOT have an
+# admin read API (CumulativeService.snapshot is unwired), so threshold semantics
+# are proved through the operator console simulate endpoint instead of redis.
 CUMULATIVE_DEF=$(curl -s "$CONTROL_URL/api/v1/admin/tenants/$TENANT_ID/cumulatives" 2>/dev/null || echo "{}")
 CUM_NAMES=$(echo "$CUMULATIVE_DEF" | python3 -c "
 import sys, json
 try:
     d = json.load(sys.stdin)
     data = d.get('data', d)
-    if isinstance(data, list):
-        for c in data:
-            print(c.get('cumulative_name', ''))
-    elif isinstance(data, dict):
-        for k in data:
-            print(k)
-except:
-    print('session_cnt')
-" 2>/dev/null || echo "session_cnt")
-
-info "Available cumulative names: $CUM_NAMES"
-
-# Try to find the cumulative name used in the rule body
-CUM_NAME=$(echo "$LUA_SCRIPT" | grep -oE 'getCumulative\([^)]+\)' | head -1 | grep -oE '"[^"]+"' | tr -d '"' || echo "session_cnt")
-if [[ -z "$CUM_NAME" ]]; then
-  CUM_NAME="session_cnt"
+    items = data if isinstance(data, list) else list((data or {}).values())
+    for c in items:
+        if isinstance(c, dict) and c.get('cumulative_name'):
+            print(c.get('cumulative_name'))
+except Exception:
+    pass
+" 2>/dev/null || true)
+if [[ -n "$CUM_NAMES" ]]; then
+  info "Cumulative defs in Control: $(echo "$CUM_NAMES" | tr '\n' ' ')"
+else
+  warn "Control returned no cumulative definitions"
 fi
-info "Using cumulative name: $CUM_NAME"
 
-# Dimension is session_id for session count rules
-CUM_VALUE="$TEST_SESSION"
+# Find the cumulative name + comparison + threshold referenced by the rule
+CUM_NAME=$(echo "$LUA_SCRIPT" | grep -oE 'getCumulative\([^)]+\)' | head -1 | grep -oE '"[^"]+"' | tr -d '"' || true)
+[[ -z "$CUM_NAME" ]] && CUM_NAME="session_cnt"
+CUM_OP=$(echo "$LUA_SCRIPT" | grep -oE "getCumulative\(['\"]${CUM_NAME}['\"]\)[[:space:]]*(>=|>|<=|<|==)" | grep -oE '(>=|>|<=|<|==)' | head -1 || true)
+CUM_THRESHOLD=$(echo "$LUA_SCRIPT" | grep -oE "getCumulative\(['\"]${CUM_NAME}['\"]\)[[:space:]]*(>=|>|<=|<|==)[[:space:]]*[0-9]+" | grep -oE '[0-9]+' | head -1 || true)
+CUM_OP="${CUM_OP:->=}"
+CUM_THRESHOLD="${CUM_THRESHOLD:-100}"
+info "Rule references cumulative '$CUM_NAME' $CUM_OP $CUM_THRESHOLD"
 
-# Calculate the current time slot (minute-level bucket)
-# The slot is: epoch_minutes / granularity
-CURRENT_SLOT=$(python3 -c "
-import time
-# Assuming 1-minute granularity
-slot = int(time.time() // 60)
-print(slot)
-")
+# Counters that hit the rule (at/above threshold) and miss it (below)
+SIM_HIT_VALUE="$CUM_THRESHOLD"
+SIM_MISS_VALUE=$(( CUM_THRESHOLD - 1 ))
+[[ "$SIM_MISS_VALUE" -lt 0 ]] && SIM_MISS_VALUE=0
 
-# Write a high counter value to trigger the rule
-# Using Redis HINCRBY to set the counter
-CUM_KEY="virbius:cum:$TENANT_ID:$CUM_NAME:$CUM_VALUE"
-info "Setting counter: $CUM_KEY field=$CURRENT_SLOT value=150"
-docker exec "$REDIS_CONTAINER" redis-cli HSET "$CUM_KEY" "$CURRENT_SLOT" 150
-docker exec "$REDIS_CONTAINER" redis-cli EXPIRE "$CUM_KEY" 3600
+SIM_ROUTE="/mcp/tools/call"
 
-# Verify
-CUM_VAL=$(docker exec "$REDIS_CONTAINER" redis-cli HGET "$CUM_KEY" "$CURRENT_SLOT")
-info "Counter value: $CUM_VAL"
-ok "Redis cumulative counter pre-populated"
+build_simulate_body() {  # $1=count $2=outfile
+  python3 - "$RULE_DATA" "$CUM_NAME" "$1" "$SIM_ROUTE" "$TEST_SESSION" "$2" "$LUA_SCRIPT" << 'PY'
+import json, sys
+rule = json.loads(sys.argv[1])
+cum_name, count, route, session, out, script = (
+    sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7])
+# Use the decoded script so simulate parses it even if the stored body was JSON-encoded.
+rule["body"] = script
+body = {
+    "rule": rule,
+    "fixture": {
+        "route_uri": route,
+        "headers": {"X-Virbius-Session-Id": session},
+        "overrides": {"cumulative": {cum_name: count}},
+    },
+    "options": {"cumulative_source": "mock"},
+}
+with open(out, "w") as f:
+    json.dump(body, f)
+PY
+}
+
+sim_summary() {  # stdin: simulate response json -> "hit effective_action"
+  python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    s = (d.get('data') or {}).get('summary') or {}
+    print('%s %s' % (s.get('hit'), s.get('effective_action')))
+except Exception:
+    print('? ?')
+" 2>/dev/null || echo "? ?"
+}
+
+SIM_HIT_FILE="$HIGRESS_TEST_DIR/simulate_hit.json"
+SIM_MISS_FILE="$HIGRESS_TEST_DIR/simulate_miss.json"
+build_simulate_body "$SIM_HIT_VALUE" "$SIM_HIT_FILE"
+build_simulate_body "$SIM_MISS_VALUE" "$SIM_MISS_FILE"
+
+info "  simulate with cumulative=$SIM_HIT_VALUE (expect block)..."
+SIM_HIT_RESP=$(curl -s -X POST "$CONTROL_URL/api/v1/admin/tenants/$TENANT_ID/rules/simulate" \
+  -H 'Content-Type: application/json' --data @"$SIM_HIT_FILE" 2>/dev/null || echo "{}")
+SIM_HIT_SUM=$(printf '%s' "$SIM_HIT_RESP" | sim_summary)
+info "  simulate hit summary: hit=$SIM_HIT_SUM"
+
+info "  simulate with cumulative=$SIM_MISS_VALUE (expect allow)..."
+SIM_MISS_RESP=$(curl -s -X POST "$CONTROL_URL/api/v1/admin/tenants/$TENANT_ID/rules/simulate" \
+  -H 'Content-Type: application/json' --data @"$SIM_MISS_FILE" 2>/dev/null || echo "{}")
+SIM_MISS_SUM=$(printf '%s' "$SIM_MISS_RESP" | sim_summary)
+info "  simulate miss summary: hit=$SIM_MISS_SUM"
+
+SIM_HIT_OK=false
+[[ "$SIM_HIT_SUM" == "true block" ]] && SIM_HIT_OK=true
+SIM_MISS_OK=false
+[[ "$SIM_MISS_SUM" == *" allow"* ]] && SIM_MISS_OK=true
+
+if $SIM_HIT_OK; then
+  ok "Simulate: cumulative $CUM_OP $CUM_THRESHOLD → rule hits, effective_action=block"
+else
+  warn "Simulate: expected 'true block' at counter=$SIM_HIT_VALUE, got: $SIM_HIT_SUM"
+fi
+if $SIM_MISS_OK; then
+  ok "Simulate: cumulative below threshold → rule does not hit (allow)"
+else
+  warn "Simulate: expected allow at counter=$SIM_MISS_VALUE, got: $SIM_MISS_SUM"
+fi
 echo ""
 
 # ═══════════════════════════════════════════════════════════════
@@ -662,51 +733,20 @@ info "Step 7: Send test requests through Higress (port 80)"
 HIGRESS_URL="http://localhost:80"
 RULE_TRIGGERED=false
 
-# ─── Test 1: Request with pre-populated high counter → should BLOCK ───
+# ─── Test 1: High counter → rule hit (proved via Control simulate) ───
 echo ""
-echo -e "${YELLOW}  Test 1: Request with counter=150 (should trigger rule_session_cnt)${NC}"
-info "  Sending POST /mcp/tools/call with session=$TEST_SESSION"
+echo -e "${YELLOW}  Test 1: cumulative $CUM_OP $CUM_THRESHOLD → rule_session_cnt hits (block)${NC}"
+info "  Operator-console simulate (session=$TEST_SESSION, cumulative=$SIM_HIT_VALUE)"
 
-RESP1=$(curl -s -o /tmp/resp1.json -w "%{http_code}" -X POST "$HIGRESS_URL/mcp/tools/call" \
-  -H 'Content-Type: application/json' \
-  -H "x-mcp-tool-name: $TEST_TOOL" \
-  -H "x-mcp-session-id: $TEST_SESSION" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "read_file",
-      "arguments": {"path": "/etc/hostname"}
-    },
-    "id": 1
-  }' 2>&1 || echo "000")
-
-HTTP_CODE1=$(echo "$RESP1" | tail -1)
-BODY1=$(cat /tmp/resp1.json 2>/dev/null || echo "")
-
-info "  HTTP Status: $HTTP_CODE1"
-info "  Response: $(echo "$BODY1" | head -c 200)"
-
-if [[ "$HTTP_CODE1" == "403" ]]; then
-  ok "Test 1 PASSED: Request blocked (403) as expected"
-  if echo "$BODY1" | grep -qi "block\|deny\|forbidden"; then
-    ok "  Block reason found in response"
-  fi
+if $SIM_HIT_OK; then
+  ok "Test 1 PASSED: simulate reports hit + effective_action=block"
   RULE_TRIGGERED=true
-elif [[ "$HTTP_CODE1" == "200" ]]; then
-  # Check if engine evaluation blocked it
-  if echo "$BODY1" | grep -qi "block\|error.*-32006"; then
-    ok "Test 1 PASSED: Request blocked by engine"
-    RULE_TRIGGERED=true
-  else
-    warn "Test 1: Request was allowed (200) — rule may not have triggered"
-    warn "  This could mean:"
-    warn "    1. WASM expression evaluation didn't match (expression IR issue)"
-    warn "    2. Engine evaluation allowed it (cumulative counter read issue)"
-    warn "    3. WASM plugin not loaded correctly"
-  fi
 else
-  warn "Test 1: Unexpected HTTP status: $HTTP_CODE1"
+  warn "Test 1: simulate did not report a block (summary: $SIM_HIT_SUM)"
+  warn "  This could mean:"
+  warn "    1. rule/condition not parsed by Control simulate"
+  warn "    2. cumulative override name mismatch ('$CUM_NAME')"
+  warn "    3. rule rollout_state is dry_run (effective_action=review)"
 fi
 
 # ─── Test 2: Request with a fresh session (counter=0) → should ALLOW ───
@@ -742,15 +782,17 @@ else
   warn "Test 2: Unexpected HTTP status: $HTTP_CODE2"
 fi
 
-# ─── Test 3: Send multiple requests to increment counter naturally ───
+# ─── Test 3: Drive calls so the counter grows naturally past the threshold ───
 echo ""
-echo -e "${YELLOW}  Test 3: Send 10 requests to increment counter naturally${NC}"
+NATURAL_CALLS=$(( CUM_THRESHOLD + 2 ))
+[[ "$NATURAL_CALLS" -gt 30 ]] && NATURAL_CALLS=30
+echo -e "${YELLOW}  Test 3: Send $NATURAL_CALLS requests (threshold $CUM_OP $CUM_THRESHOLD) to grow counter naturally${NC}"
 NATURAL_SESSION="natural-$(date +%s)"
 info "  Session: $NATURAL_SESSION"
 
 ALLOWED_COUNT=0
 BLOCKED_COUNT=0
-for i in $(seq 1 10); do
+for i in $(seq 1 "$NATURAL_CALLS"); do
   RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$HIGRESS_URL/mcp/tools/call" \
     -H 'Content-Type: application/json' \
     -H "x-mcp-tool-name: $TEST_TOOL" \
@@ -766,13 +808,16 @@ done
 
 info "  Results: $ALLOWED_COUNT allowed, $BLOCKED_COUNT blocked"
 
-# Check the natural counter in Redis
-NATURAL_KEY="virbius:cum:$TENANT_ID:$CUM_NAME:$NATURAL_SESSION"
-NATURAL_VAL=$(docker exec "$REDIS_CONTAINER" redis-cli HGET "$NATURAL_KEY" "$CURRENT_SLOT" 2>/dev/null || echo "0")
-info "  Natural counter in Redis: $NATURAL_VAL"
-
+# Natural counter growth is observed purely from gateway behavior — the test must
+# not read the redis counter directly. A 403 (or engine block) after N calls is
+# end-to-end evidence that the engine ingested the counter past the threshold.
 if [[ "$ALLOWED_COUNT" -gt 0 ]]; then
   ok "Test 3 PASSED: Some requests were allowed before threshold"
+fi
+if [[ "$BLOCKED_COUNT" -gt 0 ]]; then
+  ok "Test 3 PASSED: requests started blocking after $ALLOWED_COUNT calls (counter crossed threshold end-to-end)"
+else
+  info "Test 3: no block observed within $NATURAL_CALLS calls (counter may not have crossed $CUM_THRESHOLD yet)"
 fi
 echo ""
 
@@ -790,26 +835,57 @@ docker logs "$HIGRESS_CONTAINER" 2>&1 | grep -i "virbius\|wasm\|expr\|block\|den
 echo ""
 
 # ═══════════════════════════════════════════════════════════════
-# Step 9: Verify Redis state
+# Step 9: Verify state via Control APIs (no direct sqlite/redis)
 # ═══════════════════════════════════════════════════════════════
-info "Step 9: Verify Redis state"
+info "Step 9: Verify state via Control APIs"
 
-echo -e "${CYAN}  ── Cumulative counters ──${NC}"
-echo "  Key: virbius:cum:$TENANT_ID:$CUM_NAME:*"
-docker exec "$REDIS_CONTAINER" redis-cli --scan --pattern "virbius:cum:$TENANT_ID:$CUM_NAME:*" | while read -r key; do
-  echo "  $key:"
-  docker exec "$REDIS_CONTAINER" redis-cli HGETALL "$key" | sed 's/^/    /'
-done
+echo -e "${CYAN}  ── Cumulative definitions (Control) ──${NC}"
+curl -s "$CONTROL_URL/api/v1/admin/tenants/$TENANT_ID/cumulatives" \
+  | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    items = d.get('data', [])
+    if isinstance(items, dict):
+        items = list(items.values())
+    for c in items or []:
+        if isinstance(c, dict):
+            print('  %s (dimension=%s, window=%s/%s)' % (
+                c.get('cumulative_name'), c.get('dimension'),
+                c.get('window_kind'), c.get('window_minutes')))
+except Exception as e:
+    print('  (unavailable: %s)' % e)
+" 2>/dev/null || echo "  (cumulatives API unavailable)"
 
 echo ""
-echo -e "${CYAN}  ── Rate limit counters ──${NC}"
-docker exec "$REDIS_CONTAINER" redis-cli --scan --pattern "tool:*" | while read -r key; do
-  echo "  $key: $(docker exec "$REDIS_CONTAINER" redis-cli GET "$key")"
-done
+echo -e "${CYAN}  ── Rule state (Control) ──${NC}"
+curl -s "$CONTROL_URL/api/v1/admin/tenants/$TENANT_ID/rules/$RULE_ID" \
+  | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    r = d.get('data') or {}
+    print('  rule_id=%s layer=%s runtime=%s intent=%s rollout=%s' % (
+        r.get('rule_id'), r.get('layer'), r.get('runtime'),
+        r.get('intent_action'), r.get('rollout_state')))
+except Exception as e:
+    print('  (unavailable: %s)' % e)
+" 2>/dev/null || echo "  (rule API unavailable)"
 
 echo ""
-echo -e "${CYAN}  ── Gateway artifact pointer ──${NC}"
-docker exec "$REDIS_CONTAINER" redis-cli HGETALL "virbius:config:gateway:$TENANT_ID" | sed 's/^/  /' || echo "  (not found)"
+echo -e "${CYAN}  ── Gateway artifact pointer (Control) ──${NC}"
+curl -s "$CONTROL_URL/api/v1/admin/tenants/$TENANT_ID/gateway-artifacts/policy-version" \
+  | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+    a = d.get('data') or {}
+    print('  artifact_revision=%s storage=%s published_at=%s publish_id=%s' % (
+        a.get('artifact_revision'), a.get('storage'),
+        a.get('published_at'), a.get('publish_id')))
+except Exception as e:
+    print('  (unavailable: %s)' % e)
+" 2>/dev/null || echo "  (gateway-artifacts API unavailable)"
 echo ""
 
 # ═══════════════════════════════════════════════════════════════
@@ -825,9 +901,9 @@ echo "  Intent:      $RULE_INTENT (risk=$RULE_RISK)"
 echo "  Rollout:     $RULE_ROLLOUT"
 echo "  Expression:  $(echo "$EXPR_IR" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('expression',{}).get('source','?'))" 2>/dev/null || echo '?')"
 echo ""
-echo "  Test 1 (high counter → block):  $([ "$RULE_TRIGGERED" = true ] && echo -e "${GREEN}✓ PASSED${NC}" || echo -e "${RED}✗ FAILED${NC}")"
+echo "  Test 1 (simulate counter $CUM_OP $CUM_THRESHOLD → block): $([ "$RULE_TRIGGERED" = true ] && echo -e "${GREEN}✓ PASSED${NC}" || echo -e "${RED}✗ FAILED${NC}")"
 echo "  Test 2 (fresh session → allow): $([ "$HTTP_CODE2" == "200" ] && echo -e "${GREEN}✓ PASSED${NC}" || echo -e "${YELLOW}? CHECK${NC}")"
-echo "  Test 3 (natural increment):     $ALLOWED_COUNT allowed / $BLOCKED_COUNT blocked"
+echo "  Test 3 (natural increment):     $ALLOWED_COUNT allowed / $BLOCKED_COUNT blocked (of $NATURAL_CALLS calls)"
 echo ""
 echo "  Higress:      $HIGRESS_CONTAINER (still running, port 80)"
 echo "  Mock MCP:     $MOCK_MCP_CONTAINER (still running)"
@@ -839,6 +915,6 @@ echo "  Cleanup:            ./scripts/test-rule-session-cnt-higress.sh --cleanup
 echo ""
 
 # Clean up temp files
-rm -f /tmp/resp1.json /tmp/resp2.json
+rm -f /tmp/resp2.json
 
 exit 0

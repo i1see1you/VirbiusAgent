@@ -1,6 +1,6 @@
 [project]
 name = "virbius-integrate"
-version = "0.1.0"
+version = "1.0.0"
 description = "VirbiusAgent native-tool integration: observe, audit, inventory (advisory grade)."
 requires-python = ">=3.10"
 dependencies = [

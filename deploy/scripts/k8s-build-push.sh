@@ -8,7 +8,7 @@ Usage: k8s-build-push.sh --registry REGISTRY [--tag TAG] [--apt-mirror cn]
 
   --registry     Image registry prefix, e.g. registry.example.com/virbius
                  Images: {registry}/virbius-{engine,control,auth,mcp-proxy,demo}:{tag}
-  --tag          Image tag (default: latest)
+  --tag          Image tag (default: v1.0.0)
   --apt-mirror   Passed to Dockerfiles as APT_MIRROR (e.g. cn)
 
 Requires docker. Run `docker login` against the registry first.
@@ -16,7 +16,7 @@ EOF
 }
 
 REGISTRY=""
-TAG="latest"
+TAG="v1.0.0"
 APT_MIRROR=""
 
 while [[ $# -gt 0 ]]; do

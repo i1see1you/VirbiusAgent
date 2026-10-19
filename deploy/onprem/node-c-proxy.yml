@@ -1,0 +1,44 @@
+# Node C — 接入面：virbius-mcp-proxy（MCP 客户端的 TCP 入口）
+# 用法：scp 本文件、.env 与 license.lic 到 C 机同目录，
+#       `docker compose --env-file .env -f node-c-proxy.yml up -d`
+# license.lic 由 control 签发（运营台 Licenses 页 / POST /api/v1/admin/licenses/issue）。
+name: virbius-onprem-c
+
+services:
+  virbius-mcp-proxy:
+    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-mcp-proxy:${IMAGE_TAG:-v1.0.0}
+    environment:
+      VIRBIUS_TRANSPORT: tcp://0.0.0.0:9090
+      # ── 跨机指向 A/B 机 ──
+      VIRBIUS_CONTROL_URL: http://${NODE_A}:8080
+      VIRBIUS_ENGINE_URL: http://${NODE_B}:8082
+      # ── 客户 Redis（规则快照订阅/降级兜底） ──
+      VIRBIUS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}
+      # ── 审计/链路 → 客户 Kafka（Kafka-only 后端；SASL 见下） ──
+      VIRBIUS_AUDIT_BACKEND: kafka
+      VIRBIUS_AUDIT_KAFKA_BROKERS: ${KAFKA_BOOTSTRAP_SERVERS}
+      VIRBIUS_TRACE_BACKEND: kafka
+      VIRBIUS_TRACE_KAFKA_BROKERS: ${KAFKA_BOOTSTRAP_SERVERS}
+      VIRBIUS_KAFKA_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      VIRBIUS_KAFKA_SASL_MECHANISM: ${KAFKA_SASL_MECHANISM:-SCRAM-SHA-256}
+      VIRBIUS_KAFKA_SASL_USERNAME: ${KAFKA_SASL_USERNAME:?set KAFKA_SASL_USERNAME}
+      VIRBIUS_KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:?set KAFKA_SASL_PASSWORD}
+      # ── 被代理的 MCP Server ──
+      VIRBIUS_UPSTREAM_URL: ${VIRBIUS_UPSTREAM_URL:?set VIRBIUS_UPSTREAM_URL}
+      VIRBIUS_LICENSE_FILE: /config/license.lic
+      VIRBIUS_LOG_DIR: /var/log/virbius
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "*"
+      no_proxy: "*"
+    volumes:
+      - ./license.lic:/config/license.lic:ro
+      - proxy-logs:/var/log/virbius
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+volumes:
+  proxy-logs:
