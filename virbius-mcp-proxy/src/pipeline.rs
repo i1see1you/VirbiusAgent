@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use tracing::{debug, warn};
 
 use virbius_core::license::License;
@@ -29,6 +28,11 @@ pub enum PipelineResult {
         rule_id: Option<String>,
         /// Updated session risk score from the engine (if evaluated).
         risk_score: Option<u32>,
+        /// Terminal disposition for audit/trace, mirroring the engine verdict:
+        /// `"allow"` (default) or `"review"` (engine flagged the call for
+        /// observation but still lets it run). Kept distinct from `"allow"` so
+        /// the edge layer does not report a review as an allow.
+        disposition: &'static str,
     },
     /// Tool call is denied — return JSON-RPC error to Agent.
     Deny {
@@ -54,6 +58,7 @@ impl PipelineResult {
             reason: reason.to_string(),
             rule_id: None,
             risk_score: None,
+            disposition: "allow",
         }
     }
 
@@ -74,6 +79,18 @@ impl PipelineResult {
             reason: reason.to_string(),
             risk_score: 0,
         }
+    }
+}
+
+/// Map an engine `effective_action` to the (audit/trace disposition, reason
+/// code) the edge layer should report. `review` is preserved so the edge row
+/// matches the cloud verdict; every other engine verdict that reaches the
+/// allow branch (i.e. plain `allow`) reports `allow`.
+fn edge_disposition(effective_action: &str) -> (&'static str, &'static str) {
+    if effective_action == "review" {
+        ("review", "engine:review")
+    } else {
+        ("allow", "engine:allow")
     }
 }
 
@@ -524,18 +541,25 @@ impl SecurityPipeline {
                     };
                 }
 
+                // Preserve the engine's disposition in the audit trail. The
+                // engine may flag a call for observation via
+                // `effective_action == "review"`; the call still runs (edge is
+                // allow), but we must NOT collapse that verdict to "allow" or
+                // the edge/cloud audit rows disagree on the same trace.
+                let (disposition, reason_code) = edge_disposition(&resp.effective_action);
                 self.audit_tool_call(
                     session,
                     tool_name,
-                    "allow",
+                    disposition,
                     resp.rule_id.as_deref(),
-                    Some("engine:allow"),
+                    Some(reason_code),
                 )
                 .await;
                 PipelineResult::Allow {
                     reason: "engine".to_string(),
                     rule_id: resp.rule_id,
                     risk_score: Some(resp.session_risk_score),
+                    disposition,
                 }
             }
             Err(e) => {
@@ -629,16 +653,6 @@ impl SecurityPipeline {
         }
     }
 
-    /// Check if a challenge token is present in the request headers/meta.
-    ///
-    /// The token is passed as `X-Virbius-Challenge-Token` HTTP header or
-    /// `_meta.challenge_token` in the JSON-RPC params.
-    pub fn extract_challenge_token(meta: &Value) -> Option<String> {
-        meta.get("challenge_token")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-    }
-
     /// Check a memory write with the Engine (LLM-based injection detection).
     ///
     /// Called by the router after local Memory Interceptor checks pass.
@@ -678,49 +692,6 @@ impl SecurityPipeline {
         resp.json::<MemoryCheckResponse>()
             .await
             .map_err(EngineError::Http)
-    }
-
-    /// Verify a challenge token with the Engine.
-    pub async fn verify_challenge_token(
-        &self,
-        token: &str,
-        tool_name: &str,
-        args: &Value,
-        session: &Session,
-    ) -> Result<bool, EngineError> {
-        let args_json = serde_json::to_string(args).unwrap_or_default();
-        let args_hash = sha256_hex(&format!("{}:{}", tool_name, args_json));
-        let verify_req = serde_json::json!({
-            "token": token,
-            "tool_name": tool_name,
-            "args_hash": args_hash,
-            "session_id": session.session_id,
-        });
-        let url = self
-            .engine
-            .url
-            .replace("/v1/evaluate", "/v1/challenge/verify");
-        let token = self.auth_token(session).await;
-        let mut builder = self
-            .engine
-            .http
-            .post(&url)
-            .json(&verify_req)
-            .timeout(self.timeout_for(&session.tenant_id));
-        if !token.is_empty() {
-            builder = builder.header("Authorization", format!("Bearer {token}"));
-        }
-        let resp = builder.send().await.map_err(EngineError::Http)?;
-
-        if !resp.status().is_success() {
-            return Ok(false);
-        }
-
-        let result: serde_json::Value = resp.json().await.map_err(EngineError::Http)?;
-        Ok(result
-            .get("valid")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false))
     }
 
     /// Determine if this call qualifies for the fast path.
@@ -876,24 +847,6 @@ impl SecurityPipeline {
 
 pub type SharedPipeline = Arc<SecurityPipeline>;
 
-/// Compute SHA-256 hex digest of the input string.
-fn sha256_hex(input: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(input.as_bytes());
-    let result = hasher.finalize();
-    format!("sha256:{}", hex::encode(&result))
-}
-
-/// Minimal hex encoding (avoids adding `hex` crate dependency).
-mod hex {
-    pub fn encode(bytes: &[u8]) -> String {
-        let mut s = String::with_capacity(bytes.len() * 2);
-        for b in bytes {
-            s.push_str(&format!("{:02x}", b));
-        }
-        s
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -971,13 +924,27 @@ mod tests {
                 reason,
                 rule_id,
                 risk_score,
+                disposition,
             } => {
                 assert_eq!(reason, "ok");
                 assert!(rule_id.is_none());
                 assert!(risk_score.is_none());
+                assert_eq!(disposition, "allow");
             }
             _ => panic!("expected Allow"),
         }
+    }
+
+    #[test]
+    fn test_edge_disposition_preserves_review() {
+        assert_eq!(edge_disposition("review"), ("review", "engine:review"));
+    }
+
+    #[test]
+    fn test_edge_disposition_allow_default() {
+        assert_eq!(edge_disposition("allow"), ("allow", "engine:allow"));
+        // Any other value that reaches the allow branch maps to allow.
+        assert_eq!(edge_disposition(""), ("allow", "engine:allow"));
     }
 
     #[test]
@@ -1008,48 +975,6 @@ mod tests {
             }
             _ => panic!("expected Challenge"),
         }
-    }
-
-    #[test]
-    fn test_sha256_hex_format() {
-        let hash = sha256_hex("hello");
-        assert!(hash.starts_with("sha256:"));
-        // SHA-256 hex is 64 chars, plus "sha256:" prefix = 71
-        assert_eq!(hash.len(), 71);
-    }
-
-    #[test]
-    fn test_sha256_hex_deterministic() {
-        assert_eq!(sha256_hex("test"), sha256_hex("test"));
-        assert_ne!(sha256_hex("test"), sha256_hex("different"));
-    }
-
-    #[test]
-    fn test_hex_encode() {
-        assert_eq!(hex::encode(b"\x00\x01\xff"), "0001ff");
-        assert_eq!(hex::encode(b""), "");
-        assert_eq!(hex::encode(b"hello"), "68656c6c6f");
-    }
-
-    #[test]
-    fn test_extract_challenge_token_present() {
-        let meta = serde_json::json!({"challenge_token": "tok-abc"});
-        assert_eq!(
-            SecurityPipeline::extract_challenge_token(&meta),
-            Some("tok-abc".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_challenge_token_missing() {
-        let meta = serde_json::json!({});
-        assert_eq!(SecurityPipeline::extract_challenge_token(&meta), None);
-    }
-
-    #[test]
-    fn test_extract_challenge_token_wrong_type() {
-        let meta = serde_json::json!({"challenge_token": 42});
-        assert_eq!(SecurityPipeline::extract_challenge_token(&meta), None);
     }
 
     #[test]

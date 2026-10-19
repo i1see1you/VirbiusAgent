@@ -1,5 +1,6 @@
 package io.virbius.control.admin;
 
+import io.virbius.control.common.OperatorResolver;
 import io.virbius.control.common.exception.BusinessException;
 import io.virbius.control.common.response.ApiResult;
 import io.virbius.control.domain.BundleRelease;
@@ -366,10 +367,6 @@ public class DeployRolloutController {
     }
 
     private static String resolveOperator(HttpServletRequest request) {
-        String user = request.getHeader("X-User-Id");
-        if (user != null && !user.isBlank()) return user;
-        user = request.getRemoteUser();
-        if (user != null && !user.isBlank()) return user;
-        return "system";
+        return OperatorResolver.resolve(request, "system");
     }
 }

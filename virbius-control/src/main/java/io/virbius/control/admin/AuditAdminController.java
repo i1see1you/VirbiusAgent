@@ -7,7 +7,6 @@ import io.virbius.control.audit.DecisionBomService;
 import io.virbius.control.audit.HashChainOrchestrator;
 import io.virbius.control.audit.HashChainVerifier;
 import io.virbius.control.audit.HashChainVerifier.ChainVerificationResult;
-import io.virbius.control.audit.MerkleAuditService;
 import io.virbius.control.audit.TraceChainVerifier;
 import io.virbius.control.common.response.ApiResult;
 import java.time.Instant;
@@ -31,7 +30,6 @@ public class AuditAdminController {
     private final HashChainOrchestrator hashChain;
     private final HashChainVerifier verifier;
     private final AuditCenterService auditCenter;
-    private final MerkleAuditService merkleAudit;
     private final TraceChainVerifier traceChainVerifier;
     private final DecisionBomService decisionBom;
     private final AuditExportService auditExport;
@@ -41,7 +39,6 @@ public class AuditAdminController {
             HashChainOrchestrator hashChain,
             HashChainVerifier verifier,
             AuditCenterService auditCenter,
-            MerkleAuditService merkleAudit,
             TraceChainVerifier traceChainVerifier,
             DecisionBomService decisionBom,
             AuditExportService auditExport,
@@ -49,7 +46,6 @@ public class AuditAdminController {
         this.hashChain = hashChain;
         this.verifier = verifier;
         this.auditCenter = auditCenter;
-        this.merkleAudit = merkleAudit;
         this.traceChainVerifier = traceChainVerifier;
         this.decisionBom = decisionBom;
         this.auditExport = auditExport;
@@ -77,33 +73,6 @@ public class AuditAdminController {
     public ApiResult<HashChainOrchestrator.ChainHead> chainStatus(
             @PathVariable("tenantId") String tenantId) {
         return ApiResult.ok(hashChain.getChainHead(tenantId));
-    }
-
-    /** A4: Merkle inclusion proof for one audit event. */
-    @GetMapping("/proof/{eventId}")
-    public ApiResult<Map<String, Object>> proof(
-            @PathVariable("tenantId") String tenantId,
-            @PathVariable("eventId") String eventId,
-            @RequestParam(value = "from", required = false) String from,
-            @RequestParam(value = "to", required = false) String to) {
-        return ApiResult.ok(merkleAudit.proof(
-                tenantId, eventId,
-                from != null && !from.isBlank() ? Instant.parse(from) : null,
-                to != null && !to.isBlank() ? Instant.parse(to) : null));
-    }
-
-    /** A4: independent proof verification (root + steps supplied by the auditor). */
-    @PostMapping("/verify-proof")
-    public ApiResult<Map<String, Object>> verifyProof(
-            @PathVariable("tenantId") String tenantId,
-            @RequestBody VerifyProofRequest body) {
-        List<io.virbius.control.audit.MerkleUtil.ProofStep> steps = body.proof() == null
-                ? List.of()
-                : body.proof().stream()
-                        .map(s -> new io.virbius.control.audit.MerkleUtil.ProofStep(s.hash(), s.position()))
-                        .toList();
-        boolean ok = merkleAudit.verifyProof(tenantId, body.eventId(), body.rootHash(), steps);
-        return ApiResult.ok(Map.of("verified", ok));
     }
 
     /** A3: verify a session's trace chain, or the whole tenant when session_id is omitted. */
@@ -174,20 +143,6 @@ public class AuditAdminController {
     }
 
     // ============================================================
-    // B7 output-review false-positive statistics
-    // ============================================================
-
-    @GetMapping("/output-review-stats")
-    public ApiResult<Map<String, Object>> outputReviewStats(
-            @PathVariable("tenantId") String tenantId,
-            @RequestParam(value = "from", required = false) String from,
-            @RequestParam(value = "to", required = false) String to) {
-        Instant fromInstant = from != null && !from.isBlank() ? Instant.parse(from) : null;
-        Instant toInstant = to != null && !to.isBlank() ? Instant.parse(to) : null;
-        return ApiResult.ok(auditCenter.outputReviewStats(tenantId, fromInstant, toInstant));
-    }
-
-    // ============================================================
     // A6 Decision BOM / traceability export
     // ============================================================
 
@@ -252,11 +207,6 @@ public class AuditAdminController {
     }
 
     public record VerifyRequest(String from, String to) {}
-
-    public record VerifyProofRequest(
-            String eventId, String rootHash, List<ProofStepDto> proof) {}
-
-    public record ProofStepDto(String hash, String position) {}
 
     public record SealAnchorRequest(String date) {}
 

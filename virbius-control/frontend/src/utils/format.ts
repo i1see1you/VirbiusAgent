@@ -132,3 +132,14 @@ export function rateClass(rate: number): string {
   if (rate < 5) return 'rate-mid';
   return 'rate-high';
 }
+
+export function actionTagType(action: any): 'success' | 'warning' | 'danger' | 'info' {
+  switch (String(action ?? '').toLowerCase()) {
+    case 'allow': return 'success';
+    case 'review':
+    case 'challenge': return 'warning';
+    case 'block':
+    case 'deny': return 'danger';
+    default: return 'info';
+  }
+}

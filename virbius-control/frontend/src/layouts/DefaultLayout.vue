@@ -78,6 +78,12 @@
                 :label="tn.id + ' · ' + (tn.name || '')" :value="tn.id" />
             </el-select>
           </label>
+          <label class="topbar-field">
+            <span>{{ t('topbar.operator') }}</span>
+            <el-input :model-value="session.operatorName" style="width:150px"
+              :placeholder="t('topbar.operator-placeholder')" clearable
+              @change="onOperatorChange" @clear="onOperatorChange('')" />
+          </label>
           <el-button size="small" @click="toggleLang">{{ locale === 'zh' ? t('topbar.lang-zh') : t('topbar.lang-en') }}</el-button>
           <el-button size="small" @click="logout">{{ t('topbar.logout') }}</el-button>
         </header>
@@ -234,6 +240,9 @@ async function loadTenants() {
 
 function onTenantChange(v: string) {
   session.setTenant(v);
+}
+function onOperatorChange(v: string) {
+  session.setOperatorName(v);
 }
 function toggleLang() {
   const next = locale.value === 'zh' ? 'en' : 'zh';

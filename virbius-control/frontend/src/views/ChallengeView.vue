@@ -126,7 +126,7 @@ const approved = ref<any[]>([]);
 const dialogVisible = ref(false);
 const dialogMode = ref<'approve' | 'reject'>('approve');
 const dialogId = ref('');
-const dialogActor = ref('operator');
+const dialogActor = ref(session.operatorName);
 const dialogNote = ref('');
 
 function scrollTop() { document.querySelector('.v-scroll')?.scrollTo(0, 0); }
@@ -156,19 +156,21 @@ async function load() {
 function openDialog(mode: 'approve' | 'reject', id: string) {
   dialogMode.value = mode;
   dialogId.value = id;
-  dialogActor.value = 'operator';
+  dialogActor.value = session.operatorName;
   dialogNote.value = '';
   dialogVisible.value = true;
 }
 
 async function submitDialog() {
-  if (dialogMode.value === 'approve') await approve(dialogId.value, dialogActor.value, dialogNote.value);
-  else await reject(dialogId.value, dialogActor.value, dialogNote.value);
+  const actor = dialogActor.value.trim();
+  if (!actor) { ElMessage.warning(t('challenge.actor-required')); return; }
+  if (dialogMode.value === 'approve') await approve(dialogId.value, actor, dialogNote.value);
+  else await reject(dialogId.value, actor, dialogNote.value);
 }
 
 async function approve(id: string, approvedBy: string, comment: string) {
   try {
-    const res = await rawJson<any>(`/api/v1/challenges/${id}/approve`, { method: 'POST', body: JSON.stringify({ approved_by: approvedBy || 'operator', comment }) });
+    const res = await rawJson<any>(`/api/v1/challenges/${id}/approve`, { method: 'POST', body: JSON.stringify({ approved_by: approvedBy, comment }) });
     if (res && res.token) {
       ElMessage.success(t('challenge.approved-token', [res.token]));
       dialogVisible.value = false;
@@ -180,7 +182,7 @@ async function approve(id: string, approvedBy: string, comment: string) {
 async function reject(id: string, rejectedBy: string, reason: string) {
   if (!reason) { ElMessage.warning(t('challenge.reason-required')); return; }
   try {
-    await rawJson(`/api/v1/challenges/${id}/reject`, { method: 'POST', body: JSON.stringify({ rejected_by: rejectedBy || 'operator', reason }) });
+    await rawJson(`/api/v1/challenges/${id}/reject`, { method: 'POST', body: JSON.stringify({ rejected_by: rejectedBy, reason }) });
     ElMessage.success('Challenge rejected');
     dialogVisible.value = false;
     load();

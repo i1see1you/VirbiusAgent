@@ -2364,11 +2364,11 @@ virbius:
 | 组件 | 职责 | 表 |
 |------|------|----|
 | `TraceChainVerifier` | 按会话/整租户校验 `tb_agent_trace` 哈希链（`chain_seq`/`prev_hash`/`curr_hash`） | `tb_agent_trace`、`tb_trace_chain_state` |
-| `MerkleUtil` + `MerkleAuditService` | 对审计事件 `curr_hash`（按 `audit_seq`）构造 Merkle 树，产出单事件包含证明并支持独立校验 | `tb_audit_events` |
+| `MerkleUtil` | 哈希工具（`sha256Hex`/规范化时间戳/Merkle 树根构造），供 trace 链哈希、导出校验、每日锚点复用 | — |
 | `DailyAnchorJob` | 每日封存各会话链头到 per-tenant Merkle 根 | `tb_audit_daily_anchor` |
 | `AuditRetentionJob` | 保留归档：默认 `archive` 模式仅**复制**过期行到 `*_archive` 镜像（删除为人工 ops 动作，且须锚点已封存） | `tb_tenant_retention_policy`、`*_archive` |
 | `DecisionBomService` | 由单个 `trace_id` 重建决策 BOM（audit / session / policy / trace 四相） | — |
-| `AuditExportService` | 权限受控的加密导出 + 导出账本；AES-256-GCM，未配 `virbius.audit.export.key` 即 fail-closed | `tb_audit_export_job` |
+| `AuditExportService` | 权限受控的导出 + 导出账本；配置密钥时 AES-256-GCM，未配密钥时默认明文 JSONL（`allow-plaintext`，设 `false` 则 fail-closed） | `tb_audit_export_job` |
 | `SessionCheckpointService` | 由 trace 摄入维护会话检查点，跨 Redis 驱逐保留 | `tb_session_checkpoint` |
 
 新增 API 见 [PROTOCOL.zh.md §2.6.4](PROTOCOL.zh.md#264-审计完整性与告警控制面-api大纲-a--c)；配置与运维见 [DEPLOYMENT.zh.md §10](DEPLOYMENT.zh.md)。除链检测（detection）外，`deploy/scripts/audit-insert-only-grants.sql` 提供权限层 append-only（prevention）。
@@ -2714,8 +2714,6 @@ fail_open = true            # Engine 不可用时是否放行
 | `virbius-review-sdk`（Python） | 调用方侧 | `review_input`/`review_output`/`apply_disposal`/`wrap_stream`（窗口化逐窗送审，命中断流） |
 
 **role 副作用矩阵**：`role` 为封闭枚举 `input | output | tool_call`（空白缺省= `tool_call` 语义；其他值——含历史 `user`——引擎侧 400 拒绝，HTTP 边界校验见 `EvaluateHttpController`）。`role=input` 喂会话风险（仅 enforce 命中、同 trace 一次）、跳 challenge/计数器/工具历史；`role=output` **零副作用**（读当前风险分，不更新）——流式多窗不会污染会话风险。
-
-**统计口径**：`output-review-stats` 以**回答**为单位（`COUNT(DISTINCT trace_id)`，缺省回退 event_id），另给 `window_events` 原始窗口数——流式 N 窗不会计成 N 个输出。**allow 采样加权**：引擎 allow 事件按 `virbius.audit.sample-rate-allow` 采样（deny 全量），答案级计数对观测到的 allow-only 答案按包含概率 `1-(1-rate)^k` 取逆权重（Horvitz–Thompson，对齐 `bumpRequestStats` 的事件级加权）；`allowed`=估计值、`sampled_allow_answers`=原始观测数，`denied` 恒精确——否则默认 0.1 采样下 `total` 低估 ~10x、`deny_rate` 虚高。
 
 **移除项**（原 chat 内置审查）：`ChatCompletionsController` **整体删除**（审查分支先行移除后，剩余的本地 Ollama 透传门面亦无保留价值——生产流量走 APISIX/Higress 网关或 SDK，本地模型直连 Ollama 原生 OpenAI 兼容端点）、`TraceStepPublisher`（chat 侧 input/output trace step）、配置 `virbius.ollama-base-url`、`virbius.output-review.{skip-models,refusal-text,fail-closed,streaming.*}`（转由 SDK 配置）与 `virbius.trace.*`。保留 `action-map`。
 

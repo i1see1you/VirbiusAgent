@@ -3,10 +3,12 @@ package io.virbius.control.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import io.virbius.control.common.response.ApiResult;
+import io.virbius.control.domain.ChallengeApprovalRecord;
 import io.virbius.control.repository.ChallengeApprovalRepository;
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -15,7 +17,9 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 
 /** Regression tests for the engine proxy: failures must return a JSON body, never an empty one. */
@@ -116,7 +120,7 @@ class ChallengeControllerTest {
         String baseUrl = startEngineWithStatus(500, "");
 
         ResponseEntity<?> response =
-                controllerWithEngine(baseUrl).approve("ch-1", Map.of("approved_by", "op"));
+                controllerWithEngine(baseUrl).approve("ch-1", Map.of("approved_by", "op"), new MockHttpServletRequest());
 
         assertEquals(500, response.getStatusCode().value());
         assertEquals(500, errorBody(response).getCode());
@@ -128,7 +132,7 @@ class ChallengeControllerTest {
         String baseUrl = startEngineWithStatus(502, "");
 
         ResponseEntity<?> response =
-                controllerWithEngine(baseUrl).reject("ch-1", Map.of("reason", "nope"));
+                controllerWithEngine(baseUrl).reject("ch-1", Map.of("reason", "nope"), new MockHttpServletRequest());
 
         assertEquals(500, response.getStatusCode().value());
         assertEquals(500, errorBody(response).getCode());
@@ -140,11 +144,64 @@ class ChallengeControllerTest {
         String baseUrl = startEngineWithStatus(200, "{\"status\":\"approved\"}");
 
         ResponseEntity<?> response =
-                controllerWithEngine(baseUrl).approve("ch-1", Map.of("approved_by", "op"));
+                controllerWithEngine(baseUrl).approve("ch-1", Map.of("approved_by", "op"), new MockHttpServletRequest());
 
         assertEquals(400, response.getStatusCode().value());
         ApiResult<?> body = errorBody(response);
         assertEquals("challenge is not pending", body.getMessage());
         assertEquals(Map.of("current_status", "approved"), body.getData());
+    }
+
+    private String startEngineForApproval() throws Exception {
+        server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/challenge", exchange -> {
+            String path = exchange.getRequestURI().getPath();
+            if (path.endsWith("/status")) {
+                respond(exchange, 200,
+                        "{\"status\":\"pending\",\"tenant_id\":\"t1\",\"tool_name\":\"do_thing\","
+                                + "\"args_hash\":\"h\",\"session_id\":\"s\",\"rule_id\":\"r\","
+                                + "\"reason_code\":\"c\",\"risk_score\":50,\"approval_mode\":\"strict\","
+                                + "\"created_at\":1,\"expires_at\":2}");
+            } else if (path.endsWith("/approve")) {
+                respond(exchange, 200, "{\"status\":\"approved\"}");
+            } else {
+                respond(exchange, 404, "");
+            }
+        });
+        server.start();
+        return "http://127.0.0.1:" + server.getAddress().getPort();
+    }
+
+    @Test
+    void approveFallsBackToHeaderIdentityWhenBodyBlank() throws Exception {
+        String baseUrl = startEngineForApproval();
+        ChallengeApprovalRepository repo = mock(ChallengeApprovalRepository.class);
+        ChallengeController controller = new ChallengeController(repo);
+        ReflectionTestUtils.setField(controller, "engineBaseUrl", baseUrl);
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.addHeader("X-User-Id", "alice");
+        ResponseEntity<?> response = controller.approve("ch-1", Map.of(), request);
+
+        assertEquals(200, response.getStatusCode().value());
+        ArgumentCaptor<ChallengeApprovalRecord> captor = ArgumentCaptor.forClass(ChallengeApprovalRecord.class);
+        verify(repo).save(captor.capture());
+        assertEquals("alice", captor.getValue().approvedBy());
+    }
+
+    @Test
+    void approveWithoutIdentityRecordsUnknownNotPlaceholder() throws Exception {
+        String baseUrl = startEngineForApproval();
+        ChallengeApprovalRepository repo = mock(ChallengeApprovalRepository.class);
+        ChallengeController controller = new ChallengeController(repo);
+        ReflectionTestUtils.setField(controller, "engineBaseUrl", baseUrl);
+
+        ResponseEntity<?> response =
+                controller.approve("ch-1", Map.of("approved_by", ""), new MockHttpServletRequest());
+
+        assertEquals(200, response.getStatusCode().value());
+        ArgumentCaptor<ChallengeApprovalRecord> captor = ArgumentCaptor.forClass(ChallengeApprovalRecord.class);
+        verify(repo).save(captor.capture());
+        assertEquals("unknown", captor.getValue().approvedBy());
     }
 }

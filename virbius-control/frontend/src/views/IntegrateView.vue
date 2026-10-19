@@ -55,7 +55,7 @@
           </el-table-column>
           <el-table-column :label="t('integrate.overlay-action')">
             <template #default="{ row }">
-              <el-tag v-if="row.effective_action" size="small" :type="row.effective_action === 'allow' ? 'success' : 'danger'">{{ row.effective_action }}</el-tag>
+              <el-tag v-if="row.effective_action" size="small" :type="actionTagType(row.effective_action)">{{ row.effective_action }}</el-tag>
               <span v-else>-</span>
             </template>
           </el-table-column>
@@ -146,7 +146,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFeedbackStore } from '@/stores/feedback';
 import { useSessionStore } from '@/stores/session';
-import { fmtTime } from '@/utils/format';
+import { actionTagType, fmtTime } from '@/utils/format';
 import {
   listApps,
   listObservations,

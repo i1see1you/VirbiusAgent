@@ -775,9 +775,11 @@ async fn handle_tools_call(
         }
     };
 
-    // Check for challenge token in _meta (retry after approval)
-    let meta = params.get("_meta").unwrap_or(&Value::Null);
-    let challenge_token = SecurityPipeline::extract_challenge_token(meta);
+    // Note: a retry after challenge approval needs no token shortcut — the
+    // approve step already wrote a session-level exemption, so the retried call
+    // flows through the normal pipeline (engine override → allow) and is
+    // audited + traced like any other call. `_meta.challenge_token` is stripped
+    // in patch_forward_params so it never leaks upstream.
 
     // ── P1.3: Memory Interceptor (write-only) ──
     let memory_interceptor = memory_interceptor_for(pipeline, &session.tenant_id);
@@ -853,124 +855,6 @@ async fn handle_tools_call(
         }
     }
 
-    // If a challenge token is present, verify it before running the pipeline
-    if let Some(token) = &challenge_token {
-        match pipeline
-            .verify_challenge_token(token, &original_tool_name, &args, &session)
-            .await
-        {
-            Ok(true) => {
-                // Token verified — bypass pipeline, allow directly
-                debug!(
-                    "challenge token verified, allowing tool call: tool={}",
-                    original_tool_name
-                );
-                let transform_note = match rewrite_tool_args(&original_tool_name, &args) {
-                    Ok(rewritten) => {
-                        args = rewritten.args;
-                        rewritten.note
-                    }
-                    Err(detail) => {
-                        return Some(jsonrpc_error_simple(
-                            VirbiusErrorCode::ArgTransformFailed,
-                            id.clone(),
-                            &original_tool_name,
-                            &session.trace_id,
-                            session.session_risk_score,
-                            Some(&detail),
-                        ));
-                    }
-                };
-                if let Some(note) = &transform_note {
-                    pipeline
-                        .audit_arg_transform(&session, &original_tool_name, note)
-                        .await;
-                }
-                session.increment_calls();
-                session_mgr.update(session_id.to_string(), session.clone());
-
-                if let Some((lang, code_arg)) = local_exec {
-                    let mut resp =
-                        execute_in_sandbox(id, &original_tool_name, &args, lang, code_arg).await;
-                    annotate_arg_transform(&mut resp, transform_note.as_ref());
-                    return Some(resp);
-                }
-                if crate::egress::is_egress_tool(&original_tool_name) {
-                    let mut resp = proxy_egress_tool(
-                        id,
-                        &original_tool_name,
-                        &session.tenant_id,
-                        &args,
-                        egress_client,
-                        egress_hosts,
-                    )
-                    .await;
-                    annotate_arg_transform(&mut resp, transform_note.as_ref());
-                    return Some(resp);
-                }
-
-                let upstream = match upstream_mgr
-                    .get_or_connect(session_id, &upstream_name)
-                    .await
-                {
-                    Ok(u) => u,
-                    Err(e) => return Some(upstream_rpc_error(id, "upstream connect failed", &e)),
-                };
-
-                let forward_params =
-                    patch_forward_params(params, displayed_tool_name, &original_tool_name, &args);
-
-                // Strip challenge_token from _meta before forwarding
-                let mut forward_req = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "method": "tools/call",
-                    "params": forward_params,
-                });
-                if let Some(obj) = forward_req
-                    .get_mut("params")
-                    .and_then(|p| p.as_object_mut())
-                {
-                    if let Some(m) = obj.get_mut("_meta").and_then(|m| m.as_object_mut()) {
-                        m.remove("challenge_token");
-                    }
-                }
-
-                match upstream.forward(&forward_req).await {
-                    Ok(mut resp) => {
-                        annotate_arg_transform(&mut resp, transform_note.as_ref());
-                        return Some(resp);
-                    }
-                    Err(e) => {
-                        return Some(upstream_rpc_error(id, "upstream tools/call failed", &e))
-                    }
-                }
-            }
-            Ok(false) => {
-                return Some(jsonrpc_error_simple(
-                    VirbiusErrorCode::ChallengeRequired,
-                    id.clone(),
-                    &original_tool_name,
-                    &session.trace_id,
-                    session.session_risk_score,
-                    Some("challenge token invalid or expired"),
-                ));
-            }
-            Err(e) => {
-                warn!("challenge token verify error: {e}");
-                // Fail-closed: deny if verify endpoint is unavailable
-                return Some(jsonrpc_error_simple(
-                    VirbiusErrorCode::ChallengeRequired,
-                    id.clone(),
-                    &original_tool_name,
-                    &session.trace_id,
-                    session.session_risk_score,
-                    Some("challenge verify service unavailable"),
-                ));
-            }
-        }
-    }
-
     // ── Trace: prepare tool_call step metadata (decision recorded after pipeline) ──
     let tool_call_step_id = uuid::Uuid::new_v4().to_string();
     let parent_step_id = session.last_step_id.clone();
@@ -985,8 +869,8 @@ async fn handle_tools_call(
 
     match result {
         PipelineResult::Allow {
-            reason: _,
             risk_score,
+            disposition,
             ..
         } => {
             let transform_note = match rewrite_tool_args(&original_tool_name, &args) {
@@ -1029,7 +913,7 @@ async fn handle_tools_call(
                 &args,
                 Some(&upstream_name),
             )
-            .with_decision("allow", None, None, risk_score);
+            .with_decision(disposition, None, None, risk_score);
             trace_collector.record(tc_event).await;
 
             // Local code-execution tools: execute in sandbox with full post-processing.
@@ -1686,6 +1570,10 @@ fn patch_forward_params(params: &Value, displayed: &str, original: &str, args: &
         obj.insert("arguments".to_string(), args.clone());
         if displayed != original {
             obj.insert("name".to_string(), Value::String(original.to_string()));
+        }
+        // Never forward client-supplied challenge tokens upstream.
+        if let Some(m) = obj.get_mut("_meta").and_then(|m| m.as_object_mut()) {
+            m.remove("challenge_token");
         }
     }
     p

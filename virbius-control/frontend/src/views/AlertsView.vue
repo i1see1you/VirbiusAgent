@@ -120,11 +120,12 @@ async function load() {
 async function ack(row: any) {
   try {
     const r = await ElMessageBox.prompt(t('al.ack-prompt'), t('al.btn-ack'), {
-      inputValue: 'operator',
+      inputValue: session.operatorName,
       confirmButtonText: t('common.confirm'),
       cancelButtonText: t('common.cancel')
     }) as { value?: string };
-    const op = String(r.value || 'operator').trim() || 'operator';
+    const op = String(r.value || '').trim();
+    if (!op) { ElMessage.warning(t('al.actor-required')); return; }
     await admin(`/alerts/${encodeURIComponent(row.alert_id)}/ack?operator=${encodeURIComponent(op)}`, { method: 'POST' });
     ElMessage.success(t('al.acked-ok'));
     load();

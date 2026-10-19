@@ -2,7 +2,9 @@ package io.virbius.control.admin;
 
 import io.virbius.control.audit.AlertService;
 import io.virbius.control.audit.DecisionBomService;
+import io.virbius.control.common.OperatorResolver;
 import io.virbius.control.common.response.ApiResult;
+import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Map;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -53,8 +55,12 @@ public class AlertController {
     public ApiResult<Map<String, Object>> ack(
             @PathVariable("tenantId") String tenantId,
             @PathVariable("alertId") String alertId,
-            @RequestParam(value = "operator", required = false) String operator) {
-        boolean ok = alertService.ack(tenantId, alertId, operator);
+            @RequestParam(value = "operator", required = false) String operator,
+            HttpServletRequest request) {
+        // Explicit operator param wins; otherwise X-User-Id / authenticated
+        // principal; otherwise "unknown" — never a pretend "operator".
+        String op = OperatorResolver.resolve(operator, request, "unknown");
+        boolean ok = alertService.ack(tenantId, alertId, op);
         return ApiResult.ok(Map.of("acknowledged", ok));
     }
 

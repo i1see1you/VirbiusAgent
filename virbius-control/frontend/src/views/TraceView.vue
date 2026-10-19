@@ -50,7 +50,7 @@
       </el-table-column>
       <el-table-column :label="t('trace.header-decision')">
         <template #default="{ row }">
-          <el-tag v-if="row.tool_decision" size="small" :type="row.tool_decision === 'allow' ? 'success' : 'danger'">{{ row.tool_decision }}</el-tag>
+          <el-tag v-if="row.tool_decision" size="small" :type="actionTagType(row.tool_decision)">{{ row.tool_decision }}</el-tag>
           <span v-else>-</span>
         </template>
       </el-table-column>
@@ -90,7 +90,7 @@
             <span v-if="s.rule_id"> · rule: {{ s.rule_id }}</span>
           </div>
           <div style="margin-top:4px;display:flex;gap:6px">
-            <el-tag v-if="s.tool_decision" size="small" :type="s.tool_decision === 'allow' ? 'success' : 'danger'">{{ s.tool_decision }}</el-tag>
+            <el-tag v-if="s.tool_decision" size="small" :type="actionTagType(s.tool_decision)">{{ s.tool_decision }}</el-tag>
             <el-tag v-if="s.risk_score > 0" size="small" :type="riskLevel(s.risk_score) === 'high' ? 'danger' : riskLevel(s.risk_score) === 'mid' ? 'warning' : 'success'">风险 {{ s.risk_score }}</el-tag>
             <el-tag v-if="s.tool_status" size="small" :type="s.tool_status === 'success' ? 'success' : 'danger'">{{ s.tool_status }}</el-tag>
           </div>
@@ -109,7 +109,7 @@ import { useI18n } from 'vue-i18n';
 import { useFeedbackStore } from '@/stores/feedback';
 import { useSessionStore } from '@/stores/session';
 import { admin } from '@/api/client';
-import { fmtTime } from '@/utils/format';
+import { actionTagType, fmtTime } from '@/utils/format';
 
 const { t } = useI18n();
 const feedback = useFeedbackStore();

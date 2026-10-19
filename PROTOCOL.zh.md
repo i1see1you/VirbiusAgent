@@ -158,6 +158,8 @@ Agent sends tools/call { name, arguments }
     }
     - block -> return JSON-RPC error: engine_blocked
     - allow/review -> continue
+      （edge 侧审计/追踪**原样**记录引擎裁决——`review` 不会塌缩成 `allow`，
+        同一 trace 的 edge 与 cloud 行口径一致）
   |
   v
 6. Forward to upstream MCP Server
@@ -432,9 +434,11 @@ Agent                 Proxy/Gateway          Engine                Control Dashb
   |     token: "vct_xxx"} ----------------------|                        |
   |                        |                    |                        |
   |--- tools/call -------->|                    |                        |
-  |   (_meta.challenge_token: "vct_xxx")        |                        |
-  |                        |--- /v1/challenge/verify -->|                |
-  |                        |<-- {valid: true} ---------|                 |
+  |   (同会话/同参数重试,                       |                        |
+  |    可带可不带 _meta.challenge_token)         |                        |
+  |                        |--- /v1/evaluate --->|                        |
+  |                        |<-- allow (命中会话级豁免, |                  |
+  |                        |     正常评估+审计+轨迹)    |                 |
   |                        |--- (forward to upstream)   |                |
   |<-- result -------------|                    |                        |
 ```
@@ -462,9 +466,9 @@ Agent                 Proxy/Gateway          Engine                Control Dashb
 }
 ```
 
-#### 重试格式（带挑战令牌）
+#### 重试格式（批准后）
 
-获得批准后，Agent 重试原始的 `tools/call` 请求，在 `_meta` 中包含 `challenge_token`：
+获得批准后，Agent 直接重试原始的 `tools/call` 请求（同会话、strict 模式需同参数）：
 
 ```json
 {
@@ -473,29 +477,25 @@ Agent                 Proxy/Gateway          Engine                Control Dashb
   "method": "tools/call",
   "params": {
     "name": "delete_file",
-    "arguments": { "path": "/data/important.txt" },
-    "_meta": {
-      "challenge_token": "vct_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
-    }
+    "arguments": { "path": "/data/important.txt" }
   }
 }
 ```
 
-当代理/网关收到带有 `challenge_token` 的请求：
-1. 调用引擎 `POST /v1/challenge/verify` 验证令牌（一次性使用）
-2. 如果有效，转发到上游 MCP 服务器（移除 `_meta.challenge_token`）
-3. 如果验证失败，返回 `-32011` 错误
+重试走**正常评估管道**：批准时引擎已写入会话级豁免（`challenge:exempt:*`，TTL 默认 600s，绑定粒度按工具 `approval_mode`），命中即放行——**评估、审计、轨迹一应俱全**，不再有"token 短路无留痕"的问题。`_meta.challenge_token` 仍被接受以兼容旧客户端，但代理不再校验、转发上游前会将其剥除。
 
-> **网关（WASM）路径**：令牌通过 HTTP 头 `X-Virbius-Challenge-Token` 传递，而非 `_meta`。
+> **注意**：豁免只覆盖 `challenge` 处置；若重试时规则判定升级为 `deny`，仍会被拦截。
+
+> **网关（WASM）路径**：历史令牌头 `X-Virbius-Challenge-Token` 同样不再需要。
 
 #### 引擎挑战 API
 
 | 方法 | 路径 | 描述 |
 |--------|------|------|
 | `GET` | `/v1/challenge/{id}/status` | 查询挑战状态（pending/approved/rejected/expired） |
-| `POST` | `/v1/challenge/{id}/approve` | 批准，生成一次性令牌（仪表盘调用） |
+| `POST` | `/v1/challenge/{id}/approve` | 批准，写会话级豁免并生成令牌（仪表盘调用） |
 | `POST` | `/v1/challenge/{id}/reject` | 拒绝批准（仪表盘调用） |
-| `POST` | `/v1/challenge/verify` | 验证令牌有效性（代理/网关调用） |
+| `POST` | `/v1/challenge/verify` | 验证令牌（已废弃：代理不再调用，仅保留兼容） |
 | `GET` | `/v1/challenges?tenant_id=default&status=pending` | 列出待处理的挑战（仪表盘队列） |
 
 #### 路径选择配置
@@ -1088,11 +1088,8 @@ value = { "trace_id":"550e8400-...", "session_id":"sess_abc123", "tenant_id":"te
 |------|------|------|
 | GET | `/audit/chain/status` | 审计链头（`seq`/`last_hash`） |
 | POST | `/audit/verify` | 全链校验（`from`/`to` 可选） |
-| GET | `/audit/proof/{eventId}` | 单事件 Merkle 包含证明（`from`/`to` 可选） |
-| POST | `/audit/verify-proof` | 独立校验证明（`root`+`steps` 由审计方提供） |
 | GET | `/audit/trace-chain/verify?session_id=` | 校验会话/整租户的 trace 链 |
 | POST | `/audit/daily-anchor/seal` | 按日封存 Merkle 锚点（body `{date}`，缺省昨日 UTC） |
-| GET | `/audit/output-review-stats?from=&to=` | 输出误拦统计（`total`/`denied`/`deny_rate` 等） |
 | GET | `/audit/decision-bom/{traceId}` | 决策 BOM 重建（audit / session / policy / trace 四相） |
 | POST | `/audit/export` | 创建加密导出（body：`from`/`to`/`sessionId`/`traceId`/`minRisk`/`effectiveAction`；查询参数 `requester`） |
 | GET | `/audit/export` | 导出任务列表 |
@@ -1110,7 +1107,7 @@ value = { "trace_id":"550e8400-...", "session_id":"sess_abc123", "tenant_id":"te
 
 **会话检查点**（C5）：`GET /sessions/{sessionId}/checkpoint`（上下文跨 Redis 驱逐保留；不存在返回信封 `code=404`）。
 
-> 告警由控制面从摄入的高风险审计事件生成（`risk_score >= virbius.alert.risk-threshold` 且动作为 block/deny/challenge），**按答案（`trace_id`）聚合去重**且**携带 `session_id`**——一个被拦流式答案的每个审查窗口事件只产生一条告警（BOM 内可见全部窗口）；空 `trace_id` 退化为按事件。`/audit/output-review-stats` 的答案级计数对 allow 采样（`virbius.audit.sample-rate-allow`）做 Horvitz–Thompson 加权（`allowed`=估计值、`sampled_allow_answers`=原始观测数，`denied` 恒精确）；导出产物为 AES-256-GCM 密文，控制面不提供解密，未配置 `virbius.audit.export.key` 时任务落 `failed`（详见 DEPLOYMENT §10.3）。
+> 告警由控制面从摄入的高风险审计事件生成（`risk_score >= virbius.alert.risk-threshold` 且动作为 block/deny/challenge），**按答案（`trace_id`）聚合去重**且**携带 `session_id`**——一个被拦流式答案的每个审查窗口事件只产生一条告警（BOM 内可见全部窗口）；空 `trace_id` 退化为按事件。导出产物在配置密钥时为 AES-256-GCM 密文，控制面不提供解密；未配密钥时默认输出明文 JSONL（`virbius.audit.export.allow-plaintext=true`），设为 `false` 则任务落 `failed`（详见 DEPLOYMENT §10.3）。
 
 #### 2.6.5 输入/输出审查 API（大纲 B；引擎 chat 扩展已移除）
 

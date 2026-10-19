@@ -1,9 +1,11 @@
 package io.virbius.control.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.virbius.control.common.OperatorResolver;
 import io.virbius.control.common.response.ApiResult;
 import io.virbius.control.domain.ChallengeApprovalRecord;
 import io.virbius.control.repository.ChallengeApprovalRepository;
+import jakarta.servlet.http.HttpServletRequest;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -138,8 +140,17 @@ public class ChallengeController {
     @PostMapping("/{id}/approve")
     public ResponseEntity<?> approve(
             @PathVariable String id,
-            @RequestBody Map<String, String> body) {
+            @RequestBody Map<String, String> body,
+            HttpServletRequest request) {
         try {
+            // Record a real actor: explicit body value wins, else X-User-Id /
+            // authenticated principal, else an honest "unknown" — never "operator".
+            String approvedBy = OperatorResolver.resolve(body.get("approved_by"), request, "unknown");
+            // Forward the resolved identity so the engine payload and the SQL
+            // approval record agree even when the caller left the field blank.
+            Map<String, String> fwd = new LinkedHashMap<>(body);
+            fwd.put("approved_by", approvedBy);
+
             // Fetch the current challenge record before approving
             Map record = fetchStatus(id);
             if (record == null) {
@@ -154,7 +165,7 @@ public class ChallengeController {
                     .build()
                     .encode()
                     .toUri();
-            String json = mapper.writeValueAsString(body);
+            String json = mapper.writeValueAsString(fwd);
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(uri)
                     .header("Content-Type", "application/json")
@@ -173,7 +184,6 @@ public class ChallengeController {
             if (resp.statusCode() == 200 && result != null
                     && "approved".equals(result.get("status"))) {
                 try {
-                    String approvedBy = body.get("approved_by");
                     String comment = body.get("comment");
                     long now = Instant.now().getEpochSecond();
                     approvalRepo.save(new ChallengeApprovalRecord(
@@ -209,8 +219,14 @@ public class ChallengeController {
     @PostMapping("/{id}/reject")
     public ResponseEntity<?> reject(
             @PathVariable String id,
-            @RequestBody Map<String, String> body) {
+            @RequestBody Map<String, String> body,
+            HttpServletRequest request) {
         try {
+            // Same identity chain as approve: explicit value → request → "unknown".
+            String rejectedBy = OperatorResolver.resolve(body.get("rejected_by"), request, "unknown");
+            Map<String, String> fwd = new LinkedHashMap<>(body);
+            fwd.put("rejected_by", rejectedBy);
+
             Map record = fetchStatus(id);
             if (record == null) {
                 return errorResponse(400, "challenge not found");
@@ -224,7 +240,7 @@ public class ChallengeController {
                     .build()
                     .encode()
                     .toUri();
-            String json = mapper.writeValueAsString(body);
+            String json = mapper.writeValueAsString(fwd);
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(uri)
                     .header("Content-Type", "application/json")
@@ -242,7 +258,6 @@ public class ChallengeController {
             if (resp.statusCode() == 200 && result != null
                     && "rejected".equals(result.get("status"))) {
                 try {
-                    String rejectedBy = body.get("rejected_by");
                     String reason = body.get("reason");
                     long now = Instant.now().getEpochSecond();
                     approvalRepo.save(new ChallengeApprovalRecord(

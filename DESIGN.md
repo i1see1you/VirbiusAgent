@@ -2364,11 +2364,11 @@ On top of the audit chain, this round completes the outline-A components (migrat
 | Component | Responsibility | Table(s) |
 |------|------|----|
 | `TraceChainVerifier` | verify a session's or the tenant's `tb_agent_trace` hash chain (`chain_seq`/`prev_hash`/`curr_hash`) | `tb_agent_trace`, `tb_trace_chain_state` |
-| `MerkleUtil` + `MerkleAuditService` | Merkle tree over audit-event `curr_hash` (by `audit_seq`), producing per-event inclusion proofs and independent verification | `tb_audit_events` |
+| `MerkleUtil` | Hash helpers (`sha256Hex` / canonical timestamp / Merkle tree root), shared by trace-chain hashing, export checksums, and the daily anchor | — |
 | `DailyAnchorJob` | seal each day's session chain heads under a per-tenant Merkle root | `tb_audit_daily_anchor` |
 | `AuditRetentionJob` | retention archival: default `archive` mode only **copies** expired rows into `*_archive` mirrors (deletion is a manual ops action, only after the anchor is sealed) | `tb_tenant_retention_policy`, `*_archive` |
 | `DecisionBomService` | reconstruct the Decision BOM from a single `trace_id` (audit / session / policy / trace) | — |
-| `AuditExportService` | permission-controlled encrypted export + export ledger; AES-256-GCM, fail-closed when `virbius.audit.export.key` is unset | `tb_audit_export_job` |
+| `AuditExportService` | permission-controlled export + export ledger; AES-256-GCM when a key is set, else plaintext JSONL by default (`allow-plaintext`, fail-closed if set `false`) | `tb_audit_export_job` |
 | `SessionCheckpointService` | per-session checkpoint maintained from trace ingest, surviving a Redis eviction | `tb_session_checkpoint` |
 
 New APIs: [PROTOCOL.md §2.6.4](PROTOCOL.md). Configuration and ops: [DEPLOYMENT.md §10](DEPLOYMENT.md). Beyond chain detection, `deploy/scripts/audit-insert-only-grants.sql` adds privilege-layer append-only hardening (prevention).
@@ -2715,8 +2715,6 @@ Output review is no longer embedded in the engine chat proxy: callers integrate 
 | `virbius-review-sdk` (Python) | caller side | `review_input`/`review_output`/`apply_disposal`/`wrap_stream` (windowed per-window review, abort upstream on hit) |
 
 **Role side-effect matrix**: `role` is a closed enum `input | output | tool_call` (blank defaults to `tool_call` semantics; any other value — including the historical `user` — is rejected with 400 at the HTTP boundary, see `EvaluateHttpController`). `role=input` feeds session risk (enforced hits only, once per trace) and skips challenge/counters/tool history; `role=output` is **zero side effects** (reads the current risk score, never updates) — streaming windows never pollute session risk.
-
-**Stats**: `output-review-stats` counts **answers** (`COUNT(DISTINCT trace_id)`, falling back to event_id) plus a raw `window_events` count — N windows of one answer are no longer N outputs. **Allow-sampling reweighting**: the engine samples allow events at `virbius.audit.sample-rate-allow` (deny events are complete), so the answer-level counts weight each observed allow-only answer by the inverse of its inclusion probability `1-(1-rate)^k` (Horvitz–Thompson, mirroring `bumpRequestStats`' event-level reweighting); `allowed` = estimate, `sampled_allow_answers` = raw observed count, `denied` stays exact — otherwise the default 0.1 sampling understates `total` ~10x and inflates `deny_rate`.
 
 **Removed** (the former chat-embedded review): `ChatCompletionsController` **deleted in full** (after the review branches went, the remaining local-Ollama passthrough facade had no retention value — production traffic flows through the APISIX/Higress gateway or the SDK, and local models are reached directly via Ollama's native OpenAI-compatible endpoint), `TraceStepPublisher` (chat-side input/output trace steps), config `virbius.ollama-base-url`, `virbius.output-review.{skip-models,refusal-text,fail-closed,streaming.*}` (moved to SDK config) and `virbius.trace.*`. `action-map` stays.
 

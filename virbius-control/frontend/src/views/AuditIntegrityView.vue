@@ -60,53 +60,6 @@
         </div>
       </el-tab-pane>
 
-      <!-- A4 Merkle proof -->
-      <el-tab-pane :label="t('ai.tab-proof')" name="proof">
-        <div class="v-row">
-          <label>{{ t('ai.proof-event-id') }}
-            <el-input v-model="proofEventId" style="width:300px" @keydown.enter="loadProof" />
-          </label>
-          <el-button type="primary" @click="loadProof">{{ t('ai.proof-load') }}</el-button>
-        </div>
-
-        <div v-if="proof" class="v-section">
-          <h3>{{ t('ai.proof-result') }}</h3>
-          <p>
-            <el-tag size="small" :type="proof.found ? (proof.verified ? 'success' : 'warning') : 'info'">
-              {{ proof.found ? (proof.verified ? t('ai.proof-ok') : t('ai.proof-selfcheck-fail')) : t('ai.proof-none') }}
-            </el-tag>
-          </p>
-          <template v-if="proof.found">
-            <p class="v-hint">{{ t('ai.proof-root') }}: <code>{{ proof.root_hash }}</code></p>
-            <el-table v-if="(proof.proof || []).length" :data="proof.proof" size="small" border stripe>
-              <el-table-column :label="t('ai.proof-step-hash')" prop="hash" show-overflow-tooltip />
-              <el-table-column :label="t('ai.proof-step-pos')" prop="position" width="120" />
-            </el-table>
-            <el-button size="small" @click="useProofFromResult">{{ t('ai.vp-use-result') }}</el-button>
-          </template>
-        </div>
-
-        <div class="v-section">
-          <h3>{{ t('ai.vp-title') }}</h3>
-          <div class="v-row">
-            <label>{{ t('ai.vp-root') }}
-              <el-input v-model="vpRoot" style="width:420px" />
-            </label>
-          </div>
-          <div class="v-row">
-            <label style="display:block;width:100%">{{ t('ai.vp-proof') }}
-              <el-input v-model="vpProof" type="textarea" :rows="4" placeholder='[{"hash":"...","position":"left"}]' />
-            </label>
-          </div>
-          <div class="v-row">
-            <el-button type="primary" @click="verifyProof">{{ t('ai.vp-verify') }}</el-button>
-            <el-tag v-if="vpResult !== null" size="small" :type="vpResult ? 'success' : 'danger'">
-              {{ vpResult ? t('ai.vp-true') : t('ai.vp-false') }}
-            </el-tag>
-          </div>
-        </div>
-      </el-tab-pane>
-
       <!-- A6 Decision BOM -->
       <el-tab-pane :label="t('ai.tab-bom')" name="bom">
         <div class="v-row">
@@ -181,31 +134,6 @@
         </div>
       </el-tab-pane>
 
-      <!-- A8/B7 output-review stats -->
-      <el-tab-pane :label="t('ai.tab-stats')" name="stats">
-        <div class="v-row">
-          <label>{{ t('ai.exp-from') }}
-            <el-input v-model="statFrom" style="width:220px" placeholder="2026-10-01T00:00:00Z" />
-          </label>
-          <label>{{ t('ai.exp-to') }}
-            <el-input v-model="statTo" style="width:220px" placeholder="2026-10-31T23:59:59Z" />
-          </label>
-          <el-button type="primary" @click="loadStats">{{ t('ai.stats-load') }}</el-button>
-        </div>
-        <div v-if="stats" class="v-section">
-          <div class="ai-kv">
-            <div v-for="row in scalarStats" :key="row[0]" class="ai-kv-item">
-              <span class="ai-kv-key">{{ row[0] }}</span>
-              <span class="ai-kv-val">{{ row[1] }}</span>
-            </div>
-          </div>
-          <details class="v-hint-more">
-            <summary>{{ t('ai.raw') }}</summary>
-            <pre class="ai-json">{{ pretty(stats) }}</pre>
-          </details>
-        </div>
-      </el-tab-pane>
-
       <!-- C5 session checkpoint -->
       <el-tab-pane :label="t('ai.tab-checkpoint')" name="checkpoint">
         <div class="v-row">
@@ -229,7 +157,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { ElMessage } from 'element-plus';
 import { admin } from '@/api/client';
@@ -273,44 +201,6 @@ async function sealAnchor() {
     const d = await admin<any>('/audit/daily-anchor/seal', { method: 'POST', body });
     anchorResult.value = d?.sealed_date || '';
     ElMessage.success(t('ai.anchor-sealed', [anchorResult.value]));
-  } catch (e: any) { ElMessage.error(e.message); }
-}
-
-// A4 proof
-const proofEventId = ref('');
-const proof = ref<any>(null);
-const vpRoot = ref('');
-const vpProof = ref('');
-const vpResult = ref<boolean | null>(null);
-
-async function loadProof() {
-  const id = proofEventId.value.trim();
-  if (!id) return;
-  try {
-    proof.value = await admin(`/audit/proof/${encodeURIComponent(id)}`);
-    vpResult.value = null;
-  } catch (e: any) { ElMessage.error(e.message); }
-}
-
-function useProofFromResult() {
-  if (!proof.value?.root_hash) return;
-  vpRoot.value = proof.value.root_hash;
-  vpProof.value = JSON.stringify(proof.value.proof || [], null, 2);
-}
-
-async function verifyProof() {
-  try {
-    let steps: any[] = [];
-    const raw = vpProof.value.trim();
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      steps = Array.isArray(parsed) ? parsed : (parsed.proof || []);
-    }
-    const d = await admin<any>('/audit/verify-proof', {
-      method: 'POST',
-      body: JSON.stringify({ event_id: proofEventId.value.trim(), root_hash: vpRoot.value.trim(), proof: steps })
-    });
-    vpResult.value = !!d?.verified;
   } catch (e: any) { ElMessage.error(e.message); }
 }
 
@@ -360,21 +250,6 @@ async function download(jobId: string) {
     a.click();
     URL.revokeObjectURL(a.href);
   } catch (e: any) { ElMessage.error(e.message); }
-}
-
-// A8/B7 output-review stats
-const statFrom = ref('');
-const statTo = ref('');
-const stats = ref<any>(null);
-const scalarStats = computed<[string, any][]>(() => {
-  if (!stats.value) return [];
-  return Object.entries(stats.value).filter(([, v]) => v === null || typeof v !== 'object');
-});
-async function loadStats() {
-  const qs: string[] = [];
-  if (statFrom.value.trim()) qs.push('from=' + encodeURIComponent(statFrom.value.trim()));
-  if (statTo.value.trim()) qs.push('to=' + encodeURIComponent(statTo.value.trim()));
-  try { stats.value = await admin('/audit/output-review-stats' + (qs.length ? '?' + qs.join('&') : '')); } catch (e: any) { ElMessage.error(e.message); }
 }
 
 // C5 checkpoint

@@ -52,6 +52,9 @@ __pycache__/
 data/**/*.log
 data/**
 
+# virbius-auth runtime keystore (generated JWK at startup)
+virbius-auth/data/
+
 # virbius-demo: re-include its source data (offline manifest, labs, config).
 # Runtime caches under data/edge/{control,cloud} are excluded again in
 # virbius-demo/.gitignore.

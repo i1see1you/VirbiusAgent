@@ -657,8 +657,8 @@ dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新�
 | `virbius.audit.hash-chain.verify-batch-size` | `10000` | 每批校验行数 |
 | `virbius.audit.daily-anchor.enabled` | `true` | 每日 Merkle 锚点封存 |
 | `virbius.audit.retention.enabled` | `true` | 保留归档任务 |
-| `virbius.audit.export.key` | 空 | 导出产物 AES-256-GCM 密钥（base64，解码须 32B）；**不配则导出落 `failed`（fail-closed）** |
-| `virbius.audit.export.allow-plaintext` | `false` | 显式允许明文导出（不推荐，仅调试） |
+| `virbius.audit.export.key` | 空 | 导出产物 AES-256-GCM 密钥（base64，解码须 32B）；**配置后一律加密（明文开关被忽略）** |
+| `virbius.audit.export.allow-plaintext` | `true` | 未配置密钥时写出明文 JSONL 导出（默认）。设为 `false` 即 fail-closed（无密钥→任务落 `failed`） |
 | `virbius.alert.risk-threshold` | `80` | 生成告警的风险阈值（且动作须为 block/deny/challenge）；**告警按答案（trace_id）聚合**——流式被拦答案的多个窗口事件只开一条告警 |
 | `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | 原因码→处置（`reject|omit|redact|warn`）映射，未列出走关键字兜底；**统一在引擎解析，所有调用方一致** |
 | `virbius.evaluate.rate-limit.enabled` | `true` | `/v1/evaluate` 限流开关（无鉴权端点的滥用防护） |
@@ -706,9 +706,9 @@ export VIRBIUS_AUDIT_EXPORT_KEY="$(openssl rand -base64 32)"
 # 或 --virbius.audit.export.key=<base64>
 ```
 
-- 语义：导出内容是审计事件的 JSONL（含 `user_id`/`device_id`/`reason_code`），以 `12B IV || 密文+tag` 落 `data/exports/<jobId>.bin`，AAD 绑定 `jobId`。
+- 语义：导出内容是审计事件的 JSONL（含 `user_id`/`device_id`/`reason_code`），落 `data/exports/<jobId>.bin`。配置密钥时为 `12B IV || 密文+tag`（AAD 绑定 `jobId`）；明文模式下即为原始 JSONL，不做改动。
 - 控制面**只产出密文**，不提供解密端点——运营方持同一把密钥离线解密。
-- 不配置且未显式 `allow-plaintext=true` → 导出任务落 `failed`，`error` 字段给出原因（安全默认，非缺陷）。
+- 不配置密钥时：`allow-plaintext=true`（默认）→ 任务落 `done`，产物为明文 JSONL；`allow-plaintext=false` → 任务落 `failed`，`error` 字段给出原因。**配置了密钥则始终以加密为准，明文开关被忽略**。
 
 ### 10.4 审计证据表 append-only 授权（A0，tamper prevention）
 
@@ -724,4 +724,4 @@ mysql -u root -p < deploy/scripts/audit-insert-only-grants.sql
 ### 10.5 运营台新增页面
 
 - `/alerts`（告警）：列表 + 状态过滤（`open`/`acked`）+ 确认（ack）+ 展开决策 BOM。
-- `/audit-integrity`（审计完整性，6 tab）：完整性校验（含每日锚点封存/运行校验）、Merkle 证明、决策 BOM、审计导出、输出误拦统计、会话检查点。
+- `/audit-integrity`（审计完整性，4 tab）：完整性校验（含每日锚点封存/运行校验）、决策 BOM、审计导出、会话检查点。

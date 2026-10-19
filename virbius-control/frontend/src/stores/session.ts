@@ -5,7 +5,8 @@ import { configureApi } from '@/api/client';
 const LS = {
   apiKey: 'virbius.ops.apiKey',
   locale: 'virbius.i18n.locale',
-  sidebar: 'virbius.ops.sidebarCollapsed'
+  sidebar: 'virbius.ops.sidebarCollapsed',
+  operator: 'virbius.ops.operatorName'
 };
 
 function read(key: string): string | null {
@@ -22,6 +23,9 @@ export const useSessionStore = defineStore('session', () => {
   const bundleVer = ref('0.1.0');
   const sidebarCollapsed = ref(read(LS.sidebar) === '1');
   const locale = ref<'zh' | 'en'>((read(LS.locale) as any) || 'zh');
+  // Operator identity recorded on approvals / alert acks. Persisted so the
+  // challenge and alerts dialogs prefill a real name instead of a placeholder.
+  const operatorName = ref((read(LS.operator) || '').trim());
 
   function syncApi() {
     configureApi({ tenant: tenant.value, apiKey: apiKey.value });
@@ -44,10 +48,14 @@ export const useSessionStore = defineStore('session', () => {
     locale.value = l;
     write(LS.locale, l);
   }
+  function setOperatorName(n: string) {
+    operatorName.value = (n || '').trim();
+    write(LS.operator, operatorName.value);
+  }
 
   syncApi();
   watch(tenant, syncApi);
 
-  return { tenant, apiKey, bundleId, bundleVer, sidebarCollapsed, locale,
-    setTenant, setApiKey, toggleSidebar, setLocale, syncApi };
+  return { tenant, apiKey, bundleId, bundleVer, sidebarCollapsed, locale, operatorName,
+    setTenant, setApiKey, toggleSidebar, setLocale, setOperatorName, syncApi };
 });

@@ -23,9 +23,11 @@ import org.springframework.stereotype.Service;
  *
  * <p>Every export writes a {@code tb_audit_export_job} row (requester, filters,
  * result hash) — the ledger <em>is</em> the export action's audit trail, so
- * exports never bypass the append-only audit path. The exported payload is
- * encrypted with AES-256-GCM; a plaintext export is only possible when the
- * operator explicitly opts in via {@code virbius.audit.export.allow-plaintext}.
+ * exports never bypass the append-only audit path. When a key is configured the
+ * payload is encrypted with AES-256-GCM; otherwise a plaintext export is written
+ * by default ({@code virbius.audit.export.allow-plaintext=true}) and can be
+ * turned back into a fail-closed mode with
+ * {@code virbius.audit.export.allow-plaintext=false}.
  */
 @Service
 public class AuditExportService {
@@ -44,7 +46,7 @@ public class AuditExportService {
             JdbcTemplate jdbc,
             @Value("${virbius.data-dir:./data}") String dataDir,
             @Value("${virbius.audit.export.key:}") String keyBase64,
-            @Value("${virbius.audit.export.allow-plaintext:false}") boolean allowPlaintext) {
+            @Value("${virbius.audit.export.allow-plaintext:true}") boolean allowPlaintext) {
         this.jdbc = jdbc;
         this.exportDir = Path.of(dataDir, "exports");
         this.allowPlaintext = allowPlaintext;
@@ -60,6 +62,19 @@ public class AuditExportService {
             }
         }
         this.aeadKey = key;
+        if (key != null) {
+            if (allowPlaintext) {
+                log.warn("audit export: mode=encrypted (allow-plaintext is ignored while "
+                        + "virbius.audit.export.key is set)");
+            } else {
+                log.info("audit export: mode=encrypted");
+            }
+        } else if (allowPlaintext) {
+            log.warn("audit export: mode=PLAINTEXT (no virbius.audit.export.key set) — "
+                    + "exported audit JSONL is NOT encrypted");
+        } else {
+            log.info("audit export: mode=fail-closed (no key, allow-plaintext=false)");
+        }
     }
 
     public record ExportFilters(
@@ -159,7 +174,7 @@ public class AuditExportService {
                 return plaintext;
             }
             throw new IllegalStateException(
-                    "audit export requires virbius.audit.export.key (or explicit allow-plaintext=true)");
+                    "audit export disabled: set virbius.audit.export.key (or allow-plaintext=true)");
         }
         byte[] iv = new byte[GCM_IV_BYTES];
         new SecureRandom().nextBytes(iv);

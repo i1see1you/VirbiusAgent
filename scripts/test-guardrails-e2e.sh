@@ -12,8 +12,7 @@
 #   运营台 (control HTTP API)          engine HTTP API              Kafka
 #   -------------------------          ----------------           ------
 #   create tenant         -----------> (evaluate)  --audit-->     control ingest
-#   output-review-stats   <-------------------------------------+
-#   decision-bom / Merkle / export    (engine output review)     |
+#   decision-bom / export    (engine output review)               |
 #   alerts list/ack/BOM   <-------------------------------------+
 #   trace-chain / checkpoint / seal   (proxy wire format) --trace--> control
 #
@@ -32,18 +31,15 @@
 #             exact history the engine itself records from real calls.
 #
 # Control coverage (via 运营台 admin APIs, data via real Kafka ingest):
-#   A8/B7 output-review stats: answer-level aggregation of the real engine
-#         output-review events (XSS/credential/window denies)
-#   A6    Decision BOM reconstruction from a real ingested event (event_id
-#         drives the Merkle proof — no seeded event ids)
-#   A4    Merkle proof + independent verify (correct root+proof -> true,
-#         tampered root -> false)
+#   A6    Decision BOM reconstruction from a real ingested event
 #   A7    encrypted export (AES-GCM, no plaintext leak) + export list/404
 #   A3    audit hash-chain verify + daily-anchor seal + read-back + chain status
 #   A3    per-session trace-chain verify: valid 2-step chain (Kafka, proxy
 #         wire format) passes; tenant-level verify flags nothing broken
 #   C4    alerts lifecycle: auto-created from the deny audit event -> list ->
 #         get -> ack -> BOM -> 404
+#   C4    operator identity on alert ack: no param + no header -> unknown;
+#         X-User-Id header -> the header value (no hard-coded 'operator')
 #   C5    session checkpoint read path (written from ingested trace events)
 #   V17    proxy policy: GET normalized defaults -> PUT round-trip -> GET
 #         reflects the saved row; upstream without a url and an invalid
@@ -55,7 +51,7 @@
 #
 # Known gaps / dropped checks (deliberate, with reason):
 #   - sqlite ".tables" schema check: no API lists tables; every new table is
-#     instead exercised functionally (stats/BOM/merkle/export/alerts/checkpoint/
+#     instead exercised functionally (BOM/export/alerts/checkpoint/
 #     trace-chain/daily-anchor seal/proxy-policy).
 #   - MySQL-side parity (V16-V18 tables/columns, seed bundle ids): this E2E
 #     runs control on SQLite, so the MySQL schema is guarded by
@@ -68,6 +64,10 @@
 #   - MCP-proxy STI (B6) — Rust binary, separate harness.
 #   - SDK streaming wrap_stream end-to-end — covered by
 #     virbius-review-sdk tests + schemas/review-window-vectors.json.
+#   - audit export PLAINTEXT default (no key): this harness launches control with
+#     an export key to prove the key-wins branch (allow-plaintext defaults to
+#     true yet the artifact stays ciphertext). The no-key plaintext path needs a
+#     keyless control; it is guarded by a source-evidence check (below).
 #
 # Requires: java, curl, python3, nc, docker (kafka console producer), a
 # reachable Redis and Kafka. Kafka may be started via docker-compose.infra.yml.
@@ -80,6 +80,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$ROOT"  # repo path for source-evidence checks (kept separate from positional vars)
 cd "$ROOT"
 
 CONTROL_PORT="${CONTROL_PORT:-18080}"
@@ -388,25 +389,6 @@ check "$(printf '%s' "$R" | jget 'print("1" if d.get("rule_id")=="retry-escape" 
       "block + 2 changed retries + current => retry-escape"
 
 # ── Phase 3: 运营台 observation via the real Kafka ingest ───────────────────
-info "E2E: output-review stats (A8/B7) via real Kafka ingest"
-# The engine-phase output reviews above publish deny events (XSS / credential /
-# window) to Kafka; the control plane ingests them. Poll until a denied answer
-# shows up, then assert the answer-level aggregation.
-STATS=""; GOT=0
-for _ in $(seq 1 45); do
-  STATS=$(curl -s "$AC/audit/output-review-stats")
-  GOT=$(printf '%s' "$STATS" | jget 'print(1 if d.get("data",{}).get("denied",0) >= 1 else 0)')
-  [ "$GOT" = "1" ] && break
-  sleep 1
-done
-check "$GOT" "output-review stats aggregate >=1 denied answer via Kafka ingest (no DB seeding)"
-check "$(printf '%s' "$STATS" | jget 'print("1" if d.get("data",{}).get("window_events",0) >= 1 else "0")')" \
-      "window_events >= 1 (raw deny events counted)"
-check "$(printf '%s' "$STATS" | jget 'print("1" if (d.get("data",{}).get("deny_rate") or 0) > 0 else "0")')" \
-      "deny_rate > 0"
-check "$(printf '%s' "$STATS" | jget 'print("1" if d.get("data",{}).get("scene")=="output" else "0")')" \
-      "stats scoped to the output scene"
-
 info "E2E: decision BOM (A6) reconstructs the real XSS deny event"
 BOM=""; EID=""; BOM_OK=0
 for _ in $(seq 1 45); do
@@ -420,23 +402,11 @@ check "$BOM_OK" "decision BOM reconstructs >=1 audit event for the XSS trace"
 check "$(printf '%s' "$BOM" | jget 'print("1" if len(d.get("data",{}).get("audit_events",[]))>=1 and d.get("data",{}).get("audit_events",[{}])[0].get("effective_action")=="deny" else "0")')" \
       "BOM audit event carries the deny decision"
 
-info "E2E: Merkle proof + independent verify (A4)"
-curl -s "$AC/audit/proof/$EID" > "$WORK/proof.json"
-ROOT=$(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]))["data"];print(d["root_hash"] if d.get("found") and d.get("verified") else "")' "$WORK/proof.json" 2>/dev/null || echo "")
-check "$([ -n "$ROOT" ] && echo 1 || echo 0)" "Merkle proof found + self-verified"
-# verify-proof re-loads the leaf hash and folds the auditor-supplied steps —
-# so the real proof (root + steps) must verify, and a tampered root must not.
-python3 -c 'import json,sys;print(json.dumps(json.load(open(sys.argv[1]))["data"].get("proof") or []))' "$WORK/proof.json" > "$WORK/steps.json"
-V=$(curl -s -X POST "$AC/audit/verify-proof" -H 'Content-Type: application/json' \
-    -d "{\"event_id\":\"$EID\",\"root_hash\":\"$ROOT\",\"proof\":$(cat "$WORK/steps.json")}" \
-    | jget 'print("1" if d["data"]["verified"] else "0")')
-check "$V" "verify-proof (correct root + proof) -> true"
-V=$(curl -s -X POST "$AC/audit/verify-proof" -H 'Content-Type: application/json' \
-    -d "{\"event_id\":\"$EID\",\"root_hash\":\"sha256:deadbeef\",\"proof\":$(cat "$WORK/steps.json")}" \
-    | jget 'print("1" if not d["data"]["verified"] else "0")')
-check "$V" "verify-proof (tampered root) -> false"
-
-info "E2E: encrypted export (A7)"
+info "E2E: encrypted export (A7) — a configured key always wins over the plaintext flag"
+# allow-plaintext now DEFAULTS to true, but this control is launched with an
+# export key, so the artifact must still be AES-256-GCM ciphertext: the key
+# overrides the (new) plaintext default. This is the key-wins branch of the
+# export-mode precedence (key > allow-plaintext).
 JOB=$(curl -s -X POST "$AC/audit/export" -H 'Content-Type: application/json' -d '{"min_risk":50}' \
       | jget 'print(d["data"]["job_id"] if d["data"]["status"]=="done" else "")')
 check "$([ -n "$JOB" ] && [ "$JOB" != "PARSE_ERROR" ] && echo 1 || echo 0)" "export job completed"
@@ -448,6 +418,11 @@ if [ -n "$JOB" ] && [ "$JOB" != "PARSE_ERROR" ]; then
   check "$(grep -qi 'X-Virbius-Format: aes-256-gcm' "$WORK/export.hdr" && echo 1 || echo 0)" "export served as aes-256-gcm"
   check "$([ "$LEAK" = "0" ] && echo 1 || echo 0)" "export artifact encrypted (no plaintext OUTPUT_XSS)"
 fi
+# Source evidence for the changed default (no keyless control in this harness,
+# so the no-key plaintext path itself is out of scope here — see Known gaps).
+EXPORT_SRC="$REPO_ROOT/virbius-control/src/main/java/io/virbius/control/audit/AuditExportService.java"
+check "$(grep -q 'virbius.audit.export.allow-plaintext:true' "$EXPORT_SRC" && echo 1 || echo 0)" \
+      "source: allow-plaintext defaults to true (no-key export is plaintext)"
 
 info "E2E: alerts lifecycle (C4) — auto-created from the deny audit event"
 ALERT_ID="alert-$T-tr-out-1"
@@ -479,6 +454,35 @@ if [ "$ALERT_OK" = "1" ]; then
 fi
 R=$(curl -s "$AC/alerts/nope")
 check "$(printf '%s' "$R" | jget 'print("1" if d.get("code")==404 else "0")')" "alert get missing -> 404 code"
+
+info "E2E: operator identity on alert ack (no more hard-coded 'operator')"
+# Two more high-risk deny answers open two more alerts; ack them through the
+# console API with different identity sources to prove the resolution chain:
+#   (a) no operator param + no header -> unknown (never a pretend 'operator')
+#   (b) no operator param + X-User-Id header -> the header value
+evout "{\"tenant_id\":\"$T\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-out-ack2\",\"trace_id\":\"tr-out-ack2\",\"content\":\"Sure! <script>alert(2)</script>\"}" >/dev/null
+evout "{\"tenant_id\":\"$T\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-out-ack3\",\"trace_id\":\"tr-out-ack3\",\"content\":\"Sure! <script>alert(3)</script>\"}" >/dev/null
+A2="alert-$T-tr-out-ack2"; A3="alert-$T-tr-out-ack3"
+wait_alert(){ # $1=alert_id -> 0 once it appears in the open list
+  for _ in $(seq 1 45); do
+    curl -s "$AC/alerts?status=open&limit=300" \
+      | jget "print('1' if any(a.get('alert_id')=='$1' for a in d.get('data',[])) else '0')" | grep -q 1 && return 0
+    sleep 1
+  done
+  return 1
+}
+W=1; wait_alert "$A2" || W=0; wait_alert "$A3" || W=0
+check "$W" "two more deny answers -> two more alerts (identity-test sources)"
+if [ "$W" = "1" ]; then
+  curl -s -X POST "$AC/alerts/$A2/ack" >/dev/null
+  V=$(curl -s "$AC/alerts/$A2" | jget 'print(d.get("data",{}).get("acked_by",""))')
+  check "$([ "$V" = "unknown" ] && echo 1 || echo 0)" \
+        "ack: no operator param + no header -> acked_by=unknown (got: '$V')"
+  curl -s -X POST "$AC/alerts/$A3/ack" -H 'X-User-Id: e2e-header-ack' >/dev/null
+  V=$(curl -s "$AC/alerts/$A3" | jget 'print(d.get("data",{}).get("acked_by",""))')
+  check "$([ "$V" = "e2e-header-ack" ] && echo 1 || echo 0)" \
+        "ack: X-User-Id header -> acked_by=e2e-header-ack (got: '$V')"
+fi
 
 # ── trace events: proxy wire format -> Kafka -> control ingest ──────────────
 SID="e2e-tc-$$-$(date +%s)"

@@ -667,8 +667,8 @@ Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lac
 | `virbius.audit.hash-chain.verify-batch-size` | `10000` | rows per verification batch |
 | `virbius.audit.daily-anchor.enabled` | `true` | daily Merkle anchor sealing |
 | `virbius.audit.retention.enabled` | `true` | retention archival job |
-| `virbius.audit.export.key` | empty | AES-256-GCM key for export artifacts (base64, must decode to 32B); **when unset, exports land `failed` (fail-closed)** |
-| `virbius.audit.export.allow-plaintext` | `false` | explicitly allow plaintext export (not recommended; debug only) |
+| `virbius.audit.export.key` | empty | AES-256-GCM key for export artifacts (base64, must decode to 32B); when set, exports are always encrypted (the plaintext flag is ignored) |
+| `virbius.audit.export.allow-plaintext` | `true` | when no key is configured, write a plaintext JSONL export (default). Set `false` for fail-closed (no key → job lands `failed`) |
 | `virbius.alert.risk-threshold` | `80` | alert generation risk threshold (and action must be block/deny/challenge); **alerts aggregate per answer (`trace_id`)** — the window events of one blocked streaming answer open a single alert |
 | `virbius.output-review.action-map` | `PII=redact,PROMPT_INJECTION=omit,OUTPUT_CREDENTIAL_LEAK=redact` | reason-code→action (`reject|omit|redact|warn`) map; unlisted codes fall back to keyword matching — **resolved once in the engine, identical for every caller** |
 | `virbius.evaluate.rate-limit.enabled` | `true` | `/v1/evaluate` rate limiting (abuse bound for the unauthenticated endpoint) |
@@ -714,9 +714,9 @@ export VIRBIUS_AUDIT_EXPORT_KEY="$(openssl rand -base64 32)"
 # or --virbius.audit.export.key=<base64>
 ```
 
-- Semantics: the export is audit-event JSONL (with `user_id`/`device_id`/`reason_code`), written as `12B IV || ciphertext+tag` to `data/exports/<jobId>.bin`, with the AAD bound to `jobId`.
+- Semantics: the export is audit-event JSONL (with `user_id`/`device_id`/`reason_code`), written to `data/exports/<jobId>.bin`. With a key it is `12B IV || ciphertext+tag` (AAD bound to `jobId`); in plaintext mode the file is raw JSONL, unchanged.
 - Control only produces ciphertext and offers no decrypt endpoint — the operator decrypts offline with the same key.
-- Unset and no explicit `allow-plaintext=true` → the export job lands `failed`, with the reason in the `error` field (safe default, not a defect).
+- Unset key: with `allow-plaintext=true` (default) → the job lands `done` with plaintext JSONL; with `allow-plaintext=false` → the job lands `failed` with the reason in the `error` field. A key is always honored over the plaintext flag.
 
 ### 10.4 Audit evidence tables append-only grants (A0, tamper prevention)
 
@@ -732,4 +732,4 @@ The `DELETE` needed for retention archival is held only by a separate ops accoun
 ### 10.5 New console pages
 
 - `/alerts` (Alerts): list + status filter (`open`/`acked`) + acknowledge (ack) + expand Decision BOM.
-- `/audit-integrity` (Audit Integrity, 6 tabs): integrity verification (incl. daily-anchor seal / run verification), Merkle proof, Decision BOM, audit export, output-review stats, session checkpoints.
+- `/audit-integrity` (Audit Integrity, 4 tabs): integrity verification (incl. daily-anchor seal / run verification), Decision BOM, audit export, session checkpoints.

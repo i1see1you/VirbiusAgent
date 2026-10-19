@@ -10,7 +10,7 @@
 #
 # 覆盖：
 #   1.1 策略配置与管理   规则CRUD/风险分级/处置动作/热更新/审批/变更留存
-#   1.2 日志与审计       全链路留痕/防篡改哈希链/Merkle/加密导出/多维查询
+#   1.2 日志与审计       全链路留痕/防篡改哈希链/加密导出/多维查询
 #   1.3 输入内容安全     SDK review_input + 提示词攻击 + 外部数据注入 + 记忆注入
 #   1.4 推理与决策安全   链路模式(chain-exfil)/重试逃逸/累积资源异常/审批
 #   1.5 输出安全         SDK review_output 处置矩阵 + wrap_stream 流式阻断
@@ -25,12 +25,16 @@
 #                        单一 active issuer；Helm/迁移以源码证据核验
 #   6   运营台审批闭环   control API 队列列表/批准/拒绝/状态回查 · engine 宕机
 #                        降级 JSON 契约(非空错误体，非误导 400) · 恢复回路
+#   7   全处置动作矩阵   virbius-assistant(McpClient/SSE) → virbius-mcp-proxy →
+#                        engine 真实链路逐一触发 allow/deny/challenge/review，
+#                        运营台 API 审批与审计回查；数据保留供人工查看
 #
 # 约束：全流程只经 HTTP API（模拟用户/运营台真实操作），不直读/直写 Redis 或 SQLite。
 #
 # Usage:      bash scripts/test-eval-outline-sdk.sh
 # Skip build: SKIP_BUILD=1 bash scripts/test-eval-outline-sdk.sh
 # Keep logs:  KEEP_WORK=1 bash scripts/test-eval-outline-sdk.sh
+# Keep data:  KEEP_CONSOLE=1 bash scripts/test-eval-outline-sdk.sh  (保留数据/进程供运营台人工查看)
 # 1.4 enforce: ENFORCE_CHAIN=1 bash scripts/test-eval-outline-sdk.sh  (chain/retry 强制阻断)
 # =============================================================================
 set -euo pipefail
@@ -42,6 +46,9 @@ CONTROL_PORT="${CONTROL_PORT:-18080}"
 ENGINE_PORT="${ENGINE_PORT:-18082}"
 ENGINE2_PORT="${ENGINE2_PORT:-18084}"
 MOCK_PORT="${MOCK_PORT:-18999}"
+PROXY_PORT="${PROXY_PORT:-19098}"
+UPSTREAM_PORT="${UPSTREAM_PORT:-19099}"
+ASST_ROOT="${VIRBIUS_ASSISTANT_ROOT:-$HOME/Projects/VirbiusLLM/virbius-assistant}"
 REDIS_HOST="${REDIS_HOST:-127.0.0.1}"; REDIS_PORT="${REDIS_PORT:-6379}"
 KAFKA_HOST="${KAFKA_HOST:-127.0.0.1}"; KAFKA_PORT="${KAFKA_PORT:-9092}"
 AUDIT_TOPIC="virbius-audit-events"; TRACE_TOPIC="virbius-trace-events"
@@ -70,8 +77,22 @@ t=sys.stdin.read().strip(); h=t.split(".")[0]; h+="="*(-len(h)%4)
 print(json.loads(base64.urlsafe_b64decode(h)).get("kid",""))' 2>/dev/null || true; }
 
 cleanup(){
+  if [ "${KEEP_CONSOLE:-0}" = "1" ]; then
+    # 保留服务进程与数据(SQLite 在 $WORK/data)供运营台人工查看：不杀进程、不删 $WORK。
+    cat > "$WORK/stop-console.sh" <<EOF
+#!/usr/bin/env bash
+kill ${CONTROL_PID:-} ${ENGINE_PID:-} ${PROXY_PID:-} ${UPSTREAM_PID:-} ${MOCK_PID:-} 2>/dev/null
+EOF
+    chmod +x "$WORK/stop-console.sh"
+    info "KEEP_CONSOLE=1: 保留 数据/进程 供人工查看"
+    info "  运营台 UI : http://127.0.0.1:$CONTROL_PORT/ui"
+    info "  tenant    : $TENANT"
+    info "  数据目录  : $DATA"
+    info "  停止服务  : bash $WORK/stop-console.sh   (停完可删 $WORK)"
+    return 0
+  fi
   info "shutting down..."
-  for v in ENGINE2_PID ENGINE_PID CONTROL_PID MOCK_PID; do
+  for v in PROXY_PID UPSTREAM_PID ENGINE2_PID ENGINE_PID CONTROL_PID MOCK_PID; do
     [ -n "${!v:-}" ] && kill "${!v}" 2>/dev/null || true
   done
   wait 2>/dev/null || true
@@ -95,6 +116,14 @@ if ! nc -z "$KAFKA_HOST" "$KAFKA_PORT" 2>/dev/null; then
   nc -z "$KAFKA_HOST" "$KAFKA_PORT" 2>/dev/null || { red "Kafka not reachable"; exit 2; }
 fi
 [ -x "$PY" ] || { red "examples venv missing ($PY); run scripts/oss-agent-setup.sh"; exit 2; }
+ASST_PY="$ASST_ROOT/.venv/bin/python"
+[ -x "$ASST_PY" ] || {
+  red "virbius-assistant venv missing ($ASST_PY)."
+  red "set VIRBIUS_ASSISTANT_ROOT, or create it: cd $ASST_ROOT && python3 -m venv .venv && .venv/bin/pip install -e ."
+  exit 2
+}
+"$ASST_PY" -c 'import sys; sys.path.insert(0, sys.argv[1]); from virbius_assistant.mcp_client import McpClient' "$ASST_ROOT/src" \
+  || { red "virbius-assistant not importable from $ASST_ROOT/src"; exit 2; }
 
 KAFKA_CID="$(docker ps --format '{{.Names}}' | grep -m1 kafka || true)"
 [ -n "$KAFKA_CID" ] || { red "no kafka container found"; exit 2; }
@@ -177,7 +206,8 @@ env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="redis://$REDIS_HOST:$REDIS_PORT"
     KAFKA_BOOTSTRAP_SERVERS="$KAFKA_HOST:$KAFKA_PORT" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$ENGINE_JAR" --server.port="$ENGINE_PORT" \
-      --virbius.evaluate.auth.enabled=false --virbius.evaluate.auth.bootstrap-pem-file= $ENFORCE_FLAGS \
+      --virbius.evaluate.auth.enabled=false --virbius.evaluate.auth.bootstrap-pem-file= \
+      --virbius.audit.sample-rate-allow=1.0 $ENFORCE_FLAGS \
     > "$LOGS/engine.log" 2>&1 &
 # read indirectly via ${!v} in cleanup
 # shellcheck disable=SC2034
@@ -359,25 +389,10 @@ check "$(printf '%s' "$BOM" | jget 'print("1" if d.get("data",{}).get("audit_eve
       "留痕含处置结论(effective_action)"
 check "$(printf '%s' "$BOM" | jget 'print("1" if d.get("data",{}).get("audit_events",[{}])[0].get("user_id") else "0")')" \
       "留痕含主体标识(user_id)"
-# 防篡改：哈希链 + Merkle
+# 防篡改：哈希链
 R=$(curl -s -X POST "$AC/audit/verify" -H 'Content-Type: application/json' -d '{}')
 check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("passed") else "0")')" \
       "审计防篡改: 哈希链校验通过"
-EID=$(printf '%s' "$BOM" | jget 'print(d.get("data",{}).get("audit_events",[{}])[0].get("event_id",""))')
-if [ -n "$EID" ] && [ "$EID" != "PARSE_ERROR" ]; then
-  curl -s "$AC/audit/proof/$EID" > "$WORK/proof.json"
-  MERKLE_ROOT=$(jget 'print(d["data"]["root_hash"] if d["data"].get("found") and d["data"].get("verified") else "")' < "$WORK/proof.json")
-  check "$([ -n "$MERKLE_ROOT" ] && echo 1 || echo 0)" "审计防篡改: Merkle 证明自校验通过"
-  jget 'print(json.dumps(d["data"].get("proof") or []))' < "$WORK/proof.json" > "$WORK/steps.json"
-  V=$(curl -s -X POST "$AC/audit/verify-proof" -H 'Content-Type: application/json' \
-      -d "{\"event_id\":\"$EID\",\"root_hash\":\"sha256:deadbeef\",\"proof\":$(cat "$WORK/steps.json")}" \
-      | jget 'print("1" if not d["data"]["verified"] else "0")')
-  check "$V" "审计防篡改: 篡改 root 后校验失败"
-fi
-# 多维审计查询
-R=$(curl -s "$AC/audit/output-review-stats")
-check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("denied",0) >= 1 else "0")')" \
-      "多维审计查询: 输出误拦/拦截统计聚合"
 # 安全导出（加密）
 JOB=$(curl -s -X POST "$AC/audit/export?requester=outline-e2e" -H 'Content-Type: application/json' -d '{"min_risk":50}' \
       | jget 'print(d["data"]["job_id"] if d.get("data",{}).get("status")=="done" else "")')
@@ -682,7 +697,8 @@ env VIRBIUS_DATA_DIR="$DATA/engine2" VIRBIUS_LOG_DIR="$LOGS/engine2" \
     KAFKA_BOOTSTRAP_SERVERS="$KAFKA_HOST:$KAFKA_PORT" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$ENGINE_JAR" --server.port="$ENGINE2_PORT" \
-      --virbius.evaluate.auth.enabled=false --virbius.evaluate.auth.bootstrap-pem-file= $ENFORCE_FLAGS \
+      --virbius.evaluate.auth.enabled=false --virbius.evaluate.auth.bootstrap-pem-file= \
+      --virbius.audit.sample-rate-allow=1.0 $ENFORCE_FLAGS \
     > "$LOGS/engine2.log" 2>&1 &
 # read indirectly via ${!v} in cleanup
 # shellcheck disable=SC2034
@@ -791,6 +807,8 @@ item "6. 运营台审批闭环 + engine 宕机降级契约 (control API only)"
 #     engine 宕机时必须返回 非空 JSON 错误体；修复前为 0 字节 body → 前端
 #     "Unexpected end of JSON input"(client.ts readJson 依赖该契约)
 #   - engine 不可达时 approve/status 返回 500 JSON，而非误导性 400 "not found"
+#   - 审批/驳回的操作人身份解析(6.5b)：body 显式值 > X-User-Id 请求头 > unknown，
+#     不再落硬编码字面量 'operator'（模拟操作员在控制台填写/缺省的真实流程）
 # 约束：操作员侧只经 control API 观测/操作；本章不直读 Redis/SQLite。
 #       challenge 由 agent 侧 engine evaluate 触发(与真实链路一致)。
 # ── 6.1 建审批规则 + 生成 pending ──
@@ -865,6 +883,51 @@ NF=$(curl -s -o "$WORK/ops-nf.json" -w '%{http_code}' --max-time 10 \
      -d '{"approved_by":"ops-console-e2e"}' 2>/dev/null || echo 000)
 check "$([ "$NF" = "400" ] && jget 'print("1" if d.get("code")==400 and d.get("message")=="challenge not found" else "0")' < "$WORK/ops-nf.json")" \
       "陈旧 id 批准 → 400 + ApiResult{code,message} (HTTP $NF: $(head -c 120 "$WORK/ops-nf.json" 2>/dev/null))"
+# ── 6.5b 操作人身份解析（本次修复核心：不再硬编码字面量 'operator'） ──
+# 运营台审批/驳回应记录真实操作人，解析优先级：body 显式值 > X-User-Id 请求头 > unknown。
+# 全部经 control API 观测（回读 challenges?status=approved|rejected），不读库/不直写。
+info "6.5b 操作人身份解析: 显式值 / X-User-Id / unknown 三级兜底"
+ops_actor_field() { # $1=status $2=challenge_id $3=field -> 轮询已处理列表回读该字段
+  local st="$1" cid="$2" fld="$3" v=""
+  for _ in $(seq 1 15); do
+    v=$(curl -s "$C/api/v1/challenges?tenant_id=$TENANT&status=$st&max=100" \
+        | jget "print(next((r.get('$fld') for r in d if r.get('challenge_id')=='$cid'), ''))")
+    [ -n "$v" ] && [ "$v" != "PARSE_ERROR" ] && break
+    sleep 1
+  done
+  printf '%s' "$v"
+}
+CH4=$(ops_mkpend "s${RUN}-ops-id1" "tr-ops-id1")
+CH5=$(ops_mkpend "s${RUN}-ops-id2" "tr-ops-id2")
+CH6=$(ops_mkpend "s${RUN}-ops-id3" "tr-ops-id3")
+CH7=$(ops_mkpend "s${RUN}-ops-id4" "tr-ops-id4")
+check "$([ -n "$CH4" ] && [ "$CH4" != "PARSE_ERROR" ] && [ -n "$CH5" ] && [ -n "$CH6" ] && [ -n "$CH7" ] && echo 1 || echo 0)" \
+      "身份解析: 生成四条 pending challenge (CH4..CH7)"
+# (1) 未提供身份 + 无请求头 → unknown（修复前会落字面量 'operator'）
+curl -s -X POST "$C/api/v1/challenges/$CH4/approve" -H 'Content-Type: application/json' \
+     -d '{"comment":"no actor"}' >/dev/null
+V=$(ops_actor_field approved "$CH4" approved_by)
+check "$([ "$V" = "unknown" ] && echo 1 || echo 0)" \
+      "审批: 空身份+无请求头 → approved_by=unknown (got: '$V')"
+# (2) 无 body 身份 + X-User-Id 头 → 采用请求头
+curl -s -X POST "$C/api/v1/challenges/$CH5/approve" -H 'Content-Type: application/json' \
+     -H 'X-User-Id: e2e-header-actor' -d '{"comment":"header actor"}' >/dev/null
+V=$(ops_actor_field approved "$CH5" approved_by)
+check "$([ "$V" = "e2e-header-actor" ] && echo 1 || echo 0)" \
+      "审批: X-User-Id 头 → approved_by=e2e-header-actor (got: '$V')"
+# (3) body 显式值 优先于 X-User-Id 头
+curl -s -X POST "$C/api/v1/challenges/$CH6/approve" -H 'Content-Type: application/json' \
+     -H 'X-User-Id: header-should-lose' \
+     -d '{"approved_by":"explicit-actor","comment":"explicit wins"}' >/dev/null
+V=$(ops_actor_field approved "$CH6" approved_by)
+check "$([ "$V" = "explicit-actor" ] && echo 1 || echo 0)" \
+      "审批: 显式 approved_by 优先于 X-User-Id 头 (got: '$V')"
+# (4) 拒绝路径同样兜底（空身份 → unknown）
+curl -s -X POST "$C/api/v1/challenges/$CH7/reject" -H 'Content-Type: application/json' \
+     -d '{"reason":"no actor reject"}' >/dev/null
+V=$(ops_actor_field rejected "$CH7" rejected_by)
+check "$([ "$V" = "unknown" ] && echo 1 || echo 0)" \
+      "拒绝: 空身份+无请求头 → rejected_by=unknown (got: '$V')"
 # ── 6.6 engine 宕机降级契约(空 body → JSON 错误，本次修复核心) ──
 CH3=$(ops_mkpend "s${RUN}-ops-c" "tr-ops-c")
 check "$([ -n "$CH3" ] && [ "$CH3" != "PARSE_ERROR" ] && echo 1 || echo 0)" \
@@ -903,7 +966,8 @@ env VIRBIUS_DATA_DIR="$DATA" VIRBIUS_REDIS_URL="redis://$REDIS_HOST:$REDIS_PORT"
     KAFKA_BOOTSTRAP_SERVERS="$KAFKA_HOST:$KAFKA_PORT" \
     SPRING_PROFILES_ACTIVE=dev \
     java -jar "$ENGINE_JAR" --server.port="$ENGINE_PORT" \
-      --virbius.evaluate.auth.enabled=false --virbius.evaluate.auth.bootstrap-pem-file= $ENFORCE_FLAGS \
+      --virbius.evaluate.auth.enabled=false --virbius.evaluate.auth.bootstrap-pem-file= \
+      --virbius.audit.sample-rate-allow=1.0 $ENFORCE_FLAGS \
     > "$LOGS/engine2.log" 2>&1 &
 ENGINE_PID=$!
 wait_http "http://127.0.0.1:$ENGINE_PORT/admin/health" \
@@ -924,11 +988,368 @@ curl -s -X PATCH "$AC/rules/ops_queue_challenge/status" -H 'Content-Type: applic
 curl -s -X POST "$AC/rules/_/runtime/publish-snapshot" -H 'Content-Type: application/json' >/dev/null
 
 # ═══════════════════════════════════════════════════════════════════════════
+item "7. 全处置动作矩阵 · virbius-assistant → mcp-proxy → engine (真实链路/仅 API)"
+# IntentAction 四处置在链路上的语义(io.virbius.policy.ActionMerge → engine effective_action):
+#   allow     → allow        (allow 意图短路合并; primary 为空 → 审计 rule_id=POLICY_ALLOW)
+#   deny      → block        (canary 生效; proxy JSON-RPC -32006)
+#   challenge → challenge    (建 challenge 记录; proxy -32011 带 challenge_id;
+#                              运营台批准 → 同会话重试放行;
+#                              运营台拒绝 → 同会话重试仍 -32011)
+#   allow/deny/challenge 的阻断态均断言上游工具未被执行(无 result)
+#   review    → review       (观察/待审: 放行执行, engine 与 proxy 审计均记 review)
+# 路径: assistant McpClient(SSE, initialize meta 携带 app/tenant/session/license)
+#       → virbius-mcp-proxy(许可证白名单 + 处置执行) → engine /v1/evaluate → 上游 MCP 工具
+# 约束: 断言只经运营台 HTTP API(审批/审计); 不直读/直写 Redis 或 SQLite。
+# 数据保留: 本章规则保持 active、不归档; 配合 KEEP_CONSOLE=1 保留全部测试数据供人工查看。
+
+# ── 7.1 上游 MCP 工具服务 + 真实 virbius-mcp-proxy ───────────────────────────
+PROXY_BIN="$ROOT/target/debug/virbius-mcp-proxy"
+if [ ! -f "$PROXY_BIN" ]; then
+  command -v cargo >/dev/null 2>&1 || { red "cargo required to build virbius-mcp-proxy"; exit 2; }
+  info "building virbius-mcp-proxy (cargo)..."
+  cargo build -p virbius-mcp-proxy > "$LOGS/proxy-build.log" 2>&1 \
+    || { red "cargo build failed"; tail -30 "$LOGS/proxy-build.log"; exit 2; }
+fi
+[ -f "$PROXY_BIN" ] || { red "proxy binary missing: $PROXY_BIN"; exit 2; }
+for _p in "$UPSTREAM_PORT" "$PROXY_PORT"; do
+  if nc -z 127.0.0.1 "$_p" 2>/dev/null; then
+    red "port $_p busy — a previous KEEP_CONSOLE run may still be up; stop it first"; exit 2
+  fi
+done
+
+cat > "$WORK/upstream.py" <<'PY'
+import json, queue, sys, threading, urllib.parse, uuid
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+TOOLS = [
+    {"name": "read_doc", "description": "read a document",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "query_audit_events", "description": "query audit events",
+     "inputSchema": {"type": "object", "properties": {}}},
+    {"name": "http_get", "description": "HTTP GET",
+     "inputSchema": {"type": "object", "properties": {}}},
+]
+
+
+def serve(port):
+    sessions, lock = {}, threading.Lock()
+
+    def get_queue(sid):
+        with lock:
+            q = sessions.get(sid)
+            if q is None:
+                q = queue.Queue(); sessions[sid] = q
+            return q
+
+    def dispatch(req):
+        if not isinstance(req, dict):
+            return {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}
+        method = req.get("method"); rid = req.get("id"); params = req.get("params") or {}
+        if isinstance(method, str) and method.startswith("notifications/"):
+            return None
+        if method == "initialize":
+            return {"jsonrpc": "2.0", "id": rid, "result": {
+                "protocolVersion": "2024-11-05", "capabilities": {},
+                "serverInfo": {"name": "outline-upstream", "version": "0.1.0"}}}
+        if method == "tools/list":
+            return {"jsonrpc": "2.0", "id": rid, "result": {"tools": TOOLS}}
+        if method == "tools/call":
+            return {"jsonrpc": "2.0", "id": rid, "result": {
+                "content": [{"type": "text", "text": "ok:" + str(params.get("name"))}]}}
+        return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": "method not found"}}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+        def sse(self, ev, data):
+            self.wfile.write(("event: %s\ndata: %s\n\n" % (ev, data)).encode()); self.wfile.flush()
+        def do_GET(self):
+            p = urllib.parse.urlparse(self.path)
+            if p.path.rstrip("/") != "/sse":
+                return self.send_error(404)
+            sid = urllib.parse.parse_qs(p.query).get("session_id", [""])[0] or ("sess-" + uuid.uuid4().hex)
+            q = get_queue(sid)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "keep-alive")
+            self.end_headers()
+            self.sse("endpoint", "/messages/?session_id=" + urllib.parse.quote(sid))
+            while True:
+                try:
+                    msg = q.get(timeout=30)
+                except queue.Empty:
+                    self.wfile.write(b": ping\n\n"); self.wfile.flush(); continue
+                self.sse("message", msg)
+        def do_POST(self):
+            p = urllib.parse.urlparse(self.path)
+            if p.path.rstrip("/") != "/messages":
+                return self.send_error(404)
+            sid = urllib.parse.parse_qs(p.query).get("session_id", ["default"])[0]
+            body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8", "replace")
+            try:
+                req = json.loads(body)
+            except ValueError:
+                req = None
+            resp = dispatch(req)
+            if resp is not None:
+                get_queue(sid).put(json.dumps(resp))
+            self.send_response(202); self.end_headers(); self.wfile.write(b"")
+
+    ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+
+
+serve(int(sys.argv[1]))
+PY
+python3 "$WORK/upstream.py" "$UPSTREAM_PORT" > "$LOGS/upstream.log" 2>&1 &
+UPSTREAM_PID=$!
+for _ in $(seq 1 20); do nc -z 127.0.0.1 "$UPSTREAM_PORT" 2>/dev/null && break; sleep 0.5; done
+nc -z 127.0.0.1 "$UPSTREAM_PORT" 2>/dev/null || { red "upstream MCP server failed to start"; tail -20 "$LOGS/upstream.log"; exit 2; }
+
+info "starting virbius-mcp-proxy :$PROXY_PORT ..."
+env VIRBIUS_TRANSPORT="tcp://127.0.0.1:$PROXY_PORT" \
+    VIRBIUS_UPSTREAM_URL="http://127.0.0.1:$UPSTREAM_PORT" \
+    VIRBIUS_UPSTREAM_TRANSPORT="sse" \
+    VIRBIUS_UPSTREAM_SSE_PATH="/sse" \
+    VIRBIUS_LICENSE_FILE="$LIC_FILE" \
+    VIRBIUS_LICENSE_PUBLIC_KEY="$LIC_PUB" \
+    VIRBIUS_ENGINE_URL="$E" \
+    VIRBIUS_CONTROL_URL="$C" \
+    VIRBIUS_AUDIT_BACKEND="kafka" \
+    VIRBIUS_AUDIT_KAFKA_BROKERS="$KAFKA_HOST:$KAFKA_PORT" \
+    VIRBIUS_AUDIT_KAFKA_TOPIC="$AUDIT_TOPIC" \
+    VIRBIUS_REDIS_URL="redis://$REDIS_HOST:$REDIS_PORT" \
+    "$PROXY_BIN" > "$LOGS/proxy.log" 2>&1 &
+PROXY_PID=$!
+wait_http "http://127.0.0.1:$PROXY_PORT/health" 30 || { red "proxy failed to start"; tail -30 "$LOGS/proxy.log"; exit 2; }
+info "proxy ready (:${PROXY_PORT}/health), upstream :$UPSTREAM_PORT"
+
+# 处置矩阵独立 license (隔离白名单=query_audit_events)。
+# 注: control 库 CHECK 约束 risk_quota BETWEEN 0 AND 100 → 上限 100(>100 会被 DB 拒绝并返回 500)。
+DISP_APP="disp-app"
+DISP_JWT="$(curl -s -X POST "$AC/licenses/issue" -H 'Content-Type: application/json' \
+  -d "{\"app_id\":\"$DISP_APP\",\"agent_name\":\"outline-disp\",\"allowed_tools\":[\"query_audit_events\"],\"risk_quota\":100}" \
+  | jget 'print(d.get("data",{}).get("jwt") or "")')"
+check "$([ -n "$DISP_JWT" ] && [ "$DISP_JWT" != "PARSE_ERROR" ] && echo 1 || echo 0)" \
+      "签发处置矩阵独立 license (app=$DISP_APP, risk_quota=100, allowlist=query_audit_events)"
+
+# ── 7.2 四种处置规则 (运营台 API; 保持 active 供人工查看) ─────────────────────
+mk_rule(){ curl -s -X POST "$AC/rules" -H 'Content-Type: application/json' -d "$1" >/dev/null; }
+mk_rule '{"rule_id":"disp_allow","layer":"cloud","runtime":"groovy","bundle_id":"poc-default","reason_code":"DISP_ALLOW_OVERRIDE","risk_score":10,"intent_action":"allow","scope":{"bind_scope":"global"},"body":"def decide(ctx) { return (ctx.var(\"content\")?.contains(\"DISP_ALLOW_OK\") == true) }"}'
+mk_rule '{"rule_id":"disp_deny","layer":"cloud","runtime":"groovy","bundle_id":"poc-default","reason_code":"DISP_DENY","risk_score":90,"intent_action":"deny","scope":{"bind_scope":"global"},"body":"def decide(ctx) { return (ctx.var(\"content\")?.contains(\"DISP_DENY\") == true) }"}'
+mk_rule '{"rule_id":"disp_challenge","layer":"cloud","runtime":"groovy","bundle_id":"poc-default","reason_code":"DISP_CHALLENGE","risk_score":60,"intent_action":"challenge","scope":{"bind_scope":"global"},"body":"def decide(ctx) { return (ctx.var(\"content\")?.contains(\"DISP_CHALLENGE\") == true) }"}'
+mk_rule '{"rule_id":"disp_review","layer":"cloud","runtime":"groovy","bundle_id":"poc-default","reason_code":"DISP_REVIEW","risk_score":50,"intent_action":"review","scope":{"bind_scope":"global"},"body":"def decide(ctx) { return (ctx.var(\"content\")?.contains(\"DISP_REVIEW\") == true) }"}'
+for rid in disp_allow disp_deny disp_challenge disp_review; do
+  curl -s -X PATCH "$AC/rules/$rid/status" -H 'Content-Type: application/json' -d '{"rule_status":"active"}' >/dev/null
+  curl -s -X PATCH "$AC/rules/$rid/runtime" -H 'Content-Type: application/json' \
+    -d '{"enforce_mode":"canary","canary_percent":100}' >/dev/null
+done
+curl -s -X POST "$AC/rules/_/runtime/publish-snapshot" -H 'Content-Type: application/json' >/dev/null
+sleep 4
+check "$(curl -s "$AC/rules" | jget 'print("1" if all(any(x.get("rule_id")==r and x.get("rollout_state") not in (None,"draft") for x in d.get("data",[])) for r in ("disp_allow","disp_deny","disp_challenge","disp_review")) else "0")')" \
+      "四处置规则创建并激活 (allow/deny/challenge/review, 收尾保持 active)"
+
+# ── 7.3 virbius-assistant 驱动 (真实 McpClient + SSE) ────────────────────────
+cat > "$WORK/assistant_driver.py" <<'PY'
+"""Drive virbius-assistant's McpClient against the mcp-proxy once; print one JSON line.
+
+argv: proxy_url app_id tenant license_jwt session_id args_json [challenge_token]
+session_id 被固定, 以便 challenge 批准后在同一逻辑会话重试 (豁免连续性)。
+"""
+import asyncio, json, sys
+
+from mcp.shared.exceptions import McpError
+from mcp.types import CallToolRequest, CallToolRequestParams, CallToolResult
+
+from virbius_assistant.mcp_client import McpClient
+
+TOOL = "query_audit_events"
+
+
+def _flatten(res):
+    if isinstance(res, str):
+        return res
+    parts = []
+    for c in getattr(res, "content", None) or []:
+        t = getattr(c, "text", None)
+        if t:
+            parts.append(t)
+    return parts[0] if len(parts) == 1 else parts
+
+
+async def main():
+    proxy, app_id, tenant, jwt, session_id, args_json = sys.argv[1:7]
+    token = sys.argv[7] if len(sys.argv) > 7 else ""
+    args = json.loads(args_json)
+    out = {"session_id": session_id, "tool": TOOL, "args": args}
+    client = McpClient(server_url=proxy.rstrip("/") + "/sse", app_id=app_id,
+                       tenant_id=tenant, license_jwt=jwt)
+    client._session_id = session_id
+    await client.connect()
+
+    async def call_with_token(tok):
+        req = CallToolRequest(params=CallToolRequestParams.model_validate(
+            {"name": TOOL, "arguments": args, "_meta": {"challenge_token": tok}}))
+        return await client._session.send_request(req, CallToolResult)
+
+    used_token = False
+    try:
+        if token:
+            try:
+                res = await call_with_token(token)
+                out["outcome"] = "allow"
+                out["path"] = "challenge_token"
+                out["result"] = _flatten(res)
+                used_token = True
+            except McpError as e:
+                out["token_path_error"] = "code=%s" % e.error.code
+        if not used_token:
+            try:
+                res = await client.call_tool(TOOL, args)
+                out["outcome"] = "allow"
+                out["result"] = _flatten(res)
+                out["path"] = "plain_after_token_error" if token else "plain"
+            except McpError as e:
+                out["outcome"] = "error"
+                out["code"] = e.error.code
+                out["message"] = str(e.error.message)[:400]
+                out["data"] = e.error.data or {}
+    finally:
+        await client.disconnect()
+    print(json.dumps(out, ensure_ascii=False, default=str))
+
+
+asyncio.run(main())
+PY
+
+asst_call(){ # $1=session-tag $2=args_json [$3=challenge_token]
+  PYTHONPATH="$ASST_ROOT/src" "$ASST_PY" "$WORK/assistant_driver.py" \
+    "http://127.0.0.1:$PROXY_PORT" "$DISP_APP" "$TENANT" "$DISP_JWT" \
+    "disp-${RUN}-$1" "$2" "${3:-}" 2> "$WORK/disp-$1.err" || true
+}
+audit_recent(){ curl -s "$AC/audit/recent?limit=300"; }
+audit_count(){ # $1=rule_id $2=effective_action [ $3=layer ]
+  audit_recent | "$PY" -c '
+import sys,json
+try: d=json.load(sys.stdin)
+except Exception: print(0); raise SystemExit
+rows=((d.get("data") or {}).get("db_events")) or []
+layer=sys.argv[3] if len(sys.argv)>3 and sys.argv[3] else None
+print(sum(1 for e in rows if e.get("rule_id")==sys.argv[1] and e.get("effective_action")==sys.argv[2]
+          and (layer is None or e.get("layer")==layer)))' "$1" "$2" "${3:-}" 2>/dev/null || echo 0
+}
+
+# ── 7.4 逐处置触发 (assistant → proxy → engine) ──────────────────────────────
+R=$(asst_call allowbase '{"note":"DELETE FROM users"}')
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("outcome")=="error" and d.get("code")==-32006 else "0")')" \
+      "链路基线: 'DELETE FROM' 命中既有 deny 规则 → proxy 拦截 (-32006)"
+check "$(printf '%s' "$R" | jget 'print("1" if (d.get("data") or {}).get("trace_id") else "0")')" \
+      "拦截错误体带 trace_id (可回溯决策 BOM)"
+BASE_TRACE=$(printf '%s' "$R" | jget 'print((d.get("data") or {}).get("trace_id") or "")')
+
+R=$(asst_call deny '{"marker":"DISP_DENY"}')
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("outcome")=="error" and d.get("code")==-32006 else "0")')" \
+      "处置 deny: 规则命中 → engine block (proxy -32006)"
+check "$(printf '%s' "$R" | jget 'print("1" if "result" not in d and not (d.get("data") or {}).get("challenge_id") else "0")')" \
+      "处置 deny: 上游工具未执行(无 result, 未转 challenge)"
+
+PA_BEFORE=$(audit_count POLICY_ALLOW allow)
+R=$(asst_call allow '{"note":"DELETE FROM users","marker":"DISP_ALLOW_OK"}')
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("outcome")=="allow" and "ok:query_audit_events" in str(d.get("result")) else "0")')" \
+      "处置 allow: allow 规则短路覆盖 deny → 放行且工具真实执行 (raw=$(printf '%s' "$R" | tr -d '\n' | head -c 140))"
+
+R=$(asst_call challenge '{"marker":"DISP_CHALLENGE"}')
+CH=$(printf '%s' "$R" | jget 'print((d.get("data") or {}).get("challenge_id") or "")')
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("outcome")=="error" and d.get("code")==-32011 and (d.get("data") or {}).get("challenge_id") else "0")')" \
+      "处置 challenge: 规则命中 → 转人工确认 (-32011, challenge_id=$CH)"
+check "$(printf '%s' "$R" | jget 'print("1" if "result" not in d else "0")')" \
+      "处置 challenge: 未获批准前上游工具未执行(无 result)"
+if [ -n "$CH" ] && [ "$CH" != "PARSE_ERROR" ]; then
+  AP=$(curl -s -X POST "$C/api/v1/challenges/$CH/approve" -H 'Content-Type: application/json' \
+       -d '{"approved_by":"assistant-e2e","comment":"disp matrix approve"}')
+  CTOK=$(printf '%s' "$AP" | jget 'print(d.get("token") or (d.get("data") or {}).get("token") or "")')
+  check "$([ -n "$CTOK" ] && [ "$CTOK" != "PARSE_ERROR" ] && echo 1 || echo 0)" \
+        "运营台批准 challenge → 返回放行 token (raw=$(printf '%s' "$AP" | tr -d '\n' | head -c 140))"
+  R=$(asst_call challenge '{"marker":"DISP_CHALLENGE"}' "$CTOK")
+  check "$(printf '%s' "$R" | jget 'print("1" if d.get("outcome")=="allow" and "ok:query_audit_events" in str(d.get("result")) else "0")')" \
+        "批准后同会话重试 → 放行且工具真实执行 (path=$(printf '%s' "$R" | jget 'print(d.get("path"))'), tok_err=$(printf '%s' "$R" | jget 'print(d.get("token_path_error",""))'))"
+  sleep 2
+  CHSTAT=$(curl -s "$C/api/v1/challenges/$CH/status" | jget 'print(d.get("status") or (d.get("data") or {}).get("status") or (d.get("data") or {}).get("challenge",{}).get("status") or "")')
+  check "$([ "$CHSTAT" = "approved" ] && echo 1 || echo 0)" "运营台回查: challenge 终态=$CHSTAT"
+else
+  check 0 "运营台批准 challenge (challenge_id 未返回: $(printf '%s' "$R" | tr -d '\n' | head -c 160))"
+  check 0 "批准后同会话重试 → 放行"
+fi
+
+# ── 7.4b challenge 拒绝分支 (assistant → proxy → engine → 运营台 reject) ──────
+R=$(asst_call chalrej '{"marker":"DISP_CHALLENGE"}')
+CR=$(printf '%s' "$R" | jget 'print((d.get("data") or {}).get("challenge_id") or "")')
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("outcome")=="error" and d.get("code")==-32011 and (d.get("data") or {}).get("challenge_id") else "0")')" \
+      "拒绝分支: 命中 → 转人工确认 (-32011, challenge_id=$CR)"
+if [ -n "$CR" ] && [ "$CR" != "PARSE_ERROR" ]; then
+  curl -s -X POST "$C/api/v1/challenges/$CR/reject" -H 'Content-Type: application/json' \
+       -d '{"rejected_by":"assistant-e2e","reason":"disp matrix reject"}' >/dev/null
+  CRSTAT=""; CRCHK=0
+  for _ in $(seq 1 15); do
+    CRSTAT=$(curl -s "$C/api/v1/challenges/$CR/status" \
+             | jget 'print(d.get("status") or (d.get("data") or {}).get("status") or (d.get("data") or {}).get("challenge",{}).get("status") or "")')
+    [ "$CRSTAT" = "rejected" ] && { CRCHK=1; break; }
+    sleep 1
+  done
+  check "$CRCHK" "运营台拒绝 challenge → 回查终态=rejected (status=$CRSTAT)"
+  R=$(asst_call chalrej '{"marker":"DISP_CHALLENGE"}')
+  check "$(printf '%s' "$R" | jget 'print("1" if d.get("outcome")=="error" and d.get("code")==-32011 else "0")')" \
+        "拒绝后同会话重试(无 token) → 仍被拦截 -32011 (新 challenge_id=$(printf '%s' "$R" | jget 'print((d.get("data") or {}).get("challenge_id") or "")'))"
+  check "$(printf '%s' "$R" | jget 'print("1" if "result" not in d else "0")')" \
+        "拒绝分支: 重试未执行上游工具(无 result)"
+else
+  check 0 "拒绝分支: challenge_id 未返回 ($(printf '%s' "$R" | tr -d '\n' | head -c 160))"
+fi
+
+R=$(asst_call review '{"marker":"DISP_REVIEW"}')
+check "$(printf '%s' "$R" | jget 'print("1" if d.get("outcome")=="allow" else "0")')" \
+      "处置 review: 观察态(不阻断) → 工具放行执行 (outcome=$(printf '%s' "$R" | jget 'print(d.get("outcome"))'))"
+
+# ── 7.5 运营台审计留痕 (Kafka → control ingest) ──────────────────────────────
+info "polling audit/recent for the four dispositions..."
+A_BASE=0; A_DENY=0; A_CH=0; A_RV=0; A_RV_EDGE=0; A_CH_ALLOW=0
+for _ in $(seq 1 45); do
+  A_BASE=$(audit_count outline_deny_delete block); A_DENY=$(audit_count disp_deny block)
+  A_CH=$(audit_count disp_challenge challenge); A_RV=$(audit_count disp_review review)
+  A_RV_EDGE=$(audit_count disp_review review edge)
+  A_CH_ALLOW=$(audit_count disp_challenge allow)
+  if [ "${A_BASE:-0}" -ge 1 ] && [ "${A_DENY:-0}" -ge 1 ] && [ "${A_CH:-0}" -ge 1 ] \
+     && [ "${A_RV:-0}" -ge 1 ] && [ "${A_RV_EDGE:-0}" -ge 1 ] && [ "${A_CH_ALLOW:-0}" -ge 1 ]; then break; fi
+  sleep 1
+done
+check "$([ "${A_BASE:-0}" -ge 1 ] && echo 1 || echo 0)" "审计留痕: (outline_deny_delete, block) 基线 =$A_BASE"
+check "$([ "${A_DENY:-0}" -ge 1 ] && echo 1 || echo 0)" "审计留痕: deny → effective_action=block =$A_DENY"
+check "$([ "${A_CH:-0}" -ge 1 ] && echo 1 || echo 0)" "审计留痕: challenge → effective_action=challenge =$A_CH"
+check "$([ "${A_RV:-0}" -ge 1 ] && echo 1 || echo 0)" "审计留痕: review → effective_action=review =$A_RV"
+check "$([ "${A_RV_EDGE:-0}" -ge 1 ] && echo 1 || echo 0)" "审计留痕: review 在 edge 层同样记 review(不再塌缩为 allow) =$A_RV_EDGE"
+check "$([ "${A_CH_ALLOW:-0}" -ge 1 ] && echo 1 || echo 0)" "审计留痕: 批准后重试经 session 豁免放行 → (disp_challenge, allow) 留痕 =$A_CH_ALLOW"
+PA_AFTER=$(audit_count POLICY_ALLOW allow)
+check "$([ "${PA_AFTER:-0}" -gt "${PA_BEFORE:-0}" ] && echo 1 || echo 0)" \
+      "审计留痕: allow 覆盖 → (POLICY_ALLOW, allow) 计数增加 ($PA_BEFORE → $PA_AFTER)"
+if [ -n "$BASE_TRACE" ] && [ "$BASE_TRACE" != "PARSE_ERROR" ]; then
+  check "$(curl -s "$AC/audit/decision-bom/$BASE_TRACE" | jget 'print("1" if len((d.get("data") or {}).get("audit_events",[]))>=1 else "0")')" \
+        "决策 BOM: 由 trace 回溯 baseline deny 全链路留痕"
+fi
+
+# ── 7.6 观测记录 (只记录事实, 不改实现) ──────────────────────────────────────
+note "review 处置经 proxy 放行执行: engine 与 proxy(edge) 审计均记 review (口径一致)"
+note "challenge 双分支: 批准 → 同会话重试放行(token); 拒绝 → 同会话重试仍 -32011(新 challenge_id)"
+note "allow 覆盖对照: 无 marker 时 'DELETE FROM' 被 deny 规则拦截; 带 DISP_ALLOW_OK 时放行 → allow 短路生效"
+check "$(curl -s "$AC/rules" | jget 'print("1" if all(any(x.get("rule_id")==r and x.get("rollout_state") not in (None,"draft") for x in d.get("data",[])) for r in ("disp_allow","disp_deny","disp_challenge","disp_review")) else "0")')" \
+      "测试数据保留: 四处置规则仍为 active (未归档/未清空, 供运营台人工查看)"
+info "保留清单: 4 处置规则 + §6 审批队列(pending/approved/rejected) + 四类审计留痕 均在 control DB/Redis"
+
+# ═══════════════════════════════════════════════════════════════════════════
 echo
 echo "════════════ 智能体行为安全护栏-检验大纲 · SDK 全流程 结果 ════════════"
 green "PASS: $PASS"
 [ "$FAIL" -gt 0 ] && red "FAIL: $FAIL" || echo "FAIL: 0"
 [ "$GAP" -gt 0 ] && yellow "GAP(疑似未实现/能力缺口): $GAP" || echo "GAP: 0"
 echo "日志目录: $WORK (KEEP_WORK=1 保留)"
+[ "${KEEP_CONSOLE:-0}" = "1" ] && echo "运营台查看: http://127.0.0.1:$CONTROL_PORT/ui (tenant=$TENANT, 停止: bash $WORK/stop-console.sh)"
 echo "═══════════════════════════════════════════════════════════════════════"
 [ "$FAIL" -eq 0 ] || exit 1

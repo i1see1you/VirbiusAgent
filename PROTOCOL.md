@@ -158,6 +158,8 @@ Agent sends tools/call { name, arguments }
     }
     - block -> return JSON-RPC error: engine_blocked
     - allow/review -> continue
+      (the edge audit/trace records the engine verdict verbatim — `review` is
+       NOT collapsed to `allow`, so the edge and cloud rows for one trace agree)
   |
   v
 6. Forward to upstream MCP Server
@@ -432,9 +434,11 @@ Agent                 Proxy/Gateway          Engine                Control Dashb
   |     token: "vct_xxx"} ----------------------|                        |
   |                        |                    |                        |
   |--- tools/call -------->|                    |                        |
-  |   (_meta.challenge_token: "vct_xxx")        |                        |
-  |                        |--- /v1/challenge/verify -->|                |
-  |                        |<-- {valid: true} ---------|                 |
+  |   (same session/args retry,                 |                        |
+  |    _meta.challenge_token optional)          |                        |
+  |                        |--- /v1/evaluate --->|                        |
+  |                        |<-- allow (session exemption,|               |
+  |                        |     normal audit + trace)   |               |
   |                        |--- (forward to upstream)   |                |
   |<-- result -------------|                    |                        |
 ```
@@ -462,9 +466,9 @@ Agent                 Proxy/Gateway          Engine                Control Dashb
 }
 ```
 
-#### Retry Format (with challenge token)
+#### Retry Format (after approval)
 
-After receiving approval, the Agent retries the original `tools/call` request, including `challenge_token` in `_meta`:
+After receiving approval, the Agent simply retries the original `tools/call` request (same session; strict mode requires identical arguments):
 
 ```json
 {
@@ -473,29 +477,25 @@ After receiving approval, the Agent retries the original `tools/call` request, i
   "method": "tools/call",
   "params": {
     "name": "delete_file",
-    "arguments": { "path": "/data/important.txt" },
-    "_meta": {
-      "challenge_token": "vct_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
-    }
+    "arguments": { "path": "/data/important.txt" }
   }
 }
 ```
 
-When Proxy/Gateway receives a request with `challenge_token`:
-1. Call Engine `POST /v1/challenge/verify` to validate the token (single-use)
-2. If valid, forward to upstream MCP Server (remove `_meta.challenge_token`)
-3. If validation fails, return `-32011` error
+The retry flows through the **normal evaluation pipeline**: approval already wrote a session-level exemption (`challenge:exempt:*`, default TTL 600s, bound per the tool's `approval_mode`), so a hit allows the call — **with full evaluation, audit and trace**. The old token short-circuit (allow without audit) is gone. `_meta.challenge_token` is still accepted for client compatibility but is never verified and is stripped before forwarding upstream.
 
-> **Gateway (WASM) Path**: Token is passed via HTTP Header `X-Virbius-Challenge-Token` instead of `_meta`.
+> **Note**: the exemption only overrides a `challenge` disposition; if the retried call evaluates to `deny`, it is still blocked.
+
+> **Gateway (WASM) Path**: the legacy `X-Virbius-Challenge-Token` header is likewise no longer needed.
 
 #### Engine Challenge API
 
 | Method | Path | Description |
 |--------|------|------|
 | `GET` | `/v1/challenge/{id}/status` | Query challenge status (pending/approved/rejected/expired) |
-| `POST` | `/v1/challenge/{id}/approve` | Approve, generate single-use token (Dashboard call) |
+| `POST` | `/v1/challenge/{id}/approve` | Approve, write session exemption and generate a token (Dashboard call) |
 | `POST` | `/v1/challenge/{id}/reject` | Reject approval (Dashboard call) |
-| `POST` | `/v1/challenge/verify` | Validate token validity (Proxy/Gateway call) |
+| `POST` | `/v1/challenge/verify` | Validate a token (deprecated: no longer called by the proxy; kept for compatibility) |
 | `GET` | `/v1/challenges?tenant_id=default&status=pending` | List pending challenges (Dashboard queue) |
 
 #### Path Selection Configuration
@@ -1088,11 +1088,8 @@ New control-plane endpoints, all prefixed with `/api/v1/admin/tenants/{tenantId}
 |------|------|------|
 | GET | `/audit/chain/status` | audit chain head (`seq`/`last_hash`) |
 | POST | `/audit/verify` | full-chain verification (`from`/`to` optional) |
-| GET | `/audit/proof/{eventId}` | Merkle inclusion proof for one event (`from`/`to` optional) |
-| POST | `/audit/verify-proof` | independent proof verification (`root`+`steps` supplied by the auditor) |
 | GET | `/audit/trace-chain/verify?session_id=` | verify a session's or the tenant's trace chain |
 | POST | `/audit/daily-anchor/seal` | seal a day's Merkle anchor (body `{date}`, defaults to yesterday UTC) |
-| GET | `/audit/output-review-stats?from=&to=` | output-review false-positive stats (`total`/`denied`/`deny_rate`, …) |
 | GET | `/audit/decision-bom/{traceId}` | Decision BOM reconstruction (audit / session / policy / trace phases) |
 | POST | `/audit/export` | create an encrypted export (body: `from`/`to`/`sessionId`/`traceId`/`minRisk`/`effectiveAction`; query `requester`) |
 | GET | `/audit/export` | export job list |
@@ -1110,7 +1107,7 @@ New control-plane endpoints, all prefixed with `/api/v1/admin/tenants/{tenantId}
 
 **Session checkpoints** (C5): `GET /sessions/{sessionId}/checkpoint` (context that survives a Redis eviction; missing returns envelope `code=404`).
 
-> Alerts are generated by Control from ingested high-risk audit events (`risk_score >= virbius.alert.risk-threshold` and action block/deny/challenge) and **aggregate per answer (`trace_id`)**, each alert carrying the engine's `session_id` — a blocked streaming answer's per-window events yield a single alert (every window stays visible in its BOM); a blank `trace_id` falls back to per-event. The answer-level counts in `/audit/output-review-stats` reweight allow sampling (`virbius.audit.sample-rate-allow`) Horvitz–Thompson style (`allowed` = estimate, `sampled_allow_answers` = raw observed count, `denied` stays exact). The export artifact is AES-256-GCM ciphertext with no decrypt endpoint on the Control side, and the job lands `failed` when `virbius.audit.export.key` is unset (see DEPLOYMENT §10.3).
+> Alerts are generated by Control from ingested high-risk audit events (`risk_score >= virbius.alert.risk-threshold` and action block/deny/challenge) and **aggregate per answer (`trace_id`)**, each alert carrying the engine's `session_id` — a blocked streaming answer's per-window events yield a single alert (every window stays visible in its BOM); a blank `trace_id` falls back to per-event. The export artifact is AES-256-GCM ciphertext with no decrypt endpoint on the Control side when a key is configured; with no key it is plaintext JSONL by default (`virbius.audit.export.allow-plaintext=true`), and set `allow-plaintext=false` to land `failed` instead (see DEPLOYMENT §10.3).
 
 #### 2.6.5 Input/output review API (outline B; the engine chat extension was removed)
 

@@ -6,8 +6,7 @@
 #
 #   运营台 (control HTTP API)          engine HTTP API                 SDK
 #   -------------------------          ----------------               ------
-#   create tenants      -------------> (audit events)  --Kafka-->  stats/alerts
-#   read output-review-stats  <------- (engine -> Kafka -> control ingest)
+#   create tenants      -------------> (audit events)  --Kafka-->  alerts
 #   alert list / ack / BOM    <-------+
 #
 # Every assertion is made through an HTTP API. The test NEVER opens the control
@@ -27,8 +26,6 @@
 #   engine  no LLM endpoint: POST /v1/chat/completions is removed (404) —
 #           callers stream directly from their LLM (OpenAI/Ollama) and review
 #           via the evaluate API / SDK
-#   control output-review stats: answer-level aggregation (COUNT DISTINCT
-#           trace_id) + window_events, via the real Kafka ingest path
 #   control alerts lifecycle + Decision BOM reconstruction
 #   SDK     virbius-review-sdk against the live engine: review_input /
 #           review_output + apply_disposal / wrap_stream mid-stream block
@@ -256,11 +253,6 @@ R=$(curl -s -X POST "$C/api/v1/admin/tenants" -H 'Content-Type: application/json
 check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("tenant_id")=="'"$TS"'" or d.get("code")==200 else "0")')" \
       "create stats tenant $TS via API"
 
-info "E2E: baseline output-review-stats is empty for the fresh stats tenant"
-R=$(curl -s "$C/api/v1/admin/tenants/$TS/audit/output-review-stats")
-check "$(printf '%s' "$R" | jget 'print("1" if d.get("data",{}).get("total",0)==0 and d.get("data",{}).get("window_events",0)==0 else "0")')" \
-      "baseline total=0 window_events=0 (no history in this tenant)"
-
 # ── Phase 2: engine caller flow (deterministic output rules) ────────────────
 info "E2E: output review disposal matrix (role=output)"
 
@@ -434,33 +426,12 @@ PY
 check "$AD_OK" "LLM SSE (direct) -> SDK adapter -> wrap_stream -> Blocked (full stream flow)"
 
 # ── Phase 6: 运营台 observation via the real Kafka ingest ───────────────────
-info "E2E: control output-review stats (answer-level aggregation) via Kafka"
+info "E2E: produce deny events via real Kafka ingest (alert sources)"
 # 3 windows of ONE trace + 1 whole answer of another => 4 events, 2 answers.
 for i in 1 2 3; do
   evout "{\"tenant_id\":\"$TS\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-agg\",\"trace_id\":\"tr-agg-answer\",\"stream_chunk\":true,\"content\":\"agg window $i <script>alert(1)</script>\"}" >/dev/null
 done
 evout "{\"tenant_id\":\"$TS\",\"role\":\"output\",\"tool_name\":\"chat_completion\",\"session_id\":\"s-agg2\",\"trace_id\":\"tr-agg-answer2\",\"content\":\"whole answer <script>alert(1)</script>\"}" >/dev/null
-
-STATS=""; GOT=0
-for _ in $(seq 1 45); do
-  STATS=$(curl -s "$C/api/v1/admin/tenants/$TS/audit/output-review-stats")
-  GOT=$(printf '%s' "$STATS" | jget 'print(1 if d.get("data",{}).get("window_events",0) >= 4 else 0)')
-  [ "$GOT" = "1" ] && break
-  sleep 1
-done
-check "$GOT" "window_events reached >=4 via Kafka ingest (no DB seeding)"
-check "$(printf '%s' "$STATS" | jget 'print("1" if d.get("data",{}).get("window_events") == 4 else "0")')" \
-      "window_events == 4 (every window counted once)"
-check "$(printf '%s' "$STATS" | jget 'print("1" if d.get("data",{}).get("total") == 2 else "0")')" \
-      "total == 2 (answer-level: 3 windows of one trace count as ONE answer)"
-check "$(printf '%s' "$STATS" | jget 'print("1" if d.get("data",{}).get("denied") == 2 else "0")')" \
-      "denied == 2 (answer-level deny count)"
-check "$(printf '%s' "$STATS" | jget 'print("1" if (d.get("data",{}).get("deny_rate") or 0) > 0 else "0")')" \
-      "deny_rate > 0"
-check "$(printf '%s' "$STATS" | jget 'print("1" if d.get("data",{}).get("window_events",0) > d.get("data",{}).get("total",0) else "0")')" \
-      "window_events > total (aggregation, not raw event count)"
-check "$(printf '%s' "$STATS" | jget 'print("1" if "allowed" in d.get("data",{}) and "sampled_allow_answers" in d.get("data",{}) else "0")')" \
-      "stats expose reweighted fields (allowed, sampled_allow_answers)"
 
 info "E2E: 运营台 alert lifecycle (auto-created from deny audit events)"
 ALERTS=""; ALERT_OK=0; AID=""
