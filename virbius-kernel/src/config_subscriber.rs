@@ -440,7 +440,7 @@ pub fn run_with(cfg: NodeConfig) {
                                     }
                                 };
                                 // Ignore notifications for other tenants.
-                                if message_tenant(&payload).is_none_or(|t| t == cfg.tenant_id) {
+                                if message_tenant(&payload).map_or(true, |t| t == cfg.tenant_id) {
                                     if let Err(e) = apply_current(&mut con, &cfg, &mut last_applied)
                                     {
                                         eprintln!("config_subscriber: apply failed: {e}");

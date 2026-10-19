@@ -220,6 +220,17 @@ jobs:
   helm:
     name: Helm (lint + render)
     runs-on: ubuntu-latest
+    # The chart's secret.yaml uses `required` for these values, so `helm
+    # template` aborts on them before any later guard (e.g. the control HA
+    # check) is evaluated. Supply throwaway values so rendering reaches the
+    # guard the assertions below target. Unquoted so bash word-splits the
+    # flags onto each `helm template` call.
+    env:
+      HELM_TEST_SECRETS: >-
+        --set-string secrets.apiKeyPepper=ci-dummy
+        --set-string secrets.kafkaSaslUsername=ci-dummy
+        --set-string secrets.kafkaSaslPassword=ci-dummy
+        --set-string secrets.redisPassword=ci-dummy
     steps:
       - uses: actions/checkout@v5
 
@@ -230,7 +241,7 @@ jobs:
 
       - name: Guard blocks replicaCount=2 without shared storage
         run: |
-          if helm template deploy/helm/virbius --set control.replicaCount=2 >/tmp/render.yaml 2>/tmp/render.err; then
+          if helm template deploy/helm/virbius --set control.replicaCount=2 $HELM_TEST_SECRETS >/tmp/render.yaml 2>/tmp/render.err; then
             echo "::error::control guard did not fire for replicaCount=2"
             exit 1
           fi
@@ -242,7 +253,7 @@ jobs:
           if helm template deploy/helm/virbius \
               --set control.replicaCount=2 \
               --set control.sharedStorageEnabled=true \
-              --set control.persistence.accessMode=ReadWriteOnce >/tmp/render.yaml 2>/tmp/render.err; then
+              --set control.persistence.accessMode=ReadWriteOnce $HELM_TEST_SECRETS >/tmp/render.yaml 2>/tmp/render.err; then
             echo "::error::control guard did not fire for replicaCount=2 with ReadWriteOnce"
             exit 1
           fi
@@ -254,7 +265,8 @@ jobs:
           helm template deploy/helm/virbius \
             --set control.replicaCount=2 \
             --set control.sharedStorageEnabled=true \
-            --set control.persistence.accessMode=ReadWriteMany >/tmp/render-ha.yaml
+            --set control.persistence.accessMode=ReadWriteMany \
+            $HELM_TEST_SECRETS >/tmp/render-ha.yaml
 
       - name: Rendered HA volume + engine env/probe assertions
         run: |

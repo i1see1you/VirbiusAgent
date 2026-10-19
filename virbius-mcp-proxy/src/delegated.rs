@@ -595,7 +595,7 @@ impl DelegatedState {
         // https + 443 only (explicit non-443 port denied). test_relax_endpoint
         // lets the e2e harness drive send_hit against a plain local server.
         let scheme_ok = self.params.test_relax_endpoint || parsed.scheme() == "https";
-        let port_ok = self.params.test_relax_endpoint || parsed.port().is_none_or(|p| p == 443);
+        let port_ok = self.params.test_relax_endpoint || parsed.port().map_or(true, |p| p == 443);
         if !scheme_ok || !port_ok {
             self.alert("hit_denied_scheme");
             return HitOutcome::Handled(deny_response(id));

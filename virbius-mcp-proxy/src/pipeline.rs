@@ -847,7 +847,6 @@ impl SecurityPipeline {
 
 pub type SharedPipeline = Arc<SecurityPipeline>;
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
