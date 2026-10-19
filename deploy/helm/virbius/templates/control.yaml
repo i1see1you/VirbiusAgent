@@ -58,6 +58,15 @@ spec:
         fsGroup: 999
         runAsUser: 999
         runAsGroup: 999
+      # Soft host spread (same rationale as the engine): only meaningful once
+      # replicaCount > 1; ScheduleAnyway keeps single-node clusters working.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "control") | nindent 14 }}
       initContainers:
         {{- if .Values.mysql.enabled }}
         {{- include "virbius.waitFor" (dict "root" . "name" "mysql" "host" (printf "%s-mysql" (include "virbius.fullname" .)) "port" 3306) | nindent 8 }}

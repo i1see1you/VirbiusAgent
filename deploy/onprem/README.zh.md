@@ -219,4 +219,4 @@ engine: { promptLlm: { baseUrl: "http://<客户vLLM>:8000", model: virbiusguard 
 global: { imageRegistry: <现场可写的镜像仓库或 load 后的 registry>, imageTag: v1.0.0 }
 ```
 
-三机放置用 `nodeSelector`/亲和性把 control/auth、engine、mcp-proxy 分别钉到三台节点；端口矩阵、TLS、验收与本手册相同。离线镜像包在 K8s 路径同样适用：`docker load` 到各节点后把 `imageRegistry` 指向本地 tag 即可。
+三机放置用 `nodeSelector`/亲和性把 control/auth、engine、mcp-proxy 分别钉到三台节点；engine/control 多副本时 chart 已自带软性主机分散（`maxSkew: 1`、`ScheduleAnyway`）；端口矩阵、TLS、验收与本手册相同。离线镜像包在 K8s 路径同样适用：`docker load` 到各节点后把 `imageRegistry` 指向本地 tag 即可。

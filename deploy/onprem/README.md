@@ -216,4 +216,4 @@ engine: { promptLlm: { baseUrl: "http://<customer-vllm>:8000", model: virbiusgua
 global: { imageRegistry: <registry reachable on site>, imageTag: v1.0.0 }
 ```
 
-Pin control/auth, engine, and mcp-proxy onto the three nodes with `nodeSelector`/affinity; the port matrix, TLS, and the acceptance checklist are identical to this runbook. The offline image bundle also works on K8s: `docker load` on each node (or import into the customer's registry) and set `imageRegistry` accordingly.
+Pin control/auth, engine, and mcp-proxy onto the three nodes with `nodeSelector`/affinity; the chart already applies a soft hostname spread for engine/control replicas (`maxSkew: 1`, `ScheduleAnyway`). The port matrix, TLS, and the acceptance checklist are identical to this runbook. The offline image bundle also works on K8s: `docker load` on each node (or import into the customer's registry) and set `imageRegistry` accordingly.

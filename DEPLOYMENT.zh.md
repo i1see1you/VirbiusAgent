@@ -493,7 +493,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 
 **多副本（HA）**：engine/control 已按无状态化改造，可安全扩副本。要点：
 
-1. **engine**——每个副本由 Helm 注入唯一 `VIRBIUS_INSTANCE_ID`（取自 `metadata.name`），驱动 per-instance Redis 消费组（`engine-cache-*`/`engine-deploy-*`，广播语义）。**不要**给多个副本设同一个 `VIRBIUS_INSTANCE_ID`，否则消费组会合并、广播消息被拆分。
+1. **engine**——每个副本由 Helm 注入唯一 `VIRBIUS_INSTANCE_ID`（取自 `metadata.name`），驱动 per-instance Redis 消费组（`engine-cache-*`/`engine-deploy-*`，广播语义）。**不要**给多个副本设同一个 `VIRBIUS_INSTANCE_ID`，否则消费组会合并、广播消息被拆分。chart 还会施加软性 `topologySpreadConstraints`（`maxSkew: 1`、`kubernetes.io/hostname`、`ScheduleAnyway`）：有多个节点时副本尽量分散，单节点集群也能正常调度。
 2. **control**——扩副本必须先把本地文件换到共享 NFS：edge manifest 与审计导出目前写在每副本本地 `VIRBIUS_DATA_DIR`（Helm 为 RWO PVC），不共享时副本间不一致——发布后另一副本仍返回**旧 manifest**（200+旧 sha，静默陈旧）、导出在非创建副本上下载失败。做法：各副本 `VIRBIUS_DATA_DIR` 挂**同一 NFS、同一绝对路径**（容器 uid 可写）；`control.auditAllowPath`（渲染为 `VIRBIUS_AUDIT_ALLOW_PATH`）指向**每副本本地**（logback 滚动日志不可共享）；必要时调小 NFS `actimeo` 或用 `noac`。Helm 机器守卫：`control.replicaCount > 1` 且未设 `control.sharedStorageEnabled=true` 会直接 `helm fail`（置 true 即声明已具备上述共享存储）；后续文件外置到 DB 的正式方案落地后可去掉 NFS 依赖。
 3. **限流**——`/v1/evaluate` 限流为 per-replica 语义（见 §10.2）。
 

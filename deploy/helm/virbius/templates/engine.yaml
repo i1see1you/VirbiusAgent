@@ -32,6 +32,16 @@ spec:
         {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "engine") | nindent 8 }}
     spec:
       {{- include "virbius.imagePullSecrets" . | nindent 6 }}
+      # Soft host spread: replicas land on different nodes when possible, while a
+      # single-node cluster still schedules. Together with per-instance consumer
+      # groups, one replica per node is what makes an engine scale-out actually HA.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "virbius.componentSelectorLabels" (dict "root" . "component" "engine") | nindent 14 }}
       {{- if or .Values.kafka.enabled .Values.redis.enabled .Values.ollama.enabled }}
       initContainers:
         {{- if .Values.kafka.enabled }}
