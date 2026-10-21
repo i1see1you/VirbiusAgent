@@ -363,4 +363,89 @@ class ScriptRuleRunnerTest {
         assertEquals("challenge", result.signals().get(0).intentAction());
     }
 
+    private static final String SENSITIVE_RESOURCE_BODY = """
+def decide(ctx) {
+    def role = ctx.var("role")
+    if (role != null && role != "tool_call") {
+        return false
+    }
+    def tool = ctx.var("tool_name")
+    if (tool == null || tool.isBlank() || tool == "chat_input") {
+        return false
+    }
+    def content = ctx.var("content")
+    if (content == null || content.isBlank()) {
+        return false
+    }
+    def text = content.toLowerCase()
+    def markers = ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+        ".aws/credentials", ".aws/config", ".config/gcloud", ".kube/config",
+        ".docker/config.json", ".git-credentials", ".netrc", ".npmrc", ".pypirc",
+        ".azure/", ".gnupg/", "wallet.dat", "/etc/shadow", "/etc/sudoers",
+        "/proc/self/environ", "service_account.json", "service-account.json",
+        "credentials.json"]
+    if (markers.any { text.contains(it) }) {
+        ctx.setIntent("deny")
+        return true
+    }
+    return false
+}""";
+
+    private RuleEntry sensitiveResourceRule() {
+        return new RuleEntry(
+                "default", "cloud_sensitive_resource_deny", 1, "cloud", "groovy",
+                "SENSITIVE_RESOURCE_ACCESS", 80, "deny", "full", 0, "full",
+                SENSITIVE_RESOURCE_BODY, Map.of("bind_scope", "global"), false, null);
+    }
+
+    private MatchContext sensitiveCtx(String role, String tool, String content) {
+        return MatchContext.forToolCall(
+                content, null, null, null, "sess-sensitive",
+                Map.of("role", role, "tool_name", tool, "content", content), tool);
+    }
+
+    @Test
+    void sensitiveResourceRuleBlocksSshKeyRead() {
+        when(cache.rulesForTenant("default")).thenReturn(List.of(sensitiveResourceRule()));
+
+        ScriptRuleRunner.ScriptRunResult result = runWithDeltaWarmed(
+                sensitiveCtx("tool_call", "read_file", "{\"path\":\"~/.ssh/id_rsa\"}"));
+
+        assertEquals(1, result.signals().size());
+        assertEquals("cloud_sensitive_resource_deny", result.signals().get(0).ruleId());
+        assertEquals("deny", result.signals().get(0).intentAction());
+    }
+
+    @Test
+    void sensitiveResourceRuleBlocksEmbeddedCommandPath() {
+        when(cache.rulesForTenant("default")).thenReturn(List.of(sensitiveResourceRule()));
+
+        ScriptRuleRunner.ScriptRunResult result = runWithDeltaWarmed(
+                sensitiveCtx("tool_call", "exec_cmd", "{\"cmd\":\"cat ~/.ssh/id_ed25519\"}"));
+
+        assertEquals(1, result.signals().size());
+        assertEquals("deny", result.signals().get(0).intentAction());
+    }
+
+    @Test
+    void sensitiveResourceRuleAllowsOrdinaryRead() {
+        when(cache.rulesForTenant("default")).thenReturn(List.of(sensitiveResourceRule()));
+
+        ScriptRuleRunner.ScriptRunResult result = runWithDeltaWarmed(
+                sensitiveCtx("tool_call", "read_file", "{\"path\":\"./README.md\"}"));
+
+        assertTrue(result.signals().isEmpty());
+    }
+
+    @Test
+    void sensitiveResourceRuleIgnoresReviewRoles() {
+        when(cache.rulesForTenant("default")).thenReturn(List.of(sensitiveResourceRule()));
+
+        ScriptRuleRunner.ScriptRunResult result = runWithDeltaWarmed(
+                sensitiveCtx("input", "chat_input", "{\"path\":\"~/.ssh/id_rsa\"}"));
+
+        assertTrue(result.signals().isEmpty());
+    }
+
+
 }

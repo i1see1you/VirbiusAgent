@@ -108,7 +108,7 @@ done
 
 ```bash
 PROMPT_LLM_BASE_URL=http://<客户vLLM地址>:8000   # OpenAI 兼容，不含 /v1 之外的路径
-VIRBIUS_PROMPT_LLM_MODEL=virbiusguard            # 与客户部署的模型名一致
+VIRBIUS_PROMPT_LLM_MODEL=i1see1you/virbiusguard:v2.0            # 与客户部署的模型名一致
 ```
 
 冒烟验证：`curl $PROMPT_LLM_BASE_URL/v1/chat/completions` 返回 `choices`；再在运营台发一条 `runtime=prompt` 规则触发一次语义检测。
@@ -137,7 +137,7 @@ docker compose --env-file .env -f node-b-engine.yml --profile llm-local up -d   
 docker compose --env-file .env -f node-b-engine.yml up -d                       # 选项B
 curl -sf http://localhost:8082/admin/health
 curl -s  http://localhost:8082/admin/ready    # 应 200；not-ready 时看 body 的 redis/cache_subscriber/rule_seeder 三项定位
-docker exec onprem-ollama-1 ollama list       # 选项A：应见 virbiusguard
+docker exec onprem-ollama-1 ollama list       # 选项A：应见 i1see1you/virbiusguard:v2.0
 ```
 
 **C 机**（先放 license）：

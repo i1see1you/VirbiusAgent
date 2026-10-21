@@ -20,7 +20,7 @@ services:
       VIRBIUS_CONTROL_BASE_URL: http://${NODE_A}:8080
       # ── 提示词审查模型：选项A=本机 Ollama；选项B=客户 vLLM（.env 里二选一） ──
       VIRBIUS_PROMPT_LLM_BASE_URL: ${PROMPT_LLM_BASE_URL:-http://ollama:11434}
-      VIRBIUS_PROMPT_LLM_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-virbiusguard}
+      VIRBIUS_PROMPT_LLM_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-i1see1you/virbiusguard:v2.0}
       VIRBIUS_PROMPT_LLM_TIMEOUT_MS: "30000"
       # 本 compose 固定发布 8082，单机单副本；横向扩容请加主机（手册 §1）。
       # 多副本唯一实例 id：compose 容器 hostname 天然唯一，无需显式设置。
@@ -58,21 +58,23 @@ services:
       retries: 10
     restart: unless-stopped
 
-  # 一次性任务：把预下载的 GGUF 导入为 virbiusguard（幂等，已存在则跳过）
+  # 一次性任务：把预下载的 GGUF 导入为固定 tag（幂等，已存在则跳过）
   ollama-init:
     profiles: ["llm-local"]
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.10}
     depends_on:
       ollama:
         condition: service_healthy
+    environment:
+      VIRBIUS_OLLAMA_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-i1see1you/virbiusguard:v2.0}
     volumes:
       - ./models:/models:ro
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        ollama --host http://ollama:11434 show virbiusguard >/dev/null 2>&1 \
+        ollama --host http://ollama:11434 show "$$VIRBIUS_OLLAMA_MODEL" >/dev/null 2>&1 \
           && echo "model already exists" \
-          || ollama --host http://ollama:11434 create virbiusguard -f /models/Modelfile
+          || ollama --host http://ollama:11434 create "$$VIRBIUS_OLLAMA_MODEL" -f /models/Modelfile
 
 volumes:
   engine-logs:

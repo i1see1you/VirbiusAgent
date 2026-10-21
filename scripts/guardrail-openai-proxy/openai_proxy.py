@@ -16,6 +16,7 @@ Python SDK (virbius-review-sdk); this file is just the HTTP shim.
     UPSTREAM_BASE_URL    OpenAI-compatible LLM base, incl. /v1
                                                        (default http://127.0.0.1:11434/v1)
     UPSTREAM_API_KEY     bearer for the upstream LLM   (optional)
+    UPSTREAM_REASONING_EFFORT  reasoning_effort sent upstream (e.g. none for Qwen3)
     VIRBIUS_TENANT       tenant id sent to the engine  (default default)
     GUARDRAIL_FAIL_OPEN  1 = forward unreviewed on engine outage
                                                        (default 0 = fail CLOSED)
@@ -121,6 +122,9 @@ def _upstream_headers() -> dict:
 def _upstream_open(body: dict, stream: bool):
     data = dict(body)
     data["stream"] = stream
+    effort = os.environ.get("UPSTREAM_REASONING_EFFORT")
+    if effort:
+        data["reasoning_effort"] = effort
     req = urllib.request.Request(
         UPSTREAM + "/chat/completions",
         data=json.dumps(data).encode(),

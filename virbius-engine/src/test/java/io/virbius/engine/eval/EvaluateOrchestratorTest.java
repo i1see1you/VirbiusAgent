@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 
 import io.virbius.engine.audit.AuditWriter;
 import io.virbius.engine.cache.PolicyDataCache;
+import io.virbius.engine.cache.RuleCache;
 import io.virbius.engine.challenge.ChallengeService;
 import io.virbius.engine.config.PromptLlmProperties;
 import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
@@ -45,6 +46,7 @@ class EvaluateOrchestratorTest {
     @Mock private SessionRiskManager sessionRiskManager;
     @Mock private TrustViolationDetector trustViolationDetector;
     @Mock private PolicyDataCache policyDataCache;
+    @Mock private RuleCache ruleCache;
     @Mock private FileGuardService fileGuardService;
     @Mock private ChainPatternDetector chainPatternDetector;
     @Mock private RetryEscapeDetector retryEscapeDetector;
@@ -63,7 +65,7 @@ class EvaluateOrchestratorTest {
                 scriptRuleRunner, promptRunner, auditWriter, policyMerger,
                 challengeService, injectionDetector, taintDetector,
                 sessionRiskManager, trustViolationDetector, policyDataCache,
-                promptLlmProperties, fileGuardService,
+                ruleCache, promptLlmProperties, fileGuardService,
                 chainPatternDetector, retryEscapeDetector, sessionHistoryService,
                 new ReviewRiskGuard(600000),
                 0.5, 0.1, 0.0, 0.0);

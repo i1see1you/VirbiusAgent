@@ -102,7 +102,7 @@ services:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.10}
     environment:
       OLLAMA_HOST: http://ollama:11434
-      VIRBIUS_OLLAMA_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-virbiusguard}
+      VIRBIUS_OLLAMA_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-i1see1you/virbiusguard:v2.0}
       VIRBIUS_GUARD_GGUF_PATH: /models/model.gguf
     volumes:
       - ollama-import:/models
@@ -137,7 +137,7 @@ services:
       SPRING_PROFILES_ACTIVE: dev
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       VIRBIUS_PROMPT_LLM_BASE_URL: http://ollama:11434
-      VIRBIUS_PROMPT_LLM_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-virbiusguard}
+      VIRBIUS_PROMPT_LLM_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-i1see1you/virbiusguard:v2.0}
     volumes:
       - engine-data:/data
       - engine-logs:/var/log/virbius

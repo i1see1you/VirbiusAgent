@@ -176,7 +176,7 @@ services:
     image: ${OLLAMA_IMAGE:-ollama/ollama:0.11.10}
     environment:
       OLLAMA_HOST: http://ollama:11434
-      VIRBIUS_OLLAMA_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-virbiusguard}
+      VIRBIUS_OLLAMA_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-i1see1you/virbiusguard:v2.0}
       VIRBIUS_GUARD_GGUF_PATH: /models/model.gguf
     volumes:
       - ollama-import:/models
@@ -219,7 +219,7 @@ services:
       KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:?set KAFKA_SASL_PASSWORD in .env or environment}
       # ── LLM (in-stack Ollama) ──
       VIRBIUS_PROMPT_LLM_BASE_URL: http://ollama:11434
-      VIRBIUS_PROMPT_LLM_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-virbiusguard}
+      VIRBIUS_PROMPT_LLM_MODEL: ${VIRBIUS_PROMPT_LLM_MODEL:-i1see1you/virbiusguard:v2.0}
       VIRBIUS_PROMPT_LLM_TIMEOUT_MS: "30000"
       # ── Redis (authenticated) ──
       VIRBIUS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@redis:6379

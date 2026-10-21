@@ -29,7 +29,7 @@ ingress:
 engine:
   promptLlm:
     baseUrl: ""   # empty + ollama.enabled → in-cluster Ollama; required if ollama.enabled=false
-    model: virbiusguard   # /v1/memory/check; keep in sync with ollama.model
+    model: i1see1you/virbiusguard:v2.0   # /v1/memory/check; keep in sync with ollama.model
 
 control:
   replicaCount: 1

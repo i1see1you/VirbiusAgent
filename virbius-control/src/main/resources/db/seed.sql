@@ -650,6 +650,296 @@ INSERT INTO tb_rule_history (
     tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
                   reason_code, risk_score, intent_action, scope_json, body_json,
     rollout_state, canary_percent, effective_from, modified_at)
+SELECT 'default', 'cloud_sensitive_resource_deny', 1, 'system-builtin', 'cloud', 'groovy',
+    'SENSITIVE_RESOURCE_ACCESS', 80, 'deny', '{"bind_scope":"global"}',
+    'def decide(ctx) {
+    def role = ctx.var("role")
+    if (role != null && role != "tool_call") {
+        return false
+    }
+    def tool = ctx.var("tool_name")
+    if (tool == null || tool.isBlank() || tool == "chat_input") {
+        return false
+    }
+    def content = ctx.var("content")
+    if (content == null || content.isBlank()) {
+        return false
+    }
+    def text = content.toLowerCase()
+    def markers = ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa",
+        ".aws/credentials", ".aws/config", ".config/gcloud", ".kube/config",
+        ".docker/config.json", ".git-credentials", ".netrc", ".npmrc", ".pypirc",
+        ".azure/", ".gnupg/", "wallet.dat", "/etc/shadow", "/etc/sudoers",
+        "/proc/self/environ", "service_account.json", "service-account.json",
+        "credentials.json"]
+    if (markers.any { text.contains(it) }) {
+        ctx.setIntent("deny")
+        return true
+    }
+    return false
+}',
+    'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'cloud_sensitive_resource_deny' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'cloud_sensitive_resource_deny', 1, 'system-builtin', 'cloud', 'groovy', 'SENSITIVE_RESOURCE_ACCESS', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'cloud_sensitive_resource_deny');
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at)
+SELECT 'default', 'chain-exfil', 1, 'system-builtin', 'cloud', 'groovy',
+    'CHAIN_ABUSE', 20, 'challenge', '{"bind_scope":"global"}',
+    'def decide(ctx) {
+    def readTools = ["read_file", "cat", "read", "get_file", "download", "list_dir"]
+    def netTools = ["curl", "http_get", "http_post", "fetch", "webhook_call", "wget", "request"]
+    def sensitive = ["/etc/", "/root/", "/.ssh", "id_rsa", ".env", "credentials", "secret", "/var/"]
+    def seq = []
+    def h = ctx.sessionHistory(5)
+    for (int i = h.size() - 1; i >= 0; i--) {
+        seq.add(h[i])
+    }
+    seq.add([tool_name: ctx.var("tool_name"), args: ctx.var("content")])
+    if (seq.size() > 5) {
+        seq = seq.subList(seq.size() - 5, seq.size())
+    }
+    def step = 0
+    for (def e : seq) {
+        def t = e.tool_name?.toString()
+        def a = (e.args ?: "").toString().toLowerCase()
+        if (step == 0 && t != null && readTools.contains(t) && sensitive.any { a.contains(it) }) {
+            step = 1
+        } else if (step == 1 && t != null && netTools.contains(t)) {
+            def i = a.indexOf("http")
+            if (i >= 0) {
+                def rest = a.substring(i)
+                def end = rest.indexOf(34)
+                def url = end > 0 ? rest.substring(0, end) : rest
+                if (!ctx.isInternalHost(url)) {
+                    step = 2
+                }
+            }
+        }
+    }
+    return step == 2
+}',
+    'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'chain-exfil' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'chain-exfil', 1, 'system-builtin', 'cloud', 'groovy', 'CHAIN_ABUSE', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'chain-exfil');
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at)
+SELECT 'default', 'chain-write-exec', 1, 'system-builtin', 'cloud', 'groovy',
+    'CHAIN_ABUSE', 25, 'challenge', '{"bind_scope":"global"}',
+    'def decide(ctx) {
+    def writeTools = ["write_file", "delete_file", "rm", "mv", "cp", "truncate", "edit_file", "db_write"]
+    def execTools = ["exec_cmd", "shell", "bash", "sh", "execute_python", "run_command", "subprocess"]
+    def seq = []
+    def h = ctx.sessionHistory(6)
+    for (int i = h.size() - 1; i >= 0; i--) {
+        seq.add(h[i])
+    }
+    seq.add([tool_name: ctx.var("tool_name"), args: ctx.var("content")])
+    if (seq.size() > 6) {
+        seq = seq.subList(seq.size() - 6, seq.size())
+    }
+    def step = 0
+    for (def e : seq) {
+        def t = e.tool_name?.toString()
+        if (step == 0 && t != null && writeTools.contains(t)) {
+            step = 1
+        } else if (step == 1 && t != null && execTools.contains(t)) {
+            step = 2
+        }
+    }
+    return step == 2
+}',
+    'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'chain-write-exec' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'chain-write-exec', 1, 'system-builtin', 'cloud', 'groovy', 'CHAIN_ABUSE', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'chain-write-exec');
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at)
+SELECT 'default', 'chain-priv-esc', 1, 'system-builtin', 'cloud', 'groovy',
+    'CHAIN_ABUSE', 15, 'challenge', '{"bind_scope":"global"}',
+    'def decide(ctx) {
+    def readTools = ["read_file", "cat", "read", "get_file", "download", "list_dir"]
+    def writeTools = ["write_file", "delete_file", "rm", "mv", "cp", "truncate", "edit_file", "db_write"]
+    def execTools = ["exec_cmd", "shell", "bash", "sh", "execute_python", "run_command", "subprocess"]
+    def seq = []
+    def h = ctx.sessionHistory(8)
+    for (int i = h.size() - 1; i >= 0; i--) {
+        seq.add(h[i])
+    }
+    seq.add([tool_name: ctx.var("tool_name"), args: ctx.var("content")])
+    if (seq.size() > 8) {
+        seq = seq.subList(seq.size() - 8, seq.size())
+    }
+    def step = 0
+    for (def e : seq) {
+        def t = e.tool_name?.toString()
+        if (step == 0 && t != null && readTools.contains(t)) {
+            step = 1
+        } else if (step == 1 && t != null && writeTools.contains(t)) {
+            step = 2
+        } else if (step == 2 && t != null && execTools.contains(t)) {
+            step = 3
+        }
+    }
+    return step == 3
+}',
+    'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'chain-priv-esc' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'chain-priv-esc', 1, 'system-builtin', 'cloud', 'groovy', 'CHAIN_ABUSE', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'chain-priv-esc');
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at)
+SELECT 'default', 'retry-escape', 1, 'system-builtin', 'cloud', 'groovy',
+    'RETRY_ESCAPE', 30, 'challenge', '{"bind_scope":"global"}',
+    'def decide(ctx) {
+    def h = ctx.sessionHistory(10)
+    def attempts = []
+    for (int i = h.size() - 1; i >= 0; i--) {
+        attempts.add(h[i])
+    }
+    if (attempts.size() > 10) {
+        attempts = attempts.subList(attempts.size() - 10, attempts.size())
+    }
+    def lastBlock = -1
+    for (int i = 0; i < attempts.size(); i++) {
+        if (attempts[i].allowed == false) {
+            lastBlock = i
+        }
+    }
+    if (lastBlock < 0) {
+        return false
+    }
+    def blocked = attempts[lastBlock]
+    def trailing = 0
+    for (int i = attempts.size() - 1; i > lastBlock; i--) {
+        if (attempts[i].allowed != false) {
+            trailing++
+        } else {
+            break
+        }
+    }
+    if (trailing >= 3) {
+        return false
+    }
+    def after = []
+    after.addAll(attempts.subList(lastBlock + 1, attempts.size()))
+    after.add([tool_name: ctx.var("tool_name"), args: ctx.var("content")])
+    if (after.size() < 3) {
+        return false
+    }
+    def bTool = blocked.tool_name?.toString()
+    def bArgs = (blocked.args ?: "").toString()
+    return after.any {
+        def t = it.tool_name?.toString()
+        def a = (it.args ?: "").toString()
+        (t != null && t != bTool) || a != bArgs
+    }
+}',
+    'full', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'retry-escape' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'retry-escape', 1, 'system-builtin', 'cloud', 'groovy', 'RETRY_ESCAPE', 'full', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'retry-escape');
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at)
+SELECT 'default', 'cloud_encoded_exec_deny', 1, 'system-builtin', 'cloud', 'groovy',
+    'ENCODED_EXEC', 80, 'deny', '{"bind_scope":"global"}',
+    'def decide(ctx) {
+    def role = ctx.var("role")
+    if (role != null && role != "tool_call") {
+        return false
+    }
+    def tool = ctx.var("tool_name")
+    if (tool == null || tool.isBlank() || tool == "chat_input") {
+        return false
+    }
+    def content = ctx.var("content")
+    if (content == null || content.isBlank()) {
+        return false
+    }
+    def text = content.toLowerCase()
+    def b64 = text.contains("base64 -d") || text.contains("base64 --decode")
+    def shell = text.contains("| bash") || text.contains("| sh") || text.contains("bash -c")
+    def py = text.contains("exec(base64.b64decode")
+    def ps = text.contains("powershell") && text.contains("-enc")
+    def cert = text.contains("certutil") && text.contains("-decode")
+    def xxd = text.contains("xxd -r") && (text.contains("| sh") || text.contains("| bash"))
+    def js = text.contains("frombase64string") || (text.contains("atob(") && text.contains("eval("))
+    return (b64 && shell) || py || ps || cert || xxd || js
+}',
+    'dry_run', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'cloud_encoded_exec_deny' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'cloud_encoded_exec_deny', 1, 'system-builtin', 'cloud', 'groovy', 'ENCODED_EXEC', 'dry_run', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'cloud_encoded_exec_deny');
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at)
+SELECT 'default', 'cloud_destructive_command_deny', 1, 'system-builtin', 'cloud', 'groovy',
+    'DESTRUCTIVE_COMMAND', 80, 'deny', '{"bind_scope":"global"}',
+    'def decide(ctx) {
+    def role = ctx.var("role")
+    if (role != null && role != "tool_call") {
+        return false
+    }
+    def tool = ctx.var("tool_name")
+    if (tool == null || tool.isBlank() || tool == "chat_input") {
+        return false
+    }
+    def content = ctx.var("content")
+    if (content == null || content.isBlank()) {
+        return false
+    }
+    def text = content.toLowerCase()
+    def rmRoot = text.contains("rm -rf /") && !text.contains("rm -rf /tmp") && !text.contains("rm -rf /home") && !text.contains("rm -rf /var/tmp") && !text.contains("rm -rf /users")
+    return rmRoot
+        || text.contains("--no-preserve-root")
+        || text.contains("mkfs")
+        || text.contains("dd if=/dev/zero of=/dev/")
+        || text.contains("shutdown -h")
+        || text.contains("shutdown now")
+        || text.contains(":(){ :|:& };:")
+        || text.contains("chmod -r 777 /")
+}',
+    'dry_run', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id = 'cloud_destructive_command_deny' AND rule_revision = 1);
+
+INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
+SELECT 'default', 'cloud_destructive_command_deny', 1, 'system-builtin', 'cloud', 'groovy', 'DESTRUCTIVE_COMMAND', 'dry_run', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
+WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'cloud_destructive_command_deny');
+
+INSERT INTO tb_rule_history (
+    tenant_id, rule_id, rule_revision, bundle_id, layer, runtime,
+                  reason_code, risk_score, intent_action, scope_json, body_json,
+    rollout_state, canary_percent, effective_from, modified_at)
 SELECT 'default', 'cloud_session_risk_escalation', 1, 'demo-default', 'cloud', 'groovy',
     'CLOUD_SESSION_RISK_ESCALATION', 85, 'challenge', '{"bind_scope":"global"}',
     'def decide(ctx) {
@@ -670,3 +960,17 @@ WHERE NOT EXISTS (SELECT 1 FROM tb_rule_history WHERE tenant_id = 'default' AND 
 INSERT INTO tb_rules_current (tenant_id, rule_id, current_revision, bundle_id, layer, runtime, reason_code, rollout_state, updated_at)
 SELECT 'default', 'cloud_session_risk_escalation', 1, 'demo-default', 'cloud', 'groovy', 'CLOUD_SESSION_RISK_ESCALATION', 'dry_run', CURRENT_TIMESTAMP FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = 'cloud_session_risk_escalation');
+
+-- Default-rule cleanup: drop demo/redundant rules and promote the remaining
+-- non-gateway dry_run rules to full. Gateway rules stay dry_run by owner decision.
+DELETE FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id IN ('cloud_prompt_l1','cloud_rl_deny_keywords','cloud_rl_deny_vars','cloud_tool_chain_detect','edge_l0_content_allow');
+DELETE FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id IN ('cloud_prompt_l1','cloud_rl_deny_keywords','cloud_rl_deny_vars','cloud_tool_chain_detect','edge_l0_content_allow');
+UPDATE tb_rule_history SET rollout_state = 'full' WHERE tenant_id = 'default' AND rule_id IN ('cloud_encoded_exec_deny','cloud_destructive_command_deny','cloud_session_risk_escalation','edge_l0_content_deny') AND rule_revision = (SELECT current_revision FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = tb_rule_history.rule_id);
+UPDATE tb_rules_current SET rollout_state = 'full', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = 'default' AND rule_id IN ('cloud_encoded_exec_deny','cloud_destructive_command_deny','cloud_session_risk_escalation','edge_l0_content_deny');
+
+-- Option A gateway cleanup: keep only the two rate rules and enforce them;
+-- drop the demo subject/keyword rules.
+DELETE FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id IN ('rl_deny_devices','rl_deny_keywords','rl_deny_users');
+DELETE FROM tb_rule_history WHERE tenant_id = 'default' AND rule_id IN ('rl_deny_devices','rl_deny_keywords','rl_deny_users');
+UPDATE tb_rule_history SET rollout_state = 'full' WHERE tenant_id = 'default' AND rule_id IN ('rl_rate_user_1h','rl_rate_app_1h') AND rule_revision = (SELECT current_revision FROM tb_rules_current WHERE tenant_id = 'default' AND rule_id = tb_rule_history.rule_id);
+UPDATE tb_rules_current SET rollout_state = 'full', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = 'default' AND rule_id IN ('rl_rate_user_1h','rl_rate_app_1h');

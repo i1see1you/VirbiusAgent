@@ -105,7 +105,7 @@ Then set in `.env`:
 
 ```bash
 PROMPT_LLM_BASE_URL=http://<customer-vllm>:8000   # OpenAI-compatible base URL
-VIRBIUS_PROMPT_LLM_MODEL=virbiusguard             # must match the deployed model name
+VIRBIUS_PROMPT_LLM_MODEL=i1see1you/virbiusguard:v2.0             # must match the deployed model name
 ```
 
 Smoke test: `curl $PROMPT_LLM_BASE_URL/v1/chat/completions` returns `choices`; then trigger one `runtime=prompt` rule from the console.
@@ -134,7 +134,7 @@ docker compose --env-file .env -f node-b-engine.yml --profile llm-local up -d   
 docker compose --env-file .env -f node-b-engine.yml up -d                       # option B
 curl -sf http://localhost:8082/admin/health
 curl -s  http://localhost:8082/admin/ready    # expect 200; when not-ready, the body's redis/cache_subscriber/rule_seeder fields say why
-docker exec onprem-ollama-1 ollama list       # option A: virbiusguard listed
+docker exec onprem-ollama-1 ollama list       # option A: i1see1you/virbiusguard:v2.0 listed
 ```
 
 **Host C** (license first):

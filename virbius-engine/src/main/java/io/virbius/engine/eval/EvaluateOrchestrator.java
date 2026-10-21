@@ -2,6 +2,7 @@ package io.virbius.engine.eval;
 
 import io.virbius.engine.audit.AuditWriter;
 import io.virbius.engine.cache.PolicyDataCache;
+import io.virbius.engine.cache.RuleCache;
 import io.virbius.engine.challenge.ChallengeService;
 import io.virbius.engine.config.PromptLlmProperties;
 import io.virbius.engine.eval.PromptInjectionDetector.InjectionDetectionResult;
@@ -34,6 +35,7 @@ public class EvaluateOrchestrator {
     private final SessionRiskManager sessionRiskManager;
     private final TrustViolationDetector trustViolationDetector;
     private final PolicyDataCache policyDataCache;
+    private final RuleCache ruleCache;
     private final PromptLlmProperties promptLlmProperties;
     private final FileGuardService fileGuardService;
     private final ChainPatternDetector chainPatternDetector;
@@ -60,6 +62,7 @@ public class EvaluateOrchestrator {
             SessionRiskManager sessionRiskManager,
             TrustViolationDetector trustViolationDetector,
             PolicyDataCache policyDataCache,
+            RuleCache ruleCache,
             PromptLlmProperties promptLlmProperties,
             FileGuardService fileGuardService,
             ChainPatternDetector chainPatternDetector,
@@ -80,6 +83,7 @@ public class EvaluateOrchestrator {
         this.sessionRiskManager = sessionRiskManager;
         this.trustViolationDetector = trustViolationDetector;
         this.policyDataCache = policyDataCache;
+        this.ruleCache = ruleCache;
         this.promptLlmProperties = promptLlmProperties;
         this.fileGuardService = fileGuardService;
         this.chainPatternDetector = chainPatternDetector;
@@ -110,6 +114,9 @@ public class EvaluateOrchestrator {
         String sessionId = req.sessionId() != null ? req.sessionId() : "";
         Map<String, String> vars = new HashMap<>(req.vars() != null ? req.vars() : Map.of());
         vars.put("tool_name", toolName);
+        if (!role.isEmpty()) {
+            vars.put("role", role);
+        }
         // Expose the session user so groovy rules can inspect it via ctx.var('user_id').
         // The caller may pass user_id either explicitly in vars or as the request user_id field.
         if (req.userId() != null && !req.userId().isBlank() && !vars.containsKey("user_id")) {
@@ -216,9 +223,18 @@ public class EvaluateOrchestrator {
         // content, not tool calls, so they are skipped for input/output review.
         if (!review) {
             try {
-                List<Map<String, Object>> history = sessionHistoryService.history(sessionId);
-                signals.addAll(chainPatternDetector.detect(history, toolName, req.argsJson()));
-                retryEscapeDetector.detect(history, toolName, req.argsJson()).ifPresent(signals::add);
+                String tenant = req.tenantId() != null ? req.tenantId() : "default";
+                boolean chainRuleActive = ruleCache.get(tenant, "chain-exfil") != null;
+                boolean retryRuleActive = ruleCache.get(tenant, "retry-escape") != null;
+                if (!chainRuleActive || !retryRuleActive) {
+                    List<Map<String, Object>> history = sessionHistoryService.history(sessionId);
+                    if (!chainRuleActive) {
+                        signals.addAll(chainPatternDetector.detect(history, toolName, req.argsJson()));
+                    }
+                    if (!retryRuleActive) {
+                        retryEscapeDetector.detect(history, toolName, req.argsJson()).ifPresent(signals::add);
+                    }
+                }
             } catch (Exception e) {
                 log.warn("session-history detection failed: {}", e.getMessage());
             }

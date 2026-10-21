@@ -67,7 +67,7 @@ virbius:
         topic: virbius-audit-events
   prompt-llm:
     base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
-    model: ${VIRBIUS_PROMPT_LLM_MODEL:virbiusguard}
+    model: ${VIRBIUS_PROMPT_LLM_MODEL:i1see1you/virbiusguard:v2.0}
     api-path: /v1/chat/completions
     timeout-ms: ${VIRBIUS_PROMPT_LLM_TIMEOUT_MS:30000}
     fail-open: true

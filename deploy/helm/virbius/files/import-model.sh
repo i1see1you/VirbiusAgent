@@ -1,8 +1,8 @@
 #!/bin/sh
-# Import a local GGUF into Ollama as VIRBIUS_OLLAMA_MODEL (default virbiusguard).
+# Import a local GGUF into Ollama as VIRBIUS_OLLAMA_MODEL (default i1see1you/virbiusguard:v2.0).
 set -eu
 export OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
-MODEL="${VIRBIUS_OLLAMA_MODEL:-virbiusguard}"
+MODEL="${VIRBIUS_OLLAMA_MODEL:-i1see1you/virbiusguard:v2.0}"
 GGUF="${VIRBIUS_GUARD_GGUF_PATH:-/models/model.gguf}"
 
 i=0
