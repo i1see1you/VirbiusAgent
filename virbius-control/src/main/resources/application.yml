@@ -79,6 +79,10 @@ virbius:
     api-token: ${VIRBIUS_EVALUATION_API_TOKEN:}
     promo-enabled: ${VIRBIUS_EVALUATION_PROMO_ENABLED:true}
     promo-url: ${VIRBIUS_EVALUATION_PROMO_URL:}
+    # REST 探针租户白名单种子（DB 单源；空=仅平台管理员，* = 全部租户）
+    probe-tenants: ${VIRBIUS_EVALUATION_PROBE_TENANTS:}
+    # 代理转发超时：必须大于 evaluation 的同步截止（默认 90s）
+    forward-timeout-seconds: ${VIRBIUS_EVALUATION_FORWARD_TIMEOUT_SECONDS:150}
     settings-key: ${VIRBIUS_SETTINGS_MASTER_KEY:}
   gateway:
     artifact:

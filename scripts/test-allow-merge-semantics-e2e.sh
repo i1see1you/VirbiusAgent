@@ -7,6 +7,9 @@
 #   1. allow 命中只在 enforce 生效（canary 桶内上限 / dry_run 不压制）
 #   2. 压制发生时决策/审计归因 = 被压制 deny 的 primary（黑洞修复）
 #   3. 压制 allow 事件免 10% 采样必进审计链
+#   4. allow-only 归因 = 具体 allow 规则（POLICY_ALLOW 回归零命中哨兵）
+#   5. allow-only 归因必须过滤 enforce：dry_run/桶外候选不越位；
+#      多条 enforce 例外间按 risk_score 高者优先（归因优先级，非打分）
 #
 # 只走运营台 HTTP API（与控制台页面同一组接口）+ 引擎 /v1/evaluate
 # （调用方真实视角）。脚本从不打开 SQLite 文件、从不执行 redis-cli，
@@ -41,6 +44,8 @@ ENGINE="${VIRBIUS_ENGINE:-http://127.0.0.1:8082}"
 TENANT="${VIRBIUS_TENANT:-default}"
 BUNDLE="${VIRBIUS_BUNDLE:-poc-default}"
 RULE_ID="${VIRBIUS_RULE_ID:-e2e_allow_semantics}"
+# 副 allow 规则（例外排序场景，S5b）：risk_score 设为更高值验证归因优先级
+RULE2_ID="${VIRBIUS_RULE2_ID:-e2e_allow_sem_sub}"
 # 锚定词选择注意：怪 token（下划线密串）会被 guard 模型稳定误拦，导致
 # allow-only 场景永远被压制场景接管——用自然词面，良性句里 guard 放行。
 MARKER="${VIRBIUS_E2E_MARKER:-release_20261022_checklist}"
@@ -242,18 +247,18 @@ LAST_EVAL_JSON=""
 
 # ── 残留复位（只碰自家规则；不覆盖他人进行中的放量）──
 reset_test_rule() {
-  local rc st
-  rc=$(http GET "/api/v1/admin/tenants/${TENANT}/rules/${RULE_ID}")
+  local rid="${1:-${RULE_ID}}" rc st
+  rc=$(http GET "/api/v1/admin/tenants/${TENANT}/rules/${rid}")
   if [[ "${rc}" == 2* && "$(jgetf 'code')" == "0" ]]; then
     st=$(jgetf 'data.rollout_state')
-    log_info "发现上次残留规则（state=${st}），复位到草稿"
+    log_info "发现上次残留规则 ${rid}（state=${st}），复位到草稿"
     if [[ "${st}" != "draft" && "${st}" != "disabled" ]]; then
-      rc=$(http POST "/api/v1/admin/tenants/${TENANT}/rules/${RULE_ID}/rollout/disable" '{}')
+      rc=$(http POST "/api/v1/admin/tenants/${TENANT}/rules/${rid}/rollout/disable" '{}')
       expect_ok "${rc}" "复位: 停用在线残留" >/dev/null || return 1
       st=disabled
     fi
     if [[ "${st}" == "disabled" ]]; then
-      rc=$(http POST "/api/v1/admin/tenants/${TENANT}/rules/${RULE_ID}/rollout/recover" '{}')
+      rc=$(http POST "/api/v1/admin/tenants/${TENANT}/rules/${rid}/rollout/recover" '{}')
       expect_ok "${rc}" "复位: 恢复为草稿" >/dev/null || return 1
     fi
   fi
@@ -314,15 +319,17 @@ for r in rules:
 
 # ── 出口清理：规则若仍在执行平面则停用，释放并发放量槽位 ──
 cleanup_on_exit() {
-  local rc st
-  rc=$(http GET "/api/v1/admin/tenants/${TENANT}/rules/${RULE_ID}")
-  if [[ "${rc}" == 2* && "$(jgetf 'code')" == "0" ]]; then
-    st=$(jgetf 'data.rollout_state')
-    if [[ "${st}" == "dry_run" || "${st}" == "canary" || "${st}" == "full" ]]; then
-      rc=$(http POST "/api/v1/admin/tenants/${TENANT}/rules/${RULE_ID}/rollout/disable" '{}')
-      echo -e "\n${YELLOW}[cleanup]${NC} 规则仍处于 ${st}，已停用（HTTP ${rc}）"
+  local rc st rid
+  for rid in "${RULE_ID}" "${RULE2_ID}"; do
+    rc=$(http GET "/api/v1/admin/tenants/${TENANT}/rules/${rid}")
+    if [[ "${rc}" == 2* && "$(jgetf 'code')" == "0" ]]; then
+      st=$(jgetf 'data.rollout_state')
+      if [[ "${st}" == "dry_run" || "${st}" == "canary" || "${st}" == "full" ]]; then
+        rc=$(http POST "/api/v1/admin/tenants/${TENANT}/rules/${rid}/rollout/disable" '{}')
+        echo -e "\n${YELLOW}[cleanup]${NC} 规则 ${rid} 仍处于 ${st}，已停用（HTTP ${rc}）"
+      fi
     fi
-  fi
+  done
 }
 trap cleanup_on_exit EXIT
 
@@ -413,6 +420,17 @@ if [[ -z "${BASE_RULE}" || "${BASE_RULE}" == "POLICY_ALLOW" ]]; then
   log_fail "基线 deny 无有效归因（引擎/规则面异常），后续断言不可信"; exit 2
 fi
 
+# 零命中哨兵：规则完全不命中的良性输入，归因回到 POLICY_ALLOW（本轮修复后
+# POLICY_ALLOW 从"allow 只读兜底"回归纯哨兵语义——只在真无命中时出现）。
+# 注意用 chat 角色：命令型 tool_call 字面量会碰 guard 的固有 FP（见清单 §5）。
+resp=$(evaluate "Say hi" "input")
+expect_eq "$(evf "${resp}" 'effective_action')" "allow" "零命中: 良性输入放行"
+if [[ -z "$(evf "${resp}" 'rule_id')" ]] ; then
+  log_fail "零命中: rule_id 为空（哨兵契约缺失）"
+else
+  expect_eq "$(evf "${resp}" 'rule_id')" "POLICY_ALLOW" "零命中归因 = POLICY_ALLOW 哨兵（不再冒充具体规则）"
+fi
+
 resp=$(evaluate "${DENY_WITH_MARKER}")
 expect_eq "$(evf "${resp}" 'effective_action')" "block" "草稿隔离：带 marker 行为不变（规则未在执行平面）"
 
@@ -473,6 +491,7 @@ expect_eq "$(evf "${resp}" 'effective_action')" "block" "canary: 无 marker 仍 
 
 resp=$(evaluate "Say hi" "input")
 expect_eq "$(evf "${resp}" 'effective_action')" "allow" "良性输入保持放行"
+expect_eq "$(evf "${resp}" 'rule_id')" "POLICY_ALLOW" "生效例外存在但未命中 → 归因仍为哨兵（allow 例外不冒充命中）"
 
 # ============================================================
 log_step "S5. 量：canary → 全量（full 同样压制且归因一致）"
@@ -533,6 +552,84 @@ if [[ "${ALLOW_ONLY_GOT}" == 1 ]]; then
 else
   log_fail "allow-only 归因未在 20 探针内出现（got rid=$(evf "${resp}" 'rule_id')，持续被 guard 误拦压制？）"
 fi
+
+# ============================================================
+log_step "S5b. 例外排序（副 allow 规则）：dry_run 候选不越位，risk_score 归因优先级"
+
+# 用户在例外清单再加一条 higher-risk allow 规则（同词面）。先停在观察期：
+# 合并语义要求未生效的 allow 候选既不参与压制，也不在 allow-only 归因里
+# 越位（回退必须逐条过滤 enforce）——否则 risk=20 的副规则会压过主规则。
+reset_test_rule "${RULE2_ID}" || { log_fail "副规则残留复位失败"; exit 2; }
+
+UP2_PAYLOAD=$(python3 -c "
+import json
+print(json.dumps({
+  'rule_id': '${RULE2_ID}',
+  'bundle_id': '${BUNDLE}',
+  'layer': 'cloud',
+  'runtime': 'groovy',
+  'reason_code': 'E2E_ALLOW_SUB_PRIORITY',
+  'risk_score': 20,
+  'intent_action': 'allow',
+  'scope': {'bind_scope': 'global'},
+  'body': '''def decide(ctx) {
+    def v = ctx.var(\"content\")
+    return v != null && v.contains(\"${MARKER}\")
+}''',
+}, ensure_ascii=False))
+")
+
+rc=$(http POST "/api/v1/admin/tenants/${TENANT}/rules" "${UP2_PAYLOAD}")
+expect_ok "${rc}" "运营台保存副规则（草稿）" || exit 2
+expect_eq "$(jgetf 'data.risk_score')" "20" "副规则 risk_score=20 控制台原样保存（用户面归因优先级）"
+expect_eq "$(jgetf 'data.intent_action')" "allow" "副规则 intent=allow"
+
+rc=$(http POST "/api/v1/admin/tenants/${TENANT}/rules/${RULE2_ID}/rollout/publish" '{}')
+if [[ "${rc}" == "429" ]]; then
+  log_fail "副规则 publish 429（并发放量槽位占满，VIRBIUS_E2E_DISPOSE_STALE_ROLLOUTS=1 可自动清理）"
+  exit 2
+fi
+expect_ok "${rc}" "运营台: 副规则上线(publish)"
+expect_eq "$(jgetf 'data.rollout_state')" "dry_run" "副规则进入观察期 dry_run"
+
+# 副规则 dry_run 在场时主规则（full）的压制语义不变（dry_run 非 suppression
+# 语义在 S3 已覆盖；此处断言的是"多规则观察不干扰在线例外"）。
+wait_eval "副规则 dry_run 不改变主规则压制" "${DENY_WITH_MARKER}" 'effective_action' "allow" 8 \
+  || true
+expect_guard_rule "$(evf "${LAST_EVAL_JSON}" 'rule_id')" \
+  "副规则 dry_run: 压制归因仍指向被压制 deny/guard 规则"
+
+# 副规则未生效 → allow-only 归因仍必须是主规则（若回退没过滤 enforce，
+# risk=20 的 dry_run 副规则会在此越位）。
+wait_eval "allow-only 归因不受 dry_run 候选影响" "cat ${MARKER}.md" 'rule_id' "${RULE_ID}" 8 || true
+expect_eq "$(evf "${LAST_EVAL_JSON}" 'effective_action')" "allow" "dry_run 候选在场: 良性放行不变"
+
+# 放量副规则到灰度 100%（两条例外均 enforce）→ 归因按 risk_score 高者优先
+# （归因优先级约定：不影响决策打分，合并风险仍 0）。
+rc=$(http PATCH "/api/v1/admin/tenants/${TENANT}/rules/${RULE2_ID}/rollout" \
+  '{"rollout_state":"canary","canary_percent":100,"force":true,"comment":"e2e: 例外排序回归（副规则）"}')
+if [[ "${rc}" == "409" ]]; then
+  expect_starts "$(jgetf 'message')" "GATE_FAILED" "副规则 canary 门禁拒因可读"
+  rc=$(http PATCH "/api/v1/admin/tenants/${TENANT}/rules/${RULE2_ID}/rollout" \
+    '{"rollout_state":"canary","canary_percent":100,"force":true,"comment":"e2e: 例外排序回归（副规则）"}')
+  expect_ok "${rc}" "副规则强制跳过放量"
+else
+  expect_ok "${rc}" "副规则门禁直接放行"
+fi
+expect_eq "$(jgetf 'data.rollout_state')" "canary" "副规则状态 canary@100"
+
+wait_eval "例外均生效时归因切到高 risk 例外" "cat ${MARKER}.md" 'rule_id' "${RULE2_ID}" 12 || true
+expect_eq "$(evf "${LAST_EVAL_JSON}" 'effective_action')" "allow" "双例外: 良性放行不变"
+expect_eq "$(evf "${LAST_EVAL_JSON}" 'max_risk_score')" "0" "双例外: 决策风险恒 0（risk_score 只作归因优先级）"
+
+# 撤销副规则 → 归因回收主规则（单条例外的可解释性）
+rc=$(http PATCH "/api/v1/admin/tenants/${TENANT}/rules/${RULE2_ID}/rollout" \
+  '{"rollout_state":"disabled"}')
+expect_ok "${rc}" "运营台: 停用副规则"
+expect_eq "$(jgetf 'data.rollout_state')" "disabled" "副规则停用"
+
+wait_eval "副规则停用后归因回主规则" "cat ${MARKER}.md" 'rule_id' "${RULE_ID}" 12 || true
+expect_eq "$(evf "${LAST_EVAL_JSON}" 'effective_action')" "allow" "单例外回归: 良性放行不变"
 
 # ============================================================
 log_step "S6. 审计中心：压制 allow 事件必落链（免采样）+ 归因一致"
@@ -596,7 +693,7 @@ expect_eq "$(evf "${resp}" 'effective_action')" "block" "停用后带 marker 仍
 echo ""
 echo -e "${BLUE}===== 结果汇总 =====${NC}"
 echo -e "  ${GREEN}PASS: ${PASS}${NC}  ${RED}FAIL: ${FAIL}${NC}  ${YELLOW}SKIP: ${SKIP}${NC}"
-echo -e "  规则 ${RULE_ID} 终态: disabled（下次运行自动复位到草稿）"
+echo -e "  规则 ${RULE_ID} / ${RULE2_ID} 终态: disabled（下次运行自动复位到草稿）"
 if [[ "${FAIL}" -gt 0 ]]; then
   echo -e "  ${BLUE}提示: BUG 复现判定 — 用 run-local 纯净栈再跑一遍; 若在无 Kafka 栈跑，跳过 S6 属预期${NC}"
   exit 1

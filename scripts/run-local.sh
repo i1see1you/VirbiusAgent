@@ -55,17 +55,42 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-# Refuse to start next to a live control instance. The audit hash chain head is
-# coordinated in shared Redis (virbius:audit:chain:{tenant}) while every control
-# writes its own rows into its own database, so a second instance consuming the
-# same topics assigns a different audit_seq against the same shared head and
-# leaves both databases holding a gappy subset — HashChainVerifier then reports
-# "seq gap" and the audit chain looks tampered when it was merely double-fed.
-if pgrep -f 'virbius-control-.*\.jar' >/dev/null 2>&1; then
-  err "another virbius-control process is already running:"
+# A second live control instance must not run alongside this one: the audit
+# hash chain head is coordinated in shared Redis (virbius:audit:chain:{tenant})
+# while every control writes its own rows into its own database, so a second
+# instance consuming the same topics assigns a different audit_seq against the
+# same shared head and leaves both databases holding a gappy subset —
+# HashChainVerifier then reports "seq gap" and the audit chain looks tampered
+# when it was merely double-fed.
+# Default: auto-kill stale instances (TERM, wait, then KILL) — consistent with
+# kill_port below. Set VIRBIUS_KEEP_STALE_CONTROL=1 to restore the old
+# refuse-to-start behavior (e.g. intentionally running two checkouts).
+stale_control_pids() { pgrep -f 'virbius-control-.*\.jar' 2>/dev/null || true; }
+if [[ -n "$(stale_control_pids)" ]]; then
+  if [[ "${VIRBIUS_KEEP_STALE_CONTROL:-}" == "1" ]]; then
+    err "another virbius-control process is already running:"
+    pgrep -fl 'virbius-control-.*\.jar' >&2 || true
+    err "stop it first — it shares the Redis audit chain head and the Kafka consumer group."
+    exit 1
+  fi
+  warn "stale virbius-control process(es) found, auto-killing:"
   pgrep -fl 'virbius-control-.*\.jar' >&2 || true
-  err "stop it first — it shares the Redis audit chain head and the Kafka consumer group."
-  exit 1
+  kill $(stale_control_pids) 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    [[ -z "$(stale_control_pids)" ]] && break
+    sleep 0.2
+  done
+  if [[ -n "$(stale_control_pids)" ]]; then
+    warn "TERM did not finish them, sending SIGKILL..."
+    kill -9 $(stale_control_pids) 2>/dev/null || true
+    sleep 1
+  fi
+  if [[ -n "$(stale_control_pids)" ]]; then
+    err "could not stop stale virbius-control process(es): $(stale_control_pids)"
+    err "stop them manually and re-run."
+    exit 1
+  fi
+  ok "stale virbius-control process(es) stopped"
 fi
 
 # ─── Redis ───
@@ -210,7 +235,6 @@ fi
 for p in 8080 8082; do kill_port "$p"; done
 ensure_redis
 ensure_kafka
-ensure_ollama
 ensure_ollama
 
 # ─── License master key (required in every profile) ───

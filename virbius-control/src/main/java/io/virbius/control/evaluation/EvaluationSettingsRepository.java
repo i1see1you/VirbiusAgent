@@ -6,7 +6,13 @@ import java.util.Optional;
 public interface EvaluationSettingsRepository {
 
     record Row(boolean enabled, String baseUrl, String apiTokenCt, boolean promoEnabled,
-               String promoUrl, String updatedBy) {
+               String promoUrl, String probeTenants, String updatedBy) {
+
+        /** 兼容构造（probe_tenants 为空）。 */
+        public Row(boolean enabled, String baseUrl, String apiTokenCt, boolean promoEnabled,
+                   String promoUrl, String updatedBy) {
+            this(enabled, baseUrl, apiTokenCt, promoEnabled, promoUrl, "", updatedBy);
+        }
     }
 
     Optional<Row> find();

@@ -57,6 +57,30 @@ public class EvaluationSettingsAdminController {
         return diagnostics.run(settings.get());
     }
 
+    /** 指标（平台管理员）：转发 evaluation GET /api/v1/metrics（任务/队列/耗时）。 */
+    @GetMapping("/metrics")
+    public ResponseEntity<String> metrics() {
+        EvaluationSettingsService.Settings cfg = settings.get();
+        if (!cfg.enabled()) {
+            return error(HttpStatus.SERVICE_UNAVAILABLE, 5033, "评估集成已关闭");
+        }
+        if (!cfg.configured() || cfg.apiToken().isBlank()) {
+            return error(HttpStatus.SERVICE_UNAVAILABLE, 5031, "评估服务未配置（baseUrl/token）");
+        }
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(cfg.baseUrl().replaceAll("/+$", "") + "/api/v1/metrics"))
+                    .timeout(Duration.ofSeconds(5))
+                    .header("Authorization", "Bearer " + cfg.apiToken())
+                    .GET().build();
+            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            return ResponseEntity.status(resp.statusCode())
+                    .contentType(MediaType.APPLICATION_JSON).body(resp.body());
+        } catch (Exception e) {
+            return error(HttpStatus.BAD_GATEWAY, 5032, "评估服务不可达: " + e.getMessage());
+        }
+    }
+
     /** 上传许可证：转发到评估服务 POST /api/v1/license（先验签后落盘），状态码/信封透传。 */
     @PostMapping("/license")
     public ResponseEntity<String> uploadLicense(@RequestBody LicenseUpload upload) {

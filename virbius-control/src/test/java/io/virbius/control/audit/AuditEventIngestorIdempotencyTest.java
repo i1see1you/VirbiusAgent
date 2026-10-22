@@ -2,6 +2,7 @@ package io.virbius.control.audit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.Connection;
@@ -51,7 +52,7 @@ class AuditEventIngestorIdempotencyTest {
                 + "max_risk_score INTEGER NOT NULL, rollout_state VARCHAR(16), canary_percent INTEGER,"
                 + "in_canary_bucket INTEGER, degraded INTEGER, sampled_allow INTEGER,"
                 + "sample_rate_allow REAL, intercepted_at TIMESTAMP NOT NULL,"
-                + "user_id VARCHAR(256), device_id VARCHAR(256), agent_aid VARCHAR(256),"
+                + "user_id VARCHAR(256), device_id VARCHAR(256), session_id VARCHAR(128), agent_aid VARCHAR(256),"
                 + "app_id VARCHAR(128), subject_source VARCHAR(16), token_iss VARCHAR(64),"
                 + "audit_seq BIGINT NOT NULL DEFAULT 0, prev_hash VARCHAR(128) NOT NULL DEFAULT '',"
                 + "curr_hash VARCHAR(128) NOT NULL DEFAULT '',"
@@ -100,6 +101,23 @@ class AuditEventIngestorIdempotencyTest {
         var rows = jdbc.queryForList(
                 "SELECT seq FROM tb_audit_chain_state WHERE tenant_id = ?", Long.class, TENANT);
         return rows.isEmpty() ? 0L : rows.get(0);
+    }
+
+    /** V20: the session_id riding the Kafka payload is persisted (NULL when absent). */
+    @Test
+    void sessionIdRidingThePayloadIsPersisted() {
+        Map<String, Object> withSession = event("s1", "tr-1");
+        withSession.put("session_id", "sess-1");
+        assertEquals("accepted", ingestor.ingestEvent(withSession).status());
+
+        Map<String, Object> withoutSession = event("s2", "tr-2");
+        withoutSession.put("intercepted_at", "2026-10-15T00:00:01Z");
+        assertEquals("accepted", ingestor.ingestEvent(withoutSession).status());
+
+        assertEquals("sess-1", jdbc.queryForObject(
+                "SELECT session_id FROM tb_audit_events WHERE event_id = 's1'", String.class));
+        assertNull(jdbc.queryForObject(
+                "SELECT session_id FROM tb_audit_events WHERE event_id = 's2'", String.class));
     }
 
     /** A redelivery must not advance the chain head past the rows that exist. */

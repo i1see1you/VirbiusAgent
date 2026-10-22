@@ -8,12 +8,16 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import io.virbius.control.security.ApiKeyAuthContext;
+import io.virbius.control.security.ApiRole;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -58,6 +62,9 @@ public class EvaluationProxyController {
     private final EvaluationSettingsService settings;
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(2)).build();
+    /** 转发超时（> evaluation 同步截止 90s；jobs 提交立即返回，不受影响）。 */
+    @Value("${virbius.evaluation.forward-timeout-seconds:150}")
+    private long forwardTimeoutSeconds = 150;
     private final long statusTtlSeconds = 45;
     private final AtomicReference<CacheEntry> cache = new AtomicReference<>();
 
@@ -83,44 +90,132 @@ public class EvaluationProxyController {
 
     @GetMapping("/reports")
     public ResponseEntity<String> listReports(@PathVariable String tenantId,
-            @RequestParam(value = "target_fingerprint", required = false) String targetFingerprint) {
-        String path = "/api/v1/evaluations/reports"
-                + (targetFingerprint == null || targetFingerprint.isBlank()
-                        ? "" : "?target_fingerprint=" + targetFingerprint);
-        return forward(HttpRequest.newBuilder().GET(), path);
+            @RequestParam(value = "target_fingerprint", required = false) String targetFingerprint,
+            @RequestParam(value = "limit", required = false) Integer limit,
+            @RequestParam(value = "offset", required = false) Integer offset,
+            @RequestParam(value = "agent_name", required = false) String agentName,
+            @RequestParam(value = "grade", required = false) String grade,
+            @RequestParam(value = "target_type", required = false) String targetType) {
+        StringBuilder path = new StringBuilder("/api/v1/evaluations/reports");
+        List<String> qs = new ArrayList<>();
+        if (targetFingerprint != null && !targetFingerprint.isBlank()) {
+            qs.add("target_fingerprint=" + targetFingerprint);
+        }
+        if (limit != null) {
+            qs.add("limit=" + limit);
+        }
+        if (offset != null) {
+            qs.add("offset=" + offset);
+        }
+        if (agentName != null && !agentName.isBlank()) {
+            qs.add("agent_name=" + agentName);
+        }
+        if (grade != null && !grade.isBlank()) {
+            qs.add("grade=" + grade);
+        }
+        if (targetType != null && !targetType.isBlank()) {
+            qs.add("target_type=" + targetType);
+        }
+        if (!qs.isEmpty()) {
+            path.append('?').append(String.join("&", qs));
+        }
+        return forward(tenantId, HttpRequest.newBuilder().GET(), path.toString());
     }
 
     @GetMapping("/reports/{reportId}")
     public ResponseEntity<String> getReport(@PathVariable String tenantId,
             @PathVariable String reportId) {
-        return forward(HttpRequest.newBuilder().GET(),
+        return forward(tenantId, HttpRequest.newBuilder().GET(),
                 "/api/v1/evaluations/reports/" + reportId);
+    }
+
+    @GetMapping("/reports/{reportId}/html")
+    public ResponseEntity<String> reportHtml(@PathVariable String tenantId,
+            @PathVariable String reportId) {
+        return forward(tenantId, HttpRequest.newBuilder().GET(),
+                "/api/v1/evaluations/reports/" + reportId + "/html");
+    }
+
+    @GetMapping("/reports/{reportId}/sarif")
+    public ResponseEntity<String> reportSarif(@PathVariable String tenantId,
+            @PathVariable String reportId) {
+        return forward(tenantId, HttpRequest.newBuilder().GET(),
+                "/api/v1/evaluations/reports/" + reportId + "/sarif");
     }
 
     @PostMapping("/scans")
     public ResponseEntity<String> scan(@PathVariable String tenantId, @RequestBody String body) {
-        return forward(post(body), "/api/v1/evaluations/scans");
+        return forward(tenantId, post(body), "/api/v1/evaluations/scans");
     }
 
     @PostMapping("/probes")
     public ResponseEntity<String> probe(@PathVariable String tenantId, @RequestBody String body) {
-        return forward(post(body), "/api/v1/evaluations/probes");
+        if (!probeAllowed(tenantId)) {
+            return error(HttpStatus.FORBIDDEN, 40305,
+                    "该租户未启用探针（平台设置 → 评估 → 探针租户白名单）");
+        }
+        return forward(tenantId, post(body), "/api/v1/evaluations/probes");
     }
 
     @PostMapping("/replays")
     public ResponseEntity<String> replay(@PathVariable String tenantId, @RequestBody String body) {
-        return forward(post(body), "/api/v1/evaluations/replays");
+        return forward(tenantId, post(body), "/api/v1/evaluations/replays");
     }
 
     @PostMapping("/replays/import")
     public ResponseEntity<String> replayImport(@PathVariable String tenantId,
             @RequestBody String body) {
-        return forward(post(body), "/api/v1/evaluations/replays/import");
+        return forward(tenantId, post(body), "/api/v1/evaluations/replays/import");
     }
 
     @PostMapping("/skills")
     public ResponseEntity<String> skill(@PathVariable String tenantId, @RequestBody String body) {
-        return forward(post(body), "/api/v1/evaluations/skills");
+        return forward(tenantId, post(body), "/api/v1/evaluations/skills");
+    }
+
+    @GetMapping("/jobs/{jobId}")
+    public ResponseEntity<String> job(@PathVariable String tenantId, @PathVariable String jobId) {
+        return forward(tenantId, HttpRequest.newBuilder().GET(),
+                "/api/v1/evaluations/jobs/" + jobId);
+    }
+
+    @GetMapping("/jobs")
+    public ResponseEntity<String> jobs(@PathVariable String tenantId,
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "limit", required = false) Integer limit,
+            @RequestParam(value = "offset", required = false) Integer offset) {
+        StringBuilder path = new StringBuilder("/api/v1/evaluations/jobs");
+        List<String> qs = new ArrayList<>();
+        if (status != null && !status.isBlank()) {
+            qs.add("status=" + status);
+        }
+        if (limit != null) {
+            qs.add("limit=" + limit);
+        }
+        if (offset != null) {
+            qs.add("offset=" + offset);
+        }
+        if (!qs.isEmpty()) {
+            path.append('?').append(String.join("&", qs));
+        }
+        return forward(tenantId, HttpRequest.newBuilder().GET(), path.toString());
+    }
+
+    @PostMapping("/jobs/{jobId}/cancel")
+    public ResponseEntity<String> cancelJob(@PathVariable String tenantId,
+            @PathVariable String jobId) {
+        return forward(tenantId, post("{}"), "/api/v1/evaluations/jobs/" + jobId + "/cancel");
+    }
+
+    /** 探针租户闸：白名单含 * 或该租户，或调用者为平台管理员。 */
+    private boolean probeAllowed(String tenantId) {
+        Set<String> allowed = settings.get().probeTenantSet();
+        if (allowed.contains("*") || allowed.contains(
+                tenantId == null ? "default" : tenantId.strip().toLowerCase())) {
+            return true;
+        }
+        var principal = ApiKeyAuthContext.current();
+        return principal != null && principal.role() == ApiRole.PLATFORM_ADMIN;
     }
 
     // ---------- 内部 ----------
@@ -208,7 +303,7 @@ public class EvaluationProxyController {
         return b;
     }
 
-    private ResponseEntity<String> forward(HttpRequest.Builder builder, String path) {
+    private ResponseEntity<String> forward(String tenantId, HttpRequest.Builder builder, String path) {
         EvaluationSettingsService.Settings cfg = settings.get();
         if (!cfg.enabled()) {
             return error(HttpStatus.SERVICE_UNAVAILABLE, CODE_DISABLED,
@@ -221,14 +316,22 @@ public class EvaluationProxyController {
         try {
             HttpRequest.Builder rb = builder
                     .uri(URI.create(cfg.baseUrl().replaceAll("/+$", "") + path))
-                    .timeout(Duration.ofSeconds(120));
+                    .timeout(Duration.ofSeconds(forwardTimeoutSeconds))
+                    .header("X-VE-Tenant", tenantId == null || tenantId.isBlank()
+                            ? "default" : tenantId.strip().toLowerCase());
             if (!cfg.apiToken().isBlank()) {
                 rb.header("Authorization", "Bearer " + cfg.apiToken());
             }
             HttpResponse<String> resp = http.send(rb.build(), HttpResponse.BodyHandlers.ofString());
-            return ResponseEntity.status(resp.statusCode())
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(resp.body());
+            MediaType contentType = resp.headers().firstValue("content-type")
+                    .map(ct -> {
+                        try {
+                            return MediaType.parseMediaType(ct);
+                        } catch (Exception e) {
+                            return MediaType.APPLICATION_JSON;
+                        }
+                    }).orElse(MediaType.APPLICATION_JSON);
+            return ResponseEntity.status(resp.statusCode()).contentType(contentType).body(resp.body());
         } catch (Exception e) {
             cache.set(null);
             log.warn("evaluation proxy failed path={} err={}", path, e.toString());

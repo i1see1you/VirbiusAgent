@@ -67,10 +67,10 @@ public class AuditEventIngestor {
                     + "  event_id, trace_id, trace_id_source, tenant_id, scene, layer, tool_name,"
                     + "  rule_id, rule_revision, reason_code, effective_action, max_risk_score,"
                     + "  rollout_state, canary_percent, in_canary_bucket, degraded, sampled_allow,"
-                    + "  sample_rate_allow, intercepted_at, user_id, device_id,"
+                    + "  sample_rate_allow, intercepted_at, user_id, device_id, session_id,"
                     + "  agent_aid, app_id, subject_source, token_iss,"
                     + "  audit_seq, prev_hash, curr_hash"
-                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '')";
+                    + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '')";
             int updated = jdbc.update(insertSql,
                     eventId,
                     traceId,
@@ -93,6 +93,7 @@ public class AuditEventIngestor {
                     str(event.get("intercepted_at")),
                     str(event.get("user_id")),
                     str(event.get("device_id")),
+                    nullIfBlank(str(event.get("session_id"))),
                     nullIfBlank(str(event.get("agent_aid"))),
                     nullIfBlank(str(event.get("app_id"))),
                     nullIfBlank(str(event.get("subject_source"))),

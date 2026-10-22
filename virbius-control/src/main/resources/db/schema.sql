@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS tb_audit_events (
     intercepted_at    TIMESTAMP NOT NULL,
     user_id           VARCHAR(256),
     device_id         VARCHAR(256),
+    session_id        VARCHAR(128),
     agent_aid         VARCHAR(256),
     app_id            VARCHAR(128),
     subject_source    VARCHAR(16),
@@ -206,6 +207,11 @@ CREATE TABLE IF NOT EXISTS tb_audit_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tb_audit_events_rule ON tb_audit_events (tenant_id, rule_id, intercepted_at);
+
+-- NOTE: idx_audit_events_tenant_session is created by SqliteSchemaEvolver at
+-- startup (after the session_id column is ensured on existing databases);
+-- spring.sql.init runs before the evolver, so the index cannot live here.
+-- MySQL/prod gets it from V20__audit_event_session_id.sql via Flyway.
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tb_audit_events_event_id ON tb_audit_events (event_id);
 
@@ -647,6 +653,7 @@ CREATE TABLE IF NOT EXISTS tb_audit_events_archive (
     intercepted_at    TIMESTAMP NOT NULL,
     user_id           VARCHAR(256),
     device_id         VARCHAR(256),
+    session_id        VARCHAR(128),
     agent_aid         VARCHAR(256),
     app_id            VARCHAR(128),
     subject_source    VARCHAR(16),
@@ -868,6 +875,7 @@ CREATE TABLE IF NOT EXISTS tb_evaluation_setting (
     api_token_ct  TEXT         NULL,
     promo_enabled BOOLEAN      NOT NULL,
     promo_url     VARCHAR(512) NOT NULL,
+    probe_tenants VARCHAR(1024) NOT NULL DEFAULT '',
     updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by    VARCHAR(128) NOT NULL
 );

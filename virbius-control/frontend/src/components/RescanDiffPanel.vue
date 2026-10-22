@@ -145,7 +145,7 @@ function sevType(sev?: string): string {
 }
 
 async function reload() {
-  allReports.value = await listReports();
+  allReports.value = (await listReports({ limit: 100 })).items;
   if (!fingerprint.value && fingerprints.value.length) {
     fingerprint.value = fingerprints.value[0];
   }
@@ -157,7 +157,7 @@ async function loadSeries() {
   baselineFindings.value = {};
   candidateId.value = '';
   series.value = fingerprint.value
-    ? await listReports(fingerprint.value)
+    ? (await listReports({ targetFingerprint: fingerprint.value, limit: 100 })).items
     : allReports.value;
   // 时间正序展示趋势
   series.value = [...series.value].sort((a, b) => a.scanned_at.localeCompare(b.scanned_at));

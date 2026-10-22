@@ -11,6 +11,12 @@
       </el-tooltip>
     </div>
 
+    <div class="trace-coverage">
+      <span class="trace-coverage-text">{{ t('trace.coverage') }}</span>
+      <span v-if="ingestLoaded && ingestTotal === 0" class="trace-warn">{{ t('trace.status-no-events') }}</span>
+      <span v-else-if="ingestLastAt" class="trace-last">{{ t('trace.status-last-event', [fmtTime(ingestLastAt), ingestTotal]) }}</span>
+    </div>
+
     <div class="v-row">
       <el-input v-model="toolName" :placeholder="t('trace.placeholder-tool')" style="width:160px" />
       <el-select v-model="stepType" style="width:140px">
@@ -74,9 +80,30 @@
     </h3>
     <div v-if="!timeline.length" class="v-hint">{{ t('trace.timeline-hint') }}</div>
     <div v-for="g in groupedTimeline" :key="g.traceId" class="v-card" style="background:#f8fafc;margin-bottom:12px">
-      <h4 style="font-size:13px;margin:0 0 8px;color:#334155">Trace: <el-tooltip :content="g.traceId" placement="top"><span style="cursor:pointer">{{ g.traceId.slice(0, 16) }}…</span></el-tooltip> ({{ g.steps.length }} steps)</h4>
+      <h4 style="font-size:13px;margin:0 0 8px;color:#334155">Trace: <el-tooltip :content="g.traceId" placement="top"><span style="cursor:pointer">{{ g.traceId.slice(0, 16) }}…</span></el-tooltip> ({{ g.steps.length }} entries)</h4>
       <div v-for="(s, i) in g.steps" :key="i">
-        <div class="v-card" style="padding:8px 12px;margin:4px 0" :style="{ borderLeft: '3px solid ' + stepColor(s.step_type) }">
+        <div v-if="s.kind === 'audit'" class="v-card trace-audit-card"
+            style="padding:8px 12px;margin:4px 0" :style="{ borderLeft: '3px solid ' + auditColor(s) }"
+            @click="goAudit(s.trace_id)">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span>☁️</span>
+            <strong style="font-size:13px">{{ t('trace.audit-badge') }}<span v-if="s.type"> · {{ s.type }}</span></strong>
+            <el-tag size="small" type="info">{{ s.layer }}</el-tag>
+            <span style="margin-left:auto;color:#94a3b8;font-size:12px">{{ fmtTime(s.occurred_at) }}</span>
+          </div>
+          <div style="font-size:12px;color:#475569;margin-top:4px">
+            <span v-if="s.tool_name"> · {{ s.tool_name }}</span>
+            <span v-if="s.rule_id"> · rule: {{ s.rule_id }}</span>
+            <span v-if="s.reason_code"> · {{ s.reason_code }}</span>
+            <span v-if="s.rollout_state"> · {{ s.rollout_state }}</span>
+          </div>
+          <div style="margin-top:4px;display:flex;gap:6px;align-items:center">
+            <el-tag size="small" :type="actionTagType(s.decision)">{{ s.decision }}</el-tag>
+            <el-tag v-if="s.risk_score > 0" size="small" :type="riskLevel(s.risk_score) === 'high' ? 'danger' : riskLevel(s.risk_score) === 'mid' ? 'warning' : 'success'">风险 {{ s.risk_score }}</el-tag>
+            <span class="trace-audit-link">{{ t('trace.audit-view') }} →</span>
+          </div>
+        </div>
+        <div v-else class="v-card" style="padding:8px 12px;margin:4px 0" :style="{ borderLeft: '3px solid ' + stepColor(s.step_type) }">
           <div style="display:flex;align-items:center;gap:6px">
             <span>{{ stepIcon(s.step_type) }}</span>
             <strong style="font-size:13px">{{ s.step_type }}</strong>
@@ -105,6 +132,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { useI18n } from 'vue-i18n';
 import { useFeedbackStore } from '@/stores/feedback';
 import { useSessionStore } from '@/stores/session';
@@ -112,6 +140,7 @@ import { admin } from '@/api/client';
 import { actionTagType, fmtTime } from '@/utils/format';
 
 const { t } = useI18n();
+const router = useRouter();
 const feedback = useFeedbackStore();
 const session = useSessionStore();
 
@@ -129,6 +158,19 @@ const paginatedResults = computed(() => results.value.slice((page.value - 1) * s
 const timeline = ref<any[]>([]);
 const timelineSession = ref('');
 
+const ingestLoaded = ref(false);
+const ingestTotal = ref(0);
+const ingestLastAt = ref('');
+
+async function loadIngestStatus() {
+  try {
+    const data = await admin<any>('/trace/ingest-status') || {};
+    ingestTotal.value = Number(data?.total_events ?? 0);
+    ingestLastAt.value = data?.last_event_at || '';
+    ingestLoaded.value = true;
+  } catch { ingestLoaded.value = false; }
+}
+
 const groupedTimeline = computed(() => {
   const m: Record<string, any[]> = {};
   timeline.value.forEach(s => { (m[s.trace_id || 'unknown'] ||= []).push(s); });
@@ -137,8 +179,13 @@ const groupedTimeline = computed(() => {
 
 function stepIcon(t: string) { return ({ input: '📥', reasoning: '🧠', tool_call: '🔧', tool_result: '📤', output: '🏁' } as any)[t] || '❓'; }
 function stepColor(t: string) { return ({ tool_call: '#2563eb', tool_result: '#16a34a', input: '#8b5cf6', reasoning: '#f59e0b', output: '#64748b' } as any)[t] || '#cbd5e1'; }
+function auditColor(s: any) { return s.layer === 'cloud' ? '#0ea5e9' : '#f97316'; }
 function riskLevel(s: number) { return s >= 70 ? 'high' : s >= 30 ? 'mid' : 'low'; }
 function formatArgs(a: string) { try { return JSON.stringify(JSON.parse(a), null, 2); } catch { return a; } }
+function goAudit(traceId: string) {
+  if (!traceId) return;
+  router.push({ path: '/audit-center', query: { trace_id: traceId } });
+}
 
 async function search() {
   const params = new URLSearchParams();
@@ -158,12 +205,12 @@ async function onRowClick(row: any) {
   if (!row.session_id) return;
   timelineSession.value = row.session_id;
   try {
-    timeline.value = await admin<any[]>('/trace/session/' + encodeURIComponent(row.session_id) + '/timeline') || [];
+    timeline.value = await admin<any[]>('/trace/session/' + encodeURIComponent(row.session_id) + '/timeline?include=all') || [];
   } catch (e: any) { feedback.log(e.message, 'err'); }
 }
 
-onMounted(() => { search(); });
-watch(() => session.tenant, () => { search(); });
+onMounted(() => { search(); loadIngestStatus(); });
+watch(() => session.tenant, () => { search(); loadIngestStatus(); });
 </script>
 <style scoped>
 .trace-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
@@ -174,6 +221,17 @@ watch(() => session.tenant, () => { search(); });
   cursor: pointer; font-size: 12px; line-height: 1; padding: 0;
 }
 .trace-help:hover, .trace-help:focus-visible { color: var(--v-primary); border-color: var(--v-primary); outline: none; }
+.trace-coverage {
+  display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline;
+  font-size: 12px; margin-bottom: 12px; padding: 8px 12px;
+  background: #f8fafc; border: 1px solid var(--v-border); border-radius: 6px;
+}
+.trace-coverage-text { color: #475569; }
+.trace-last { color: #64748b; }
+.trace-warn { color: #b45309; font-weight: 500; }
+.trace-audit-card { cursor: pointer; background: #f0f9ff; }
+.trace-audit-card:hover { background: #e0f2fe; }
+.trace-audit-link { color: var(--v-primary); font-size: 12px; }
 </style>
 <style>
 .trace-help-popper { max-width: 420px; line-height: 1.55; }

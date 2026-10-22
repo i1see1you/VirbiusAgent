@@ -24,33 +24,61 @@
       <el-tab-pane :label="t('ev.tab-reports')" name="reports">
         <div class="v-row">
           <el-button size="small" @click="loadReports">{{ t('ev.refresh') }}</el-button>
+          <el-input v-model="filterAgent" size="small" clearable style="width:180px"
+                    :placeholder="t('ev.filter-agent')" @keyup.enter="reloadReports" />
+          <el-select v-model="filterGrade" size="small" clearable style="width:150px"
+                     :placeholder="t('ev.filter-grade')" @change="reloadReports">
+            <el-option value="blocked" label="blocked" />
+            <el-option value="review" label="review" />
+            <el-option value="caution" label="caution" />
+            <el-option value="pass" label="pass" />
+          </el-select>
           <span class="v-hint">{{ t('ev.reports-hint') }}</span>
         </div>
         <el-table :data="reports" size="small" border stripe highlight-current-row
-                  style="margin-top:12px" :empty-text="t('ev.empty')" @row-click="openReport">
+                  style="margin-top:12px" :empty-text="t('ev.empty')" @row-click="openReport"
+                  :row-class-name="reportRowClass">
           <el-table-column prop="report_id" :label="t('ev.col-report')" width="220" />
-          <el-table-column prop="agent_name" :label="t('ev.col-agent')" width="160" />
-          <el-table-column :label="t('ev.col-target')" min-width="220" show-overflow-tooltip>
+          <el-table-column prop="agent_name" :label="t('ev.col-agent')" width="150" />
+          <el-table-column :label="t('ev.col-target')" min-width="200" show-overflow-tooltip>
             <template #default="{ row }">
               {{ row.target_fingerprint || row.target_path }}
             </template>
           </el-table-column>
-          <el-table-column :label="t('ev.col-score')" width="90">
+          <el-table-column :label="t('ev.col-score')" width="80">
             <template #default="{ row }">{{ row.summary?.risk_score }}</template>
           </el-table-column>
-          <el-table-column :label="t('ev.col-grade')" width="100">
+          <el-table-column :label="t('ev.col-grade')" width="95">
             <template #default="{ row }">
               <el-tag size="small" :type="gradeType(row.summary?.grade)">{{ row.summary?.grade }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column prop="scanned_at" :label="t('ev.col-time')" width="200" />
+          <el-table-column :label="t('ev.accepted')" width="95">
+            <template #default="{ row }">{{ row.suppressed_count ?? 0 }}</template>
+          </el-table-column>
+          <el-table-column prop="scanned_at" :label="t('ev.col-time')" width="190" />
         </el-table>
+        <div class="v-row" style="margin-top:10px">
+          <el-button size="small" :disabled="offset === 0" @click="prevPage">{{ t('ev.prev') }}</el-button>
+          <span class="v-hint">{{ offset + 1 }}–{{ Math.min(offset + limit, total) }} / {{ total }}</span>
+          <el-button size="small" :disabled="offset + limit >= total" @click="nextPage">{{ t('ev.next') }}</el-button>
+        </div>
 
         <template v-if="detail">
           <h3 style="margin:16px 0 8px">
             {{ detail.report_id }} · {{ detail.summary?.risk_score }} · {{ detail.summary?.grade }}
+            <el-tag v-if="acceptedCount" size="small" type="info" style="margin-left:8px">
+              {{ t('ev.accepted-n', { n: acceptedCount }) }}
+            </el-tag>
           </h3>
-          <el-table :data="detail.findings" size="small" border stripe>
+          <div class="v-row" style="margin-bottom:8px">
+            <el-button size="small" @click="exportReport('json')">JSON</el-button>
+            <el-button size="small" @click="exportReport('html')">HTML</el-button>
+            <el-button size="small" @click="exportReport('sarif')">SARIF</el-button>
+            <el-checkbox v-model="showSuppressed">{{ t('ev.show-suppressed') }}</el-checkbox>
+          </div>
+          <el-table :data="visibleFindings" size="small" border stripe
+                    :row-class-name="findingRowClass">
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div style="padding:8px 16px">
@@ -63,6 +91,10 @@
                     <strong>{{ t('ev.prescription') }}</strong>
                     <div v-for="(c, i) in row.virbius_config" :key="i" class="ev-evidence">{{ c }}</div>
                   </div>
+                  <div v-if="row.suppressed" style="margin-top:8px">
+                    <strong>{{ t('ev.suppression-reason') }}</strong>
+                    <div class="ev-evidence">{{ row.suppression?.reason || '-' }}</div>
+                  </div>
                   <div v-if="row.commands?.length" style="margin-top:8px">
                     <el-button size="small" @click="copy(row.commands.join('\n'))">
                       {{ t('ev.copy-commands') }}
@@ -73,9 +105,12 @@
               </template>
             </el-table-column>
             <el-table-column prop="risk_name" :label="t('ev.col-risk')" min-width="280" />
-            <el-table-column :label="t('ev.col-severity')" width="100">
+            <el-table-column :label="t('ev.col-severity')" width="120">
               <template #default="{ row }">
                 <el-tag size="small" :type="sevType(row.severity)">{{ row.severity }}</el-tag>
+                <el-tag v-if="row.suppressed" size="small" type="info" style="margin-left:4px">
+                  {{ t('ev.suppressed') }}
+                </el-tag>
               </template>
             </el-table-column>
             <el-table-column prop="check_id" :label="t('ev.col-check')" width="220" />
@@ -167,9 +202,23 @@
           <el-button type="primary" :loading="running" :disabled="!writable" @click="run">
             {{ t('ev.run-btn') }}
           </el-button>
+          <el-button v-if="activeJob && !jobTerminal" size="small" @click="cancelCurrent">
+            {{ t('ev.cancel') }}
+          </el-button>
           <span v-if="lastResult" class="v-hint">
             {{ lastResult.report_id }} · {{ lastResult.summary?.risk_score }} ·
             {{ lastResult.summary?.grade }}
+          </span>
+        </div>
+        <div v-if="activeJob" class="ev-job">
+          <el-progress v-if="activeJob.progress?.total"
+                       :percentage="Math.round((activeJob.progress.done / activeJob.progress.total) * 100)" />
+          <span class="v-hint">
+            {{ t('ev.job-status') }}: {{ activeJob.status }} · {{ activeJob.phase }}
+            <template v-if="activeJob.progress?.total">
+              · {{ activeJob.progress.done }}/{{ activeJob.progress.total }}
+            </template>
+            <template v-if="activeJob.progress?.current"> · {{ activeJob.progress.current }}</template>
           </span>
         </div>
       </el-tab-pane>
@@ -192,9 +241,9 @@ import EvaluationIntroPanel from '@/components/EvaluationIntroPanel.vue';
 import EvaluationSettingsPanel from '@/components/EvaluationSettingsPanel.vue';
 import { useEvaluationStore } from '@/stores/evaluation';
 import {
-  createProbe, createReplay, createScan, createSkillScan, getReport,
-  importReplay, listReports,
-  type ReportMeta, type ScanReport
+  cancelJob, createProbe, createReplay, createScan, createSkillScan, downloadReport,
+  getJob, getReport, importReplay, listReports,
+  type JobView, type ReportMeta, type ScanReport
 } from '@/api/evaluation';
 
 const { t } = useI18n();
@@ -234,7 +283,21 @@ const licenseBanner = computed<{ type: 'info' | 'warning' | 'error'; title: stri
 const tab = ref('reports');
 const settingsOpen = ref(false);
 const reports = ref<ReportMeta[]>([]);
+const total = ref(0);
+const limit = ref(20);
+const offset = ref(0);
+const filterAgent = ref('');
+const filterGrade = ref('');
+const showSuppressed = ref(true);
+const activeJob = ref<JobView | null>(null);
+const jobTerminal = computed(() => !!activeJob.value &&
+  ['succeeded', 'failed', 'canceled'].includes(activeJob.value.status));
 const detail = ref<ScanReport | null>(null);
+
+const acceptedCount = computed(() =>
+  (detail.value?.findings || []).filter(f => f.suppressed).length);
+const visibleFindings = computed(() =>
+  (detail.value?.findings || []).filter(f => showSuppressed.value || !f.suppressed));
 
 const runType = ref<'scan' | 'http' | 'mcp' | 'replay' | 'skill' | 'jsonl'>('scan');
 const agentName = ref('');
@@ -276,10 +339,49 @@ function sevType(sev?: string): string {
 
 async function loadReports() {
   try {
-    reports.value = await listReports();
+    const page = await listReports({
+      agentName: filterAgent.value || undefined,
+      grade: filterGrade.value || undefined,
+      limit: limit.value,
+      offset: offset.value
+    });
+    reports.value = page.items;
+    total.value = page.total;
   } catch (e: any) {
     ElMessage.error(String(e?.message || e));
   }
+}
+
+function reloadReports() {
+  offset.value = 0;
+  void loadReports();
+}
+
+function prevPage() {
+  offset.value = Math.max(0, offset.value - limit.value);
+  void loadReports();
+}
+
+function nextPage() {
+  offset.value += limit.value;
+  void loadReports();
+}
+
+async function exportReport(format: 'json' | 'html' | 'sarif') {
+  if (!detail.value) return;
+  try {
+    await downloadReport(detail.value.report_id, format);
+  } catch (e: any) {
+    ElMessage.error(String(e?.message || e));
+  }
+}
+
+function reportRowClass() {
+  return '';
+}
+
+function findingRowClass({ row }: { row: { suppressed?: boolean } }) {
+  return row.suppressed ? 'ev-suppressed-row' : '';
 }
 
 async function openReport(row: ReportMeta) {
@@ -311,24 +413,25 @@ async function copy(text: string) {
 
 async function run() {
   running.value = true;
+  activeJob.value = null;
   try {
     const baseline = baselineId.value || undefined;
     const agent = agentName.value || undefined;
+    if (runType.value === 'http' || runType.value === 'mcp') {
+      const submit = await createProbe(runType.value === 'http'
+        ? { target_type: 'http', url: targetUrl.value, model: model.value || undefined,
+            agent_name: agent, baseline_report_id: baseline }
+        : { target_type: 'mcp', mcp_cmd: mcpCmd.value.trim().split(/\s+/).filter(Boolean),
+            allow_dangerous: allowDangerous.value,
+            agent_name: agent, baseline_report_id: baseline });
+      ElMessage.info(t('ev.job-submitted', { id: submit.job_id }));
+      await pollJob(submit.job_id);
+      return;
+    }
     let report: ScanReport;
     if (runType.value === 'scan') {
       report = await createScan({
         target_path: targetPath.value, agent_name: agent, baseline_report_id: baseline
-      });
-    } else if (runType.value === 'http') {
-      report = await createProbe({
-        target_type: 'http', url: targetUrl.value, model: model.value || undefined,
-        agent_name: agent, baseline_report_id: baseline
-      });
-    } else if (runType.value === 'mcp') {
-      report = await createProbe({
-        target_type: 'mcp', mcp_cmd: mcpCmd.value.trim().split(/\s+/).filter(Boolean),
-        allow_dangerous: allowDangerous.value,
-        agent_name: agent, baseline_report_id: baseline
       });
     } else if (runType.value === 'skill') {
       report = await createSkillScan({
@@ -359,6 +462,49 @@ async function run() {
   }
 }
 
+/** 探针任务轮询：1s 起、指数退避到 5s；终态后拉取报告。 */
+async function pollJob(jobId: string) {
+  let delay = 1000;
+  while (true) {
+    let job: JobView;
+    try {
+      job = await getJob(jobId);
+    } catch (e: any) {
+      ElMessage.error(t('ev.job-lost') + ' — ' + String(e?.message || e));
+      return;
+    }
+    activeJob.value = job;
+    if (job.status === 'succeeded') {
+      if (job.report_id) {
+        const report = await getReport(job.report_id);
+        lastResult.value = report;
+        ElMessage.success(`${report.report_id} · ${report.summary?.grade}`);
+        await loadReports();
+      }
+      return;
+    }
+    if (job.status === 'failed') {
+      ElMessage.error(job.error?.message || t('ev.job-failed'));
+      return;
+    }
+    if (job.status === 'canceled') {
+      ElMessage.info(t('ev.job-canceled'));
+      return;
+    }
+    await new Promise(r => setTimeout(r, delay));
+    delay = Math.min(5000, Math.round(delay * 1.5));
+  }
+}
+
+async function cancelCurrent() {
+  if (!activeJob.value) return;
+  try {
+    activeJob.value = await cancelJob(activeJob.value.job_id);
+  } catch (e: any) {
+    ElMessage.error(String(e?.message || e));
+  }
+}
+
 async function refreshStatus() {
   await evalStore.load(true);
   if (ready.value) await loadReports();
@@ -371,6 +517,8 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.ev-job { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+:deep(.ev-suppressed-row) { opacity: .55; background: var(--el-fill-color-light); }
 .ev-evidence {
   font-size: 12px;
   color: var(--el-text-color-regular);

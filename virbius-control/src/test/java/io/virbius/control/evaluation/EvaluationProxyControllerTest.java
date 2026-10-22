@@ -25,6 +25,7 @@ class EvaluationProxyControllerTest {
     private HttpServer server;
     private final AtomicInteger healthCalls = new AtomicInteger();
     private final AtomicReference<String> lastQuery = new AtomicReference<>();
+    private final AtomicReference<String> lastTenantHeader = new AtomicReference<>();
 
     @AfterEach
     void stop() {
@@ -43,7 +44,7 @@ class EvaluationProxyControllerTest {
         assertNull(s.license());
         assertTrue(s.promoEnabled());
 
-        ResponseEntity<String> r = c.listReports("t", null);
+        ResponseEntity<String> r = c.listReports("t", null, null, null, null, null, null);
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, r.getStatusCode());
         assertTrue(r.getBody().contains("\"code\":5031"), r.getBody());
     }
@@ -59,7 +60,7 @@ class EvaluationProxyControllerTest {
         assertEquals(30L, s.license().daysLeft());
         assertEquals(Boolean.TRUE, s.license().active());
 
-        ResponseEntity<String> r = c.listReports("t", "http:http://127.0.0.1:1/x");
+        ResponseEntity<String> r = c.listReports("t", "http:http://127.0.0.1:1/x", null, null, null, null, null);
         assertEquals(200, r.getStatusCode().value());
         assertEquals("target_fingerprint=http:http://127.0.0.1:1/x", lastQuery.get());
     }
@@ -75,7 +76,7 @@ class EvaluationProxyControllerTest {
         assertTrue(s.configured());
         assertFalse(s.reachable());
 
-        ResponseEntity<String> r = c.listReports("t", null);
+        ResponseEntity<String> r = c.listReports("t", null, null, null, null, null, null);
         assertEquals(HttpStatus.BAD_GATEWAY, r.getStatusCode());
         assertTrue(r.getBody().contains("\"code\":5032"), r.getBody());
     }
@@ -97,7 +98,7 @@ class EvaluationProxyControllerTest {
         EvaluationProxyController.Status s = off.status("t", null);
         assertFalse(s.enabled());
         assertFalse(s.configured());
-        ResponseEntity<String> r = off.listReports("t", null);
+        ResponseEntity<String> r = off.listReports("t", null, null, null, null, null, null);
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, r.getStatusCode());
         assertTrue(r.getBody().contains("\"code\":5033"), r.getBody());
     }
@@ -119,6 +120,33 @@ class EvaluationProxyControllerTest {
         assertEquals(1, healthCalls.get(), "TTL 内应命中缓存");
         c.status("t", true);
         assertEquals(2, healthCalls.get(), "refresh=true 应绕过缓存");
+    }
+
+    @Test
+    void tenantHeaderIsInjectedOnForward() throws Exception {
+        String base = startStub(200);
+        EvaluationProxyController c = controller(base);
+        c.listReports("acme", null, null, null, null, null, null);
+        assertEquals("acme", lastTenantHeader.get(), "代理必须注入 X-VE-Tenant");
+    }
+
+    @Test
+    void probeGateDeniesTenantOutsideAllowlist() {
+        EvaluationProxyController c = controller("");
+        ResponseEntity<String> r = c.probe("acme", "{}");
+        assertEquals(HttpStatus.FORBIDDEN, r.getStatusCode());
+        assertTrue(r.getBody().contains("\"code\":40305"), r.getBody());
+    }
+
+    @Test
+    void probeGateAllowsAllowlistedTenant() throws Exception {
+        String base = startStub(200);
+        EvaluationProxyController c = new EvaluationProxyController(new EvaluationSettingsService(
+                new EvaluationSettingsService.Settings(true, base, "tok", true,
+                        "https://promo.example/x", "acme")));
+        ResponseEntity<String> r = c.probe("acme", "{}");
+        assertEquals(HttpStatus.ACCEPTED, r.getStatusCode(), r.getBody());
+        assertEquals("acme", lastTenantHeader.get());
     }
 
     // ---------- helpers ----------
@@ -146,7 +174,13 @@ class EvaluationProxyControllerTest {
         });
         server.createContext("/api/v1/evaluations/reports", ex -> {
             lastQuery.set(ex.getRequestURI().getQuery());
+            lastTenantHeader.set(ex.getRequestHeaders().getFirst("X-VE-Tenant"));
             respond(ex, 200, "{\"code\":0,\"data\":[]}");
+        });
+        server.createContext("/api/v1/evaluations/probes", ex -> {
+            lastTenantHeader.set(ex.getRequestHeaders().getFirst("X-VE-Tenant"));
+            respond(ex, 202, "{\"code\":0,\"data\":{\"job_id\":\"job-1\","
+                    + "\"status\":\"queued\",\"poll_after_ms\":1000}}");
         });
         server.start();
         return "http://127.0.0.1:" + server.getAddress().getPort();

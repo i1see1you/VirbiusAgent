@@ -107,3 +107,20 @@ export async function adminUpload<T = any>(path: string, formData: FormData): Pr
 export function jsonBody(obj: any): string {
   return JSON.stringify(obj);
 }
+
+/** Tenant-scoped download (HTML/SARIF), carrying the session/API-key headers. */
+export async function adminDownload(path: string, filename: string): Promise<void> {
+  const url = '/api/v1/admin/tenants/' + encodeURIComponent(ctx.tenant || 'default') + path;
+  const res = await fetch(url, { credentials: 'same-origin', headers: authHeaders(undefined, true) });
+  redirectToLoginIfUnauthorized(res);
+  if (!res.ok) throw new Error('download failed: HTTP ' + res.status);
+  const blob = await res.blob();
+  const href = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(href);
+}

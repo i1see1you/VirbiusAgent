@@ -22,6 +22,10 @@
         <el-form-item :label="t('ev.set-promo-url')">
           <el-input v-model="form.promoUrl" placeholder="https://..." />
         </el-form-item>
+        <el-form-item :label="t('ev.set-probe-tenants')">
+          <el-input v-model="form.probeTenants"
+                    :placeholder="t('ev.set-probe-tenants-hint')" />
+        </el-form-item>
       </el-form>
 
       <div class="v-row" style="gap:8px;margin:8px 0 16px">
@@ -81,7 +85,8 @@ const form = reactive({
   enabled: true,
   baseUrl: '',
   promoEnabled: true,
-  promoUrl: ''
+  promoUrl: '',
+  probeTenants: ''
 });
 
 function apply(v: EvaluationSettingsView) {
@@ -89,6 +94,7 @@ function apply(v: EvaluationSettingsView) {
   form.baseUrl = v.baseUrl || '';
   form.promoEnabled = v.promoEnabled;
   form.promoUrl = v.promoUrl || '';
+  form.probeTenants = v.probeTenants || '';
   apiTokenSet.value = v.apiTokenSet;
   tokenInput.value = '';
   clearToken.value = false;

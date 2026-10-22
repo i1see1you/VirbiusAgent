@@ -22,7 +22,7 @@ public class HashChainVerifier {
         String sql = """
                 SELECT audit_seq, prev_hash, curr_hash, trace_id, event_id, tenant_id,
                        effective_action, layer, reason_code, rule_id, scene,
-                       user_id, device_id, intercepted_at
+                       user_id, device_id, agent_aid, intercepted_at
                 FROM tb_audit_events
                 WHERE tenant_id = ? AND intercepted_at >= ? AND intercepted_at <= ?
                 ORDER BY audit_seq ASC
@@ -35,7 +35,7 @@ public class HashChainVerifier {
         String sql = """
                 SELECT audit_seq, prev_hash, curr_hash, trace_id, event_id, tenant_id,
                        effective_action, layer, reason_code, rule_id, scene,
-                       user_id, device_id, intercepted_at
+                       user_id, device_id, agent_aid, intercepted_at
                 FROM tb_audit_events
                 WHERE tenant_id = ?
                 ORDER BY audit_seq ASC

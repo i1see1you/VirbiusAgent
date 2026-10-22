@@ -23,20 +23,50 @@ public class EvaluationSettingsService {
 
     /** 生效配置（token 明文，仅内存）。 */
     public record Settings(boolean enabled, String baseUrl, String apiToken,
-                           boolean promoEnabled, String promoUrl) {
+                           boolean promoEnabled, String promoUrl, String probeTenants) {
+
+        /** 兼容构造（无 probe 租户白名单）。 */
+        public Settings(boolean enabled, String baseUrl, String apiToken,
+                        boolean promoEnabled, String promoUrl) {
+            this(enabled, baseUrl, apiToken, promoEnabled, promoUrl, "");
+        }
+
         public boolean configured() {
             return baseUrl != null && !baseUrl.isBlank();
+        }
+
+        /** 探针租户白名单：空=仅平台管理员；* = 全部；否则逗号分隔。 */
+        public java.util.Set<String> probeTenantSet() {
+            java.util.Set<String> out = new java.util.LinkedHashSet<>();
+            if (probeTenants != null) {
+                for (String t : probeTenants.split(",")) {
+                    if (!t.isBlank()) {
+                        out.add(t.strip().toLowerCase());
+                    }
+                }
+            }
+            return out;
         }
     }
 
     /** 对外视图（token 永不回传）。 */
     public record View(boolean enabled, String baseUrl, boolean apiTokenSet, boolean promoEnabled,
-                       String promoUrl, String updatedBy) {
+                       String promoUrl, String probeTenants, String updatedBy) {
+
+        public View(boolean enabled, String baseUrl, boolean apiTokenSet, boolean promoEnabled,
+                    String promoUrl, String updatedBy) {
+            this(enabled, baseUrl, apiTokenSet, promoEnabled, promoUrl, "", updatedBy);
+        }
     }
 
     /** 保存请求：apiToken=null 表示保持不变，"" 表示清空。 */
     public record Update(boolean enabled, String baseUrl, String apiToken,
-                         boolean promoEnabled, String promoUrl) {
+                         boolean promoEnabled, String promoUrl, String probeTenants) {
+
+        public Update(boolean enabled, String baseUrl, String apiToken,
+                      boolean promoEnabled, String promoUrl) {
+            this(enabled, baseUrl, apiToken, promoEnabled, promoUrl, null);
+        }
     }
 
     private record Cache(Settings settings, long at) {
@@ -57,14 +87,23 @@ public class EvaluationSettingsService {
             @Value("${virbius.evaluation.base-url:}") String baseUrl,
             @Value("${virbius.evaluation.api-token:}") String apiToken,
             @Value("${virbius.evaluation.promo-enabled:true}") boolean promoEnabled,
-            @Value("${virbius.evaluation.promo-url:}") String promoUrl) {
+            @Value("${virbius.evaluation.promo-url:}") String promoUrl,
+            @Value("${virbius.evaluation.probe-tenants:}") String probeTenants) {
         this.repository = repository;
         this.cipher = cipher;
         this.seed = new Settings(enabled, baseUrl == null ? "" : baseUrl.trim(),
                 apiToken == null ? "" : apiToken.trim(), promoEnabled,
-                promoUrl == null ? "" : promoUrl.trim());
+                promoUrl == null ? "" : promoUrl.trim(), normalizeTenants(probeTenants));
         this.fixed = false;
         seedIfEmpty();
+    }
+
+    /** 测试构造（7 参，无 probe 租户白名单）。 */
+    public EvaluationSettingsService(EvaluationSettingsRepository repository,
+                                     EvaluationSettingsCipher cipher, boolean enabled,
+                                     String baseUrl, String apiToken, boolean promoEnabled,
+                                     String promoUrl) {
+        this(repository, cipher, enabled, baseUrl, apiToken, promoEnabled, promoUrl, "");
     }
 
     /** 测试/固定配置（无 DB）。 */
@@ -84,9 +123,12 @@ public class EvaluationSettingsService {
             }
             String ct = seed.apiToken().isBlank() ? null : cipher.encrypt(seed.apiToken());
             repository.upsert(new EvaluationSettingsRepository.Row(seed.enabled(),
-                    seed.baseUrl(), ct, seed.promoEnabled(), seed.promoUrl(), "env-seed"));
-            log.info("evaluation settings seeded from env: enabled={} baseUrl={} token={}",
-                    seed.enabled(), seed.baseUrl(), seed.apiToken().isBlank() ? "none" : "set");
+                    seed.baseUrl(), ct, seed.promoEnabled(), seed.promoUrl(),
+                    seed.probeTenants(), "env-seed"));
+            log.info("evaluation settings seeded from env: enabled={} baseUrl={} token={}"
+                            + " probeTenants={}",
+                    seed.enabled(), seed.baseUrl(), seed.apiToken().isBlank() ? "none" : "set",
+                    seed.probeTenants());
         } catch (Exception e) {
             throw new IllegalStateException(
                     "评估集成设置初始化失败（检查 DB 与 VIRBIUS_SETTINGS_MASTER_KEY）: " + e.getMessage(), e);
@@ -111,7 +153,7 @@ public class EvaluationSettingsService {
     public View view() {
         Settings s = get();
         return new View(s.enabled(), s.baseUrl(), !s.apiToken().isBlank(), s.promoEnabled(),
-                s.promoUrl(), updatedBy());
+                s.promoUrl(), s.probeTenants(), updatedBy());
     }
 
     /** 保存（全量替换；apiToken=null 保持原值，"" 清空）。热生效。 */
@@ -124,13 +166,18 @@ public class EvaluationSettingsService {
         String existing = get().apiToken();
         String token = u.apiToken() == null ? existing : u.apiToken().trim();
         String ct = token.isBlank() ? null : cipher.encrypt(token);
+        String tenants = u.probeTenants() == null ? get().probeTenants()
+                : normalizeTenants(u.probeTenants());
         repository.upsert(new EvaluationSettingsRepository.Row(u.enabled(), baseUrl, ct,
                 u.promoEnabled(), u.promoUrl() == null ? "" : u.promoUrl().trim(),
-                actor == null || actor.isBlank() ? "unknown" : actor));
+                tenants, actor == null || actor.isBlank() ? "unknown" : actor));
         cache.set(new Cache(new Settings(u.enabled(), baseUrl, token, u.promoEnabled(),
-                u.promoUrl() == null ? "" : u.promoUrl().trim()), System.currentTimeMillis()));
-        log.info("evaluation settings updated by {}: enabled={} baseUrl={} token={} promo={}",
-                actor, u.enabled(), baseUrl, token.isBlank() ? "none" : "set", u.promoEnabled());
+                u.promoUrl() == null ? "" : u.promoUrl().trim(), tenants),
+                System.currentTimeMillis()));
+        log.info("evaluation settings updated by {}: enabled={} baseUrl={} token={} promo={}"
+                        + " probeTenants={}",
+                actor, u.enabled(), baseUrl, token.isBlank() ? "none" : "set", u.promoEnabled(),
+                tenants);
         return view();
     }
 
@@ -138,8 +185,8 @@ public class EvaluationSettingsService {
         return repository.find().map(row -> new Settings(row.enabled(), row.baseUrl(),
                         row.apiTokenCt() == null || row.apiTokenCt().isBlank()
                                 ? "" : cipher.decrypt(row.apiTokenCt()),
-                        row.promoEnabled(), row.promoUrl()))
-                .orElse(new Settings(true, "", "", true, ""));
+                        row.promoEnabled(), row.promoUrl(), row.probeTenants()))
+                .orElse(new Settings(true, "", "", true, "", ""));
     }
 
     private String updatedBy() {
@@ -149,6 +196,25 @@ public class EvaluationSettingsService {
         } catch (Exception e) {
             return "unknown";
         }
+    }
+
+    /** 归一化租户白名单：小写、去空、校验 [a-z0-9_-] 或 *。 */
+    static String normalizeTenants(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return "";
+        }
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (String t : raw.split(",")) {
+            String v = t.strip().toLowerCase();
+            if (v.isEmpty()) {
+                continue;
+            }
+            if (!"*".equals(v) && !v.matches("[a-z0-9_-]{1,64}")) {
+                throw new IllegalArgumentException("非法租户 id（允许 [a-z0-9_-] 或 *）: " + t);
+            }
+            out.add(v);
+        }
+        return String.join(",", out);
     }
 
     private static void validate(String baseUrl) {
