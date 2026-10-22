@@ -75,14 +75,16 @@ if [[ -n "$(stale_control_pids)" ]]; then
   fi
   warn "stale virbius-control process(es) found, auto-killing:"
   pgrep -fl 'virbius-control-.*\.jar' >&2 || true
-  kill $(stale_control_pids) 2>/dev/null || true
+  read -r -a _stale_pids <<< "$(stale_control_pids)"
+  (( ${#_stale_pids[@]} )) && kill "${_stale_pids[@]}" 2>/dev/null || true
   for _ in $(seq 1 50); do
     [[ -z "$(stale_control_pids)" ]] && break
     sleep 0.2
   done
   if [[ -n "$(stale_control_pids)" ]]; then
     warn "TERM did not finish them, sending SIGKILL..."
-    kill -9 $(stale_control_pids) 2>/dev/null || true
+    read -r -a _stale_pids <<< "$(stale_control_pids)"
+    (( ${#_stale_pids[@]} )) && kill -9 "${_stale_pids[@]}" 2>/dev/null || true
     sleep 1
   fi
   if [[ -n "$(stale_control_pids)" ]]; then

@@ -150,8 +150,6 @@ expect_starts() {
 # ── 引擎 evaluate（用户真实调用面）──
 # 运营台 API 是全局 snake_case JSON 契约（test-policy-rollout-e2e.sh 同款）；
 # 引擎 trace_id 由调用方透传（EvaluateRequestDto.traceId），必须自带以便审计中心回查。
-EVTOKEN=""
-EVTOKEN="$(cat "${TOKEN_FILE}" 2>/dev/null || true)"
 eval_request() {
   local content="$1" role="${2:-tool_call}"
   local sid="e2e-allow-sem-$$-${RANDOM}${RANDOM}"
@@ -200,7 +198,6 @@ mint_eval_token() {
     tok=$(jgetf 'data.access_token')
     if [[ -n "${tok}" ]]; then
       printf '%s' "${tok}" > "${TOKEN_FILE}"
-      EVTOKEN="${tok}"
       return 0
     fi
   fi
@@ -309,7 +306,7 @@ for r in rules:
     for rid in ${ids}; do
       rc=$(http POST "/api/v1/admin/tenants/${TENANT}/rules/${rid}/rollout/disable" '{}')
       if [[ "${rc}" == 2* ]]; then count=$((count+1)); else
-        echo -e "  ${RED}DISPOSER 失败${NC}: ${rid} (HTTP ${rc})"; log_fail_and_exit=1
+        log_fail "DISPOSER 停用失败: ${rid} (HTTP ${rc})"
       fi
     done
   done
@@ -366,7 +363,6 @@ fi
 log_step "S1. 残留复位 + 规则草稿（新建 FP 抑制规则）"
 reset_test_rule || { log_fail "残留复位失败"; exit 2; }
 
-RULE_BODY='def decide(ctx) { def v = ctx.var("content"); return v != null && v.contains("'${MARKER}'") }'
 UP_PAYLOAD=$(python3 -c "
 import json
 print(json.dumps({

@@ -202,8 +202,8 @@ except Exception:
 # probe_until_block：guard 对词面有抖动（措辞敏感），基准不稳时重采样直到
 # 出现 block by prompt-* 上限 N 轮。stdout 输出最终响应 JSON；断言由调用方做。
 probe_until_block() {
-  local tries="${1:-15}" i resp action rid
-  for i in $(seq 1 "${tries}"); do
+  local tries="${1:-15}" resp action rid
+  for _ in $(seq 1 "${tries}"); do
     resp=$(evaluate "${FP_PROMPT}")
     action=$(evf "${resp}" 'effective_action')
     rid=$(evf "${resp}" 'rule_id')
@@ -220,8 +220,8 @@ LAST_EVAL_JSON=""
 
 # probe_until_suppressed：压制特征对 = allow 且 rule_id==基准规则。
 probe_until_suppressed() {
-  local tries="${1:-25}" i resp action rid
-  for i in $(seq 1 "${tries}"); do
+  local tries="${1:-25}" resp action rid
+  for _ in $(seq 1 "${tries}"); do
     resp=$(evaluate "${FP_PROMPT}")
     action=$(evf "${resp}" 'effective_action')
     rid=$(evf "${resp}" 'rule_id')
@@ -239,8 +239,8 @@ probe_until_suppressed() {
 # 不允许再出现 (allow, BASE_RULE) 对。guard 仍可能拦截（block）或自行放行
 # （POLICY_ALLOW），两者均为合法撤销态。
 probe_absent_suppression() {
-  local probes="${1:-5}" i resp action rid
-  for i in $(seq 1 "${probes}"); do
+  local probes="${1:-5}" resp action rid
+  for _ in $(seq 1 "${probes}"); do
     resp=$(evaluate "${FP_PROMPT}")
     action=$(evf "${resp}" 'effective_action')
     rid=$(evf "${resp}" 'rule_id')
@@ -517,7 +517,7 @@ log_step "S6. 审计中心：压制 (allow, 被压制 guard 规则) 必落链（
 
 if [[ "${AUDIT_LIVE}" == 1 && -n "${SUPPRESS_TRACE}" ]]; then
   AUDIT_GOT=0
-  for i in $(seq 1 10); do
+  for _ in $(seq 1 10); do
     rc=$(http GET "/api/v1/admin/tenants/${TENANT}/audit/trace/${SUPPRESS_TRACE}")
     if [[ "${rc}" == 2* && "$(jgetf 'code')" == "0" ]]; then
       N=$(jgetf 'data.db_count')
