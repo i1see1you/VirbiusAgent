@@ -49,15 +49,15 @@ class PolicyDeciderTest {
     }
 
     @Test
-    void decideReturnsAllowWhenFirstSignalIsAllow() {
+    void dryRunAllowDoesNotSuppressDeny() {
         List<SignalDto> signals = List.of(
                 new SignalDto("Rule_Allow", 1, "cloud", "cloud", 0, "SAFE", "allow", "dry_run", null, null),
                 new SignalDto("Rule_Deny", 2, "cloud", "cloud", 80, "DANGER", "deny", "full", null, null));
 
         EngineDecisionDto decision = decider.decide("default", "sess-1", signals, null);
 
-        // First allow intent short-circuits to ALLOW
-        assertEquals("allow", decision.effectiveAction());
+        // dry_run allow is observation-only: the deny still enforces.
+        assertEquals("block", decision.effectiveAction());
     }
 
     @Test

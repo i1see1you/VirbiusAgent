@@ -18,7 +18,15 @@ public final class ActionMerge {
             String enforceMode,
             Integer canaryPercent) {}
 
-    public record MergeResult(String effectiveAction, int maxRiskScore, RuleHit primary) {}
+    /**
+     * Merge result.
+     *
+     * @param suppressed true only when an allow hit overrode an enforceable
+     *                   deny/challenge (FP-suppression). Allow-only hits that
+     *                   merely attribute to an allow rule leave this false so
+     *                   the audit sampler keeps routine benign traffic sampled.
+     */
+    public record MergeResult(String effectiveAction, int maxRiskScore, RuleHit primary, boolean suppressed) {}
 
     private ActionMerge() {}
 
@@ -38,14 +46,48 @@ public final class ActionMerge {
 
     public static MergeResult merge(List<RuleHit> hits, String sessionId) {
         if (hits == null || hits.isEmpty()) {
-            return new MergeResult(IntentAction.ALLOW, 0, null);
+            return new MergeResult(IntentAction.ALLOW, 0, null, false);
         }
-        if (hits.stream().anyMatch(h -> IntentAction.isAllowIntent(h.intentAction()))) {
-            return new MergeResult(IntentAction.ALLOW, 0, null);
+        // Allow hits only suppress when their enforcement is effective
+        // (full, or canary with the session in bucket). A dry_run allow must
+        // NOT hard-pass — it is an exception candidate under observation and
+        // may not weaken any enforcement until promoted. Enforce-blank hits
+        // were normalized to "dry_run" upstream, so the default is conservative.
+        List<RuleHit> allowHits = hits.stream()
+                .filter(h -> IntentAction.isAllowIntent(h.intentAction()))
+                .toList();
+        if (!allowHits.isEmpty() && effectiveEnforce(allowHits, sessionId)) {
+            // Attribution: surface the strongest overridden enforcement hit as
+            // primary so audits record (allow, deny-rule) instead of losing the
+            // suppressed rule behind POLICY_ALLOW. Only deny/challenge hits are
+            // enforcement; review hits never blocked and are not attribution.
+            RuleHit topSuppressed = hits.stream()
+                    .filter(h -> !IntentAction.isAllowIntent(h.intentAction()))
+                    .filter(h -> IntentAction.priority(h.intentAction()) >= 50)
+                    .max(Comparator.comparingInt(RuleHit::riskScore)
+                            .thenComparingInt(RuleHit::ruleRevision)
+                            .thenComparing(RuleHit::ruleId))
+                    .orElse(null);
+            if (topSuppressed != null) {
+                return new MergeResult(IntentAction.ALLOW, 0, topSuppressed, true);
+            }
+            // Allow-only: nothing was overridden, but the release decision was
+            // still caused by a specific allow rule. Attribute to the strongest
+            // *enforced* allow hit (never a dry_run/out-of-bucket candidate)
+            // so the operations console can name the rule instead of
+            // POLICY_ALLOW. suppressed stays false: no enforcement was
+            // overridden, so routine benign traffic stays on normal sampling.
+            RuleHit attribution = allowHits.stream()
+                    .filter(h -> isEffectivelyEnforced(h, sessionId))
+                    .max(Comparator.comparingInt(RuleHit::riskScore)
+                            .thenComparingInt(RuleHit::ruleRevision)
+                            .thenComparing(RuleHit::ruleId))
+                    .orElse(null);
+            return new MergeResult(IntentAction.ALLOW, 0, attribution, false);
         }
         int maxPriority = hits.stream().mapToInt(h -> IntentAction.priority(h.intentAction())).max().orElse(0);
         if (maxPriority <= 0) {
-            return new MergeResult(IntentAction.ALLOW, 0, null);
+            return new MergeResult(IntentAction.ALLOW, 0, null, false);
         }
         List<RuleHit> top = hits.stream()
                 .filter(h -> IntentAction.priority(h.intentAction()) == maxPriority)
@@ -61,7 +103,7 @@ public final class ActionMerge {
                     case IntentAction.REVIEW -> "review";
                     default -> IntentAction.ALLOW;
                 };
-        return new MergeResult(action, maxRiskScore, primary);
+        return new MergeResult(action, maxRiskScore, primary, false);
     }
 
     private static boolean effectiveEnforce(List<RuleHit> hits, String sessionId) {
@@ -69,6 +111,10 @@ public final class ActionMerge {
             return true;
         }
         return hits.stream().anyMatch(h -> isCanaryEffective(h, sessionId));
+    }
+
+    private static boolean isEffectivelyEnforced(RuleHit hit, String sessionId) {
+        return isFull(hit.enforceMode()) || isCanaryEffective(hit, sessionId);
     }
 
     private static boolean isFull(String mode) {

@@ -24,9 +24,6 @@ public class PolicyDecider {
             String primaryRuleId) {
         List<ActionMerge.RuleHit> hits = new ArrayList<>();
         for (SignalDto s : signals) {
-            if (s.intentAction() != null && IntentAction.isAllowIntent(s.intentAction())) {
-                return new EngineDecisionDto(IntentAction.ALLOW, 0, "dry_run");
-            }
             String intent = s.intentAction();
             String enforce = s.enforceMode();
             Integer canary = s.canaryPercent();
@@ -45,9 +42,6 @@ public class PolicyDecider {
                 }
             }
             intent = IntentAction.normalize(intent, (int) s.score());
-            if (IntentAction.isAllowIntent(intent)) {
-                return new EngineDecisionDto(IntentAction.ALLOW, 0, "dry_run");
-            }
             hits.add(new ActionMerge.RuleHit(
                     s.ruleId(),
                     s.ruleRevision(),
@@ -59,6 +53,6 @@ public class PolicyDecider {
         }
         ActionMerge.MergeResult merged = ActionMerge.merge(hits, sessionId);
         String mode = merged.primary() != null ? merged.primary().enforceMode() : "dry_run";
-        return new EngineDecisionDto(merged.effectiveAction(), merged.maxRiskScore(), mode);
+        return new EngineDecisionDto(merged.effectiveAction(), merged.maxRiskScore(), mode, merged.suppressed());
     }
 }

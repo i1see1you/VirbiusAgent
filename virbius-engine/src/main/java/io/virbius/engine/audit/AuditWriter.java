@@ -99,7 +99,15 @@ public class AuditWriter {
             putIfPresent(event, "subject_source", vars.get("virbius.subject_source"));
             putIfPresent(event, "token_iss", vars.get("virbius.token_iss"));
             boolean isAllow = "allow".equalsIgnoreCase(decision.effectiveAction());
-            if (isAllow && auditSampleRateAllow > 0) {
+            // An allow that overrode a deny/challenge (decision.suppressed) is
+            // audit-sensitive: the FP-suppression evidence must always reach
+            // the audit chain, so exempt it from the allow sampling that would
+            // drop 90% of these events. Allow-only attributions (an allow rule
+            // named as primary without anything overridden) stay on normal
+            // sampling — otherwise a broadly-anchored allow rule would exempt
+            // every benign request from sampling and flood the chain.
+            boolean suppressedAllow = isAllow && decision.suppressed();
+            if (isAllow && !suppressedAllow && auditSampleRateAllow > 0) {
                 boolean sampled = ThreadLocalRandom.current().nextDouble() < auditSampleRateAllow;
                 if (sampled) {
                     event.put("sampled_allow", true);
@@ -112,7 +120,7 @@ public class AuditWriter {
             } else {
                 auditLog.info(json);
             }
-            if (!isAllow || event.containsKey("sampled_allow")) {
+            if (!isAllow || suppressedAllow || event.containsKey("sampled_allow")) {
                 publisher.publish(Map.of("payload", json));
             }
         } catch (Exception e) {

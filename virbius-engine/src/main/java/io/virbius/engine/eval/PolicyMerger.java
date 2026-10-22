@@ -50,7 +50,8 @@ public class PolicyMerger {
         }
         ActionMerge.MergeResult merged = ActionMerge.merge(hits, sessionId);
         String enforceMode = merged.primary() != null ? merged.primary().enforceMode() : "dry_run";
-        EngineDecisionDto decision = new EngineDecisionDto(merged.effectiveAction(), merged.maxRiskScore(), enforceMode);
+        EngineDecisionDto decision =
+                new EngineDecisionDto(merged.effectiveAction(), merged.maxRiskScore(), enforceMode, merged.suppressed());
         SignalDto primarySignal = merged.primary() != null ? toPrimarySignal(merged.primary()) : null;
         return new PolicyMergeResult(decision, primarySignal);
     }
