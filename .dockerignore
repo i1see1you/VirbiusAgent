@@ -28,6 +28,7 @@ virbius-control/frontend/node/
 virbius-guard/
 virbius-intent/
 virbius-eval/
+virbius-evaluation/
 virbius-integrate/
 docs/
 examples/

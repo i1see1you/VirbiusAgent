@@ -16,6 +16,7 @@ const routes = [
   { path: '/audit-integrity', name: 'audit-integrity', component: () => import('@/views/AuditIntegrityView.vue') },
   { path: '/alerts', name: 'alerts', component: () => import('@/views/AlertsView.vue') },
   { path: '/integrate', name: 'integrate', component: () => import('@/views/IntegrateView.vue') },
+  { path: '/evaluation', name: 'evaluation', component: () => import('@/views/EvaluationView.vue') },
   { path: '/monitor', name: 'monitor', component: () => import('@/views/MonitorView.vue') },
   { path: '/challenge', name: 'challenge', component: () => import('@/views/ChallengeView.vue') },
   { path: '/trace', name: 'trace', component: () => import('@/views/TraceView.vue') }

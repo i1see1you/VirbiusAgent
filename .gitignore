@@ -108,3 +108,7 @@ virbius-evaluation/
 
 # maturin editable-install artifacts (built into the mixed python-source tree)
 virbius-mcp-python/python/virbius_mcp_python/*.so
+# virbius-evaluation 一键安装生成的本地文件（install-evaluation.sh 在仓库根运行）
+.env.evaluation
+docker-compose.evaluation.yml
+data/evaluation-license/

@@ -81,6 +81,12 @@ body {
 .v-nav-icon { width: 1.25rem; height:1.25rem; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
 .v-nav-icon svg { width:18px; height:18px; }
 .v-nav-label { white-space: nowrap; overflow: hidden; }
+.v-nav-badge {
+  margin-left: 6px; padding: 0 5px; font-size: 10px; line-height: 16px;
+  border-radius: 4px; color: var(--el-color-info-dark-2);
+  background: var(--el-color-info-light-8); white-space: nowrap;
+}
+.v-sidebar.collapsed .v-nav-badge { display: none; }
 .v-sidebar.collapsed .v-nav-label { display: none; }
 .v-sidebar.collapsed .v-nav-sub { padding-left: 14px; justify-content: center; }
 .v-nav-group-head { display: flex; align-items: center; justify-content: space-between; width: 100%; }

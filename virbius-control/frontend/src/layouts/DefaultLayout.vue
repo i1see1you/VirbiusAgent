@@ -12,10 +12,11 @@
         <nav class="v-sidebar-nav">
           <div class="v-nav-section">
             <div class="v-nav-section-label">{{ t('nav.group-ops') }}</div>
-            <button v-for="n in opsItems" :key="n.to" class="v-nav-item"
+            <button v-for="n in visibleOpsItems" :key="n.to" class="v-nav-item"
               :class="{ active: isActive(n.to) }" :title="t(n.label)" @click="go(n.to)">
               <span class="v-nav-icon" v-html="icons[n.name]"></span>
               <span class="v-nav-label">{{ t(n.label) }}</span>
+              <span v-if="n.badge" class="v-nav-badge">{{ t(n.badge) }}</span>
             </button>
           </div>
 
@@ -104,6 +105,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import zhCn from 'element-plus/es/locale/lang/zh-cn';
 import en from 'element-plus/es/locale/lang/en';
 import { useSessionStore } from '@/stores/session';
+import { useEvaluationStore } from '@/stores/evaluation';
 import { useRulesStore, type LayerKey } from '@/stores/rules';
 import { useFeedbackStore } from '@/stores/feedback';
 import { adminRoot } from '@/api/client';
@@ -113,6 +115,7 @@ const { t, locale } = useI18n();
 const router = useRouter();
 const route = useRoute();
 const session = useSessionStore();
+const evaluationStore = useEvaluationStore();
 const rules = useRulesStore();
 const feedback = useFeedbackStore();
 
@@ -134,6 +137,7 @@ const icons: Record<string, string> = {
   monitor: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 16l5-7 4 3 5-8"/></svg>',
   challenge: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10 3l2.5 5 5.5.5-4 4 1 5.5L10 15l-5 3 1-5.5-4-4L7.5 8 10 3z"/></svg>',
   trace: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="5" cy="5" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="10" cy="16" r="1.5"/><path d="M6 6l8 3M16 11l-6 4"/></svg>',
+  evaluation: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 3.2h9l3 3v10.6H4z"/><path d="M7 9h6M7 12h6M7 15h4"/><path d="M13 3.2v3h3"/></svg>',
   integrate: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4h6a2 2 0 0 1 2 2v1"/><path d="M5 7h6a2 2 0 0 1 2 2v1"/><path d="M3 10h6a2 2 0 0 1 2 2v1"/><circle cx="15" cy="15" r="2.4"/></svg>',
   cloud: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 15.2h7.6a2.9 2.9 0 0 0 .3-5.78 4.1 4.1 0 0 0-7.9-1.15A3 3 0 0 0 6.2 15.2Z"/></svg>',
   gateway: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 16.5V7.2a6 6 0 0 1 12 0v9.3"/><path d="M4 16.5h12"/><path d="M10 16.5V9"/></svg>',
@@ -141,10 +145,16 @@ const icons: Record<string, string> = {
   kernel: '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m10 2.8 6.2 3.6v7.2L10 17.2 3.8 13.6V6.4Z"/><circle cx="10" cy="10" r="2.2"/></svg>'
 };
 
+// 「评估」入口默认隐藏：仅当集成已启用且已接入（configured=true，即安装并配置了 base-url）时显示。
+// 未安装时导航干净；安装后状态刷新即自动出现（无需重启）。直接访问 /evaluation 仍可做初始配置。
+const visibleOpsItems = computed(() =>
+  opsItems.filter((n) => n.name !== 'evaluation'
+    || (evaluationStore.status?.enabled !== false && evaluationStore.status?.configured === true)));
 const opsItems = [
   { to: '/challenge', name: 'challenge', label: 'nav.challenge' },
   { to: '/monitor', name: 'monitor', label: 'nav.monitor' },
   { to: '/integrate', name: 'integrate', label: 'nav.integrate' },
+  { to: '/evaluation', name: 'evaluation', label: 'nav.evaluation', badge: 'nav.commercial' },
   { to: '/trace', name: 'trace', label: 'nav.trace' },
   { to: '/audit-center', name: 'audit-center', label: 'nav.audit-center' },
   { to: '/audit-integrity', name: 'integrity', label: 'nav.audit-integrity' },
@@ -255,5 +265,8 @@ async function logout() {
   window.location.href = '/ui/login';
 }
 
-onMounted(loadTenants);
+onMounted(() => {
+  loadTenants();
+  void evaluationStore.load();
+});
 </script>

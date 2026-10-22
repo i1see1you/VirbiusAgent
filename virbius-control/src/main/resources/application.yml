@@ -70,6 +70,16 @@ virbius:
     url: ${VIRBIUS_REDIS_URL:redis://127.0.0.1:6379}
   engine:
     base-url: ${VIRBIUS_ENGINE_URL:http://127.0.0.1:8082}
+  # 评估模块（商业扩展，可选集成；开源仓不含评估服务本体）。
+  # 配置单源 = DB（「评估 → 设置」页）；以下 env 仅作首次启动种子（写入 DB 后 env 不再生效）。
+  # settings-key 用于加密 DB 中的 api-token（缺省回退 license.master-key 派生）。
+  evaluation:
+    enabled: ${VIRBIUS_EVALUATION_ENABLED:true}
+    base-url: ${VIRBIUS_EVALUATION_BASE_URL:}
+    api-token: ${VIRBIUS_EVALUATION_API_TOKEN:}
+    promo-enabled: ${VIRBIUS_EVALUATION_PROMO_ENABLED:true}
+    promo-url: ${VIRBIUS_EVALUATION_PROMO_URL:}
+    settings-key: ${VIRBIUS_SETTINGS_MASTER_KEY:}
   gateway:
     artifact:
       enabled: ${VIRBIUS_GATEWAY_ARTIFACT_ENABLED:true}

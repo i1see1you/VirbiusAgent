@@ -859,3 +859,15 @@ CREATE TABLE IF NOT EXISTS tb_obs_app_liveness (
     updated_at      VARCHAR(32),
     PRIMARY KEY (tenant_id, app_id, device_id)
 );
+
+-- Global evaluation integration settings (V21 mirror for SQLite/dev).
+CREATE TABLE IF NOT EXISTS tb_evaluation_setting (
+    id            TINYINT      NOT NULL PRIMARY KEY,
+    enabled       BOOLEAN      NOT NULL,
+    base_url      VARCHAR(512) NOT NULL,
+    api_token_ct  TEXT         NULL,
+    promo_enabled BOOLEAN      NOT NULL,
+    promo_url     VARCHAR(512) NOT NULL,
+    updated_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by    VARCHAR(128) NOT NULL
+);
