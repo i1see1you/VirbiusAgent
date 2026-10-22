@@ -138,6 +138,25 @@ pub(crate) struct EvaluateResponse {
     pub(crate) args_hash: Option<String>,
 }
 
+/// Engine output-review response body (`role = "output"`).
+///
+/// The engine guarantees `disposal_action` on every output-review verdict
+/// (both the deterministic content-rule path and the policy pipeline resolve
+/// it through `OutputActionResolver`). A response missing the field is a
+/// contract violation: deserialization fails and the caller follows the
+/// `fail_open` policy — never a silent unredacted pass-through.
+#[derive(Debug, Deserialize)]
+pub(crate) struct OutputReviewResponse {
+    pub(crate) effective_action: String,
+    #[serde(default)]
+    pub(crate) rule_id: Option<String>,
+    #[serde(default, rename = "reason_code")]
+    pub(crate) reason: Option<String>,
+    pub(crate) disposal_action: String,
+    #[serde(default)]
+    pub(crate) sanitized_content: Option<String>,
+}
+
 /// Engine memory check request body (LLM-based injection detection).
 #[derive(Debug, Serialize)]
 struct MemoryCheckRequest<'a> {
@@ -211,6 +230,25 @@ impl EngineClient {
         timeout: Duration,
         token: &str,
     ) -> Result<EvaluateResponse, EngineError> {
+        self.post_evaluate(req, timeout, token).await
+    }
+
+    /// Output review over the same endpoint with the disposal contract fields.
+    async fn evaluate_output_review(
+        &self,
+        req: &EvaluateRequest<'_>,
+        timeout: Duration,
+        token: &str,
+    ) -> Result<OutputReviewResponse, EngineError> {
+        self.post_evaluate(req, timeout, token).await
+    }
+
+    async fn post_evaluate<T: serde::de::DeserializeOwned>(
+        &self,
+        req: &EvaluateRequest<'_>,
+        timeout: Duration,
+        token: &str,
+    ) -> Result<T, EngineError> {
         let mut builder = self.http.post(&self.url).json(req).timeout(timeout);
         if !token.is_empty() {
             builder = builder.header("Authorization", format!("Bearer {token}"));
@@ -223,9 +261,7 @@ impl EngineClient {
             return Err(EngineError::Status(status, body));
         }
 
-        resp.json::<EvaluateResponse>()
-            .await
-            .map_err(EngineError::Http)
+        resp.json::<T>().await.map_err(EngineError::Http)
     }
 
     /// STI taint check for a tool result (engine `POST /v1/evaluate/tool-result`).
@@ -751,6 +787,26 @@ impl SecurityPipeline {
         self.audit.report(event).await;
     }
 
+    /// Emit an audit event for an output-review intervention.
+    ///
+    /// `action` stays inside the existing edge vocabulary (`block` when the
+    /// original content is suppressed, `allow` for a warn-only pass-through);
+    /// the disposal verb travels in `reason_code` as `output_review:<disposal>`
+    /// so the control plane needs no schema/word-list change.
+    pub async fn audit_output_review(
+        &self,
+        session: &Session,
+        tool_name: &str,
+        action: &str,
+        rule_id: Option<&str>,
+        disposal: &str,
+    ) {
+        let reason = format!("output_review:{disposal}");
+        let mut event = AuditEvent::tool_call(session, tool_name, action, rule_id, Some(&reason));
+        event.event_type = "output_review".into();
+        self.audit.report(event).await;
+    }
+
     /// Check if output review should be triggered for the given text and risk score.
     ///
     /// Review is triggered when either:
@@ -780,13 +836,15 @@ impl SecurityPipeline {
     /// perform LLM content safety classification (VirbiusGuard) and
     /// deterministic pattern matching.
     ///
-    /// Returns the engine's evaluate response, or an error on failure.
+    /// Returns the engine's output-review verdict, including the
+    /// `disposal_action` / `sanitized_content` contract fields. The caller
+    /// applies the disposal verbatim (same mapping as the official SDK).
     pub(crate) async fn review_output(
         &self,
         session: &Session,
         tool_name: &str,
         content: &str,
-    ) -> Result<EvaluateResponse, EngineError> {
+    ) -> Result<OutputReviewResponse, EngineError> {
         let vars = HashMap::from([("app_id".to_string(), session.app_id.clone())]);
         let req = EvaluateRequest {
             trace_id: &session.trace_id,
@@ -805,7 +863,7 @@ impl SecurityPipeline {
             vars,
         };
         self.engine
-            .evaluate(
+            .evaluate_output_review(
                 &req,
                 self.timeout_for(&session.tenant_id),
                 &self.auth_token(session).await,
@@ -944,6 +1002,41 @@ mod tests {
         assert_eq!(edge_disposition("allow"), ("allow", "engine:allow"));
         // Any other value that reaches the allow branch maps to allow.
         assert_eq!(edge_disposition(""), ("allow", "engine:allow"));
+    }
+
+    #[test]
+    fn test_output_review_response_parses_disposal_contract() {
+        let ok: OutputReviewResponse = serde_json::from_str(
+            r#"{"effective_action":"deny","reason_code":"PII","disposal_action":"redact","sanitized_content":"mail [REDACTED_EMAIL]"}"#,
+        )
+        .unwrap();
+        assert_eq!(ok.effective_action, "deny");
+        assert_eq!(ok.disposal_action, "redact");
+        assert_eq!(
+            ok.sanitized_content.as_deref(),
+            Some("mail [REDACTED_EMAIL]")
+        );
+    }
+
+    #[test]
+    fn test_output_review_response_requires_disposal_action() {
+        // The engine contract guarantees disposal_action for role=output; a
+        // response without it must surface as an error (fail_open policy),
+        // never as a silent unredacted pass-through.
+        assert!(serde_json::from_str::<OutputReviewResponse>(
+            r#"{"effective_action":"deny","reason_code":"PII"}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn test_output_review_response_warn_without_sanitized() {
+        let warn: OutputReviewResponse = serde_json::from_str(
+            r#"{"effective_action":"allow","reason_code":"POLICY_ALLOW","disposal_action":"warn"}"#,
+        )
+        .unwrap();
+        assert_eq!(warn.disposal_action, "warn");
+        assert!(warn.sanitized_content.is_none());
     }
 
     #[test]

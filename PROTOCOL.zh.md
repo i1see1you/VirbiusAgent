@@ -1139,6 +1139,8 @@ POST /v1/evaluate
 ```
 调用方按 `disposal_action` 落地：`reject`→替换拒答文案、`omit`→置空、`redact`→用 `sanitized_content`、`warn`→放行仅留痕。映射由引擎 `OutputActionResolver` 统一解析（`virbius.output-review.action-map` 可按 reason_code 覆盖），保证各调用方行为一致。确定性正则（代码/SQL/模板注入、XSS、凭据）在管线前置命中即 `deny`。
 
+**接入方**：官方 SDK（`virbius-review-sdk`，`apply_disposal`）与 **MCP Proxy 的工具输出评审**（`review_tool_output`，`role=output`）都按同一映射落地；proxy 对本次干预额外写一条 edge 审计行（`event_type=output_review`，`action=block|allow`，`reason_code=output_review:<disposal>`），cloud 侧审计行仍为引擎 `scene=output` 原行。`redact` 缺 `sanitized_content`、未知 disposal、或响应缺 `disposal_action` 时一律按 fail-closed 处理（拒答文案）。
+
 **流式输出审查（SDK）**：`virbius-review-sdk` 的 `wrap_stream()` 移植引擎 `StreamReviewWindow`（共享测试向量 `schemas/review-window-vectors.json` 防漂移），逐窗调 `evaluate(role=output, stream_chunk=true)`；过审窗口才下发，命中即终止并建议断上游。SDK 对引擎故障默认 fail-open（`fail_open=True` 可关），但对 **429/限流恒 fail-closed**（无放行开关）——限流是人为节流，放行即绕过审查。
 
 **限流（v2，防无鉴权滥用）**：`/v1/evaluate` 按调用方 IP / session 限流；同一 `trace_id` 的流式窗口**合并计一次会话配额**（不误伤流式）；单 trace 窗口数上限默认 64。超限返回 `429 + Retry-After`。配置：`virbius.evaluate.rate-limit.*`。

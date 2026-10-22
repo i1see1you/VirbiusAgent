@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **MCP proxy now applies output-review disposal instead of blocking every verdict**: `review_tool_output` previously only handled `block/deny` and replaced the whole tool result with a placeholder, ignoring `disposal_action`/`sanitized_content`. It now applies the same canonical mapping as `virbius-review-sdk`: `redact` → deliver `sanitized_content` (empty string included; missing sanitized text fails closed), `omit` → empty, `reject` → refusal placeholder, `warn` → pass through, unknown/missing disposal → fail closed. The proxy's output-review reply is a typed `OutputReviewResponse` whose required `disposal_action` makes an engine contract violation surface as an engine error (following `fail_open`). Each intervention records an edge audit row (`event_type=output_review`, `reason_code=output_review:<disposal>`) so the proxy layer is no longer silent about output review.
+
 ## [1.0.0] - 2026-10-19
 
 ### Added

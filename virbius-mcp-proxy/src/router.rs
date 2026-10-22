@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::egress::EgressClient;
 use crate::error::{jsonrpc_error_simple, VirbiusErrorCode};
-use crate::pipeline::{PipelineResult, SecurityPipeline, SharedPipeline};
+use crate::pipeline::{OutputReviewResponse, PipelineResult, SecurityPipeline, SharedPipeline};
 use crate::session::{Session, SessionManager};
 use crate::trace_collector::{SharedTraceCollector, TraceEvent};
 use crate::upstream::UpstreamManager;
@@ -1387,6 +1387,78 @@ fn extract_result_text(resp: &Value) -> String {
 /// Replace all text content in a JSON-RPC tool call response with a safe message.
 ///
 /// Used when the output review engine denies the content.
+/// What the output-review verdict did to the tool result text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OutputDisposal {
+    Redacted,
+    Omitted,
+    Rejected,
+    Warned,
+    Passed,
+}
+
+/// Apply the engine's `disposal_action` to the tool result (SDK canonical
+/// mapping, one mapping for every caller):
+///
+/// - `reject`            → refusal placeholder
+/// - `omit`              → empty text
+/// - `redact`            → `sanitized_content` verbatim (empty included);
+///   missing sanitized text falls back to reject
+/// - `warn`              → content unchanged
+/// - unknown / missing   → reject (fail-closed)
+///
+/// Only blocked verdicts (`block`/`deny`) mutate content; an unblocked verdict
+/// can only be `warn` (the engine's resolver returns warn when not blocked).
+fn apply_output_disposal(resp: &mut Value, verdict: &OutputReviewResponse) -> OutputDisposal {
+    let blocked = matches!(
+        verdict.effective_action.to_ascii_lowercase().as_str(),
+        "block" | "deny"
+    );
+    if !blocked {
+        return if verdict.disposal_action.eq_ignore_ascii_case("warn") {
+            OutputDisposal::Warned
+        } else {
+            OutputDisposal::Passed
+        };
+    }
+
+    let reason = verdict
+        .reason
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("content safety violation");
+
+    match verdict.disposal_action.to_ascii_lowercase().as_str() {
+        "redact" => match verdict.sanitized_content.as_deref() {
+            Some(sanitized) => {
+                replace_result_text(resp, sanitized);
+                OutputDisposal::Redacted
+            }
+            None => {
+                // Contract violation: redact without sanitized text must not
+                // leak the original — fail closed to the refusal placeholder.
+                replace_result_text(
+                    resp,
+                    &format!("[Content blocked by safety review: {}]", reason),
+                );
+                OutputDisposal::Rejected
+            }
+        },
+        "omit" => {
+            replace_result_text(resp, "");
+            OutputDisposal::Omitted
+        }
+        _ => {
+            // reject + unknown values: fail closed.
+            replace_result_text(
+                resp,
+                &format!("[Content blocked by safety review: {}]", reason),
+            );
+            OutputDisposal::Rejected
+        }
+    }
+}
+
 fn replace_result_text(resp: &mut Value, safe_message: &str) {
     let Some(result) = resp.get_mut("result") else {
         return;
@@ -1483,25 +1555,79 @@ async fn review_tool_output(
     }
 
     match pipeline.review_output(session, tool_name, &text).await {
-        Ok(eval_resp) => {
-            let action = eval_resp.effective_action.as_str();
-            if action == "block" || action == "deny" {
-                let reason = eval_resp
-                    .reason
-                    .as_deref()
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("content safety violation");
-                info!(
-                    "output review blocked: tool={} session={} rule={:?} reason={}",
-                    tool_name, session.session_id, eval_resp.rule_id, reason
-                );
-                let safe_msg = format!("[Content blocked by safety review: {}]", reason);
-                replace_result_text(resp, &safe_msg);
-            } else {
-                debug!(
-                    "output review passed: tool={} session={} action={}",
-                    tool_name, session.session_id, action
-                );
+        Ok(verdict) => {
+            let outcome = apply_output_disposal(resp, &verdict);
+            match outcome {
+                OutputDisposal::Redacted => {
+                    info!(
+                        "output review redacted: tool={} session={} rule={:?} reason={:?}",
+                        tool_name, session.session_id, verdict.rule_id, verdict.reason
+                    );
+                    pipeline
+                        .audit_output_review(
+                            session,
+                            tool_name,
+                            "block",
+                            verdict.rule_id.as_deref(),
+                            &verdict.disposal_action,
+                        )
+                        .await;
+                }
+                OutputDisposal::Omitted => {
+                    info!(
+                        "output review omitted: tool={} session={} rule={:?} reason={:?}",
+                        tool_name, session.session_id, verdict.rule_id, verdict.reason
+                    );
+                    pipeline
+                        .audit_output_review(
+                            session,
+                            tool_name,
+                            "block",
+                            verdict.rule_id.as_deref(),
+                            &verdict.disposal_action,
+                        )
+                        .await;
+                }
+                OutputDisposal::Rejected => {
+                    info!(
+                        "output review blocked: tool={} session={} rule={:?} reason={:?}",
+                        tool_name, session.session_id, verdict.rule_id, verdict.reason
+                    );
+                    pipeline
+                        .audit_output_review(
+                            session,
+                            tool_name,
+                            "block",
+                            verdict.rule_id.as_deref(),
+                            &verdict.disposal_action,
+                        )
+                        .await;
+                }
+                OutputDisposal::Warned => {
+                    // Content passes unchanged; record the warn so the edge
+                    // audit row exists for the same trace.
+                    warn!(
+                        "output review warn: tool={} session={} rule={:?} reason={:?}",
+                        tool_name, session.session_id, verdict.rule_id, verdict.reason
+                    );
+                    if verdict.rule_id.is_some() {
+                        pipeline
+                            .audit_output_review(
+                                session,
+                                tool_name,
+                                "allow",
+                                verdict.rule_id.as_deref(),
+                                &verdict.disposal_action,
+                            )
+                            .await;
+                    }
+                }
+                OutputDisposal::Passed => {
+                    debug!(
+                        "output review passed: tool={} session={} action={}",
+                        tool_name, session.session_id, verdict.effective_action
+                    );
+                }
             }
         }
         Err(e) => {
@@ -2338,5 +2464,116 @@ mod tests {
         assert!(output_masking_skipped("recall"));
         assert!(!output_masking_skipped("send_email"));
         assert!(!output_masking_skipped("http_get"));
+    }
+
+    // ── output-review disposal matrix ──
+
+    fn output_review_resp(
+        effective_action: &str,
+        disposal: &str,
+        sanitized: Option<&str>,
+    ) -> OutputReviewResponse {
+        OutputReviewResponse {
+            effective_action: effective_action.to_string(),
+            rule_id: Some("OUTPUT_CREDENTIAL_LEAK".to_string()),
+            reason: Some("OUTPUT_CREDENTIAL_LEAK".to_string()),
+            disposal_action: disposal.to_string(),
+            sanitized_content: sanitized.map(String::from),
+        }
+    }
+
+    fn tool_result(text: &str) -> serde_json::Value {
+        serde_json::json!({
+            "jsonrpc": "2.0",
+            "result": { "content": [{ "type": "text", "text": text }] }
+        })
+    }
+
+    fn result_text(resp: &serde_json::Value) -> &str {
+        resp["result"]["content"][0]["text"].as_str().unwrap()
+    }
+
+    #[test]
+    fn disposal_redact_delivers_sanitized_text() {
+        let mut resp = tool_result("key AKIA1234567890ABCDEF leaked");
+        let v = output_review_resp("deny", "redact", Some("key [REDACTED_AWS_KEY] leaked"));
+        let outcome = apply_output_disposal(&mut resp, &v);
+        assert_eq!(outcome, OutputDisposal::Redacted);
+        assert_eq!(result_text(&resp), "key [REDACTED_AWS_KEY] leaked");
+    }
+
+    #[test]
+    fn disposal_redact_sanitized_empty_string_is_delivered_verbatim() {
+        // SDK parity: sanitized_content Some("") is delivered as empty, not
+        // silently replaced by the refusal text.
+        let mut resp = tool_result("secret");
+        let v = output_review_resp("deny", "redact", Some(""));
+        let outcome = apply_output_disposal(&mut resp, &v);
+        assert_eq!(outcome, OutputDisposal::Redacted);
+        assert_eq!(result_text(&resp), "");
+    }
+
+    #[test]
+    fn disposal_redact_without_sanitized_fails_closed() {
+        let mut resp = tool_result("secret");
+        let v = output_review_resp("deny", "redact", None);
+        let outcome = apply_output_disposal(&mut resp, &v);
+        assert_eq!(outcome, OutputDisposal::Rejected);
+        assert!(result_text(&resp).contains("blocked by safety review"));
+    }
+
+    #[test]
+    fn disposal_omit_empties_text() {
+        let mut resp = tool_result("<script>alert(1)</script>");
+        let v = output_review_resp("block", "omit", None);
+        let outcome = apply_output_disposal(&mut resp, &v);
+        assert_eq!(outcome, OutputDisposal::Omitted);
+        assert_eq!(result_text(&resp), "");
+    }
+
+    #[test]
+    fn disposal_reject_replaces_with_placeholder() {
+        let mut resp = tool_result("unsafe");
+        let v = output_review_resp("deny", "reject", None);
+        let outcome = apply_output_disposal(&mut resp, &v);
+        assert_eq!(outcome, OutputDisposal::Rejected);
+        assert!(result_text(&resp).contains("blocked by safety review"));
+    }
+
+    #[test]
+    fn disposal_unknown_value_fails_closed() {
+        let mut resp = tool_result("unsafe");
+        let v = output_review_resp("deny", "quarantine_v2", None);
+        let outcome = apply_output_disposal(&mut resp, &v);
+        assert_eq!(outcome, OutputDisposal::Rejected);
+        assert!(result_text(&resp).contains("blocked by safety review"));
+    }
+
+    #[test]
+    fn disposal_warn_passes_content_unchanged() {
+        let mut resp = tool_result("borderline content");
+        let v = output_review_resp("allow", "warn", None);
+        let outcome = apply_output_disposal(&mut resp, &v);
+        assert_eq!(outcome, OutputDisposal::Warned);
+        assert_eq!(result_text(&resp), "borderline content");
+    }
+
+    #[test]
+    fn disposal_applies_to_every_text_block_and_leaves_non_text_alone() {
+        let mut resp = serde_json::json!({
+            "jsonrpc": "2.0",
+            "result": { "content": [
+                { "type": "text", "text": "first secret" },
+                { "type": "text", "text": "second secret" },
+                { "type": "image", "data": "AAA", "mimeType": "image/png" }
+            ]}
+        });
+        let v = output_review_resp("deny", "redact", Some("redacted"));
+        let outcome = apply_output_disposal(&mut resp, &v);
+        assert_eq!(outcome, OutputDisposal::Redacted);
+        let content = resp["result"]["content"].as_array().unwrap();
+        assert_eq!(content[0]["text"], "redacted");
+        assert_eq!(content[1]["text"], "redacted");
+        assert_eq!(content[2]["data"], "AAA");
     }
 }

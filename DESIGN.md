@@ -2713,6 +2713,7 @@ Output review is no longer embedded in the engine chat proxy: callers integrate 
 | `EvaluateRateLimiter` | engine `api/` | `/v1/evaluate` rate limiting v2: per-trace aggregation (streaming windows share one quota unit), session/IP quotas, per-trace window cap, 429+Retry-After |
 | `ReviewRiskGuard` | engine `eval/` | input-review risk dedup (once per trace, TTL default 10 min) |
 | `virbius-review-sdk` (Python) | caller side | `review_input`/`review_output`/`apply_disposal`/`wrap_stream` (windowed per-window review, abort upstream on hit) |
+| MCP Proxy tool-result review (Rust) | caller side (`virbius-mcp-proxy` `router.rs`) | applies the same disposal mapping to tool returns: `redact`→`sanitized_content`, `omit`→empty, `reject`/unknown/missing→refusal placeholder, `warn`→pass-through; emits an edge audit row (`event_type=output_review`) |
 
 **Role side-effect matrix**: `role` is a closed enum `input | output | tool_call` (blank defaults to `tool_call` semantics; any other value — including the historical `user` — is rejected with 400 at the HTTP boundary, see `EvaluateHttpController`). `role=input` feeds session risk (enforced hits only, once per trace) and skips challenge/counters/tool history; `role=output` is **zero side effects** (reads the current risk score, never updates) — streaming windows never pollute session risk.
 
