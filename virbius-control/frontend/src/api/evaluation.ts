@@ -153,6 +153,7 @@ export interface ProbeRequest {
   url?: string;
   model?: string;
   identity?: string;
+  target_spec?: string;
   mcp_cmd?: string[];
   agent_name?: string;
   baseline_report_id?: string;

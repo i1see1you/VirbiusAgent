@@ -13,8 +13,16 @@ import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
-/** 分步诊断：url/dns/tcp/health/auth/license，失败即停并给出可操作原因。 */
+/** 分步诊断：url/dns/tcp/health/auth/license + 能力位（probe_remote/scan_root/egress/judge）。 */
 class EvaluationDiagnosticsServiceTest {
+
+    private static final String CAPS_OK = "{\"code\":0,\"data\":{"
+            + "\"probe\":{\"enabled\":true,\"allow_remote\":true},"
+            + "\"scan_root\":{\"configured\":true,\"usable\":true,\"roots\":1},"
+            + "\"mcp_egress\":{\"allow_hosts_configured\":false,\"allow_hosts\":0,"
+            + "\"deny_loopback\":false},"
+            + "\"judge_llm\":{\"configured\":false,\"reachable\":false,\"detail\":\"未配置\"},"
+            + "\"probe_headers\":{\"configured\":false,\"vars\":[]}}}";
 
     private final EvaluationDiagnosticsService svc = new EvaluationDiagnosticsService();
     private HttpServer server;
@@ -31,8 +39,9 @@ class EvaluationDiagnosticsServiceTest {
         String base = startStub(200, 200);
         EvaluationDiagnosticsService.Result r = svc.run(cfg(base, "tok"));
         assertTrue(r.ok(), () -> r.steps().toString());
-        assertTrue(r.steps().size() == 6);
-        assertTrue(r.steps().stream().allMatch(EvaluationDiagnosticsService.Step::ok));
+        assertEquals(12, r.steps().size(), r.steps().toString());
+        assertTrue(r.steps().stream().allMatch(EvaluationDiagnosticsService.Step::ok),
+                r.steps().toString());
     }
 
     @Test
@@ -68,6 +77,92 @@ class EvaluationDiagnosticsServiceTest {
     }
 
     @Test
+    void capabilitiesStepSendsBearerToken() throws Exception {
+        String base = startStub(200, 200);
+        svc.run(cfg(base, "tok"));
+        assertEquals("Bearer tok", lastCapabilitiesAuth.get(),
+                "capabilities 步必须带 Authorization（与其它 /api/v1/* 一致）");
+    }
+
+    @Test
+    void oldVeWithoutCapabilitiesDegrades() throws Exception {
+        String base = startStub(200, 200, "trial", true, null, "[]");
+        EvaluationDiagnosticsService.Result r = svc.run(cfg(base, "tok"));
+        assertTrue(r.ok(), r.steps().toString());
+        var cap = r.steps().stream().filter(s -> s.step().equals("capabilities"))
+                .findFirst().orElseThrow();
+        assertTrue(cap.ok());
+        assertTrue(cap.detail().contains("版本过旧"));
+        assertFalse(r.steps().stream().anyMatch(s -> s.step().equals("probe_remote")),
+                "老版本没有能力位可查，跳过而不是误报");
+    }
+
+    @Test
+    void probeRemoteDisabledFailsTestStage() throws Exception {
+        String caps = CAPS_OK.replace("\"allow_remote\":true", "\"allow_remote\":false");
+        String base = startStub(200, 200, "trial", true, caps, "[]");
+        EvaluationDiagnosticsService.Result r = svc.run(cfg(base, "tok"));
+        assertFalse(r.ok());
+        var probe = r.steps().stream().filter(s -> s.step().equals("probe_remote"))
+                .findFirst().orElseThrow();
+        assertFalse(probe.ok());
+        assertTrue(probe.detail().contains("allow_remote=false"));
+        assertTrue(probe.detail().contains("403"));
+    }
+
+    @Test
+    void licenseWithoutProbeFeatureFlagsProbeStep() throws Exception {
+        String base = startStub(200, 200, "valid", true, CAPS_OK, "[\"skill\"]");
+        EvaluationDiagnosticsService.Result r = svc.run(cfg(base, "tok"));
+        assertFalse(r.ok());
+        var probe = r.steps().stream().filter(s -> s.step().equals("probe_remote"))
+                .findFirst().orElseThrow();
+        assertFalse(probe.ok());
+        assertTrue(probe.detail().contains("license probe=false"));
+        var feats = r.steps().stream().filter(s -> s.step().equals("license_features"))
+                .findFirst().orElseThrow();
+        assertTrue(feats.ok());
+        assertEquals("skill", feats.detail());
+    }
+
+    @Test
+    void emptyFeaturesMeansUnrestricted() throws Exception {
+        String base = startStub(200, 200, "trial", true, CAPS_OK, "[]");
+        EvaluationDiagnosticsService.Result r = svc.run(cfg(base, "tok"));
+        var feats = r.steps().stream().filter(s -> s.step().equals("license_features"))
+                .findFirst().orElseThrow();
+        assertTrue(feats.detail().contains("未限制"));
+        assertTrue(r.ok(), r.steps().toString());
+    }
+
+    @Test
+    void judgeLlmUnreachableFailsTestStage() throws Exception {
+        String caps = CAPS_OK.replace(
+                "\"judge_llm\":{\"configured\":false,\"reachable\":false,\"detail\":\"未配置\"}",
+                "\"judge_llm\":{\"configured\":true,\"reachable\":false,"
+                        + "\"detail\":\"TCP 不可达: ConnectException\"}");
+        String base = startStub(200, 200, "trial", true, caps, "[]");
+        EvaluationDiagnosticsService.Result r = svc.run(cfg(base, "tok"));
+        assertFalse(r.ok());
+        var judge = r.steps().stream().filter(s -> s.step().equals("judge_llm"))
+                .findFirst().orElseThrow();
+        assertFalse(judge.ok());
+        assertTrue(judge.detail().contains("不可达"));
+    }
+
+    @Test
+    void scanRootUnusableFailsTestStage() throws Exception {
+        String caps = CAPS_OK.replace("\"usable\":true", "\"usable\":false");
+        String base = startStub(200, 200, "trial", true, caps, "[]");
+        EvaluationDiagnosticsService.Result r = svc.run(cfg(base, "tok"));
+        assertFalse(r.ok());
+        var root = r.steps().stream().filter(s -> s.step().equals("scan_root"))
+                .findFirst().orElseThrow();
+        assertFalse(root.ok());
+        assertTrue(root.detail().contains("usable=false"));
+    }
+
+    @Test
     void refusedPortFailsAtTcp() throws Exception {
         int dead;
         try (ServerSocket s = new ServerSocket(0)) {
@@ -100,6 +195,8 @@ class EvaluationDiagnosticsServiceTest {
 
     private final java.util.concurrent.atomic.AtomicReference<String> lastLicenseAuth =
             new java.util.concurrent.atomic.AtomicReference<>();
+    private final java.util.concurrent.atomic.AtomicReference<String> lastCapabilitiesAuth =
+            new java.util.concurrent.atomic.AtomicReference<>();
 
     private static EvaluationSettingsService.Settings cfg(String base, String token) {
         return new EvaluationSettingsService.Settings(true, base, token, true, "");
@@ -110,11 +207,16 @@ class EvaluationDiagnosticsServiceTest {
     }
 
     private String startStub(int healthStatus, int licenseStatus) throws Exception {
-        return startStub(healthStatus, licenseStatus, "trial", true);
+        return startStub(healthStatus, licenseStatus, "trial", true, CAPS_OK, "[]");
     }
 
     private String startStub(int healthStatus, int licenseStatus, String mode, boolean active)
             throws Exception {
+        return startStub(healthStatus, licenseStatus, mode, active, CAPS_OK, "[]");
+    }
+
+    private String startStub(int healthStatus, int licenseStatus, String mode, boolean active,
+                             String capsJson, String featuresJson) throws Exception {
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/api/v1/health", ex -> respond(ex, healthStatus,
                 "{\"code\":0,\"data\":{\"status\":\"UP\"}}"));
@@ -127,8 +229,15 @@ class EvaluationDiagnosticsServiceTest {
                 return;
             }
             respond(ex, 200, "{\"code\":0,\"data\":{\"mode\":\"" + mode + "\",\"active\":"
-                    + active + ",\"days_left\":30,\"detail\":\"\"}}");
+                    + active + ",\"days_left\":30,\"detail\":\"\",\"features\":"
+                    + featuresJson + "}}");
         });
+        if (capsJson != null) {
+            server.createContext("/api/v1/capabilities", ex -> {
+                lastCapabilitiesAuth.set(ex.getRequestHeaders().getFirst("Authorization"));
+                respond(ex, 200, capsJson);
+            });
+        }
         server.start();
         return "http://127.0.0.1:" + server.getAddress().getPort();
     }

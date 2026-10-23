@@ -248,6 +248,16 @@
             <el-input v-model="targetUrl" style="width:520px" :placeholder="t('ev.target-url')" />
             <el-input v-model="model" style="width:200px" :placeholder="t('ev.model')" />
           </div>
+          <div class="v-row" style="margin-top:8px">
+            <el-input v-model="probeIdentity" style="width:240px"
+                      :placeholder="t('ev.probe-identity')" />
+            <span class="v-hint">{{ t('ev.probe-identity-hint') }}</span>
+          </div>
+          <div style="margin-top:8px">
+            <el-input v-model="targetSpec" type="textarea" :rows="4" style="width:740px"
+                      :placeholder="t('ev.target-spec')" />
+            <p class="v-hint">{{ t('ev.target-spec-hint') }}</p>
+          </div>
         </template>
 
         <template v-else-if="runType === 'mcp'">
@@ -512,6 +522,8 @@ const baselineId = ref('');
 const targetPath = ref('');
 const targetUrl = ref('');
 const model = ref('');
+const probeIdentity = ref('');
+const targetSpec = ref('');
 const mcpCmd = ref('');
 const allowDangerous = ref(false);
 const replayTenant = ref('');
@@ -627,6 +639,8 @@ async function run() {
     if (runType.value === 'http' || runType.value === 'mcp') {
       const submit = await createProbe(runType.value === 'http'
         ? { target_type: 'http', url: targetUrl.value, model: model.value || undefined,
+            identity: probeIdentity.value || undefined,
+            target_spec: targetSpec.value.trim() || undefined,
             agent_name: agent, baseline_report_id: baseline }
         : { target_type: 'mcp', mcp_cmd: mcpCmd.value.trim().split(/\s+/).filter(Boolean),
             allow_dangerous: allowDangerous.value,

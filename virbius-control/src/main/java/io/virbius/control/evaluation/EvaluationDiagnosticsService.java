@@ -110,10 +110,14 @@ public class EvaluationDiagnosticsService {
         }
         steps.add(step("auth", true, "HTTP 200（token 有效）", t0));
 
+        List<String> features = new ArrayList<>();
         t0 = System.nanoTime();
         try {
-            var data = new com.fasterxml.jackson.databind.ObjectMapper()
+            com.fasterxml.jackson.databind.JsonNode data = new com.fasterxml.jackson.databind.ObjectMapper()
                     .readTree(lic.body()).path("data");
+            if (data.path("features").isArray()) {
+                data.get("features").forEach(n -> features.add(n.asText()));
+            }
             String mode = data.path("mode").asText("unknown");
             boolean active = data.path("active").asBoolean(false);
             String detail = mode + (data.hasNonNull("days_left")
@@ -123,8 +127,86 @@ public class EvaluationDiagnosticsService {
             ok = good;
         } catch (Exception e) {
             steps.add(step("license", false, "许可状态解析失败: " + e.getMessage(), t0));
-            ok = false;
+            return new Result(false, steps);
         }
+
+        t0 = System.nanoTime();
+        steps.add(step("license_features", true,
+                features.isEmpty() ? "未限制（trial/全能力）" : String.join(", ", features), t0));
+
+        t0 = System.nanoTime();
+        HttpResponse<String> cap;
+        try {
+            cap = http.send(get(uri, "/api/v1/capabilities", cfg.apiToken()),
+                    HttpResponse.BodyHandlers.ofString());
+        } catch (Exception e) {
+            steps.add(step("capabilities", false, "请求失败: " + e.getMessage(), t0));
+            return new Result(false, steps);
+        }
+        if (cap.statusCode() == 404) {
+            // 老版本评估服务没有 /capabilities：降级跳过，不误报为连接失败。
+            steps.add(step("capabilities", true,
+                    "VE 版本过旧（无 /capabilities），跳过能力检查", t0));
+            return new Result(ok, steps);
+        }
+        if (cap.statusCode() != 200) {
+            steps.add(step("capabilities", false, "HTTP " + cap.statusCode(), t0));
+            return new Result(false, steps);
+        }
+        com.fasterxml.jackson.databind.JsonNode capData;
+        try {
+            capData = new com.fasterxml.jackson.databind.ObjectMapper()
+                    .readTree(cap.body()).path("data");
+        } catch (Exception e) {
+            steps.add(step("capabilities", false, "响应解析失败: " + e.getMessage(), t0));
+            return new Result(false, steps);
+        }
+
+        t0 = System.nanoTime();
+        steps.add(step("capabilities", true, "已读取能力位", t0));
+
+        t0 = System.nanoTime();
+        boolean probeEnabled = capData.path("probe").path("enabled").asBoolean(false);
+        boolean allowRemote = capData.path("probe").path("allow_remote").asBoolean(false);
+        boolean probeLicensed = features.isEmpty() || features.contains("probe");
+        boolean mcpLicensed = features.isEmpty() || features.contains("mcp");
+        String tenants = cfg.probeTenants() == null ? "" : cfg.probeTenants().strip();
+        boolean probeGood = probeEnabled && allowRemote && probeLicensed;
+        String tenantDetail = tenants.isEmpty() ? "空（仅平台管理员）" : tenants;
+        steps.add(step("probe_remote", probeGood,
+                "VE enabled=" + probeEnabled + " allow_remote=" + allowRemote
+                        + "；license probe=" + probeLicensed + " mcp=" + mcpLicensed
+                        + "；control 白名单=" + tenantDetail
+                        + (probeGood ? "" : "（提交探针会 403/503）"), t0));
+        ok = ok && probeGood;
+
+        t0 = System.nanoTime();
+        boolean rootConfigured = capData.path("scan_root").path("configured").asBoolean(false);
+        boolean rootUsable = capData.path("scan_root").path("usable").asBoolean(false);
+        steps.add(step("scan_root", rootUsable,
+                "configured=" + rootConfigured + " usable=" + rootUsable
+                        + "（仅约束 REST /scans、/skills；CLI 不受限）", t0));
+        ok = ok && rootUsable;
+
+        t0 = System.nanoTime();
+        var eg = capData.path("mcp_egress");
+        steps.add(step("mcp_egress", true,
+                "allow_hosts=" + (eg.path("allow_hosts_configured").asBoolean(false)
+                        ? eg.path("allow_hosts").asInt(0) : 0)
+                        + " deny_loopback=" + eg.path("deny_loopback").asBoolean(false), t0));
+
+        t0 = System.nanoTime();
+        var judge = capData.path("judge_llm");
+        boolean judgeConfigured = judge.path("configured").asBoolean(false);
+        boolean judgeReachable = judge.path("reachable").asBoolean(false);
+        boolean judgeGood = !judgeConfigured || judgeReachable;
+        steps.add(step("judge_llm", judgeGood,
+                judgeConfigured
+                        ? (judgeReachable ? "已配置且 TCP 连通"
+                        : "已配置但不可达：" + judge.path("detail").asText(""))
+                        : "未配置（判定信号降级；不阻断探针）", t0));
+        ok = ok && judgeGood;
+
         return new Result(ok, steps);
     }
 
