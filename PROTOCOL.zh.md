@@ -1152,6 +1152,7 @@ POST /v1/evaluate
 - **引擎校验链**：验签（信任锚 = 配置内置 control 平台公钥 + Redis `virbius:engine:issuers` 增强，多 `kid`）→ `aud/exp` → 吊销（`agent_aid`/`jti`，Redis 通道即时 + 启动/周期全量对账）→ 注入已验证主体。
 - **声明优先**：`tenant_id/app_id` **以令牌为准**，请求体冲突 → `403 subject_mismatch`；服务 token（`sub=service:*`，无自带租户、按用途签发、通配仅在显式跨租户时授予）例外——租户取自请求，审计记 `on_behalf_of`。
 - **能力校验**：仅 `role=tool_call` 校验 `tool_name ∈ scope.allowed_tools`（否则 `403 capability_denied`）；`role=input/output` 豁免；`license_risk_quota` 取 token scope 上限。
+- **空白名单语义**：空的 `scope.allowed_tools`（以及空的 License `allowed_tools`）在 virbius-core、engine 与 MCP proxy 中均表示**不限制工具**（通配）。控制面以逗号分隔列持久化，空列表必须原样往返为空（绝不落成 `[""]`）；签发侧统一 trim/去重。
 - **失败姿态**：缺/坏/过期/`sid` 不符/被吊销 → **`401`（fail-closed）**；SDK 对 401/403 恒抛 `ReviewError`（`auth_fail_open=True` 才放行）。与 429 政策同源：认证/限流故障绝不放行未审内容。
 - **审计**：事件新增 `agent_aid/app_id/subject_source(token|service_token|reported)/token_iss`，且 `agent_aid` 纳入审计哈希链——“哪个 agent 干的”从自报变实证。
 - **限流**：`per-agent-per-min`（已验 `agent_aid`）作为会话配额之上的**兜底**（session 级 60/min 不变）；未认证的 401 流量由前置 per-IP 配额覆盖。

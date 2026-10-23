@@ -613,6 +613,8 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants/default/tools \
 
 > **结论**：注册一个新工具后，还必须**在签发 License JWT 时把该工具名加入 `allowed_tools` 数组**，否则端层 precheck 第一步就被拦截。反之，只把工具加进 License 白名单而不注册，工具能调用但没有任何策略保护（按默认 low 风险、无参数校验）。
 
+> **空白名单语义**：`allowed_tools: []` 在 virbius-core、engine 和 MCP proxy 中均表示**不限制工具**（通配），**不是**拒绝全部。若要在未携带许可证/白名单时全拒，请使用 proxy 的回退策略（`default_deny`）。控制面以 CSV 持久化该列表，空列表必须原样往返为空（绝不落成 `[""]`），签发侧会统一 trim 与去重。
+
 #### 4.4.3 注册后的数据流转
 
 工具注册成功后，元数据会被编译并下发到三个消费方：

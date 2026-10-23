@@ -1,11 +1,11 @@
 package io.virbius.control.repository;
 
+import io.virbius.control.common.LicenseTools;
 import io.virbius.control.domain.AgentLicense;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,7 +29,7 @@ public class JdbcLicenseRepository implements LicenseRepository {
         lic.setAppId(rs.getString("app_id"));
         lic.setTenantId(rs.getString("tenant_id"));
         String toolsRaw = rs.getString("allowed_tools");
-        lic.setAllowedTools(toolsRaw != null ? Arrays.asList(toolsRaw.split(",")) : List.of());
+        lic.setAllowedTools(LicenseTools.parseCsv(toolsRaw));
         lic.setRiskQuota(rs.getInt("risk_quota"));
         lic.setToolRateLimit(rs.getInt("tool_rate_limit"));
         Timestamp exp = rs.getTimestamp("expiry");
@@ -65,7 +65,7 @@ public class JdbcLicenseRepository implements LicenseRepository {
                 licenseId,
                 license.getTenantId(),
                 license.getAppId(),
-                String.join(",", license.getAllowedTools() != null ? license.getAllowedTools() : List.of()),
+                LicenseTools.toCsv(license.getAllowedTools()),
                 license.getRiskQuota(),
                 license.getToolRateLimit(),
                 Timestamp.from(license.getExpiry()),

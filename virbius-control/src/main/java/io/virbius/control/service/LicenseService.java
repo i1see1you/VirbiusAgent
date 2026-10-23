@@ -1,5 +1,6 @@
 package io.virbius.control.service;
 
+import io.virbius.control.common.LicenseTools;
 import io.virbius.control.common.exception.BusinessException;
 import io.virbius.control.common.exception.ResourceNotFoundException;
 import io.virbius.control.domain.AgentLicense;
@@ -79,6 +80,11 @@ public class LicenseService {
 
         byte[] signingKey = signer.decryptPrivateKey(encPrivKey);
 
+        // Empty list stays empty: "no restriction" is the documented License
+        // wildcard (virbius-core/engine/proxy all treat empty as allow-all).
+        // Trim/blanks are dropped so the CSV round-trip cannot invent entries.
+        List<String> tools = LicenseTools.normalize(allowedTools);
+
         String agentAid = buildAgentAid(tenantId, appId);
 
         AgentLicense license = new AgentLicense();
@@ -87,7 +93,7 @@ public class LicenseService {
         license.setAgentName(agentName);
         license.setDescription(description);
         license.setAgentAid(agentAid);
-        license.setAllowedTools(allowedTools);
+        license.setAllowedTools(tools);
         license.setRiskQuota(riskQuota);
         license.setToolRateLimit(toolRateLimit);
         license.setExpiry(Instant.now().plusSeconds(expirySeconds));
@@ -104,7 +110,7 @@ public class LicenseService {
         repo.save(license, licenseId);
 
         log.info("issued license {} for app {} tenant {} (quota={}, rate={}, tools={})",
-                licenseId, appId, tenantId, riskQuota, toolRateLimit, allowedTools);
+                licenseId, appId, tenantId, riskQuota, toolRateLimit, tools);
 
         return Map.ofEntries(
                 Map.entry("license_id", licenseId),
@@ -115,7 +121,7 @@ public class LicenseService {
                 Map.entry("jwt", jwt),
                 Map.entry("signature_hash", signatureHash),
                 Map.entry("expiry", license.getExpiry().toString()),
-                Map.entry("allowed_tools", allowedTools),
+                Map.entry("allowed_tools", tools),
                 Map.entry("risk_quota", riskQuota),
                 Map.entry("tool_rate_limit", toolRateLimit));
     }

@@ -618,6 +618,8 @@ Tool call request
 
 > **Bottom line**: After registering a new tool, you **must also add the tool name to the `allowed_tools` array when issuing the License JWT**, otherwise the edge precheck rejects it at the first step. Conversely, adding a tool only to the License allowlist without registering it lets the tool run with no policy protection (default low risk, no args validation).
 
+> **Empty allowlist**: `allowed_tools: []` means **no tool restriction** (wildcard) in virbius-core, the engine and the MCP proxy — it is **not** deny-all. To block everything when no license/allowlist is presented, use the proxy fallback policy (`default_deny`). The control plane stores the list as CSV, so an empty list must round-trip as empty (never `[""]`); the issuer trims/dedupes entries.
+
 #### 4.4.3 Data Flow After Registration
 
 Once a tool is registered, its metadata is compiled and distributed to three consumers:
