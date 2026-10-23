@@ -1,10 +1,11 @@
-# VirbiusAgent 客户现场三机部署手册（离线 · 无外置 K8s/有 K8s 均适用）
+# VirbiusAgent 客户现场部署手册（单机 / 三机 · 离线 · 无外置 K8s/有 K8s 均适用）
 
 [English](README.md)
 
 适用版本：**v1.0.0**。
 本手册只部署 VirbiusAgent 自身组件；**MySQL / Kafka / Redis / vLLM 由客户统一环境提供**。
 随离线包 `virbius-onprem-v1.0.0.tar.gz` 分发（即 `deploy/onprem/` 目录）。
+默认按**三机**编写；**单机**（全部组件同机、客户 infra 外置）见 §0.1、§1.2 与 §5.1。
 
 ---
 
@@ -16,13 +17,36 @@
 | Kafka | 3.x，SASL_PLAINTEXT + SCRAM-SHA-256 账号；若机制不同改 `.env` 的 `KAFKA_SASL_MECHANISM` | 客户 |
 | Redis | 7.x，带密码；**需开持久化（AOF/RDB）**——审计链头在 Redis，断电丢链头会触发审计校验告警 | 客户 |
 | vLLM | 可选（模型选项B）；OpenAI 兼容端点 | 客户 |
-| 三台机器 | Docker 20.10+（含 compose v2）；彼此网络互通；磁盘 ≥20G | 客户 |
+| 机器 | Docker 20.10+（含 compose v2）。三机：彼此网络互通、每台磁盘 ≥20G；单机：磁盘 ≥40G（镜像/日志/导出同机） | 客户 |
 | 镜像 | 现场无法拉外网仓库 → 用 §3 离线包 | 我方 |
-| 模型 GGUF | ~1.5GB，经 hf-mirror/ModelScope 预下载（§4） | 我方 |
+| 模型 GGUF | ~1.5GB，经 hf-mirror/ModelScope 预下载（§4 选项A） | 我方 |
+| 模型 safetensors | 选项B（客户 vLLM）需 HF 格式权重，ModelScope 同仓库（§4） | 我方/客户 |
+
+### 0.1 单机（客户外置 infra）进场前准备
+
+**我方提前准备**（有网机器）：
+
+1. 离线包：`./deploy/scripts/offline-bundle.sh --tag v1.0.0`（单机走客户 vLLM 时**不要加 `--with-ollama`**），拷贝 `dist/offline/` 三个产物。
+2. vLLM 权重：按 §4 选项B 下载 7 个 safetensors 文件交给客户，并**提前约好**加载方式与 `--served-model-name`（`.env` 的 `VIRBIUS_PROMPT_LLM_MODEL` 必须与之一致）。
+3. 许可：确认 `license.lic` 的签发/上传方式（首次登录运营台后在 Licenses 页签发并下载）。
+
+**现场 `.env` 必核项**（`cp .env.example .env` 后逐项确认）：
+
+| 变量 | 注意 |
+|---|---|
+| `VIRBIUS_JDBC_URL` | 按客户 MySQL TLS 策略选 `sslMode`；`VERIFY_IDENTITY` 需放 CA 并解开 `node-a-control.yml` certs 卷注释（§6） |
+| `KAFKA_SASL_*` | 四件套齐全；机制非 SCRAM-SHA-256 时改 `KAFKA_SASL_MECHANISM` |
+| `REDIS_PASSWORD` | 同时确认客户已开 AOF/RDB（审计链头依赖） |
+| `VIRBIUS_LICENSE_MASTER_KEY` / `VIRBIUS_API_KEY_PEPPER` | 均 ≥32 字符，否则 control 拒绝启动 |
+| `CONTROL_PUBLIC_URL` | 必须等于浏览器实际访问地址，否则登录回跳 401 |
+| `PROMPT_LLM_BASE_URL` / `VIRBIUS_PROMPT_LLM_MODEL` | 选项B 指向客户 vLLM，模型名与 served-name 一致 |
+| `NODE_A` / `NODE_B` / `NODE_C` | 单机三个值都填**本机可达 IP**（见 §1.2，不能填 `127.0.0.1`） |
 
 ---
 
-## 1. 三机角色分配
+## 1. 角色分配（三机 / 单机）
+
+### 1.1 三机（默认）
 
 | 机器 | 角色 | 组件 | 对外端口 | 资源建议 |
 |---|---|---|---|---|
@@ -34,6 +58,23 @@
 
 - **engine 可多副本**：横向扩容请加主机，每台一个 engine（本 compose 固定发布 8082，单机 `--scale` 会端口冲突）。每个副本的 `VIRBIUS_INSTANCE_ID` 必须唯一（compose 容器 hostname 天然唯一；手动 `docker run` 需显式设置）。多于一个 engine 时前置 LB，control 与 proxy 的 `VIRBIUS_ENGINE_URL` 指向 LB。
 - **control / auth / proxy 单副本**：auth 的 JWT 签名密钥落在本机卷（扩副本会互踢登录）；control 多副本需共享 NFS（K8s 路径见 DEPLOYMENT.md §8.5，裸机本期不做）；proxy 是 MCP 客户端的单 TCP 入口。
+
+### 1.2 单机（全部组件同机）
+
+A/B/C 三个角色合并到一台机器：使用**同一份 `.env`**，三个 compose 文件同时运行；端口互不冲突。
+
+| 组件 | 监听端口 |
+|---|---|
+| virbius-control | 8080 |
+| virbius-auth | 8083 |
+| virbius-engine | 8082 |
+| virbius-mcp-proxy | 9090 |
+
+- **资源建议**：三机建议值合计约 14C28G；单机共享 OS 后可 **12C24G 推荐、8C16G 最低**（选项B 不含本机 Ollama，选项A 另加 8G 内存）；磁盘 ≥40G。
+- **`.env` 的 `NODE_A` / `NODE_B` / `NODE_C` 三个值都填本机 IP**，且必须是**容器可达的地址**（容器内 `127.0.0.1` 指向容器自身，不能用）。跨机场景下 control/engine/proxy 通过 `${NODE_*}:端口` 互联，单机同理。
+- **网络矩阵塌缩**：§2 中的 A↔B、A↔C、B↔C 全部变成本机互通，无需额外防火墙放通；实际只需「单机 → 客户 MySQL/Kafka/Redis/vLLM」出站，以及「办公网 → 8080」「MCP 客户端 → 9090」。
+- **限制不变**：control/auth/proxy 保持单副本；engine 不使用 `--scale`（固定发布 8082 会端口冲突），需要扩容时改为多机或前置 LB。
+- 部署命令见 §5.1。
 
 ## 2. 组件间网络与防火墙矩阵
 
@@ -54,6 +95,8 @@
 | MCP 客户端 → C | 9090 | 业务入口 | ✅ |
 
 东西向组件流量默认明文，依赖客户内网隔离（与 K8s 路径 §9.3 同一口径：Kafka SASL 认证 + 网络层隔离；如需传输加密，由客户侧升级 TLS 后调整 `.env`）。
+
+> **单机部署**：上表中 A↔B、A↔C、B↔C 行全部视为本机互通（无需放通）；只保留「单机 → 客户 MySQL/Kafka/Redis/vLLM」与「办公网 → 8080」「MCP 客户端 → 9090」。
 
 ## 3. 镜像离线交付（tar 包）
 
@@ -113,13 +156,35 @@ VIRBIUS_PROMPT_LLM_MODEL=i1see1you/virbiusguard:v2.0            # 与客户部�
 
 冒烟验证：`curl $PROMPT_LLM_BASE_URL/v1/chat/completions` 返回 `choices`；再在运营台发一条 `runtime=prompt` 规则触发一次语义检测。
 
-## 5. 逐机部署
+## 5. 部署
 
-启动顺序：客户 infra 就绪 → A 机 → B 机 → C 机。engine 在 control 发布 issuer 前 `/admin/ready` 可能短暂返回 503，属正常，control 就绪后自动转 ready（30s 内）。
+先准备 `.env`（单机/三机通用）：
 
 ```bash
-cd onprem && cp .env.example .env && vi .env   # 按现场填写（三机共用同一份 .env）
+cd onprem && cp .env.example .env && vi .env   # 按现场填写（同机/多机共用同一份）
 ```
+
+### 5.1 单机（按顺序执行三个 compose）
+
+启动顺序：客户 infra 就绪 → control/auth → engine → proxy。engine 在 control 发布 issuer 前 `/admin/ready` 可能短暂返回 503，属正常，control 就绪后自动转 ready（30s 内）。
+
+```bash
+docker compose --env-file .env -f node-a-control.yml up -d
+docker compose --env-file .env -f node-b-engine.yml up -d          # 选项B；选项A加 --profile llm-local
+docker compose --env-file .env -f node-c-proxy.yml up -d
+
+curl -sf http://localhost:8083/api/v1/health             # auth（直接访问本机发布端口）
+curl -sf http://localhost:8080/api/v1/health             # control
+curl -s  http://localhost:8082/admin/ready               # engine，应 200
+```
+
+> 注意：容器之间用 `.env` 的 `NODE_A/B/C` 互联，这三个值要填本机可达 IP；上面 `curl localhost` 只是从宿主侧验证发布端口。三个 compose 的 `name` 不同（`virbius-onprem-a/b/c`），可共存，清理时需分别 `down`。
+
+之后按 §6–§10 做 TLS、升级回滚、备份、验收与排障。
+
+### 5.2 三机
+
+启动顺序：客户 infra 就绪 → A 机 → B 机 → C 机。engine 在 control 发布 issuer 前 `/admin/ready` 可能短暂返回 503，属正常，control 就绪后自动转 ready（30s 内）。
 
 **A 机**：
 
@@ -167,7 +232,7 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
 
 ## 7. 升级与回滚
 
-- **升级**：我方出新 tar 包 → 现场 `docker load` → 逐机 `docker compose up -d`（顺序无硬依赖，先升 A 可让迁移先跑）。DB 迁移由 control Flyway 自动执行；**升级说明见 DEPLOYMENT.md §9.5**（含 V19 issuer 去重引起的 ≤15 分钟 token 401 窗口，仅影响已有多个 active issuer 的存量库升级）。
+- **升级**：我方出新 tar 包 → 现场 `docker load` → 逐机 `docker compose up -d`（顺序无硬依赖，先升 A 可让迁移先跑；单机依次执行三个 compose）。DB 迁移由 control Flyway 自动执行；**升级说明见 DEPLOYMENT.md §9.5**（含 V19 issuer 去重引起的 ≤15 分钟 token 401 窗口，仅影响已有多个 active issuer 的存量库升级）。
 - **回滚**：镜像 tag 指回旧版本重启即可；DB 迁移不回滚（新增列/索引向后兼容）。
 
 ## 8. 备份要点
@@ -182,6 +247,8 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
 
 ## 9. 现场验收 checklist
 
+> 单机部署时下表 A/B/C 均指本机，`localhost` 命令直接在单机执行。
+
 | # | 检查 | 命令/操作 | 预期 |
 |---|---|---|---|
 | 1 | 三机容器健康 | `docker compose ps` | 全部 `healthy`/`running` |
@@ -195,12 +262,15 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
 
 ## 10. 故障速查
 
+> 单机部署时 A/B/C 均指本机；跨机连通性问题转为检查 `NODE_A/B/C` 是否填了容器可达 IP。
+
 | 现象 | 定位 |
 |---|---|
 | control 启动失败 | 看日志首条 ERROR：密钥缺失/过短（§0 密钥表）、JDBC 不通、Kafka SASL 失败 |
 | engine `/admin/ready` 一直 503 | 看 body：`redis=down`→Redis 连通/密码；`cache_subscriber=starting`→等 30s 或查 Kafka；`rule_seeder=seeding`→control 未发快照 |
 | 控制台登录后 401/回跳异常 | auth 与 control 的 `VIRBIUS_AUTH_ISSUER` 必须一致；`CONTROL_PUBLIC_URL` 必须等于浏览器实际地址 |
 | 审批队列页报错 | control→B 机 8082 网络；1.0.0 起失败响应返回 JSON 错误体而非空 body |
+| 单机容器间互相调不通 | 常见为 `NODE_*` 误填 `127.0.0.1`（容器内是自身回环），或宿主防火墙未放通 8080/8082/8083/9090 |
 | 审计链校验告警 | 客户 Redis 未开持久化，链头丢失；恢复后 control 会重建 |
 | proxy 审计不落 | `VIRBIUS_AUDIT_BACKEND=kafka` + SASL 四件套是否配置；proxy 只支持 Kafka 后端 |
 
