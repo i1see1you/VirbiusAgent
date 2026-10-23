@@ -90,7 +90,7 @@ public class EvaluationDiagnosticsService {
         }
         HttpResponse<String> lic;
         try {
-            lic = http.send(get(uri, "/api/v1/license"),
+            lic = http.send(get(uri, "/api/v1/license", cfg.apiToken()),
                     HttpResponse.BodyHandlers.ofString());
         } catch (Exception e) {
             steps.add(step("auth", false, "请求失败: " + e.getMessage(), t0));
@@ -129,10 +129,19 @@ public class EvaluationDiagnosticsService {
     }
 
     private HttpRequest get(URI base, String path) {
-        return HttpRequest.newBuilder()
+        return get(base, path, null);
+    }
+
+    /** 带凭据的 GET：auth/license 步必须带 Bearer（health 保持无头——该端点豁免鉴权）。 */
+    private HttpRequest get(URI base, String path, String token) {
+        HttpRequest.Builder b = HttpRequest.newBuilder()
                 .uri(URI.create(base.toString().replaceAll("/+$", "") + path))
                 .timeout(Duration.ofSeconds(2))
-                .GET().build();
+                .GET();
+        if (token != null && !token.isBlank()) {
+            b.header("Authorization", "Bearer " + token);
+        }
+        return b.build();
     }
 
     private static Step step(String name, boolean ok, String detail, long startNanos) {

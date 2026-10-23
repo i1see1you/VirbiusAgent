@@ -54,6 +54,72 @@ export interface Finding {
   confidence?: string | null;
   suppressed?: boolean | null;
   suppression?: { id?: string; reason?: string } | null;
+  remediations?: RemediationSpec[] | null;
+}
+
+/** 报告内嵌的处置模板（evaluation 侧结构化处方）。 */
+export interface RemediationSpec {
+  plan_id: string;
+  type: string;
+  title?: string;
+  vars?: Record<string, RemediationVarSpec>;
+  bound_vars?: Record<string, string>;
+  payload_template?: unknown;
+}
+
+export interface RemediationVarSpec {
+  source?: string;
+  bind?: string;
+  hint?: string;
+  default_value?: string;
+  danger?: string;
+  bound_value?: string;
+}
+
+export interface RemediationPlanPreview {
+  risk_id: string;
+  check_id?: string;
+  plan_id: string;
+  type: string;
+  title?: string;
+  executable: boolean;
+  executable_reason?: string;
+  rule_id: string;
+  vars: Record<string, RemediationVarSpec>;
+  unresolved_vars: string[];
+  payload_preview?: Record<string, unknown>;
+  normalized?: boolean;
+  normalized_note?: string;
+  existing_rule?: { rule_id: string; rollout_state: string; enforce_mode: string } | null;
+}
+
+export interface RemediationPreview {
+  report_id: string;
+  agent_name?: string | null;
+  app_candidates: string[];
+  plans: RemediationPlanPreview[];
+}
+
+export interface RemediationApplyItem {
+  risk_id: string;
+  plan_id: string;
+  variables?: Record<string, string>;
+  app_id?: string;
+}
+
+export interface RemediationResultItem {
+  risk_id: string;
+  plan_id: string;
+  status: 'created' | 'skipped_exists' | 'skipped_cap' | 'unsupported' | 'failed' | 'needs_input';
+  rule_id?: string;
+  error?: string;
+  hint?: string;
+  existing_state?: string;
+}
+
+export interface RemediationApplyResponse {
+  report_id: string;
+  results: RemediationResultItem[];
 }
 
 export interface RescanResult {
@@ -233,6 +299,22 @@ export function listReports(q: ReportQuery = {}): Promise<ReportPage> {
 
 export function getReport(reportId: string): Promise<ScanReport> {
   return admin('/evaluation/reports/' + encodeURIComponent(reportId));
+}
+
+/** 一键处置预览（变量/查重/可执行性）。 */
+export function remediationPreview(reportId: string, riskIds: string[]): Promise<RemediationPreview> {
+  const params = new URLSearchParams({ risk_ids: riskIds.join(',') });
+  return admin(`/evaluation/reports/${encodeURIComponent(reportId)}/remediation-preview?${params}`);
+}
+
+/** 一键处置执行（创建 dry_run 规则；幂等，不覆盖已有规则）。 */
+export function remediationApply(
+  reportId: string, items: RemediationApplyItem[]
+): Promise<RemediationApplyResponse> {
+  return admin(`/evaluation/reports/${encodeURIComponent(reportId)}/remediation-apply`, {
+    method: 'POST',
+    body: JSON.stringify({ items })
+  });
 }
 
 export function createScan(body: ScanRequest): Promise<ScanReport> {

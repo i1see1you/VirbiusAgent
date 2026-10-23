@@ -501,6 +501,9 @@ without it.
   even when configured.
 - `VIRBIUS_EVALUATION_*` env is a **first-start seed only**; afterwards the DB row
   is authoritative.
+- Reports support **one-click rule generation**: finding → preview (variables,
+  evidence binding, executability) → `dry_run` rule; idempotent, never overwrites an
+  existing rule, and app binding requires explicit confirmation.
 - No telemetry: nothing is reported; links open only on user click.
 
 ## Security

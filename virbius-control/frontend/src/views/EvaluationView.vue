@@ -9,6 +9,92 @@
     </div>
     <EvaluationSettingsPanel v-model="settingsOpen" @saved="refreshStatus" />
 
+    <el-dialog v-model="remOpen" :title="t('ev.rem-title')" width="780px">
+      <div v-if="remLoading" class="v-hint">{{ t('ev.status-loading') }}</div>
+      <template v-else-if="remPreview">
+        <el-alert v-if="!writable" type="warning" :closable="false" show-icon
+                  :title="t('ev.license-readonly')" style="margin-bottom:10px" />
+        <div class="v-row" style="margin-bottom:10px; flex-wrap:wrap">
+          <span class="v-hint">{{ t('ev.rem-app') }}</span>
+          <el-input v-model="remApp" size="small" style="width:220px"
+                    :placeholder="t('ev.rem-app-ph')" />
+          <el-checkbox v-model="remAppConfirmed">{{ t('ev.rem-app-confirm') }}</el-checkbox>
+        </div>
+        <p v-if="remApp && remPreview.app_candidates.length && !remPreview.app_candidates.includes(remApp)"
+           class="v-hint" style="color:var(--el-color-warning)">
+          {{ t('ev.rem-app-unknown') }}
+        </p>
+
+        <div v-for="p in remPreview.plans" :key="p.risk_id + p.plan_id" class="rem-plan">
+          <div class="v-row" style="justify-content:space-between">
+            <strong>{{ p.title || p.plan_id }}</strong>
+            <el-tag size="small" :type="p.executable ? '' : 'info'">
+              {{ p.executable ? t('ev.rem-create-rule') : t('ev.rem-unsupported') }}
+            </el-tag>
+          </div>
+          <p class="v-hint" style="margin:4px 0">{{ t('ev.rem-dryrun-hint') }}</p>
+          <p v-if="!p.executable" class="v-hint">{{ p.executable_reason }}</p>
+          <div v-for="(spec, name) in p.vars" :key="name" class="v-row" style="margin-top:6px">
+            <span class="mono" style="min-width:110px">{{ name }}</span>
+            <el-input v-model="remVars[p.risk_id + '|' + p.plan_id][name]" size="small"
+                      style="width:340px" :placeholder="spec.hint || ''"
+                      :disabled="!p.executable" />
+            <el-tag v-if="spec.danger && spec.danger !== 'none'" size="small"
+                    :type="spec.danger === 'mask' ? 'warning' : 'danger'">{{ spec.danger }}</el-tag>
+            <span v-if="spec.bound_value" class="v-hint">{{ t('ev.rem-from-evidence') }}</span>
+          </div>
+          <p v-if="p.normalized" class="v-hint" style="margin:6px 0">{{ p.normalized_note }}</p>
+          <details v-if="p.payload_preview" style="margin-top:6px">
+            <summary class="v-hint">{{ t('ev.rem-payload') }}</summary>
+            <pre class="mono ev-evidence">{{ JSON.stringify(p.payload_preview, null, 2) }}</pre>
+          </details>
+          <p v-if="p.existing_rule" class="v-hint" style="margin:6px 0">
+            {{ t('ev.rem-existing', { rule: p.existing_rule.rule_id, state: p.existing_rule.rollout_state }) }}
+          </p>
+        </div>
+
+        <div v-if="remResults.length" style="margin-top:12px">
+          <h4 style="margin:8px 0">{{ t('ev.rem-results') }}</h4>
+          <el-table :data="remResults" size="small" border>
+            <el-table-column prop="plan_id" label="plan" width="170" />
+            <el-table-column :label="t('ev.rem-status')" width="150">
+              <template #default="{ row }">
+                <el-tag size="small" :type="remStatusType(row.status)">
+                  {{ t('ev.rem-st-' + row.status) }}
+                </el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="rule_id" min-width="230">
+              <template #default="{ row }">
+                <span class="mono">{{ row.rule_id || '-' }}</span>
+                <el-button v-if="row.rule_id" link size="small" @click="copy(row.rule_id)">
+                  {{ t('ev.rem-copy-id') }}
+                </el-button>
+              </template>
+            </el-table-column>
+            <el-table-column min-width="240">
+              <template #default="{ row }">
+                <span class="v-hint">{{ row.error || row.hint || '' }}</span>
+                <router-link v-if="row.rule_id && ['created','skipped_exists','skipped_cap'].includes(row.status)"
+                             to="/rules" class="v-hint" style="margin-left:6px">
+                  {{ t('ev.rem-goto-rules') }}
+                </router-link>
+              </template>
+            </el-table-column>
+          </el-table>
+          <p class="v-hint" style="margin-top:6px">{{ t('ev.rem-observe-hint') }}</p>
+        </div>
+      </template>
+      <template #footer>
+        <el-button size="small" @click="remOpen = false">{{ t('ev.rem-close') }}</el-button>
+        <el-button size="small" type="primary" :loading="remApplying"
+                   :disabled="!writable || !remAppConfirmed || !hasExecutablePlan"
+                   @click="submitRemediation">
+          {{ t('ev.rem-apply') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
     <div v-if="!status" class="v-hint">{{ t('ev.status-loading') }}</div>
     <EvaluationIntroPanel v-else-if="!ready" :status="status" :diagnostic="statusError"
                           @retry="refreshStatus" />
@@ -78,7 +164,7 @@
             <el-checkbox v-model="showSuppressed">{{ t('ev.show-suppressed') }}</el-checkbox>
           </div>
           <el-table :data="visibleFindings" size="small" border stripe
-                    :row-class-name="findingRowClass">
+                    :row-class-name="findingRowClass" @expand-change="onExpandChange">
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div style="padding:8px 16px">
@@ -100,6 +186,19 @@
                       {{ t('ev.copy-commands') }}
                     </el-button>
                     <pre class="mono ev-evidence">{{ row.commands.join('\n') }}</pre>
+                  </div>
+                  <div v-if="row.remediations?.length && !row.suppressed" style="margin-top:8px">
+                    <el-tag v-if="appliedState[row.risk_id]" size="small" type="success"
+                            style="margin-right:8px">
+                      {{ t('ev.rem-applied', {
+                        rule: appliedState[row.risk_id].rule_id,
+                        state: appliedState[row.risk_id].rollout_state
+                      }) }}
+                    </el-tag>
+                    <el-button size="small" type="primary" :disabled="!writable"
+                               @click="openRemediation(row)">
+                      {{ t('ev.rem-open') }}
+                    </el-button>
                   </div>
                 </div>
               </template>
@@ -242,8 +341,9 @@ import EvaluationSettingsPanel from '@/components/EvaluationSettingsPanel.vue';
 import { useEvaluationStore } from '@/stores/evaluation';
 import {
   cancelJob, createProbe, createReplay, createScan, createSkillScan, downloadReport,
-  getJob, getReport, importReplay, listReports,
-  type JobView, type ReportMeta, type ScanReport
+  getJob, getReport, importReplay, listReports, remediationApply, remediationPreview,
+  type Finding as EvalFinding, type JobView, type RemediationPreview,
+  type RemediationResultItem, type ReportMeta, type ScanReport
 } from '@/api/evaluation';
 
 const { t } = useI18n();
@@ -293,6 +393,113 @@ const activeJob = ref<JobView | null>(null);
 const jobTerminal = computed(() => !!activeJob.value &&
   ['succeeded', 'failed', 'canceled'].includes(activeJob.value.status));
 const detail = ref<ScanReport | null>(null);
+
+const remOpen = ref(false);
+const remLoading = ref(false);
+const remApplying = ref(false);
+const remPreview = ref<RemediationPreview | null>(null);
+const remVars = ref<Record<string, Record<string, string>>>({});
+const remApp = ref('');
+const remAppConfirmed = ref(false);
+const remResults = ref<RemediationResultItem[]>([]);
+const appliedState = ref<Record<string, { rule_id: string; rollout_state: string }>>({});
+const expandedChecked = ref<Record<string, boolean>>({});
+const hasExecutablePlan = computed(() =>
+  !!remPreview.value?.plans.some(p => p.executable));
+
+function remStatusType(status: string): string {
+  switch (status) {
+    case 'created': return 'success';
+    case 'skipped_cap': return 'warning';
+    case 'needs_input': return 'warning';
+    case 'failed': return 'danger';
+    default: return 'info';
+  }
+}
+
+async function openRemediation(row: EvalFinding) {
+  if (!detail.value) return;
+  remOpen.value = true;
+  remLoading.value = true;
+  remPreview.value = null;
+  remResults.value = [];
+  remVars.value = {};
+  remApp.value = detail.value.agent_name || '';
+  remAppConfirmed.value = false;
+  try {
+    const preview = await remediationPreview(detail.value.report_id, [row.risk_id]);
+    for (const plan of preview.plans) {
+      const key = plan.risk_id + '|' + plan.plan_id;
+      const values: Record<string, string> = {};
+      for (const [name, spec] of Object.entries(plan.vars || {})) {
+        values[name] = spec.bound_value || spec.default_value || '';
+      }
+      remVars.value[key] = values;
+      if (plan.existing_rule) {
+        appliedState.value[plan.risk_id] = {
+          rule_id: plan.existing_rule.rule_id,
+          rollout_state: plan.existing_rule.rollout_state
+        };
+      }
+    }
+    remPreview.value = preview;
+  } catch (e: any) {
+    ElMessage.error(String(e?.message || e));
+    remOpen.value = false;
+  } finally {
+    remLoading.value = false;
+  }
+}
+
+async function submitRemediation() {
+  if (!detail.value || !remPreview.value) return;
+  const items = remPreview.value.plans
+    .filter(p => p.executable)
+    .map(p => ({
+      risk_id: p.risk_id,
+      plan_id: p.plan_id,
+      variables: remVars.value[p.risk_id + '|' + p.plan_id] || {},
+      app_id: remApp.value || undefined
+    }));
+  if (!items.length) return;
+  remApplying.value = true;
+  try {
+    const resp = await remediationApply(detail.value.report_id, items);
+    remResults.value = resp.results;
+    for (const r of resp.results) {
+      if (r.rule_id && (r.status === 'created' || r.status === 'skipped_exists')) {
+        appliedState.value[r.risk_id] = {
+          rule_id: r.rule_id,
+          rollout_state: r.status === 'created' ? 'dry_run' : (r.existing_state || 'existing')
+        };
+      }
+    }
+  } catch (e: any) {
+    ElMessage.error(String(e?.message || e));
+  } finally {
+    remApplying.value = false;
+  }
+}
+
+/** S1：展开 finding 时惰性反查是否已生成过规则（低频动作，不随页面加载全量反查）。 */
+async function onExpandChange(row: EvalFinding, expandedRows: EvalFinding[]) {
+  if (!detail.value || !expandedRows.includes(row)) return;
+  if (!row.remediations?.length || row.suppressed) return;
+  if (appliedState.value[row.risk_id] || expandedChecked.value[row.risk_id]) return;
+  expandedChecked.value[row.risk_id] = true;
+  try {
+    const preview = await remediationPreview(detail.value.report_id, [row.risk_id]);
+    const existing = preview.plans.find(p => p.existing_rule)?.existing_rule;
+    if (existing) {
+      appliedState.value[row.risk_id] = {
+        rule_id: existing.rule_id,
+        rollout_state: existing.rollout_state
+      };
+    }
+  } catch {
+    expandedChecked.value[row.risk_id] = false;
+  }
+}
 
 const acceptedCount = computed(() =>
   (detail.value?.findings || []).filter(f => f.suppressed).length);
@@ -524,5 +731,11 @@ onMounted(async () => {
   color: var(--el-text-color-regular);
   line-height: 1.6;
   word-break: break-all;
+}
+.rem-plan {
+  border: 1px solid var(--el-border-color-light);
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 10px;
 }
 </style>

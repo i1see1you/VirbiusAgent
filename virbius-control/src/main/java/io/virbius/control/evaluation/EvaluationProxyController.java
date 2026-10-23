@@ -340,6 +340,11 @@ public class EvaluationProxyController {
         }
     }
 
+    /** 处置链路复用：GET 转发（同包 RemediationService 取报告用；错误码语义同上）。 */
+    ResponseEntity<String> forwardGet(String tenantId, String path) {
+        return forward(tenantId, HttpRequest.newBuilder().GET(), path);
+    }
+
     private static String jsonQuote(String s) {
         try {
             return JSON.writeValueAsString(s);

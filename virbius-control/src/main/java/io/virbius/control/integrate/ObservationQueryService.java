@@ -43,11 +43,11 @@ public class ObservationQueryService {
         }
         if (since != null && !since.isBlank()) {
             sql.append(" AND observed_at >= ?");
-            args.add(since);
+            args.add(normalizeTsBound(since));
         }
         if (until != null && !until.isBlank()) {
             sql.append(" AND observed_at <= ?");
-            args.add(until);
+            args.add(normalizeTsBound(until));
         }
         sql.append(" ORDER BY observed_at ASC,"
                 + " CASE phase WHEN 'started' THEN 0 WHEN 'completed' THEN 1 ELSE 2 END ASC"
@@ -162,5 +162,17 @@ public class ObservationQueryService {
         row.put("package_version", rs.getString("package_version"));
         row.put("observed_at", rs.getString("observed_at"));
         return row;
+    }
+
+    /**
+     * 归一窗口边界到 ISO-8601（与库内 observed_at 同形）：evaluation 回放侧发送
+     * MySQL 'yyyy-MM-dd HH:mm:ss'（空格分隔）格式，与 'T' 分隔的 ISO 字符串直接比较
+     * 会因 'T'（0x54）> 空格（0x20）将 <= 边界全部漏掉，统一转成 ISO 形式再比较。
+     */
+    static String normalizeTsBound(String ts) {
+        if (ts == null || ts.length() < 19 || ts.charAt(10) != ' ' || ts.charAt(13) != ':') {
+            return ts;
+        }
+        return ts.substring(0, 10) + "T" + ts.substring(11);
     }
 }

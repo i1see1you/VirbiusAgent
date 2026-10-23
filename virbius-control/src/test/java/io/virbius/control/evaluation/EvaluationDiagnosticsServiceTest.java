@@ -1,5 +1,6 @@
 package io.virbius.control.evaluation;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -56,6 +57,17 @@ class EvaluationDiagnosticsServiceTest {
     }
 
     @Test
+    void licenseStepSendsBearerToken() throws Exception {
+        String base = startStub(200, 200);
+        EvaluationDiagnosticsService.Result r = svc.run(cfg(base, "tok"));
+        assertTrue(r.ok(), () -> r.steps().toString());
+        // BUG-2 回归网：评估 /api/v1/license 要求 Bearer（无头→401），诊断必须带 Authorization，
+        // 否则真实环境「测试连接」对启用了鉴权的评估服务恒误报 401（false negative）。
+        assertEquals("Bearer tok", lastLicenseAuth.get(),
+                "license 步请求必须带 Authorization 头（不带会被评估服务拒为 401）");
+    }
+
+    @Test
     void refusedPortFailsAtTcp() throws Exception {
         int dead;
         try (ServerSocket s = new ServerSocket(0)) {
@@ -86,6 +98,9 @@ class EvaluationDiagnosticsServiceTest {
 
     // ---------- helpers ----------
 
+    private final java.util.concurrent.atomic.AtomicReference<String> lastLicenseAuth =
+            new java.util.concurrent.atomic.AtomicReference<>();
+
     private static EvaluationSettingsService.Settings cfg(String base, String token) {
         return new EvaluationSettingsService.Settings(true, base, token, true, "");
     }
@@ -104,8 +119,11 @@ class EvaluationDiagnosticsServiceTest {
         server.createContext("/api/v1/health", ex -> respond(ex, healthStatus,
                 "{\"code\":0,\"data\":{\"status\":\"UP\"}}"));
         server.createContext("/api/v1/license", ex -> {
-            if (licenseStatus != 200) {
-                respond(ex, licenseStatus, "{\"code\":401,\"message\":\"unauthorized\"}");
+            // 仿真评估服务行为：/license 要求 Bearer 头（无头 → 401，与真实端点一致）
+            lastLicenseAuth.set(ex.getRequestHeaders().getFirst("Authorization"));
+            if (licenseStatus != 200 || lastLicenseAuth.get() == null) {
+                respond(ex, licenseStatus != 200 ? licenseStatus : 401,
+                        "{\"code\":401,\"message\":\"unauthorized\"}");
                 return;
             }
             respond(ex, 200, "{\"code\":0,\"data\":{\"mode\":\"" + mode + "\",\"active\":"

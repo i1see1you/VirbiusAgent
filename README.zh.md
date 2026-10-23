@@ -492,6 +492,7 @@ VirbiusAgent/
   base-url、服务 token、测试连接、许可证上传——即时生效，无需重启。
 - `VIRBIUS_EVALUATION_ENABLED=false`（种子）或设置页开关：即使已接入也隐藏入口。
 - `VIRBIUS_EVALUATION_*` env 仅作**首次启动种子**；之后以 DB 配置为准。
+- 检测报告支持**一键生成规则**：Finding → 预览（变量/证据绑定/可执行性）→ 生成 `dry_run` 观察态规则；幂等、不覆盖已有规则、应用绑定需显式确认。
 - 无遥测：不上报任何数据；外链仅在用户点击时打开。
 
 ## 安全报告

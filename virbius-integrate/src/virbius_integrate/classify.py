@@ -98,6 +98,10 @@ def _tool_args_keys(tool) -> list:
 
 
 def _tool_fields(tool) -> tuple[str, str]:
+    if isinstance(tool, dict):
+        name = tool.get("tool_name") or tool.get("name") or ""
+        description = tool.get("description") or ""
+        return str(name), str(description)
     name = getattr(tool, "name", None) or getattr(tool, "__name__", "") or ""
     description = getattr(tool, "description", "") or ""
     return str(name), str(description)
