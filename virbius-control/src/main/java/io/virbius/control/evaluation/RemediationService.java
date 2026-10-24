@@ -13,6 +13,7 @@ import io.virbius.control.security.ApiKeyAuthContext;
 import io.virbius.control.service.PublishService;
 import io.virbius.control.service.RolloutService;
 import io.virbius.control.service.RuleService;
+import io.virbius.policy.BindScope;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -30,6 +31,8 @@ import org.springframework.stereotype.Service;
  * 一键处置（M1-min）：报告 Finding 的结构化处方 → dry_run 规则。
  *
  * <p>红线：单一幂等键 eval-{check_id}-{risk_id8}；已存在不覆盖（skipped_exists）；
+ * 等价判重（skipped_covered）：同 layer+runtime+intent + 归一化 body 相等 + scope 覆盖目标 app，
+ * 仅 full 态（或本批新建）算已覆盖，dry_run/canary 降级为 similar_rules 提示；
  * 一律经 RolloutService.publish 进入 dry_run（不触碰 canary/full）；变量仅白名单键、
  * {{var}} 只做 JsonNode 叶子级替换；register_tool/egress_allowlist M1 返回 unsupported；
  * evaluation 许可 inactive 时 apply 整体拒绝（Owner 2026-10-23 决策）。
@@ -71,6 +74,8 @@ public class RemediationService {
     public Map<String, Object> preview(String tenantId, String reportId, List<String> riskIds) {
         JsonNode report = fetchReport(tenantId, reportId);
         Map<String, JsonNode> findings = indexFindings(report);
+        List<Map<String, Object>> rules = allRuleDetails(tenantId);
+        String agentApp = report.path("agent_name").asText(null);
         List<Map<String, Object>> plans = new ArrayList<>();
         for (String riskId : riskIds) {
             JsonNode finding = findings.get(riskId);
@@ -78,7 +83,7 @@ public class RemediationService {
                 continue;
             }
             for (JsonNode plan : finding.path("remediations")) {
-                plans.add(previewPlan(tenantId, finding, plan));
+                plans.add(previewPlan(tenantId, finding, plan, rules, agentApp));
             }
         }
         Map<String, Object> out = new LinkedHashMap<>();
@@ -101,8 +106,9 @@ public class RemediationService {
         List<Map<String, Object>> results = new ArrayList<>();
         boolean anyCreated = false;
         String agentApp = report.path("agent_name").asText("default");
+        List<Map<String, Object>> rules = new ArrayList<>(allRuleDetails(tenantId));
         for (ApplyItem item : items) {
-            Map<String, Object> result = applyItem(tenantId, reportId, findings, item, agentApp);
+            Map<String, Object> result = applyItem(tenantId, reportId, findings, item, agentApp, rules);
             results.add(result);
             anyCreated |= "created".equals(result.get("status"));
         }
@@ -121,7 +127,7 @@ public class RemediationService {
 
     private Map<String, Object> applyItem(
             String tenantId, String reportId, Map<String, JsonNode> findings,
-            ApplyItem item, String agentApp) {
+            ApplyItem item, String agentApp, List<Map<String, Object>> rules) {
         JsonNode finding = findings.get(item.riskId());
         if (finding == null) {
             return result(item, "failed", null, "risk_id 不在报告中: " + item.riskId());
@@ -131,7 +137,7 @@ public class RemediationService {
             return result(item, "failed", null, "plan_id 不在该 finding: " + item.planId());
         }
         if (!"create_rule".equals(plan.path("type").asText())) {
-            audit(tenantId, reportId, item, null, "skipped", finding);
+            audit(tenantId, reportId, item, null, "skipped", "none", finding);
             return result(item, "unsupported", null,
                     "M1 仅支持 create_rule（register_tool/egress_allowlist 留 M2）");
         }
@@ -149,17 +155,29 @@ public class RemediationService {
         }
         Map<String, Object> existing = existingRule(tenantId, ruleId);
         if (existing != null) {
-            audit(tenantId, reportId, item, ruleId, "skipped", finding);
+            audit(tenantId, reportId, item, ruleId, "skipped", "key", finding);
             Map<String, Object> r = result(item, "skipped_exists", ruleId, null);
             r.put("existing_state", existing.get("rollout_state"));
             r.put("hint", "规则已存在（不覆盖）；如需改变量请到规则页下线→编辑→重新发布");
             return r;
         }
+        JsonNode substituted = substitute(payload.deepCopy(), resolved.values());
+        Map<String, Object> coveredBy = findCoveringRule(rules, substituted, appId);
+        if (coveredBy != null) {
+            String coveredId = String.valueOf(coveredBy.get("rule_id"));
+            audit(tenantId, reportId, item, coveredId, "skipped", "equivalent", finding);
+            Map<String, Object> r = result(item, "skipped_covered", ruleId, null);
+            r.put("covered_by", coveredId);
+            r.put("existing_state", coveredBy.get("rollout_state"));
+            r.put("hint", "已有等价规则 " + coveredId + " 在防护中（内容一致）；"
+                    + "如需独立观察请到规则页手动复制后修改变量");
+            return r;
+        }
         try {
-            UpsertRuleRequest upsert = buildUpsert(payload, ruleId, appId, resolved.values());
+            UpsertRuleRequest upsert = buildUpsert(substituted, ruleId, appId);
             ruleService.upsertRule(tenantId, upsert);
         } catch (Exception e) {
-            audit(tenantId, reportId, item, ruleId, "failed", finding);
+            audit(tenantId, reportId, item, ruleId, "failed", "none", finding);
             return result(item, "failed", ruleId, firstLine(e.getMessage()));
         }
         String status = "created";
@@ -170,13 +188,14 @@ public class RemediationService {
             status = "skipped_cap";
             error = "规则已创建（draft）但进入 dry_run 被拒: " + firstLine(e.getMessage());
         }
-        audit(tenantId, reportId, item, ruleId, "created".equals(status) ? "created" : "skipped", finding);
+        audit(tenantId, reportId, item, ruleId,
+                "created".equals(status) ? "created" : "skipped", "none", finding);
+        rules.add(createdRuleShadow(substituted, ruleId, appId));
         return result(item, status, ruleId, error);
     }
 
-    private UpsertRuleRequest buildUpsert(
-            JsonNode payload, String ruleId, String appId, Map<String, String> values) {
-        JsonNode body = substitute(payload.path("body").deepCopy(), values);
+    private UpsertRuleRequest buildUpsert(JsonNode payload, String ruleId, String appId) {
+        JsonNode body = payload.path("body");
         Object bodyValue;
         if ("groovy".equals(payload.path("runtime").asText()) && body.has("script")) {
             bodyValue = body.path("script").asText();
@@ -299,7 +318,166 @@ public class RemediationService {
         return node;
     }
 
-    private Map<String, Object> previewPlan(String tenantId, JsonNode finding, JsonNode plan) {
+    /**
+     * 等价判重：同 layer+runtime+intent + 归一化 body 相等 + 已有规则 scope 覆盖目标 app。
+     * 仅 full 态（或本批刚创建）算"已覆盖"；dry_run/canary/draft 只观察不防护，留给 similar 提示。
+     */
+    private Map<String, Object> findCoveringRule(
+            List<Map<String, Object>> rules, JsonNode payload, String appId) {
+        String layer = payload.path("layer").asText(null);
+        String runtime = payload.path("runtime").asText(null);
+        boolean dlp = DlpRuleValidator.isDlpRuntime(runtime);
+        String intent = dlp ? "allow" : payload.path("intent_action").asText(null);
+        for (Map<String, Object> rule : rules) {
+            if (!java.util.Objects.equals(layer, rule.get("layer"))
+                    || !java.util.Objects.equals(runtime, rule.get("runtime"))) {
+                continue;
+            }
+            if (!java.util.Objects.equals(intent, String.valueOf(rule.get("intent_action")))) {
+                continue;
+            }
+            if (!bodyEquals(runtime, rule.get("body"), payload.path("body"))) {
+                continue;
+            }
+            Object scope = rule.get("scope");
+            if (!coversApp(scope instanceof Map<?, ?> s ? castScope(s) : null, appId)) {
+                continue;
+            }
+            String state = rule.get("rollout_state") == null ? "draft"
+                    : String.valueOf(rule.get("rollout_state"));
+            if ("full".equals(state) || Boolean.TRUE.equals(rule.get("_batch_created"))) {
+                return rule;
+            }
+        }
+        return null;
+    }
+
+    /** 软提示：body 等价但未防护（dry_run/canary/draft），或同 layer+runtime+reason_code。 */
+    private List<Map<String, Object>> findSimilarRules(
+            List<Map<String, Object>> rules, JsonNode payload, String appId, String selfRuleId) {
+        String layer = payload.path("layer").asText(null);
+        String runtime = payload.path("runtime").asText(null);
+        String reason = payload.path("reason_code").asText(null);
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> rule : rules) {
+            if (out.size() >= 5) {
+                break;
+            }
+            String id = String.valueOf(rule.get("rule_id"));
+            if (id.equals(selfRuleId)) {
+                continue;
+            }
+            String state = rule.get("rollout_state") == null ? "draft"
+                    : String.valueOf(rule.get("rollout_state"));
+            if ("disabled".equals(state)) {
+                continue;
+            }
+            if (!java.util.Objects.equals(layer, rule.get("layer"))
+                    || !java.util.Objects.equals(runtime, rule.get("runtime"))) {
+                continue;
+            }
+            Object scope = rule.get("scope");
+            if (!coversApp(scope instanceof Map<?, ?> s ? castScope(s) : null, appId)) {
+                continue;
+            }
+            boolean sameBody = bodyEquals(runtime, rule.get("body"), payload.path("body"));
+            if (sameBody && "full".equals(state)) {
+                continue;
+            }
+            boolean sameReason = reason != null && reason.equals(rule.get("reason_code"));
+            if (!sameBody && !sameReason) {
+                continue;
+            }
+            Map<String, Object> s = new LinkedHashMap<>();
+            s.put("rule_id", id);
+            s.put("rollout_state", state);
+            s.put("intent_action", rule.get("intent_action"));
+            s.put("reason", sameBody ? "same_body_not_enforcing" : "same_reason_code");
+            out.add(s);
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> castScope(Map<?, ?> s) {
+        return (Map<String, Object>) s;
+    }
+
+    /** scope 覆盖语义与 BindScope 对齐：global=全覆盖；service=app_ids 命中；tool=无 app_ids 限定时全覆盖。 */
+    private static boolean coversApp(Map<String, Object> scope, String appId) {
+        String bind = BindScope.scopeFromRuleScope(scope);
+        if (BindScope.GLOBAL.equals(bind)) {
+            return true;
+        }
+        List<String> appIds = new ArrayList<>();
+        Object raw = BindScope.bindRefFromScope(scope).get("app_ids");
+        if (raw instanceof List<?> list) {
+            list.forEach(id -> {
+                if (id != null && !String.valueOf(id).isBlank()) {
+                    appIds.add(String.valueOf(id));
+                }
+            });
+        }
+        if (BindScope.SERVICE.equals(bind)) {
+            return appId != null && appIds.contains(appId);
+        }
+        return appIds.isEmpty() || (appId != null && appIds.contains(appId));
+    }
+
+    private static boolean bodyEquals(String runtime, Object existingBody, JsonNode newBody) {
+        if (existingBody == null || newBody == null || newBody.isMissingNode()) {
+            return false;
+        }
+        String existing = String.valueOf(existingBody);
+        if ("groovy".equals(runtime) || "agent-groovy".equals(runtime) || "lua".equals(runtime)) {
+            String script = newBody.path("script").asText(null);
+            return script != null && normalizeScript(existing).equals(normalizeScript(script));
+        }
+        try {
+            return JSON.readTree(existing).equals(newBody);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static String normalizeScript(String s) {
+        return s == null ? "" : s.replaceAll("\\s+", " ").trim();
+    }
+
+    private List<Map<String, Object>> allRuleDetails(String tenantId) {
+        try {
+            List<Map<String, Object>> out = ruleService.listRuleDetails(tenantId);
+            return out == null ? List.of() : out;
+        } catch (Exception e) {
+            log.debug("rule details scan failed (dedup degraded to key-only): {}", e.toString());
+            return List.of();
+        }
+    }
+
+    /** 本批新建规则的影子记录，保证同批后续等价项判重命中（视为已覆盖）。 */
+    private Map<String, Object> createdRuleShadow(JsonNode payload, String ruleId, String appId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("rule_id", ruleId);
+        m.put("layer", payload.path("layer").asText(null));
+        m.put("runtime", payload.path("runtime").asText(null));
+        m.put("reason_code", payload.path("reason_code").asText(null));
+        boolean dlp = DlpRuleValidator.isDlpRuntime(payload.path("runtime").asText());
+        m.put("intent_action", dlp ? "allow" : payload.path("intent_action").asText(null));
+        m.put("rollout_state", "dry_run");
+        m.put("scope", Map.of("bind_scope", "service",
+                "bind_ref", Map.of("app_ids", List.of(appId))));
+        JsonNode body = payload.path("body");
+        if ("groovy".equals(payload.path("runtime").asText()) && body.has("script")) {
+            m.put("body", body.path("script").asText());
+        } else {
+            m.put("body", body.toString());
+        }
+        m.put("_batch_created", Boolean.TRUE);
+        return m;
+    }
+
+    private Map<String, Object> previewPlan(String tenantId, JsonNode finding, JsonNode plan,
+            List<Map<String, Object>> rules, String agentApp) {
         Map<String, Object> p = new LinkedHashMap<>();
         String riskId = finding.path("risk_id").asText();
         p.put("risk_id", riskId);
@@ -347,6 +525,18 @@ public class RemediationService {
                 p.put("normalized_note", "DLP 类规则由平台强制 risk=0 / intent=allow（脱敏检测语义）");
             }
             p.put("payload_preview", JSON.convertValue(payload, Map.class));
+            Map<String, Object> covering = findCoveringRule(rules, payload, agentApp);
+            if (covering != null) {
+                p.put("equivalent_rule", Map.of(
+                        "rule_id", String.valueOf(covering.get("rule_id")),
+                        "rollout_state", String.valueOf(covering.get("rollout_state")),
+                        "intent_action", String.valueOf(covering.get("intent_action"))));
+            }
+            List<Map<String, Object>> similar =
+                    findSimilarRules(rules, payload, agentApp, ruleId(finding, riskId));
+            if (!similar.isEmpty()) {
+                p.put("similar_rules", similar);
+            }
         }
         Map<String, Object> existing = existingRule(tenantId, ruleId(finding, riskId));
         if (existing != null) {
@@ -444,7 +634,7 @@ public class RemediationService {
     }
 
     private void audit(String tenantId, String reportId, ApplyItem item, String ruleId,
-            String action, JsonNode finding) {
+            String action, String dedupLayer, JsonNode finding) {
         try {
             Map<String, Object> event = new LinkedHashMap<>();
             event.put("event_id", UUID.randomUUID().toString());
@@ -455,6 +645,7 @@ public class RemediationService {
             event.put("tool_name", item.planId());
             event.put("rule_id", ruleId);
             event.put("effective_action", action);
+            event.put("dedup_layer", dedupLayer);
             event.put("session_id", item.riskId());
             var principal = ApiKeyAuthContext.current();
             if (principal != null) {

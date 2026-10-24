@@ -79,6 +79,21 @@ class RemediationServiceTest {
         when(proxy.status(anyString(), any())).thenReturn(activeStatus());
         when(ruleService.getRule(anyString(), anyString()))
                 .thenThrow(new IllegalArgumentException("rule not found"));
+        when(ruleService.listRuleDetails(anyString())).thenReturn(List.of());
+    }
+
+    /** full 态等价规则（global scope）：layer/runtime/intent 相同 + body 相等。 */
+    private Map<String, Object> fullEquivalentRule(String ruleId, String keywordsJson, Object scope) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("rule_id", ruleId);
+        m.put("layer", "edge");
+        m.put("runtime", "lua-dsl");
+        m.put("reason_code", "HITL_REQUIRED");
+        m.put("intent_action", "challenge");
+        m.put("rollout_state", "full");
+        m.put("scope", scope);
+        m.put("body", "{\"keywords\":" + keywordsJson + ",\"list_type\":\"deny\"}");
+        return m;
     }
 
     private Status activeStatus() {
@@ -199,6 +214,122 @@ class RemediationServiceTest {
 
         verify(ruleService, never()).upsertRule(anyString(), any());
         verify(rolloutService, never()).publish(anyString(), anyString());
+    }
+
+    @Test
+    void applySkippedCoveredWhenEquivalentFullRuleExists() {
+        when(ruleService.listRuleDetails(TENANT)).thenReturn(List.of(
+                fullEquivalentRule("cloud-hitl", "[\"send_email\"]", Map.of())));
+
+        Map<String, Object> out = service.apply(TENANT, REPORT,
+                new RemediationService.ApplyRequest(List.of(item(null, "mail-app"))));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> r = ((List<Map<String, Object>>) out.get("results")).get(0);
+        assertEquals("skipped_covered", r.get("status"));
+        assertEquals("cloud-hitl", r.get("covered_by"));
+        assertEquals("full", r.get("existing_state"));
+
+        verify(ruleService, never()).upsertRule(anyString(), any());
+        verify(rolloutService, never()).publish(anyString(), anyString());
+        verify(audit).ingestEvent(argThat(e -> "equivalent".equals(e.get("dedup_layer"))
+                && "cloud-hitl".equals(e.get("rule_id"))));
+    }
+
+    @Test
+    void applyCreatesWhenEquivalentRuleOnlyDryRun() {
+        Map<String, Object> dry = fullEquivalentRule("cloud-hitl", "[\"send_email\"]", Map.of());
+        dry.put("rollout_state", "dry_run");
+        when(ruleService.listRuleDetails(TENANT)).thenReturn(List.of(dry));
+
+        Map<String, Object> out = service.apply(TENANT, REPORT,
+                new RemediationService.ApplyRequest(List.of(item(null, "mail-app"))));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> r = ((List<Map<String, Object>>) out.get("results")).get(0);
+        assertEquals("created", r.get("status"));
+    }
+
+    @Test
+    void applyCreatesWhenVariablesDiffer() {
+        when(ruleService.listRuleDetails(TENANT)).thenReturn(List.of(
+                fullEquivalentRule("cloud-hitl", "[\"other_tool\"]", Map.of())));
+
+        Map<String, Object> out = service.apply(TENANT, REPORT,
+                new RemediationService.ApplyRequest(List.of(item(null, "mail-app"))));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> r = ((List<Map<String, Object>>) out.get("results")).get(0);
+        assertEquals("created", r.get("status"));
+    }
+
+    @Test
+    void applyCreatesWhenScopeDoesNotCoverApp() {
+        when(ruleService.listRuleDetails(TENANT)).thenReturn(List.of(
+                fullEquivalentRule("cloud-hitl", "[\"send_email\"]",
+                        Map.of("bind_scope", "service",
+                                "bind_ref", Map.of("app_ids", List.of("other-app"))))));
+
+        Map<String, Object> out = service.apply(TENANT, REPORT,
+                new RemediationService.ApplyRequest(List.of(item(null, "mail-app"))));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> r = ((List<Map<String, Object>>) out.get("results")).get(0);
+        assertEquals("created", r.get("status"));
+    }
+
+    @Test
+    void applyBatchSecondEquivalentSkippedCovered() {
+        String report = """
+                {"report_id":"re-1","agent_name":"mail-agent","findings":[
+                  {"risk_id":"aabbccdd11223344","check_id":"high-risk-actions","severity":"high",
+                   "remediations":[{"plan_id":"challenge_highrisk","type":"create_rule","title":"t",
+                     "vars":{"tool":{"source":"evidence","bind":"tool"}},
+                     "bound_vars":{"tool":"send_email"},
+                     "payload_template":{"layer":"edge","runtime":"lua-dsl","reason_code":"HITL_REQUIRED",
+                       "risk_score":80,"intent_action":"challenge","is_async":false,
+                       "body":{"keywords":["{{tool}}"],"list_type":"deny"}}}]},
+                  {"risk_id":"bbbbbbbb22334455","check_id":"high-risk-actions","severity":"high",
+                   "remediations":[{"plan_id":"challenge_highrisk","type":"create_rule","title":"t",
+                     "vars":{"tool":{"source":"evidence","bind":"tool"}},
+                     "bound_vars":{"tool":"send_email"},
+                     "payload_template":{"layer":"edge","runtime":"lua-dsl","reason_code":"HITL_REQUIRED",
+                       "risk_score":80,"intent_action":"challenge","is_async":false,
+                       "body":{"keywords":["{{tool}}"],"list_type":"deny"}}}]}]}
+                """;
+        when(proxy.forwardGet(anyString(), anyString())).thenReturn(ResponseEntity.ok(report));
+
+        Map<String, Object> out = service.apply(TENANT, REPORT,
+                new RemediationService.ApplyRequest(List.of(
+                        new RemediationService.ApplyItem(
+                                "aabbccdd11223344", "challenge_highrisk", null, "app"),
+                        new RemediationService.ApplyItem(
+                                "bbbbbbbb22334455", "challenge_highrisk", null, "app"))));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> results = (List<Map<String, Object>>) out.get("results");
+        assertEquals("created", results.get(0).get("status"));
+        assertEquals("skipped_covered", results.get(1).get("status"));
+        assertEquals("eval-high-risk-actions-aabbccdd", results.get(1).get("covered_by"));
+        verify(ruleService, times(1)).upsertRule(anyString(), any());
+    }
+
+    @Test
+    void previewShowsEquivalentAndSimilarRules() {
+        Map<String, Object> drySameReason = fullEquivalentRule(
+                "eval-old", "[\"other\"]", Map.of());
+        drySameReason.put("rollout_state", "dry_run");
+        when(ruleService.listRuleDetails(TENANT)).thenReturn(List.of(
+                fullEquivalentRule("cloud-hitl", "[\"send_email\"]", Map.of()),
+                drySameReason));
+
+        Map<String, Object> out = service.preview(TENANT, REPORT, List.of(RISK));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> plan = ((List<Map<String, Object>>) out.get("plans")).get(0);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> eq = (Map<String, Object>) plan.get("equivalent_rule");
+        assertNotNull(eq);
+        assertEquals("cloud-hitl", eq.get("rule_id"));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> similar = (List<Map<String, Object>>) plan.get("similar_rules");
+        assertNotNull(similar);
+        assertEquals("eval-old", similar.get(0).get("rule_id"));
+        assertEquals("same_reason_code", similar.get(0).get("reason"));
     }
 
     @Test

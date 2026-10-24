@@ -126,6 +126,13 @@ public class RuleService {
         return RuleResponseMapper.toDetail(saved);
     }
 
+    /** Full-detail list (includes body); used by remediation dedup. */
+    public List<Map<String, Object>> listRuleDetails(String tenantId) {
+        return store.listCurrentRules(tenantId, null).stream()
+                .map(RuleResponseMapper::toDetail)
+                .toList();
+    }
+
     public Map<String, Object> getRule(String tenantId, String ruleId) {
         RuleRevision r = store.getCurrentRule(tenantId, ruleId)
                 .orElseThrow(() -> new IllegalArgumentException("rule not found: " + ruleId));

@@ -91,6 +91,8 @@ export interface RemediationPlanPreview {
   normalized?: boolean;
   normalized_note?: string;
   existing_rule?: { rule_id: string; rollout_state: string; enforce_mode: string } | null;
+  equivalent_rule?: { rule_id: string; rollout_state: string; intent_action: string } | null;
+  similar_rules?: { rule_id: string; rollout_state: string; intent_action?: string; reason: string }[];
 }
 
 export interface RemediationPreview {
@@ -110,11 +112,12 @@ export interface RemediationApplyItem {
 export interface RemediationResultItem {
   risk_id: string;
   plan_id: string;
-  status: 'created' | 'skipped_exists' | 'skipped_cap' | 'unsupported' | 'failed' | 'needs_input';
+  status: 'created' | 'skipped_exists' | 'skipped_covered' | 'skipped_cap' | 'unsupported' | 'failed' | 'needs_input';
   rule_id?: string;
   error?: string;
   hint?: string;
   existing_state?: string;
+  covered_by?: string;
 }
 
 export interface RemediationApplyResponse {

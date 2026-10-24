@@ -51,6 +51,12 @@
           <p v-if="p.existing_rule" class="v-hint" style="margin:6px 0">
             {{ t('ev.rem-existing', { rule: p.existing_rule.rule_id, state: p.existing_rule.rollout_state }) }}
           </p>
+          <p v-if="p.equivalent_rule" class="v-hint" style="margin:6px 0;color:var(--el-color-warning)">
+            {{ t('ev.rem-equivalent', { rule: p.equivalent_rule.rule_id, state: p.equivalent_rule.rollout_state }) }}
+          </p>
+          <p v-if="p.similar_rules?.length" class="v-hint" style="margin:6px 0">
+            {{ t('ev.rem-similar', { rules: p.similar_rules.map(s => s.rule_id + '(' + s.rollout_state + ')').join(', ') }) }}
+          </p>
         </div>
 
         <div v-if="remResults.length" style="margin-top:12px">
@@ -75,7 +81,7 @@
             <el-table-column min-width="240">
               <template #default="{ row }">
                 <span class="v-hint">{{ row.error || row.hint || '' }}</span>
-                <router-link v-if="row.rule_id && ['created','skipped_exists','skipped_cap'].includes(row.status)"
+                <router-link v-if="row.rule_id && ['created','skipped_exists','skipped_covered','skipped_cap'].includes(row.status)"
                              to="/rules" class="v-hint" style="margin-left:6px">
                   {{ t('ev.rem-goto-rules') }}
                 </router-link>
