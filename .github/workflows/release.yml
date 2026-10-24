@@ -249,6 +249,10 @@ jobs:
             echo "prerelease=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Compute lowercase image ref
+        id: image
+        run: echo "ref=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -269,13 +273,13 @@ jobs:
             - `virbius-mcp-proxy-aarch64-apple-darwin` — macOS Apple Silicon
 
             ### Docker
-            - Multi-arch image: `ghcr.io/${{ github.repository }}:${{ github.ref_name }}`
+            - Multi-arch image: `${{ steps.image.outputs.ref }}:${{ github.ref_name }}`
             - Offline tarball: `virbius-agent-${{ github.ref_name }}-multiarch.tar.gz`
 
             ### Installation
             ```bash
             # Docker (recommended)
-            docker pull ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+            docker pull ${{ steps.image.outputs.ref }}:${{ github.ref_name }}
             docker compose up -d
 
             # Manual
