@@ -132,6 +132,9 @@ pub(crate) struct EvaluateResponse {
     pub(crate) risk_score_delta: i32,
     #[serde(default)]
     pub(crate) session_risk_score: u32,
+    /// Per-decision risk (engine `max_risk_score`), used for the edge audit row.
+    #[serde(default)]
+    pub(crate) max_risk_score: u32,
     #[serde(default)]
     pub(crate) challenge_id: Option<String>,
     #[serde(default)]
@@ -519,12 +522,13 @@ impl SecurityPipeline {
         match evaluated {
             Ok(resp) => {
                 if resp.effective_action == "block" {
-                    self.audit_tool_call(
+                    self.audit_tool_call_with_risk(
                         session,
                         tool_name,
                         "block",
                         resp.rule_id.as_deref(),
                         resp.reason.as_deref(),
+                        resp.max_risk_score,
                     )
                     .await;
                     return PipelineResult::Deny {
@@ -539,12 +543,13 @@ impl SecurityPipeline {
                 }
 
                 if resp.effective_action == "challenge" {
-                    self.audit_tool_call(
+                    self.audit_tool_call_with_risk(
                         session,
                         tool_name,
                         "challenge",
                         resp.rule_id.as_deref(),
                         resp.reason.as_deref(),
+                        resp.max_risk_score,
                     )
                     .await;
                     return PipelineResult::Challenge {
@@ -561,12 +566,13 @@ impl SecurityPipeline {
 
                 // Check risk threshold
                 if resp.session_risk_score >= risk_quota {
-                    self.audit_tool_call(
+                    self.audit_tool_call_with_risk(
                         session,
                         tool_name,
                         "block",
                         resp.rule_id.as_deref(),
                         Some("risk_threshold_exceeded"),
+                        resp.max_risk_score,
                     )
                     .await;
                     return PipelineResult::Deny {
@@ -583,12 +589,13 @@ impl SecurityPipeline {
                 // allow), but we must NOT collapse that verdict to "allow" or
                 // the edge/cloud audit rows disagree on the same trace.
                 let (disposition, reason_code) = edge_disposition(&resp.effective_action);
-                self.audit_tool_call(
+                self.audit_tool_call_with_risk(
                     session,
                     tool_name,
                     disposition,
                     resp.rule_id.as_deref(),
                     Some(reason_code),
+                    resp.max_risk_score,
                 )
                 .await;
                 PipelineResult::Allow {
@@ -770,6 +777,23 @@ impl SecurityPipeline {
         reason: Option<&str>,
     ) {
         let event = AuditEvent::tool_call(session, tool_name, action, rule_id, reason);
+        self.audit.report(event).await;
+    }
+
+    /// Audit an engine decision with the decision's own max risk score, so the
+    /// edge row matches the cloud row for the same trace (the default
+    /// `AuditEvent::tool_call` carries session risk instead).
+    async fn audit_tool_call_with_risk(
+        &self,
+        session: &Session,
+        tool_name: &str,
+        action: &str,
+        rule_id: Option<&str>,
+        reason: Option<&str>,
+        risk: u32,
+    ) {
+        let mut event = AuditEvent::tool_call(session, tool_name, action, rule_id, reason);
+        event.max_risk_score = risk;
         self.audit.report(event).await;
     }
 

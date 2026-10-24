@@ -76,7 +76,7 @@ public class AuditEventIngestor {
                     traceId,
                     str(event.get("trace_id_source")),
                     tenantId,
-                    str(event.get("scene")),
+                    sceneOf(event),
                     str(event.get("layer")),
                     str(event.get("tool_name")),
                     str(event.get("rule_id")),
@@ -121,7 +121,7 @@ public class AuditEventIngestor {
                         tenantId,
                         eventId);
             }
-            bumpRequestStats(tenantId, str(event.get("scene")), str(event.get("layer")), event);
+            bumpRequestStats(tenantId, sceneOf(event), str(event.get("layer")), event);
             alertService.onAuditEvent(tenantId, event);
             return IngestResult.accepted();
         } catch (Exception e) {
@@ -167,6 +167,16 @@ public class AuditEventIngestor {
     public Long countForStatus(String sql, Object... args) {
         Long val = jdbc.queryForObject(sql, Long.class, args);
         return val != null ? val : 0L;
+    }
+
+    /**
+     * Edge events use `event_type` (tool_call/memory_write/output_review/...)
+     * and have no `scene`; engine events use `scene`. Prefer scene, fall back
+     * to event_type so edge audit rows are not stored with an empty scene.
+     */
+    private static String sceneOf(Map<String, Object> event) {
+        String scene = str(event.get("scene"));
+        return scene.isBlank() ? str(event.get("event_type")) : scene;
     }
 
     private void bumpRequestStats(String tenantId, String scene, String layer, Map<String, Object> event) {

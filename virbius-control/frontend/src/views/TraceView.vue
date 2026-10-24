@@ -205,7 +205,7 @@ async function onRowClick(row: any) {
   if (!row.session_id) return;
   timelineSession.value = row.session_id;
   try {
-    timeline.value = await admin<any[]>('/trace/session/' + encodeURIComponent(row.session_id) + '/timeline?include=all') || [];
+    timeline.value = await admin<any[]>('/trace/session/' + encodeURIComponent(row.session_id) + '/timeline') || [];
   } catch (e: any) { feedback.log(e.message, 'err'); }
 }
 

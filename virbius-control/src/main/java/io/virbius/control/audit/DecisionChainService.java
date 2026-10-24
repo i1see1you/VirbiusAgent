@@ -39,10 +39,15 @@ public class DecisionChainService {
         this.jdbc = jdbc;
     }
 
-    /** Session timeline: trace steps + audit adjudications of every trace in the session. */
+    /**
+     * Session timeline: trace steps + every audit adjudication carrying this
+     * session_id. Querying audits by session (not by the trace ids of steps)
+     * makes pure input/output review sessions visible even when no edge step
+     * exists.
+     */
     public List<Map<String, Object>> sessionTimeline(String tenantId, String sessionId) {
         List<Map<String, Object>> steps = traceQuery.sessionTimeline(tenantId, sessionId);
-        return merge(steps, auditEvents(tenantId, traceIds(steps)));
+        return merge(steps, auditEventsBySession(tenantId, sessionId));
     }
 
     /** Single-trace chain: trace steps + audit adjudications of that trace. */
@@ -130,6 +135,45 @@ public class DecisionChainService {
             row.put("device_id", rs.getString("device_id"));
             return row;
         }, args);
+    }
+
+    private List<Map<String, Object>> auditEventsBySession(String tenantId, String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return List.of();
+        }
+        String sql = """
+                SELECT event_id, trace_id, trace_id_source, tenant_id, session_id, scene, layer,
+                       tool_name, rule_id, reason_code, effective_action, max_risk_score,
+                       rollout_state, canary_percent, in_canary_bucket, degraded, sampled_allow,
+                       intercepted_at, user_id, device_id
+                FROM tb_audit_events
+                WHERE tenant_id = ? AND session_id = ?
+                ORDER BY intercepted_at
+                """;
+        return jdbc.query(sql, (rs, n) -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("event_id", rs.getString("event_id"));
+            row.put("trace_id", rs.getString("trace_id"));
+            row.put("trace_id_source", rs.getString("trace_id_source"));
+            row.put("tenant_id", rs.getString("tenant_id"));
+            row.put("session_id", rs.getString("session_id"));
+            row.put("scene", rs.getString("scene"));
+            row.put("layer", rs.getString("layer"));
+            row.put("tool_name", rs.getString("tool_name"));
+            row.put("rule_id", rs.getString("rule_id"));
+            row.put("reason_code", rs.getString("reason_code"));
+            row.put("effective_action", rs.getString("effective_action"));
+            row.put("max_risk_score", rs.getInt("max_risk_score"));
+            row.put("rollout_state", rs.getString("rollout_state"));
+            row.put("canary_percent", rs.getObject("canary_percent"));
+            row.put("in_canary_bucket", rs.getObject("in_canary_bucket"));
+            row.put("degraded", rs.getObject("degraded"));
+            row.put("sampled_allow", rs.getObject("sampled_allow"));
+            row.put("intercepted_at", rs.getString("intercepted_at"));
+            row.put("user_id", rs.getString("user_id"));
+            row.put("device_id", rs.getString("device_id"));
+            return row;
+        }, tenantId, sessionId);
     }
 
     private static Collection<String> traceIds(List<Map<String, Object>> steps) {

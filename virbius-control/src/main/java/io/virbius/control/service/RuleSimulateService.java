@@ -47,6 +47,11 @@ public class RuleSimulateService {
 
         String layer = str(rule.get("layer"));
         String runtime = str(rule.get("runtime"));
+        if ("lua-dsl".equalsIgnoreCase(runtime) || "dlp-dsl".equalsIgnoreCase(runtime)) {
+            throw new IllegalArgumentException(
+                    "simulate is not supported for runtime=" + runtime
+                            + " (edge DLP/keyword rules have no generic fixture evaluator)");
+        }
         Map<String, Object> scope = map(rule.get("scope"));
         boolean promptRuntime = "prompt".equalsIgnoreCase(runtime);
         String script = promptRuntime

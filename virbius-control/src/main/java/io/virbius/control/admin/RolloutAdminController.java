@@ -233,31 +233,23 @@ public class RolloutAdminController {
     // ── Agent decision chain trace endpoints ──
 
     /**
-     * Session timeline. {@code include=steps} (default) keeps the legacy
-     * steps-only shape; {@code include=all} merges the session's audit
-     * adjudications (input/output/tool_call, cloud + edge) into the timeline
-     * by trace_id — see {@link DecisionChainService}.
+     * Session timeline: trace steps plus the session's audit adjudications
+     * (input/output/tool_call, cloud + edge), merged and sorted by time.
+     * Audits are matched by session_id so a pure input/output review session
+     * is visible even when it has no edge trace steps.
      */
     @GetMapping("/trace/session/{sessionId}/timeline")
     public ApiResult<List<Map<String, Object>>> traceSessionTimeline(
             @PathVariable("tenantId") String tenantId,
-            @PathVariable("sessionId") String sessionId,
-            @RequestParam(value = "include", defaultValue = "steps") String include) {
-        if ("all".equalsIgnoreCase(include) || "audit".equalsIgnoreCase(include)) {
-            return ApiResult.ok(decisionChainService.sessionTimeline(tenantId, sessionId));
-        }
-        return ApiResult.ok(traceQueryService.sessionTimeline(tenantId, sessionId));
+            @PathVariable("sessionId") String sessionId) {
+        return ApiResult.ok(decisionChainService.sessionTimeline(tenantId, sessionId));
     }
 
     @GetMapping("/trace/{traceId}/chain")
     public ApiResult<List<Map<String, Object>>> traceChain(
             @PathVariable("tenantId") String tenantId,
-            @PathVariable("traceId") String traceId,
-            @RequestParam(value = "include", defaultValue = "steps") String include) {
-        if ("all".equalsIgnoreCase(include) || "audit".equalsIgnoreCase(include)) {
-            return ApiResult.ok(decisionChainService.traceChain(tenantId, traceId));
-        }
-        return ApiResult.ok(traceQueryService.traceChain(tenantId, traceId));
+            @PathVariable("traceId") String traceId) {
+        return ApiResult.ok(decisionChainService.traceChain(tenantId, traceId));
     }
 
     @GetMapping("/trace/search")

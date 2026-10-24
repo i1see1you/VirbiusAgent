@@ -127,15 +127,27 @@ class DecisionChainServiceTest {
                 "2026-10-20T00:00:01Z");
         jdbc.update("INSERT INTO tb_agent_trace (trace_id, session_id, tenant_id, step_id,"
                 + " step_seq, step_type, layer, occurred_at) VALUES (?,?,?,?,?,?,?,?)",
-                "tr-other", "sess", "t2", "sx", 1, "tool_call", "edge",
+                "tr-other", "other-sess", "t2", "sx", 1, "tool_call", "edge",
                 "2026-10-20T00:00:01Z");
-        insertAudit("evt-other", "tr-other", "tool_call", "cloud", "allow", 10,
-                "2026-10-20T00:00:01Z");
+        insertAuditInSession("evt-other", "tr-other", "other-sess", "tool_call", "cloud",
+                "allow", 10, "2026-10-20T00:00:01Z");
 
         List<Map<String, Object>> out = service.sessionTimeline(TENANT, "sess");
 
         assertEquals(1, out.size());
         assertEquals("tr-4", out.get(0).get("trace_id"));
+    }
+
+    @Test
+    void pureAuditSessionTimelineYieldsAuditsWithoutSteps() {
+        insertAuditInSession("evt-audit", "tr-audit-only", "audit-sess", "input", "cloud",
+                "block", 70, "2026-10-20T00:00:01Z");
+
+        List<Map<String, Object>> out = service.sessionTimeline(TENANT, "audit-sess");
+
+        assertEquals(1, out.size());
+        assertEquals("audit", out.get(0).get("kind"));
+        assertEquals("input", out.get(0).get("type"));
     }
 
     @Test
@@ -165,11 +177,17 @@ class DecisionChainServiceTest {
 
     private void insertAudit(String eventId, String trace, String scene, String layer,
                              String action, int risk, String interceptedAt) {
+        insertAuditInSession(eventId, trace, "sess", scene, layer, action, risk, interceptedAt);
+    }
+
+    private void insertAuditInSession(String eventId, String trace, String session,
+                                      String scene, String layer, String action, int risk,
+                                      String interceptedAt) {
         jdbc.update("INSERT INTO tb_audit_events (event_id, trace_id, trace_id_source,"
                         + " tenant_id, session_id, scene, layer, rule_id, reason_code,"
                         + " effective_action, max_risk_score, intercepted_at)"
                         + " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                eventId, trace, "client", TENANT, "sess", scene, layer, "r-" + action,
+                eventId, trace, "client", TENANT, session, scene, layer, "r-" + action,
                 "OUTPUT_XSS", action, risk, interceptedAt);
     }
 }
