@@ -221,7 +221,9 @@ jobs:
               git log --pretty=format:"- %s (%h)" "$PREVIOUS_TAG".."$TAG" > changelog.md
             fi
           fi
-          { echo "body<<CH_LOG_EOF"; cat changelog.md; echo "CH_LOG_EOF"; } >> "$GITHUB_OUTPUT"
+          # git log --pretty=format: omits the trailing newline; the extra
+          # echo guarantees CH_LOG_EOF starts on its own line.
+          { echo "body<<CH_LOG_EOF"; cat changelog.md; echo; echo "CH_LOG_EOF"; } >> "$GITHUB_OUTPUT"
 
   # ────────────────────────────────────────────────────────────
   #  Create GitHub Release

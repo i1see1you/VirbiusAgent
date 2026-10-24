@@ -21,20 +21,22 @@ fn landlock_available() -> bool {
     detect_abi_version() != LandlockAbi::None
 }
 
-/// Minimal read paths needed to exec a dynamically-linked binary (ld.so +
-/// libc) under Landlock.  Kept deliberately narrow — broad patterns like
-/// `/**` or `/usr/lib/**` expand to tens of thousands of paths and stall
-/// glob expansion for minutes on CI runners.
+/// Read paths needed to exec a dynamically-linked binary (ld.so + runtime
+/// libs) under Landlock.  Plain directory paths are NOT glob-expanded (they
+/// pass through as single recursive Landlock rules), so whole lib dirs stay
+/// cheap — unlike `/usr/lib/**`, which would expand to tens of thousands of
+/// paths and stall CI.  Newer distro images link coreutils against more than
+/// libc (e.g. libsystemd on ubuntu-24.04 runners), so libc-only rules break.
 fn runtime_lib_read_paths() -> Vec<String> {
     vec![
-        // x86_64 dynamic linker + libc
+        // x86_64 dynamic linker + runtime lib dir
         "/lib64/ld-linux-x86-64.so.2".into(),
-        "/lib/x86_64-linux-gnu/libc.so*".into(),
-        "/usr/lib/x86_64-linux-gnu/libc.so*".into(),
-        // aarch64 dynamic linker + libc (no-match on x86_64, harmless)
+        "/lib/x86_64-linux-gnu".into(),
+        "/usr/lib/x86_64-linux-gnu".into(),
+        // aarch64 dynamic linker + runtime lib dir (no-match on x86_64, harmless)
         "/lib/ld-linux-aarch64.so.1".into(),
-        "/lib/aarch64-linux-gnu/libc.so*".into(),
-        "/usr/lib/aarch64-linux-gnu/libc.so*".into(),
+        "/lib/aarch64-linux-gnu".into(),
+        "/usr/lib/aarch64-linux-gnu".into(),
     ]
 }
 
