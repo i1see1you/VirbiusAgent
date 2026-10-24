@@ -128,7 +128,7 @@ expect_reject() { # code-msg-fragment handle host header prefix value
   assert_contains "$RESP" "$frag" "错误信息: $frag"
 }
 expect_reject "value must be >= 16 bytes" "v-short" "vshort-$S.example.com" Authorization "Bearer " "short"
-expect_reject "value: CR/LF/NUL rejected" "v-crlf" "vcrlf-$S.example.com" Authorization "Bearer " $'line1\rline2xxxxxxx'
+expect_reject "value: control characters" "v-crlf" "vcrlf-$S.example.com" Authorization "Bearer " $'line1\rline2xxxxxxx'
 expect_reject "managed/deny list" "v-deny" "vdeny-$S.example.com" Host "Bearer " "$SECRET1"
 expect_reject "managed/deny list" "v-ctype" "vctype-$S.example.com" Content-Type "" "$SECRET1"
 expect_reject "invalid token character" "v-space" "vspace-$S.example.com" "Bad Header" "" "$SECRET1"
