@@ -97,6 +97,14 @@ func main() {
 			}
 		case "--script":
 			scriptMode = true
+		case "--with-action", "--wrap":
+			// Parsed after source loading; must not overwrite source.
+		case "--action", "--rule-id", "--reason", "--risk-score":
+			// Value flags are parsed after source loading; skip their value here
+			// so it cannot be mistaken for the Lua expression.
+			if i+1 < len(args) {
+				i++
+			}
 		default:
 			source = args[i]
 		}
