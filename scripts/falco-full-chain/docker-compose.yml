@@ -18,9 +18,30 @@ services:
     ports:
       - "6379:6379"
 
+  kafka:
+    image: apache/kafka:3.7.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller,broker
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      CLUSTER_ID: MkUjOEJhQjY1QUY1NDQ2Nk1BODI
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
   control:
     image: eclipse-temurin:17-jre
-    depends_on: [redis]
+    depends_on: [redis, kafka]
     volumes:
       - ../../virbius-control/target/virbius-control-${APP_VER}.jar:/app/control.jar:ro
       - control-data:/data
@@ -28,24 +49,31 @@ services:
       VIRBIUS_DATA_DIR: /data
       VIRBIUS_REDIS_URL: redis://redis:6379
       SPRING_PROFILES_ACTIVE: dev
+      VIRBIUS_LICENSE_MASTER_KEY: e2e-falco-master-key-0123456789-abcdef
+      VIRBIUS_DELEGATED_MASTER_KEY: e2e-falco-delegated-key-0123456789
       # resolvable-but-refused: kafka consumers retry in background (non-fatal),
       # an unresolvable host makes consumer construction fail hard at startup.
-      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     command: ["java", "-jar", "/app/control.jar"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8080:8080"
 
   engine:
     image: eclipse-temurin:17-jre
-    depends_on: [redis]
+    depends_on: [redis, kafka]
     volumes:
       - ../../virbius-engine/target/virbius-engine-${APP_VER}.jar:/app/engine.jar:ro
     environment:
       VIRBIUS_DATA_DIR: /tmp/engine-data
       VIRBIUS_REDIS_URL: redis://redis:6379
       SPRING_PROFILES_ACTIVE: dev
-      KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      VIRBIUS_EVALUATE_AUTH_ENABLED: "false"
     command: ["java", "-jar", "/app/engine.jar"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8082:8082"
 

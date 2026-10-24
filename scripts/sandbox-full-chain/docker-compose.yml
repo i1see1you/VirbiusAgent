@@ -19,6 +19,8 @@ services:
       VIRBIUS_REDIS_URL: redis://redis:6379
       SPRING_PROFILES_ACTIVE: dev
       KAFKA_BOOTSTRAP_SERVERS: localhost:9092
+      VIRBIUS_LICENSE_MASTER_KEY: e2e-sandbox-master-key-0123456789-abcdef
+      VIRBIUS_DELEGATED_MASTER_KEY: e2e-sandbox-delegated-key-0123456789
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
       http_proxy: ""
