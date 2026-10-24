@@ -31,7 +31,7 @@ services:
 
   # ── MySQL TLS certificates (self-signed CA, generated once) ────────────
   cert-gen:
-    image: ${OPENSSL_IMAGE:-alpine/openssl:3.3}
+    image: ${OPENSSL_IMAGE:-mysql:8.0}
     volumes:
       - mysql-certs:/certs
       - ./deploy/certs/gen-mysql-certs.sh:/gen-mysql-certs.sh:ro
@@ -85,11 +85,22 @@ services:
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CLIENT:SASL_PLAINTEXT,INTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_SASL_ENABLED_MECHANISMS: SCRAM-SHA-256
+      # Broker-side JAAS entry is required for SASL listeners; without it Kafka
+      # exits with "Could not find a 'KafkaServer' entry in the JAAS configuration".
+      KAFKA_OPTS: "-Djava.security.auth.login.config=/etc/kafka/kafka_server_jaas.conf"
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
       KAFKA_NUM_PARTITIONS: "3"
       KAFKA_DEFAULT_REPLICATION_FACTOR: "1"
+      # Single-broker deployments: internal topics default to RF=3 and would
+      # never auto-create, leaving consumers unjoined and control /ready at 503.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
       # Required cluster ID for KRaft mode
       CLUSTER_ID: MkUjOEJhQjY1QUY1NDQ2Nk1BODI
+    volumes:
+      - ./deploy/kafka/kafka_server_jaas.conf:/etc/kafka/kafka_server_jaas.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:29092 >/dev/null 2>&1"]
       interval: 10s
@@ -235,6 +246,8 @@ services:
         condition: service_completed_successfully
       ollama-init:
         condition: service_healthy
+      virbius-control:
+        condition: service_healthy
     extra_hosts:
       - "host.docker.internal:host-gateway"
     healthcheck:
@@ -288,8 +301,6 @@ services:
         condition: service_healthy
       kafka-provision:
         condition: service_completed_successfully
-      virbius-engine:
-        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "--noproxy", "*", "http://localhost:8080/api/v1/health"]
       interval: 15s

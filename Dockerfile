@@ -144,6 +144,15 @@ COPY virbius-core/include virbius-core/include
 RUN HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
     cargo build --release -p virbius-mcp-proxy
 
+# ── Stage 2b: virbius-expr (Go) ─────────────────────────────────────────────
+# Control shells out to this binary to compile gateway Lua rules into the
+# expression IR embedded in gateway artifacts. Without it gateway rules are
+# silently skipped (fail-open), so it must ship in the control image.
+FROM golang:1.23-alpine AS expr-build
+WORKDIR /src
+COPY virbius-expr/ ./virbius-expr/
+RUN cd virbius-expr && CGO_ENABLED=0 go build -o /out/virbius-expr ./cmd/virbius-expr
+
 # ── Stage 3: virbius-engine runtime ─────────────────────────────────────────
 FROM eclipse-temurin:17-jre-jammy AS virbius-engine
 WORKDIR /app
@@ -192,6 +201,7 @@ RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
 RUN groupadd -r virbius && useradd -r -g virbius -d /app -s /sbin/nologin virbius
 
 COPY --from=java-build /build/virbius-control/target/virbius-control-*.jar app.jar
+COPY --from=expr-build /out/virbius-expr /usr/local/bin/virbius-expr
 
 RUN mkdir -p /data /var/log/virbius && chown -R virbius:virbius /app /data /var/log/virbius
 
