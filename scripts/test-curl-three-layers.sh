@@ -64,6 +64,7 @@ restart_engine() {
   engine_jar="$ROOT/virbius-engine/target/virbius-engine-$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/').jar"
   nohup env VIRBIUS_DATA_DIR="$ROOT/data" VIRBIUS_REDIS_URL="${VIRBIUS_REDIS_URL:-redis://127.0.0.1:6379}" \
     SPRING_PROFILES_ACTIVE="${SPRING_PROFILES_ACTIVE:-dev}" \
+    VIRBIUS_EVALUATE_AUTH_ENABLED=false \
     java -jar "$engine_jar" \
     >/tmp/virbius-agent/logs/engine.log 2>&1 &
   for _ in $(seq 1 20); do
