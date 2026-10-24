@@ -173,7 +173,6 @@
                   <div v-if="row.risk_id" style="margin-bottom:6px">
                     <strong>{{ t('ev.col-risk-id') }}</strong>
                     <span class="mono" style="margin-left:6px">{{ row.risk_id }}</span>
-                    <el-button link size="small" @click="copy(row.risk_id)">{{ t('ev.risk-copy') }}</el-button>
                     <el-button link size="small" @click="copyDeepLink(row)">{{ t('ev.risk-copy-link') }}</el-button>
                     <el-button link size="small" @click="copySuppression(row)">{{ t('ev.risk-suppress') }}</el-button>
                   </div>
@@ -222,12 +221,9 @@
               </template>
             </el-table-column>
             <el-table-column prop="check_id" :label="t('ev.col-check')" width="220" />
-            <el-table-column :label="t('ev.col-risk-id')" width="165">
+            <el-table-column :label="t('ev.col-risk-id')" width="150">
               <template #default="{ row }">
-                <span class="mono" :title="row.risk_id">{{ shortRiskId(row.risk_id) }}</span>
-                <el-button link size="small" @click.stop="copy(row.risk_id)">
-                  {{ t('ev.risk-copy') }}
-                </el-button>
+                <span class="mono">{{ row.risk_id }}</span>
               </template>
             </el-table-column>
             <el-table-column :label="t('ev.col-owasp')" width="140">
@@ -556,11 +552,6 @@ const filteredFindings = computed(() => {
     return hay.includes(q);
   });
 });
-
-function shortRiskId(id?: string): string {
-  const s = String(id || '');
-  return s.length > 9 ? `${s.slice(0, 8)}…` : s;
-}
 
 const runType = ref<'scan' | 'http' | 'mcp' | 'replay' | 'skill' | 'jsonl'>('scan');
 const agentName = ref('');

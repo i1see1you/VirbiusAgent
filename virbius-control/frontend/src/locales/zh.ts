@@ -1283,7 +1283,6 @@ export default {
   'ev.col-check': '检测项',
   'ev.col-risk-id': '风险 ID',
   'ev.filter-findings': '过滤：风险 ID / 检测项 / 文件名',
-  'ev.risk-copy': '复制 ID',
   'ev.risk-copy-link': '复制链接',
   'ev.risk-suppress': '复制抑制条目',
   'ev.risk-not-found': '该报告中没有匹配的 risk_id：{risk}',

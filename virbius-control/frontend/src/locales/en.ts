@@ -1283,7 +1283,6 @@ export default {
   'ev.col-check': 'Check',
   'ev.col-risk-id': 'Risk ID',
   'ev.filter-findings': 'Filter: risk ID / check / file',
-  'ev.risk-copy': 'Copy ID',
   'ev.risk-copy-link': 'Copy link',
   'ev.risk-suppress': 'Copy suppression entry',
   'ev.risk-not-found': 'No finding with risk_id {risk} in this report',
