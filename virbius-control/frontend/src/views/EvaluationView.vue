@@ -162,12 +162,21 @@
             <el-button size="small" @click="exportReport('html')">HTML</el-button>
             <el-button size="small" @click="exportReport('sarif')">SARIF</el-button>
             <el-checkbox v-model="showSuppressed">{{ t('ev.show-suppressed') }}</el-checkbox>
+            <el-input v-model="filterFindings" size="small" clearable style="width:300px"
+                      :placeholder="t('ev.filter-findings')" />
           </div>
-          <el-table :data="visibleFindings" size="small" border stripe
+          <el-table :data="filteredFindings" size="small" border stripe
                     :row-class-name="findingRowClass" @expand-change="onExpandChange">
             <el-table-column type="expand">
               <template #default="{ row }">
                 <div style="padding:8px 16px">
+                  <div v-if="row.risk_id" style="margin-bottom:6px">
+                    <strong>{{ t('ev.col-risk-id') }}</strong>
+                    <span class="mono" style="margin-left:6px">{{ row.risk_id }}</span>
+                    <el-button link size="small" @click="copy(row.risk_id)">{{ t('ev.risk-copy') }}</el-button>
+                    <el-button link size="small" @click="copyDeepLink(row)">{{ t('ev.risk-copy-link') }}</el-button>
+                    <el-button link size="small" @click="copySuppression(row)">{{ t('ev.risk-suppress') }}</el-button>
+                  </div>
                   <div><strong>{{ t('ev.evidence') }}</strong></div>
                   <div v-for="(e, i) in row.evidence || []" :key="i" class="ev-evidence">
                     <span class="mono">{{ e.ref }}</span>
@@ -213,6 +222,14 @@
               </template>
             </el-table-column>
             <el-table-column prop="check_id" :label="t('ev.col-check')" width="220" />
+            <el-table-column :label="t('ev.col-risk-id')" width="165">
+              <template #default="{ row }">
+                <span class="mono" :title="row.risk_id">{{ shortRiskId(row.risk_id) }}</span>
+                <el-button link size="small" @click.stop="copy(row.risk_id)">
+                  {{ t('ev.risk-copy') }}
+                </el-button>
+              </template>
+            </el-table-column>
             <el-table-column :label="t('ev.col-owasp')" width="140">
               <template #default="{ row }">{{ (row.owasp || []).join(', ') }}</template>
             </el-table-column>
@@ -342,8 +359,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onMounted, ref } from 'vue';
 import { useI18n } from 'vue-i18n';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import RescanDiffPanel from '@/components/RescanDiffPanel.vue';
 import EvaluationIntroPanel from '@/components/EvaluationIntroPanel.vue';
@@ -357,6 +375,8 @@ import {
 } from '@/api/evaluation';
 
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
 const evalStore = useEvaluationStore();
 
 const status = computed(() => evalStore.status);
@@ -403,6 +423,8 @@ const activeJob = ref<JobView | null>(null);
 const jobTerminal = computed(() => !!activeJob.value &&
   ['succeeded', 'failed', 'canceled'].includes(activeJob.value.status));
 const detail = ref<ScanReport | null>(null);
+const filterFindings = ref('');
+const highlightRiskId = ref('');
 
 const remOpen = ref(false);
 const remLoading = ref(false);
@@ -516,6 +538,30 @@ const acceptedCount = computed(() =>
 const visibleFindings = computed(() =>
   (detail.value?.findings || []).filter(f => showSuppressed.value || !f.suppressed));
 
+/** 过滤：16 位 hex 视为 risk_id 精确匹配、8–15 位 hex 为前缀；其余匹配风险 ID/检测项/标题/证据。 */
+const filteredFindings = computed(() => {
+  const base = visibleFindings.value;
+  const q = filterFindings.value.trim().toLowerCase();
+  if (!q) return base;
+  const hex = /^[0-9a-f]{8,16}$/.test(q);
+  return base.filter(f => {
+    const id = String(f.risk_id || '').toLowerCase();
+    if (hex) return q.length === 16 ? id === q : id.startsWith(q);
+    const hay = [
+      f.risk_id,
+      f.check_id,
+      f.risk_name,
+      ...((f.evidence || []).map(e => `${e.ref || ''} ${e.snippet || ''}`))
+    ].join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+});
+
+function shortRiskId(id?: string): string {
+  const s = String(id || '');
+  return s.length > 9 ? `${s.slice(0, 8)}…` : s;
+}
+
 const runType = ref<'scan' | 'http' | 'mcp' | 'replay' | 'skill' | 'jsonl'>('scan');
 const agentName = ref('');
 const baselineId = ref('');
@@ -599,16 +645,68 @@ function reportRowClass() {
   return '';
 }
 
-function findingRowClass({ row }: { row: { suppressed?: boolean } }) {
-  return row.suppressed ? 'ev-suppressed-row' : '';
+function findingRowClass({ row }: { row: { suppressed?: boolean; risk_id?: string } }) {
+  const cls: string[] = [];
+  if (row.suppressed) cls.push('ev-suppressed-row');
+  if (highlightRiskId.value && row.risk_id === highlightRiskId.value) cls.push('ev-row-highlight');
+  return cls.join(' ');
+}
+
+async function loadDetail(reportId: string, riskId?: string) {
+  detail.value = await getReport(reportId);
+  filterFindings.value = '';
+  highlightRiskId.value = '';
+  if (riskId) await focusRisk(riskId);
 }
 
 async function openReport(row: ReportMeta) {
   try {
-    detail.value = await getReport(row.report_id);
+    await loadDetail(row.report_id);
   } catch (e: any) {
     ElMessage.error(String(e?.message || e));
   }
+}
+
+/** 深链定位：高亮 + 展开 + 滚动到目标 finding（risk_id 不存在时提示）。 */
+async function focusRisk(riskId: string) {
+  const row = (detail.value?.findings || []).find(f => f.risk_id === riskId);
+  if (!row) {
+    ElMessage.warning(t('ev.risk-not-found', { risk: riskId }));
+    return;
+  }
+  highlightRiskId.value = riskId;
+  await nextTick();
+  // 深链首帧表格可能尚未挂载；轮询到目标行后点击展开图标（已展开则不重复点击）。
+  let tries = 0;
+  const reveal = () => {
+    const rowEl = document.querySelector('.ev-row-highlight');
+    const icon = rowEl?.querySelector('.el-table__expand-icon');
+    if (!rowEl && tries++ < 40) { window.setTimeout(reveal, 50); return; }
+    if (!rowEl) return;
+    if (icon && !icon.classList.contains('el-table__expand-icon--expanded')) {
+      (icon as HTMLElement).click();
+    }
+    rowEl.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  };
+  window.setTimeout(reveal, 80);
+}
+
+function copyDeepLink(row: EvalFinding) {
+  const report = detail.value?.report_id || '';
+  const href = router.resolve({ path: '/evaluation', query: { report, risk: row.risk_id } }).href;
+  void copy(`${window.location.origin}${window.location.pathname}${href}`);
+}
+
+/** 生成可直接粘贴到 .ve-suppress.yaml 的条目（reason 留 TODO，需人工填写）。 */
+function copySuppression(row: EvalFinding) {
+  const id = String(row.risk_id || '').slice(0, 8) || 'finding';
+  const snippet = [
+    `  - id: accept-${id}`,
+    `    reason: "${t('ev.risk-suppress-reason')}"`,
+    '    match:',
+    `      risk_id: "${row.risk_id}"`
+  ].join('\n');
+  void copy(snippet);
 }
 
 async function onJsonlFile(file: any) {
@@ -734,12 +832,24 @@ async function refreshStatus() {
 onMounted(async () => {
   await evalStore.load();
   if (ready.value) await loadReports();
+  const pick = (v: unknown): string =>
+    Array.isArray(v) ? String(v[0] || '') : (typeof v === 'string' ? v : '');
+  const reportId = pick(route.query.report);
+  const riskId = pick(route.query.risk);
+  if (reportId) {
+    try {
+      await loadDetail(reportId, riskId || undefined);
+    } catch (e: any) {
+      ElMessage.error(String(e?.message || e));
+    }
+  }
 });
 </script>
 
 <style scoped>
 .ev-job { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 :deep(.ev-suppressed-row) { opacity: .55; background: var(--el-fill-color-light); }
+:deep(.ev-row-highlight) { background: var(--el-color-primary-light-9) !important; }
 .ev-evidence {
   font-size: 12px;
   color: var(--el-text-color-regular);
