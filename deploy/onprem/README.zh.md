@@ -14,8 +14,8 @@
 | 项 | 要求 | 由谁提供 |
 |---|---|---|
 | MySQL | 8.0+（或 MariaDB 10.6+），建库 `virbius` + 账号密码；**1.0.0 全部迁移已在 MySQL 8.0 / MariaDB 11 双方言实测** | 客户 |
-| Kafka | 3.x。**v1.0.1 必须提供三机均可达的 PLAINTEXT（无 SASL、无 TLS）listener**——mcp-proxy 的 librdkafka 编译未启用 SASL（仅 control/engine 支持 SASL_PLAINTEXT + SCRAM-SHA-256/512）。客户仅开放 SASL listener 时，proxy 审计/链路无法投递，属 1.0.1 已知限制（需排期改构建，见 §10）；无认证 → 必须以网络层隔离补偿（§2）。现场须把三份 compose 的 `KAFKA_SECURITY_PROTOCOL` 改为 `PLAINTEXT`（§0.1 有步骤）。topic `virbius-audit-events`、`virbius-trace-events` 预建（分区 ≥3）或授权我方自建 | 客户 |
-| Redis | 7.x。**standalone（或主从+固定入口；不支持 Cluster / Sentinel 寻址）**；必须设密码；**不支持 TLS**（`rediss://` 不可用）；**必须开 AOF（或至少 RDB）且禁用数据淘汰类 `maxmemory-policy`**——审计链头/会话状态仅存 Redis，v1.0.1 丢失后审计链**永久分叉、不可自愈**（§10） | 客户 |
+| Kafka | 3.x，SASL_PLAINTEXT + SCRAM-SHA-256/512 账号（机制不同改 `.env` 的 `KAFKA_SASL_MECHANISM`）；客户仅有 PLAINTEXT listener 时也可用（三份 compose 的 `KAFKA_SECURITY_PROTOCOL` 改 `PLAINTEXT`，SASL 账号填占位值）。topic `virbius-audit-events`、`virbius-trace-events` 预建（分区 ≥3）或授权我方自建 | 客户 |
+| Redis | 7.x。**standalone（或主从+固定入口；不支持 Cluster / Sentinel 寻址）**；必须设密码；**不支持 TLS**（`rediss://` 不可用）；**必须开 AOF（或至少 RDB）且禁用数据淘汰类 `maxmemory-policy`**——审计链头/会话状态仅存 Redis；1.0.2 起链头丢失可从 DB 自愈续链（下一条审计事件触发），持久化仍是硬要求，避免自愈前窗口期丢事件 | 客户 |
 | vLLM | 可选（模型选项B）；OpenAI 兼容端点 | 客户 |
 | 机器 | Docker 20.10+（含 compose v2）。三机：彼此网络互通、每台磁盘 ≥20G；单机：磁盘 ≥40G（镜像/日志/导出同机） | 客户 |
 | 镜像 | 现场无法拉外网仓库 → 用 §3 离线包 | 我方 |
@@ -35,7 +35,7 @@
 | 变量 | 注意 |
 |---|---|
 | `VIRBIUS_JDBC_URL` | 按客户 MySQL TLS 策略选 `sslMode`；`VERIFY_IDENTITY` 需放 CA 并解开 `node-a-control.yml` certs 卷注释（§6） |
-| `KAFKA_SASL_*` | v1.0.1 全栈只能跑 PLAINTEXT（proxy 无 SASL，见 §0）。现场须改三份 compose：`KAFKA_SECURITY_PROTOCOL` 由 `SASL_PLAINTEXT` 改为 `PLAINTEXT`（node-a/node-b/node-c 各一处），`KAFKA_SASL_USERNAME/PASSWORD` 必填项填占位值；`.env` 的 `KAFKA_BOOTSTRAP_SERVERS` 填客户 PLAINTEXT listener。客户仅开放 SASL listener → 无法交付，升级为排期项 |
+| `KAFKA_SASL_*` | 四件套齐全；机制非 SCRAM-SHA-256 时改 `KAFKA_SASL_MECHANISM`（仅支持 SCRAM-SHA-256/512，不支持 PLAIN/SASL_SSL） |
 | `REDIS_PASSWORD` | 同时确认客户已开 AOF/RDB 且 `maxmemory-policy` 不会淘汰数据（审计链头仅存 Redis，丢失不可自愈） |
 | `VIRBIUS_LICENSE_MASTER_KEY` / `VIRBIUS_API_KEY_PEPPER` | 均 ≥32 字符，否则 control 拒绝启动 |
 | `CONTROL_PUBLIC_URL` | 必须等于浏览器实际访问地址，否则登录回跳 401 |
@@ -94,7 +94,7 @@ A/B/C 三个角色合并到一台机器：使用**同一份 `.env`**，三个 co
 | 运维办公网 → A | 443/8080 | 运营台（§6 TLS） | ✅ |
 | MCP 客户端 → C | 9090 | 业务入口 | ✅ |
 
-东西向组件流量默认明文，依赖客户内网隔离（与 K8s 路径 §9.3 同一口径）。**Kafka 尤其如此**：v1.0.1 proxy 仅支持 PLAINTEXT（§0），认证不可用，必须保证 listener 仅三机可达（如 Kafka 侧 firewall/安全组白名单 A/B/C 三 IP）。
+东西向组件流量默认明文，依赖客户内网隔离（与 K8s 路径 §9.3 同一口径：Kafka SASL 认证 + 网络层隔离；若客户用 PLAINTEXT listener，则须以 Kafka 侧防火墙/安全组白名单 A/B/C 三 IP 补偿）。
 
 > **单机部署**：上表中 A↔B、A↔C、B↔C 行全部视为本机互通（无需放通）；只保留「单机 → 客户 MySQL/Kafka/Redis/vLLM」与「办公网 → 8080」「MCP 客户端 → 9090」。
 
@@ -292,8 +292,8 @@ curl -s http://localhost:9090/status | head -c 400
 | 控制台登录后 401/回跳异常 | auth 与 control 的 `VIRBIUS_AUTH_ISSUER` 必须一致；`CONTROL_PUBLIC_URL` 必须等于浏览器实际地址 |
 | 审批队列页报错 | control→B 机 8082 网络；1.0.0 起失败响应返回 JSON 错误体而非空 body |
 | 单机容器间互相调不通 | 常见为 `NODE_*` 误填 `127.0.0.1`（容器内是自身回环），或宿主防火墙未放通 8080/8082/8083/9090 |
-| 审计链校验告警（`seq gap` / `curr_hash mismatch`） | v1.0.1 **链头丢失不可自愈**：Redis 未开 AOF/RDB、未持久化重启、FLUSH 或淘汰策略逐出 key 都会让链头从 0 重起，与 DB 已链行永久分叉，校验持续报篡改。预防：§0 Redis 三项硬要求；已分叉需联系我方人工修复（对齐链头或重置审计数据），现场不要自行清库 |
-| proxy 审计不落 | ① proxy **不支持 SASL/TLS**（v1.0.1）：`KAFKA_BOOTSTRAP_SERVERS` 必须指 PLAINTEXT listener，指到 SASL listener 会连不上；② 确认 `VIRBIUS_AUDIT_BACKEND=kafka`；③ proxy 只支持 Kafka 后端。topic 未预建时看 proxy 日志 |
+| 审计链校验告警（`seq gap` / `curr_hash mismatch`） | 1.0.2 起 Redis 链头丢失（未持久化重启/FLUSH/淘汰）会在下一条审计事件时**从 DB 自愈续链**（日志 `recovered from DB`）。若 verify 仍报 mismatch：多半是事件在丢失窗口期产生（Kafka 有数据、DB 未入库）或有人为改库——保留现场联系我方定位，不要自行清库。预防仍是 §0 Redis 三项硬要求（AOF/RDB + 禁淘汰），避免窗口期丢事件 |
+| proxy 审计不落 | ① `KAFKA_BOOTSTRAP_SERVERS`/协议/SCRAM 账号三件是否与客户 Kafka 匹配（支持 SASL_PLAINTEXT+SCRAM-SHA-256/512 与 PLAINTEXT，不支持 SASL_SSL）；② 确认 `VIRBIUS_AUDIT_BACKEND=kafka`；③ proxy 只支持 Kafka 后端；④ topic 未预建时看 proxy 日志 |
 
 ---
 

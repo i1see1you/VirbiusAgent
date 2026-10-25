@@ -124,7 +124,8 @@ RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
         /etc/apt/sources.list 2>/dev/null || true; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev g++ python3 make && rm -rf /var/lib/apt/lists/*
+    pkg-config libssl-dev g++ python3 make \
+    libsasl2-dev libkrb5-dev && rm -rf /var/lib/apt/lists/*
 # Copy all source and build
 COPY Cargo.toml Cargo.lock* ./
 COPY virbius-core/Cargo.toml virbius-core/
@@ -141,8 +142,16 @@ COPY virbius-core/include virbius-core/include
 
 # BuildKit injects the client proxy into RUN steps and overrides the ENV clears
 # above, so clear them per-command for the network-calling build step.
-RUN HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
-    cargo build --release -p virbius-mcp-proxy
+# Cache mounts keep the cargo registry and build artifacts across builds — a
+# Cargo.toml-only change no longer recompiles the whole crate tree from zero.
+# The target dir is a cache mount, so the built binary must be copied out to
+# a non-mounted path in the same RUN for the later COPY --from to see it.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/build/target \
+    HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
+    cargo build --release -p virbius-mcp-proxy \
+    && mkdir -p /out && cp target/release/virbius-mcp-proxy /out/
 
 # ── Stage 2b: virbius-expr (Go) ─────────────────────────────────────────────
 # Control shells out to this binary to compile gateway Lua rules into the
@@ -271,6 +280,7 @@ RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
         /etc/apt/sources.list 2>/dev/null || true; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends curl python3 nodejs \
+    libsasl2-2 libgssapi-krb5-2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Run as root: the sandbox engine (gVisor runsc) creates its user/pid namespaces
@@ -280,7 +290,7 @@ RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
 # isolation boundary for untrusted code is the runsc sandbox itself.
 RUN mkdir -p /var/log/virbius
 
-COPY --from=rust-build /build/target/release/virbius-mcp-proxy /usr/local/bin/virbius-mcp-proxy
+COPY --from=rust-build /out/virbius-mcp-proxy /usr/local/bin/virbius-mcp-proxy
 
 USER root
 EXPOSE 9090

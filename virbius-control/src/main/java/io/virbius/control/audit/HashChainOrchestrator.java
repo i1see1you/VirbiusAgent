@@ -87,6 +87,27 @@ public class HashChainOrchestrator {
                 if (prevHash == null || prevHash.isEmpty()) {
                     prevHash = GENESIS_HASH;
                 }
+                if (seq == 0) {
+                    // Redis head lost (FLUSHDB / restart without persistence /
+                    // eviction). Rebuild from the last chained DB row instead of
+                    // silently restarting the chain at seq=1 over rows that are
+                    // already chained — that fork is exactly what
+                    // HashChainVerifier reports as a permanent "seq gap".
+                    HeadRecovery recovered = recoverHeadFromDb(tenantId);
+                    if (recovered != null) {
+                        seq = recovered.seq();
+                        prevHash = recovered.lastHash();
+                        log.warn("redis chain head missing for tenant {}, recovered from DB: seq={}, last_hash={}",
+                                tenantId, seq, prevHash);
+                        try {
+                            jedis.hset(key, Map.of(
+                                    "seq", String.valueOf(seq),
+                                    "last_hash", prevHash));
+                        } catch (Exception ignored) {
+                            // head restore is best-effort; the next attempt re-reads
+                        }
+                    }
+                }
 
                 for (Map<String, Object> event : events) {
                     seq++;
@@ -241,6 +262,35 @@ public class HashChainOrchestrator {
     private static String str(Object o) {
         return o == null ? "" : o.toString();
     }
+
+    /**
+     * Rebuild a missing Redis chain head from the last chained row. Ingest is
+     * first-persist-then-chain, so the row with the max audit_seq carries the
+     * committed head even when a chain step itself failed — chaining must
+     * resume after the DB's max, never from genesis.
+     */
+    private HeadRecovery recoverHeadFromDb(String tenantId) {
+        try {
+            var rows = jdbc.queryForList(
+                    "SELECT audit_seq, curr_hash FROM tb_audit_events "
+                    + "WHERE tenant_id = ? AND audit_seq > 0 ORDER BY audit_seq DESC LIMIT 1",
+                    tenantId);
+            if (rows.isEmpty()) {
+                return null;
+            }
+            var row = rows.get(0);
+            String hash = (String) row.get("curr_hash");
+            if (hash == null || hash.isBlank()) {
+                return null;
+            }
+            return new HeadRecovery(((Number) row.get("audit_seq")).longValue(), hash);
+        } catch (Exception e) {
+            log.warn("failed to recover chain head from DB for tenant {}: {}", tenantId, e.getMessage());
+            return null;
+        }
+    }
+
+    private record HeadRecovery(long seq, String lastHash) {}
 
     /**
      * Must mirror {@code AuditEventIngestor.sceneOf}: the persisted scene column

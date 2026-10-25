@@ -6,3 +6,9 @@
 -- (curr_hash mismatch) because the hash was computed over the untruncated
 -- digest. Widen to 128 to match the other hash columns (prev_hash / curr_hash).
 ALTER TABLE tb_agent_trace MODIFY tool_args_hash VARCHAR(128);
+
+-- The archive table is created with CREATE TABLE ... LIKE tb_agent_trace (V14),
+-- so it inherits the old width; retention copies the same 71-char digest into it
+-- with a plain INSERT (no IGNORE), which makes a strict-mode MySQL reject the
+-- whole archive batch.
+ALTER TABLE tb_agent_trace_archive MODIFY tool_args_hash VARCHAR(128);

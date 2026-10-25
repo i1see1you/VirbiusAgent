@@ -1,6 +1,6 @@
 [package]
 name = "virbius-mcp-proxy"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2021"
 rust-version.workspace = true
 license = "MIT"
@@ -31,7 +31,10 @@ axum = { version = "0.7", features = ["json"] }
 tokio-stream = "0.1"
 base64 = "0.22"
 sha2 = "0.10"
-rdkafka = { version = "0.37", features = ["tokio"] }
+# "sasl" compiles librdkafka with SASL (SCRAM-SHA-256/512) support; without it
+# the proxy cannot authenticate to SASL_PLAINTEXT listeners (needs libsasl2 at
+# build time and libsasl2-2 in the runtime image, see Dockerfile).
+rdkafka = { version = "0.37", features = ["tokio", "sasl"] }
 redis = { version = "0.25", features = ["tokio-comp"] }
 aes-gcm = "0.10"
 zeroize = "1"
