@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -52,6 +54,16 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResult<Void>> handleMaxUpload(MaxUploadSizeExceededException e) {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResult.error(400, "uploaded file exceeds the size limit"));
+    }
+
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    public ResponseEntity<ApiResult<Void>> handleNoResource(Exception e) {
+        String path = e instanceof NoResourceFoundException nrf
+                ? nrf.getResourcePath()
+                : ((NoHandlerFoundException) e).getRequestURL();
+        String detail = path == null || path.isBlank() ? "" : ": " + path;
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResult.error(404, "resource not found" + detail));
     }
 
     @ExceptionHandler(Exception.class)

@@ -137,7 +137,12 @@ public class LicenseSigner {
             String sigB64 = Base64.getUrlEncoder().withoutPadding().encodeToString(signature);
             return message + "." + sigB64;
         } catch (Exception e) {
-            throw new IllegalStateException("failed to sign license: " + e.getMessage(), e);
+            log.error("license signing failed (tenant={}, app={})",
+                    license != null ? license.getTenantId() : null,
+                    license != null ? license.getAppId() : null,
+                    e);
+            String detail = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            throw new IllegalStateException("failed to sign license: " + detail, e);
         }
     }
 

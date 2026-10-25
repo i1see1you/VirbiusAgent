@@ -126,6 +126,15 @@ class LicenseSignerTest {
         assertArrayEquals(raw, signer.decryptPrivateKey(legacyEnvelope));
     }
 
+    @Test
+    void signFailureKeepsTheCauseAndReturnsADiagnosableMessage() {
+        LicenseSigner signer = signer(prod(), STRONG_KEY);
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> signer.sign(null, null));
+        assertTrue(e.getMessage().startsWith("failed to sign license: "), e.getMessage());
+        assertTrue(e.getCause() instanceof NullPointerException);
+    }
+
     // ─── HKDF (RFC 5869, A.1 test vector) ─────────────────────────────────
 
     @Test

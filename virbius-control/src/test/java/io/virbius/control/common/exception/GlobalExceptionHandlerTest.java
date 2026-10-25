@@ -4,8 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import io.virbius.control.common.response.ApiResult;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 /**
  * {@link GlobalExceptionHandler#handleBusiness} must surface the domain code as the
@@ -41,6 +45,22 @@ class GlobalExceptionHandlerTest {
                 handler.handleBusiness(new BusinessException(429, "exchange rate limit exceeded"));
         assertEquals(HttpStatus.TOO_MANY_REQUESTS, resp.getStatusCode());
         assertEquals(429, resp.getBody().getCode());
+    }
+
+    @Test
+    void missingResourceMapsToNotFound() {
+        ResponseEntity<ApiResult<Void>> resp = handler.handleNoResource(
+                new NoResourceFoundException(HttpMethod.GET, "/api/v1/missing"));
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertEquals(404, resp.getBody().getCode());
+    }
+
+    @Test
+    void noHandlerMapsToNotFound() {
+        ResponseEntity<ApiResult<Void>> resp = handler.handleNoResource(
+                new NoHandlerFoundException("GET", "/api/v1/missing", new HttpHeaders()));
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertEquals(404, resp.getBody().getCode());
     }
 
     private void assertStatus(int code, HttpStatus expected) {
