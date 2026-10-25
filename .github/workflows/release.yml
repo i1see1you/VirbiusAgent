@@ -37,6 +37,9 @@ jobs:
         with:
           go-version: '1.22'
 
+      - name: Install native deps for librdkafka (SASL/SSL)
+        run: sudo apt-get update && sudo apt-get install -y libsasl2-dev libkrb5-dev pkg-config libssl-dev zlib1g-dev
+
       - name: Java tests
         run: mvn -B -e test
 
@@ -102,6 +105,17 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
+
+      - name: Install native deps for librdkafka (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsasl2-dev libkrb5-dev pkg-config libssl-dev zlib1g-dev
+
+      - name: Install native deps for librdkafka (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install openssl@3 cyrus-sasl pkg-config
+          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix cyrus-sasl)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
 
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'

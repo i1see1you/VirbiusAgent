@@ -2,11 +2,11 @@ fullnameOverride: virbius
 
 global:
   imageRegistry: "hb.grainmind.cn/library"
-  # Pin the release tag (the release pipeline publishes `${github.ref_name}` = `v1.0.0`;
+  # Pin the release tag (the release pipeline publishes `${github.ref_name}` = `v1.0.2`;
   # keep this in sync with the example file and k8s-deploy.sh). Do not ship `latest`:
   # Kubernetes forces imagePullPolicy=Always for it, so a rescheduled pod silently
   # pulls a newer image and the API contract can change under a running install.
-  imageTag: "v1.0.0"
+  imageTag: "v1.0.2"
   imagePullSecrets: []
   waitImage: hb.grainmind.cn/library/busybox:1.36
 

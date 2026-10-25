@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-25
+
 ### Added
 - **MCP proxy Kafka SASL support**: librdkafka is now built with the SASL feature (SCRAM-SHA-256/512), so the proxy can deliver audit/trace events to `SASL_PLAINTEXT` listeners with the same `VIRBIUS_KAFKA_SASL_*` configuration control and engine already use. `PLAINTEXT` listeners remain supported (set `VIRBIUS_KAFKA_SECURITY_PROTOCOL=PLAINTEXT`); `SASL_SSL`/PLAIN mechanisms are still not supported. Requires `libsasl2` at build time and `libsasl2-2`/`libgssapi-krb5-2` in the runtime image (Dockerfile updated). Verified end-to-end against a SCRAM-SHA-256 broker with the shipped compose defaults.
 - **Audit chain head self-recovery after Redis data loss**: the per-tenant chain head lives only in Redis, so a FLUSHDB / restart-without-persistence / eviction used to restart the chain at seq=1 over already-chained rows — a permanent `seq gap` the verifier reported as tampering. When the head is missing, chaining now rebuilds it from the last chained DB row (`max(audit_seq)` + its `curr_hash`) and logs a warning; the next ingested event resumes the chain from the recovered head. Verified by deleting the Redis head and confirming the follow-up event chains onto the recovered hash with `audit/verify` passing.
@@ -16,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Evaluation one-click remediation (M1-min)**: report findings can now carry structured `remediation` plans (eight single-value templates: DLP secrets, high-risk challenge, prompt safety, suspicious-domain block, memory-write challenge, replay high-risk/rate-limit, query rate-limit), with schema validation, dangerous-default rejection, JSON-node placeholder checks and evidence binding. Control adds tenant-scoped `GET .../evaluation/reports/{reportId}/remediation-preview` and `POST .../remediation-apply` (viewer/admin respectively): variables resolve user > bound > default (never guessed), values are whitelisted, and only **dry-run** rules are created — single idempotency key `eval-{check_id}-{risk_id8}` (existing → `skipped_exists`), rollout 429 → `skipped_cap`, license inactive → `40306`, `register_tool`/`egress_allowlist` unsupported, DLP templates normalized to `allow`/risk 0, and an audit event is written with `scene=remediation_apply`. The console gains the generation dialog (danger tags, explicit app-binding confirmation, payload preview, result table with rule deep link). Covered by `scripts/test-remediation-e2e.sh` (control flow) and `tests/test_remediation_flow.sh` (evaluation contract).
 
 ### Fixed
+- **Unknown routes now return 404 instead of 500**: `NoResourceFoundException` and `NoHandlerFoundException` are handled explicitly, so a typo'd API path no longer falls into the generic 500 handler. Covered by `GlobalExceptionHandlerTest`.
+- **License signing failures are diagnosable**: `LicenseSigner` now logs the cause with tenant/app context and falls back to the exception class name when `getMessage()` is null, so the field no longer sees only `failed to sign license: null`. Covered by `LicenseSignerTest`.
+- **MySQL/MariaDB schema must be utf8mb4 before migrations**: control/auth now check `@@character_set_database` before Flyway and refuse to start on anything else, preventing latin1 tables on MariaDB. Covered by `DatabaseCharsetGuardTest`.
+- **Release and deployment hardening**: CI/release workflows install librdkafka SASL/SSL build deps (Linux and macOS); the offline bundle supports `--platform`, streams `docker save` straight through gzip, and all compose/Helm/script/runbook version pins are now v1.0.2.
 - **MySQL timestamp round-trip broke audit/trace hash verification**: control wrote `Instant.toString()` into `TIMESTAMP` columns but hashed the pre-storage ISO string. MySQL hands back a `java.sql.Timestamp` and rounds `TIMESTAMP(0)` writes to the nearest second (not truncation), so the verifier recomputed a different hash for roughly half the rows; a blank `scene` (stored as `event_type`) and the missing `layer` in the trace hash caused the rest. Writes now bind `java.sql.Timestamp`, `MerkleUtil.canonicalTs` folds ISO / driver / epoch-millis forms back to epoch-seconds with MySQL ROUND semantics, and the audit and trace hashes use the same scene fallback and `layer` field as the persisted row. Covered by `HashChainVerifierTest`, `MerkleUtilTest` and `TraceChainVerifierTest`.
 - **`tb_agent_trace.tool_args_hash` could not hold the full digest**: `VARCHAR(64)` truncated the `sha256:` + 64-hex (71 chars) value; under MySQL strict mode the plain archive `INSERT` failed, and under relaxed mode the row was stored clipped so `TraceChainVerifier` reported a `curr_hash` mismatch. V36 widens both `tb_agent_trace` and `tb_agent_trace_archive` to `VARCHAR(128)`.
 - **MCP proxy token exchange got stuck after a control restart**: a pooled keep-alive connection went stale without a FIN under Docker NAT, turning every evaluate-token exchange into a permanent transport failure until the proxy restarted. The client now uses a 5s pool idle timeout and retries the exchange once.
@@ -175,7 +181,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - MCP proxy protocol specification (PROTOCOL.md).
 - Seven-dimensional Agent security risk assessment framework.
 
-[Unreleased]: https://github.com/i1see1you/VirbiusAgent/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/i1see1you/VirbiusAgent/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/i1see1you/VirbiusAgent/compare/v1.0.1...v1.0.2
 [1.0.0]: https://github.com/i1see1you/VirbiusAgent/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/i1see1you/VirbiusAgent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/i1see1you/VirbiusAgent/releases/tag/v0.1.0

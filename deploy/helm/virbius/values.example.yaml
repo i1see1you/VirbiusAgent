@@ -2,14 +2,14 @@
 #   cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 #
 # Then:
-#   ./deploy/scripts/k8s-deploy.sh --registry registry.example.com/virbius --tag v1.0.0 \
+#   ./deploy/scripts/k8s-deploy.sh --registry registry.example.com/virbius --tag v1.0.2 \
 #     --values deploy/helm/virbius/values-prod.yaml
 
 fullnameOverride: virbius
 
 global:
   imageRegistry: registry.example.com/virbius
-  imageTag: v1.0.0
+  imageTag: v1.0.2
   imagePullSecrets:
     - name: registry-pull-secret
 

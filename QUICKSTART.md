@@ -69,7 +69,7 @@ spec:
     rate_limit: true
     license_verify: true
     tool_precheck: true
-  url: oci://registry.example.com/virbius-gateway-wasm:v1.0.0
+  url: oci://registry.example.com/virbius-gateway-wasm:v1.0.2
 ```
 
 Requests route through the gateway, which pre-checks each tool call and reviews

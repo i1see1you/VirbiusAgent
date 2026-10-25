@@ -64,7 +64,7 @@ spec:
     rate_limit: true
     license_verify: true
     tool_precheck: true
-  url: oci://registry.example.com/virbius-gateway-wasm:v1.0.0
+  url: oci://registry.example.com/virbius-gateway-wasm:v1.0.2
 ```
 
 请求经网关转发，网关在路径上预检每次工具调用并审查内容（拒绝时返回 HTTP 403 +

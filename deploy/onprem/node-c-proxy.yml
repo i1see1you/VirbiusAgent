@@ -6,7 +6,7 @@ name: virbius-onprem-c
 
 services:
   virbius-mcp-proxy:
-    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-mcp-proxy:${IMAGE_TAG:-v1.0.0}
+    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-mcp-proxy:${IMAGE_TAG:-v1.0.2}
     environment:
       VIRBIUS_TRANSPORT: tcp://0.0.0.0:9090
       # ── 跨机指向 A/B 机 ──

@@ -2,9 +2,9 @@
 
 [English](README.md)
 
-适用版本：**v1.0.0**。
+适用版本：**v1.0.2**。
 本手册只部署 VirbiusAgent 自身组件；**MySQL / Kafka / Redis / vLLM 由客户统一环境提供**。
-随离线包 `virbius-onprem-v1.0.0.tar.gz` 分发（即 `deploy/onprem/` 目录）。
+随离线包 `virbius-onprem-v1.0.2.tar.gz` 分发（即 `deploy/onprem/` 目录）。
 默认按**三机**编写；**单机**（全部组件同机、客户 infra 外置）见 §0.1、§1.2 与 §5.1。
 
 ---
@@ -13,20 +13,30 @@
 
 | 项 | 要求 | 由谁提供 |
 |---|---|---|
-| MySQL | 8.0+（或 MariaDB 10.6+），建库 `virbius` + 账号密码；**1.0.0 全部迁移已在 MySQL 8.0 / MariaDB 11 双方言实测** | 客户 |
+| MySQL | 8.0+（或 MariaDB 10.6+），建库 `virbius` + 账号密码；**库必须为 `utf8mb4`**；**V1–V36 全部迁移已在 MySQL 8.0 / MariaDB 11 双方言实测** | 客户 |
 | Kafka | 3.x，SASL_PLAINTEXT + SCRAM-SHA-256/512 账号（机制不同改 `.env` 的 `KAFKA_SASL_MECHANISM`）；客户仅有 PLAINTEXT listener 时也可用（三份 compose 的 `KAFKA_SECURITY_PROTOCOL` 改 `PLAINTEXT`，SASL 账号填占位值）。topic `virbius-audit-events`、`virbius-trace-events` 预建（分区 ≥3）或授权我方自建 | 客户 |
-| Redis | 7.x。**standalone（或主从+固定入口；不支持 Cluster / Sentinel 寻址）**；必须设密码；**不支持 TLS**（`rediss://` 不可用）；**必须开 AOF（或至少 RDB）且禁用数据淘汰类 `maxmemory-policy`**——审计链头/会话状态仅存 Redis；1.0.2 起链头丢失可从 DB 自愈续链（下一条审计事件触发），持久化仍是硬要求，避免自愈前窗口期丢事件 | 客户 |
+| Redis | 7.x。**standalone（或主从+固定入口；不支持 Cluster / Sentinel 寻址）**；必须设密码；**不支持 TLS**（`rediss://` 不可用）；**必须开 AOF（或至少 RDB）且禁用数据淘汰类 `maxmemory-policy`**——审计链头/会话状态仅存 Redis；v1.0.2 起链头丢失可从 DB 自愈续链（下一条审计事件触发），持久化仍是硬要求，避免自愈前窗口期丢事件 | 客户 |
 | vLLM | 可选（模型选项B）；OpenAI 兼容端点 | 客户 |
 | 机器 | Docker 20.10+（含 compose v2）。三机：彼此网络互通、每台磁盘 ≥20G；单机：磁盘 ≥40G（镜像/日志/导出同机） | 客户 |
 | 镜像 | 现场无法拉外网仓库 → 用 §3 离线包 | 我方 |
 | 模型 GGUF | ~1.5GB，经 hf-mirror/ModelScope 预下载（§4 选项A） | 我方 |
 | 模型 safetensors | 选项B（客户 vLLM）需 HF 格式权重，ModelScope 同仓库（§4） | 我方/客户 |
 
+**MySQL 建库（必须 utf8mb4）**：
+
+```sql
+CREATE DATABASE virbius CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'virbius'@'%' IDENTIFIED BY '<password>';
+GRANT ALL PRIVILEGES ON virbius.* TO 'virbius'@'%';
+```
+
+control/auth 启动时会检查 `@@character_set_database`；不是 `utf8mb4` 会直接拒绝启动，不会在错误字符集上执行迁移。已有库用 `SELECT @@character_set_database, @@collation_database;` 确认。
+
 ### 0.1 单机（客户外置 infra）进场前准备
 
 **我方提前准备**（有网机器）：
 
-1. 离线包：`./deploy/scripts/offline-bundle.sh --tag v1.0.0`（单机走客户 vLLM 时**不要加 `--with-ollama`**），拷贝 `dist/offline/` 三个产物。
+1. 离线包：`./deploy/scripts/offline-bundle.sh --tag v1.0.2`（单机走客户 vLLM 时**不要加 `--with-ollama`**），拷贝 `dist/offline/` 三个产物。
 2. vLLM 权重：按 §4 选项B 下载 7 个 safetensors 文件交给客户，并**提前约好**加载方式与 `--served-model-name`（`.env` 的 `VIRBIUS_PROMPT_LLM_MODEL` 必须与之一致）。
 3. 许可：确认 `license.lic` 的签发/上传方式（首次登录运营台后在 Licenses 页签发并下载）。
 
@@ -36,7 +46,7 @@
 |---|---|
 | `VIRBIUS_JDBC_URL` | 按客户 MySQL TLS 策略选 `sslMode`；`VERIFY_IDENTITY` 需放 CA 并解开 `node-a-control.yml` certs 卷注释（§6） |
 | `KAFKA_SASL_*` | 四件套齐全；机制非 SCRAM-SHA-256 时改 `KAFKA_SASL_MECHANISM`（仅支持 SCRAM-SHA-256/512，不支持 PLAIN/SASL_SSL） |
-| `REDIS_PASSWORD` | 同时确认客户已开 AOF/RDB 且 `maxmemory-policy` 不会淘汰数据（审计链头仅存 Redis，丢失不可自愈） |
+| `REDIS_PASSWORD` | 同时确认客户已开 AOF/RDB 且 `maxmemory-policy` 不会淘汰数据（审计链头仅存 Redis；v1.0.2 起丢失后下一条审计事件会从 DB 自愈续链，持久化仍是硬要求） |
 | `VIRBIUS_LICENSE_MASTER_KEY` / `VIRBIUS_API_KEY_PEPPER` | 均 ≥32 字符，否则 control 拒绝启动 |
 | `CONTROL_PUBLIC_URL` | 必须等于浏览器实际访问地址，否则登录回跳 401 |
 | `PROMPT_LLM_BASE_URL` / `VIRBIUS_PROMPT_LLM_MODEL` | 选项B 指向客户 vLLM，模型名与 served-name 一致 |
@@ -54,7 +64,7 @@
 | B（`NODE_B`） | 决策面 | `virbius-engine`（8082），可 `--scale` 多副本；模型选项A时 + Ollama（11434） | 8082 | 8C16G；选项A加 8G 内存（模型常驻） |
 | C（`NODE_C`） | 接入面 | `virbius-mcp-proxy`（9090） | 9090（MCP 客户端入口） | 2C4G |
 
-副本策略（1.0.0 能力边界）：
+副本策略（v1.0.2 能力边界）：
 
 - **engine 可多副本**：横向扩容请加主机，每台一个 engine（本 compose 固定发布 8082，单机 `--scale` 会端口冲突）。每个副本的 `VIRBIUS_INSTANCE_ID` 必须唯一（compose 容器 hostname 天然唯一；手动 `docker run` 需显式设置）。多于一个 engine 时前置 LB，control 与 proxy 的 `VIRBIUS_ENGINE_URL` 指向 LB。
 - **control / auth / proxy 单副本**：auth 的 JWT 签名密钥落在本机卷（扩副本会互踢登录）；control 多副本需共享 NFS（K8s 路径见 DEPLOYMENT.md §8.5，裸机本期不做）；proxy 是 MCP 客户端的单 TCP 入口。
@@ -103,20 +113,22 @@ A/B/C 三个角色合并到一台机器：使用**同一份 `.env`**，三个 co
 **构建侧**（我方有网机器，仓库根目录）：
 
 ```bash
-./deploy/scripts/offline-bundle.sh --tag v1.0.0 --with-ollama
+./deploy/scripts/offline-bundle.sh --tag v1.0.2 --with-ollama
 # 产物 dist/offline/：
-#   virbius-images-v1.0.0.tar.gz   engine/control/auth/mcp-proxy (+ollama)
-#   virbius-onprem-v1.0.0.tar.gz   本目录全部资产 + .env 样例
-#   SHA256SUMS-v1.0.0.txt
+#   virbius-images-v1.0.2.tar.gz   engine/control/auth/mcp-proxy (+ollama)
+#   virbius-onprem-v1.0.2.tar.gz   本目录全部资产 + .env 样例
+#   SHA256SUMS-v1.0.2.txt
 ```
+
+> **镜像架构必须匹配客户服务器**：`docker build` 默认跟随构建机架构（Apple Silicon 上为 arm64）。客户是 x86_64 服务器时必须加 `--platform linux/amd64`（或在 x86_64 构建机执行），否则现场 `docker load` 后容器会 `exec format error`。当前离线包可用 `docker image inspect <image> --format '{{.Architecture}}'` 核对。
 
 **现场侧**（三台机器各执行一次，或按角色只 load 所需镜像）：
 
 ```bash
-sha256sum -c SHA256SUMS-v1.0.0.txt          # 先校验
-gunzip -c virbius-images-v1.0.0.tar.gz | docker load
-tar -xzf virbius-onprem-v1.0.0.tar.gz       # 得到 onprem/ 目录
-docker images | grep v1.0.0                 # 确认 5 个镜像就位
+sha256sum -c SHA256SUMS-v1.0.2.txt          # 先校验
+gunzip -c virbius-images-v1.0.2.tar.gz | docker load
+tar -xzf virbius-onprem-v1.0.2.tar.gz       # 得到 onprem/ 目录
+docker images | grep v1.0.2                 # 确认 5 个镜像就位
 ```
 
 ## 4. 提示词审查模型（二选一）
@@ -260,7 +272,7 @@ curl -s http://localhost:9090/status | head -c 400
 | 数据 | 位置 | 方式 |
 |---|---|---|
 | 规则/租户/审计/签发记录 | 客户 MySQL `virbius` 库 | 客户统一备份 |
-| 审计链头/会话状态 | 客户 Redis | **客户必须开 AOF/RDB 且禁用数据淘汰**；v1.0.1 链头丢失不可自愈（§10），备份是唯一兜底 |
+| 审计链头/会话状态 | 客户 Redis | **客户必须开 AOF/RDB 且禁用数据淘汰**；v1.0.2 起链头丢失可从 DB 自愈续链（下一条审计事件触发，日志 `recovered from DB`），备份仍是兜底 |
 | edge manifest / 审计导出 | A 机卷 `control-data` | 定期拷贝 |
 | auth JWT 签名密钥 | A 机卷 `auth-data` | 定期拷贝；丢失则全部会话需重登 |
 | engine / proxy | 无状态 | 仅日志卷 |
@@ -280,6 +292,7 @@ curl -s http://localhost:9090/status | head -c 400
 | 7 | 拦截闭环 | 触发一条 deny 规则 | 客户端被拒，运营台有 deny 记录 |
 | 8 | 审计链自检 | A 机：`curl -X POST :8080/api/v1/admin/tenants/default/audit/verify`；`curl :8080/api/v1/admin/tenants/default/audit/trace-chain/verify`（带运营台会话 cookie） | 两处均 `passed:true` |
 | 9 | 审计导出（如启用） | 运营台导出一次 | `data/exports/` 出密文文件 |
+| 10 | MySQL 字符集 | 在 `virbius` 库执行 `SELECT @@character_set_database` | `utf8mb4` |
 
 ## 10. 故障速查
 
@@ -290,9 +303,9 @@ curl -s http://localhost:9090/status | head -c 400
 | control 启动失败 | 看日志首条 ERROR：密钥缺失/过短（§0 密钥表）、JDBC 不通、Kafka SASL 失败 |
 | engine `/admin/ready` 一直 503 | 看 body：`redis=down`→Redis 连通/密码；`cache_subscriber=starting`→等 30s 或查 Kafka；`rule_seeder=seeding`→control 未发快照 |
 | 控制台登录后 401/回跳异常 | auth 与 control 的 `VIRBIUS_AUTH_ISSUER` 必须一致；`CONTROL_PUBLIC_URL` 必须等于浏览器实际地址 |
-| 审批队列页报错 | control→B 机 8082 网络；1.0.0 起失败响应返回 JSON 错误体而非空 body |
+| 审批队列页报错 | control→B 机 8082 网络；失败响应返回 JSON 错误体而非空 body |
 | 单机容器间互相调不通 | 常见为 `NODE_*` 误填 `127.0.0.1`（容器内是自身回环），或宿主防火墙未放通 8080/8082/8083/9090 |
-| 审计链校验告警（`seq gap` / `curr_hash mismatch`） | 1.0.2 起 Redis 链头丢失（未持久化重启/FLUSH/淘汰）会在下一条审计事件时**从 DB 自愈续链**（日志 `recovered from DB`）。若 verify 仍报 mismatch：多半是事件在丢失窗口期产生（Kafka 有数据、DB 未入库）或有人为改库——保留现场联系我方定位，不要自行清库。预防仍是 §0 Redis 三项硬要求（AOF/RDB + 禁淘汰），避免窗口期丢事件 |
+| 审计链校验告警（`seq gap` / `curr_hash mismatch`） | v1.0.2 起 Redis 链头丢失（未持久化重启/FLUSH/淘汰）会在下一条审计事件时**从 DB 自愈续链**（日志 `recovered from DB`）。若 verify 仍报 mismatch：多半是事件在丢失窗口期产生（Kafka 有数据、DB 未入库）或有人为改库——保留现场联系我方定位，不要自行清库。预防仍是 §0 Redis 三项硬要求（AOF/RDB + 禁淘汰），避免窗口期丢事件 |
 | proxy 审计不落 | ① `KAFKA_BOOTSTRAP_SERVERS`/协议/SCRAM 账号三件是否与客户 Kafka 匹配（支持 SASL_PLAINTEXT+SCRAM-SHA-256/512 与 PLAINTEXT，不支持 SASL_SSL）；② 确认 `VIRBIUS_AUDIT_BACKEND=kafka`；③ proxy 只支持 Kafka 后端；④ topic 未预建时看 proxy 日志 |
 
 ---
@@ -307,7 +320,7 @@ kafka:  { enabled: false, bootstrapServers: "<客户Kafka>:9092" }
 redis:  { enabled: false, url: "redis://:<密码>@<客户Redis>:6379" }
 ollama: { enabled: false }            # 模型选项B；选项A仍可用集群内 Ollama
 engine: { promptLlm: { baseUrl: "http://<客户vLLM>:8000", model: virbiusguard } }
-global: { imageRegistry: <现场可写的镜像仓库或 load 后的 registry>, imageTag: v1.0.0 }
+global: { imageRegistry: <现场可写的镜像仓库或 load 后的 registry>, imageTag: v1.0.2 }
 ```
 
 三机放置用 `nodeSelector`/亲和性把 control/auth、engine、mcp-proxy 分别钉到三台节点；engine/control 多副本时 chart 已自带软性主机分散（`maxSkew: 1`、`ScheduleAnyway`）；端口矩阵、TLS、验收与本手册相同。离线镜像包在 K8s 路径同样适用：`docker load` 到各节点后把 `imageRegistry` 指向本地 tag 即可。

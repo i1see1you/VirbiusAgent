@@ -4,24 +4,27 @@
 #   dist/offline/virbius-images-<TAG>.tar.gz   镜像包（现场 docker load）
 #   dist/offline/virbius-onprem-<TAG>.tar.gz   部署资产（deploy/onprem/* + 校验和）
 # 用法：
-#   ./deploy/scripts/offline-bundle.sh [--tag v1.0.0] [--with-demo] [--with-ollama]
+#   ./deploy/scripts/offline-bundle.sh [--tag v1.0.2] [--platform linux/amd64]
+#                                      [--with-demo] [--with-ollama]
 #                                      [--apt-mirror cn] [--crates-mirror cn]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-TAG="v1.0.0"
+TAG="v1.0.2"
 REGISTRY="hb.grainmind.cn/library"
 WITH_DEMO=0
 WITH_OLLAMA=0
 OLLAMA_IMAGE="ollama/ollama:0.11.10"
+PLATFORM=""
 BUILD_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tag) TAG="${2:-}"; shift 2 ;;
     --registry) REGISTRY="${2:-}"; shift 2 ;;
+    --platform) PLATFORM="${2:-}"; shift 2 ;;
     --with-demo) WITH_DEMO=1; shift ;;
     --with-ollama) WITH_OLLAMA=1; shift ;;
     --apt-mirror) BUILD_ARGS+=(--build-arg "APT_MIRROR=${2:-}"); shift 2 ;;
@@ -30,6 +33,10 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
+
+if [ -n "$PLATFORM" ]; then
+  BUILD_ARGS+=(--platform "$PLATFORM")
+fi
 
 COMPONENTS=(virbius-engine virbius-control virbius-auth virbius-mcp-proxy)
 IMAGES=()
@@ -53,10 +60,9 @@ fi
 
 OUT="dist/offline"
 mkdir -p "$OUT"
-IMG_TAR="$OUT/virbius-images-${TAG}.tar"
-echo "==> docker save -> ${IMG_TAR}"
-docker save -o "$IMG_TAR" "${IMAGES[@]}"
-gzip -f "$IMG_TAR"
+IMG_TAR="$OUT/virbius-images-${TAG}.tar.gz"
+echo "==> docker save | gzip -> ${IMG_TAR}"
+docker save "${IMAGES[@]}" | gzip -c > "$IMG_TAR"
 
 echo "==> 打包部署资产 -> ${OUT}/virbius-onprem-${TAG}.tar.gz"
 tar -czf "${OUT}/virbius-onprem-${TAG}.tar.gz" -C deploy onprem

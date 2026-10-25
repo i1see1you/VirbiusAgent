@@ -7,7 +7,7 @@ usage() {
 Usage: k8s-deploy.sh --registry REGISTRY [options]
 
   --registry       Image registry prefix (required unless --skip-build and values already set it)
-  --tag            Image tag (default: v1.0.0)
+  --tag            Image tag (default: v1.0.2)
   --namespace      Kubernetes namespace (default: virbius)
   --release        Helm release name (default: virbius)
   --values         Extra Helm values file (repeatable)
@@ -22,7 +22,7 @@ EOF
 }
 
 REGISTRY=""
-TAG="v1.0.0"
+TAG="v1.0.2"
 NAMESPACE="virbius"
 RELEASE="virbius"
 SKIP_BUILD=0

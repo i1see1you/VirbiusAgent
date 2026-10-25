@@ -1,4 +1,4 @@
-# VirbiusAgent API Reference (v1.0.0 stability contract)
+# VirbiusAgent API Reference (v1.0.2 stability contract)
 
 [中文](API_REFERENCE.zh.md)
 

@@ -454,7 +454,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 ```bash
 ./deploy/scripts/k8s-deploy.sh \
   --registry registry.example.com/virbius \
-  --tag v1.0.0 \
+  --tag v1.0.2 \
   --namespace virbius \
   --values deploy/helm/virbius/values-prod.yaml
 ```
@@ -462,7 +462,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 只构建推送镜像：
 
 ```bash
-./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v1.0.0
+./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v1.0.2
 ```
 
 镜像已在仓库、只装 Chart：
@@ -470,7 +470,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 ```bash
 ./deploy/scripts/k8s-deploy.sh --skip-build \
   --registry registry.example.com/virbius \
-  --tag v1.0.0 \
+  --tag v1.0.2 \
   --values deploy/helm/virbius/values-prod.yaml
 ```
 

@@ -1,7 +1,7 @@
 # VirbiusAgent On-Prem Three-Host Deployment Runbook (offline; K8s optional)
 
-Version: **v1.0.0**.
-This runbook deploys only VirbiusAgent components; **MySQL / Kafka / Redis / vLLM are provided by the customer's shared platform**. It ships inside the offline bundle `virbius-onprem-v1.0.0.tar.gz` (the `deploy/onprem/` directory). 中文现场版见 [README.zh.md](README.zh.md).
+Version: **v1.0.2**.
+This runbook deploys only VirbiusAgent components; **MySQL / Kafka / Redis / vLLM are provided by the customer's shared platform**. It ships inside the offline bundle `virbius-onprem-v1.0.2.tar.gz` (the `deploy/onprem/` directory). 中文现场版见 [README.zh.md](README.zh.md).
 
 ---
 
@@ -9,13 +9,23 @@ This runbook deploys only VirbiusAgent components; **MySQL / Kafka / Redis / vLL
 
 | Item | Requirement | Owner |
 |---|---|---|
-| MySQL | 8.0+ (or MariaDB 10.6+), database `virbius` + credentials. All 1.0.0 migrations are verified on both MySQL 8.0 and MariaDB 11 | Customer |
+| MySQL | 8.0+ (or MariaDB 10.6+), database `virbius` + credentials. **Database must be `utf8mb4`**. All V1–V36 migrations are verified on both MySQL 8.0 and MariaDB 11 | Customer |
 | Kafka | 3.x, SASL_PLAINTEXT + SCRAM-SHA-256 (override `KAFKA_SASL_MECHANISM` in `.env` if different) | Customer |
-| Redis | 7.x with password; **persistence (AOF/RDB) required** — the audit chain head lives in Redis and losing it triggers chain-verification alerts | Customer |
+| Redis | 7.x with password; **persistence (AOF/RDB) required** — the audit chain head lives in Redis and losing it triggers chain-verification alerts. Since v1.0.2 the head is recovered from the DB on the next audit event, but persistence is still required to avoid losing events before recovery | Customer |
 | vLLM | Optional (model option B); OpenAI-compatible endpoint | Customer |
 | Three hosts | Docker 20.10+ (compose v2), mutual network reachability, ≥20 GB disk | Customer |
 | Images | No external registry access on site → use the §3 offline bundle | Us |
 | Model GGUF | ~1.5 GB, pre-downloaded via hf-mirror/ModelScope (§4) | Us |
+
+**MySQL database (must be utf8mb4)**:
+
+```sql
+CREATE DATABASE virbius CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'virbius'@'%' IDENTIFIED BY '<password>';
+GRANT ALL PRIVILEGES ON virbius.* TO 'virbius'@'%';
+```
+
+control/auth verify `@@character_set_database` before Flyway runs and refuse to start on anything other than `utf8mb4`, so a wrong database charset cannot silently corrupt data. For an existing database, check with `SELECT @@character_set_database, @@collation_database;`.
 
 ---
 
@@ -27,10 +37,10 @@ This runbook deploys only VirbiusAgent components; **MySQL / Kafka / Redis / vLL
 | B (`NODE_B`) | Decision plane | `virbius-engine` (8082), scalable; + Ollama (11434) for model option A | 8082 | 8C16G (+8 GB RAM for option A) |
 | C (`NODE_C`) | Edge ingress | `virbius-mcp-proxy` (9090) | 9090 (MCP client entry) | 2C4G |
 
-Replica policy (1.0.0 capability boundaries):
+Replica policy (v1.0.2 capability boundaries):
 
 - **engine can be multi-replica**: scale out by adding hosts — one engine per host (this compose file publishes a fixed 8082, so `--scale` on a single host collides). Each replica needs a unique `VIRBIUS_INSTANCE_ID`; compose container hostnames are already unique, and with bare `docker run` set it explicitly. With more than one engine, front them with an LB and point `VIRBIUS_ENGINE_URL` / the proxy at the LB.
-- **control / auth / proxy stay single-replica**: auth's JWT signing key lives on a local volume (scaling it would invalidate logins); multi-replica control requires shared NFS (K8s path, DEPLOYMENT.md §8.5 — not covered for bare metal in 1.0.0); the proxy is the single TCP entry for MCP clients.
+- **control / auth / proxy stay single-replica**: auth's JWT signing key lives on a local volume (scaling it would invalidate logins); multi-replica control requires shared NFS (K8s path, DEPLOYMENT.md §8.5 — not covered for bare metal in v1.0.2); the proxy is the single TCP entry for MCP clients.
 
 ## 2. Network & firewall matrix
 
@@ -57,20 +67,22 @@ East-west component traffic is plaintext by default and relies on customer netwo
 **Build side** (our machine with network, repo root):
 
 ```bash
-./deploy/scripts/offline-bundle.sh --tag v1.0.0 --with-ollama
+./deploy/scripts/offline-bundle.sh --tag v1.0.2 --with-ollama
 # outputs dist/offline/:
-#   virbius-images-v1.0.0.tar.gz   engine/control/auth/mcp-proxy (+ollama)
-#   virbius-onprem-v1.0.0.tar.gz   all assets in this directory + .env sample
-#   SHA256SUMS-v1.0.0.txt
+#   virbius-images-v1.0.2.tar.gz   engine/control/auth/mcp-proxy (+ollama)
+#   virbius-onprem-v1.0.2.tar.gz   all assets in this directory + .env sample
+#   SHA256SUMS-v1.0.2.txt
 ```
+
+> **Image architecture must match the customer hosts**: `docker build` defaults to the build host's architecture (arm64 on Apple Silicon). For x86_64 servers add `--platform linux/amd64` (or build on an x86_64 host), otherwise `docker load` succeeds but containers fail with `exec format error`. Check the bundle with `docker image inspect <image> --format '{{.Architecture}}'`.
 
 **On site** (on every host, or load only the images that host needs):
 
 ```bash
-sha256sum -c SHA256SUMS-v1.0.0.txt          # verify first
-gunzip -c virbius-images-v1.0.0.tar.gz | docker load
-tar -xzf virbius-onprem-v1.0.0.tar.gz       # yields onprem/
-docker images | grep v1.0.0                 # 5 images present
+sha256sum -c SHA256SUMS-v1.0.2.txt          # verify first
+gunzip -c virbius-images-v1.0.2.tar.gz | docker load
+tar -xzf virbius-onprem-v1.0.2.tar.gz       # yields onprem/
+docker images | grep v1.0.2                 # 5 images present
 ```
 
 ## 4. Prompt-review model (pick one)
@@ -189,6 +201,7 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
 | 6 | MCP end-to-end | one allowlisted tool call through C:9090 | call succeeds, visible in console audit |
 | 7 | Deny loop | trigger a deny rule | client rejected, deny record in console |
 | 8 | Audit export (if enabled) | export once from the console | ciphertext file under `data/exports/` |
+| 9 | MySQL charset | run `SELECT @@character_set_database` on the `virbius` DB | `utf8mb4` |
 
 ## 10. Troubleshooting quick reference
 
@@ -197,8 +210,8 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
 | control fails to start | first ERROR in the log: missing/short keys (§0 table), JDBC unreachable, Kafka SASL failure |
 | engine `/admin/ready` stuck 503 | read the body: `redis=down` → Redis reachability/password; `cache_subscriber=starting` → wait 30s or check Kafka; `rule_seeder=seeding` → control has not published a snapshot |
 | console 401 / broken login redirect | `VIRBIUS_AUTH_ISSUER` must match on auth and control; `CONTROL_PUBLIC_URL` must equal the browser-visible address |
-| approval-queue page errors | network A→B:8082; since 1.0.0, failures return a JSON error body instead of an empty response |
-| audit-chain verification alerts | customer Redis lacks persistence and lost the chain head; control rebuilds it after recovery |
+| approval-queue page errors | network A→B:8082; failures return a JSON error body instead of an empty response |
+| audit-chain verification alerts | customer Redis lacks persistence and lost the chain head. Since v1.0.2 the head is recovered from the DB on the next audit event (log: `recovered from DB`); events produced during the lost window still need manual investigation |
 | proxy audit missing | `VIRBIUS_AUDIT_BACKEND=kafka` + the four SASL vars configured; the proxy only supports the Kafka backend |
 
 ---
@@ -213,7 +226,7 @@ kafka:  { enabled: false, bootstrapServers: "<customer-kafka>:9092" }
 redis:  { enabled: false, url: "redis://:<password>@<customer-redis>:6379" }
 ollama: { enabled: false }            # model option B; option A can still use the in-cluster Ollama
 engine: { promptLlm: { baseUrl: "http://<customer-vllm>:8000", model: virbiusguard } }
-global: { imageRegistry: <registry reachable on site>, imageTag: v1.0.0 }
+global: { imageRegistry: <registry reachable on site>, imageTag: v1.0.2 }
 ```
 
 Pin control/auth, engine, and mcp-proxy onto the three nodes with `nodeSelector`/affinity; the chart already applies a soft hostname spread for engine/control replicas (`maxSkew: 1`, `ScheduleAnyway`). The port matrix, TLS, and the acceptance checklist are identical to this runbook. The offline image bundle also works on K8s: `docker load` on each node (or import into the customer's registry) and set `imageRegistry` accordingly.

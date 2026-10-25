@@ -159,6 +159,19 @@ echo "  Logs:       $LOG_DIR"
 echo "  Redis:      $VIRBIUS_REDIS_URL"
 echo ""
 
+# rdkafka-sys compiles librdkafka with --enable-ssl (the `sasl` feature pulls in
+# `ssl` regardless of whether the broker uses TLS). Homebrew openssl is
+# keg-only, so its headers are invisible to the configure script and the build
+# fails with "fatal error: 'openssl/ssl.h' file not found". Point the build at
+# it; explicit CFLAGS/LDFLAGS from the caller take precedence.
+if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
+  OPENSSL_PREFIX="$(brew --prefix openssl@3 2>/dev/null || true)"
+  if [[ -n "$OPENSSL_PREFIX" && -f "$OPENSSL_PREFIX/include/openssl/ssl.h" ]]; then
+    export CFLAGS="${CFLAGS:-} -I$OPENSSL_PREFIX/include"
+    export LDFLAGS="${LDFLAGS:-} -L$OPENSSL_PREFIX/lib"
+  fi
+fi
+
 # ─── Step 1: Build Rust (virbius-core + virbius-kernel + virbius-mcp-proxy) ───
 info "Building Rust components..."
 if cargo build -p virbius-core -p virbius-kernel -p virbius-mcp-proxy 2>&1 | tail -3; then
