@@ -22,14 +22,14 @@ public class DeployStateService {
     }
 
     public void record(String tenantId, String layer) {
-        String nowStr = Instant.now().toString();
+        java.sql.Timestamp now = java.sql.Timestamp.from(Instant.now());
         String sql;
         if (dialect.isMysql()) {
             sql = "REPLACE INTO tb_deploy_state (tenant_id, layer, deployed_at) VALUES (?, ?, ?)";
         } else {
             sql = "INSERT OR REPLACE INTO tb_deploy_state (tenant_id, layer, deployed_at) VALUES (?, ?, ?)";
         }
-        jdbc.update(sql, tenantId, layer, nowStr);
+        jdbc.update(sql, tenantId, layer, now);
     }
 
     public Map<String, Object> status(String tenantId) {

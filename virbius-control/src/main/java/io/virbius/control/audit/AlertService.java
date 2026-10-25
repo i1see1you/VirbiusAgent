@@ -105,7 +105,7 @@ public class AlertService {
         return jdbc.update(
                 "UPDATE tb_alert SET status = 'acked', acked_by = ?, acked_at = ? "
                         + "WHERE tenant_id = ? AND alert_id = ? AND status = 'open'",
-                operator != null ? operator : "unknown", Instant.now().toString(), tenantId, alertId) > 0;
+                operator != null ? operator : "unknown", java.sql.Timestamp.from(Instant.now()), tenantId, alertId) > 0;
     }
 
     private static String str(Object o) {

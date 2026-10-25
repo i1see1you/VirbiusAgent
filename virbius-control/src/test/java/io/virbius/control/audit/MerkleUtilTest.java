@@ -54,6 +54,17 @@ class MerkleUtilTest {
         assertEquals(String.valueOf(epoch), MerkleUtil.canonicalTs("2026-10-13 07:00:00.000"));
         assertEquals(String.valueOf(epoch), MerkleUtil.canonicalTs(java.sql.Timestamp.valueOf("2026-10-13 07:00:00")));
         assertEquals(String.valueOf(epoch), MerkleUtil.canonicalTs(epoch));
+
+        // MySQL TIMESTAMP(0) semantics: sub-second inputs fold with ROUND, not truncate —
+        // otherwise the hash is computed over the pre-storage instant and the verifier
+        // (which reads back the rounded stored value) mismatches ~50% of the time.
+        assertEquals(String.valueOf(epoch + 1), MerkleUtil.canonicalTs("2026-10-13T07:00:00.5Z"));
+        assertEquals(String.valueOf(epoch + 1), MerkleUtil.canonicalTs("2026-10-13T07:00:00.999Z"));
+        assertEquals(String.valueOf(epoch), MerkleUtil.canonicalTs("2026-10-13T07:00:00.499Z"));
+        assertEquals(String.valueOf(epoch + 1), MerkleUtil.canonicalTs("2026-10-13 07:00:00.999"));
+        long epochMillis = epoch * 1000L;
+        assertEquals(String.valueOf(epoch), MerkleUtil.canonicalTs(epochMillis));
+        assertEquals(String.valueOf(epoch + 1), MerkleUtil.canonicalTs(epochMillis + 999));
     }
 
     @Test

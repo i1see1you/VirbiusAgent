@@ -67,6 +67,58 @@ class HashChainVerifierTest {
     }
 
     @Test
+    void dbTimestampFormStillPasses() {
+        // The row was hashed with an ISO instant but MySQL hands the verifier back a
+        // java.sql.Timestamp (wall clock of the stored, rounded second) — the hash
+        // contract must survive that round-trip (BUG: truncation vs MySQL ROUND).
+        String iso = "2026-10-14T00:00:00Z";
+        String curr = HashChainOrchestrator.computeHash(GENESIS, 1, content(1, "agent-a", iso));
+        jdbc.update(
+                "INSERT INTO tb_audit_events (tenant_id,trace_id,event_id,audit_seq,prev_hash,"
+                        + "curr_hash,effective_action,layer,reason_code,rule_id,scene,user_id,"
+                        + "device_id,agent_aid,intercepted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                TENANT, "tr", "evt-1", 1, GENESIS, curr, "allow", "cloud", "OK",
+                "POLICY_ALLOW", "tool_call", "u", "d", "agent-a",
+                java.sql.Timestamp.from(java.time.Instant.parse(iso)));
+
+        HashChainVerifier.ChainVerificationResult r = verifier.verifyAll(TENANT);
+
+        assertTrue(r.passed(), r.reason());
+    }
+
+    @Test
+    void sceneFallsBackToEventTypeForHashing() {
+        // AuditEventIngestor.sceneOf stores event_type when scene is blank, so the
+        // hash must use the same fallback — otherwise verifier recomputation (which
+        // reads the stored scene) reports a false "curr_hash mismatch".
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("tenant_id", TENANT);
+        m.put("trace_id", "tr-fb");
+        m.put("event_id", "evt-fb");
+        m.put("effective_action", "allow");
+        m.put("layer", "edge");
+        m.put("reason_code", "OK");
+        m.put("rule_id", "POLICY_ALLOW");
+        m.put("user_id", "u");
+        m.put("device_id", "d");
+        m.put("agent_aid", "agent-a");
+        m.put("event_type", "tool_call");
+        m.put("intercepted_at", "2026-10-14T00:00:05Z");
+        String curr = HashChainOrchestrator.computeHash(GENESIS, 1, m);
+        jdbc.update(
+                "INSERT INTO tb_audit_events (tenant_id,trace_id,event_id,audit_seq,prev_hash,"
+                        + "curr_hash,effective_action,layer,reason_code,rule_id,scene,user_id,"
+                        + "device_id,agent_aid,intercepted_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                TENANT, "tr-fb", "evt-fb", 1, GENESIS, curr, "allow", "edge", "OK",
+                "POLICY_ALLOW", "tool_call", "u", "d", "agent-a",
+                java.sql.Timestamp.from(java.time.Instant.parse("2026-10-14T00:00:05Z")));
+
+        HashChainVerifier.ChainVerificationResult r = verifier.verifyAll(TENANT);
+
+        assertTrue(r.passed(), r.reason());
+    }
+
+    @Test
     void nullAgentAidStillPasses() {
         insertEvent(1, GENESIS, null, null, "2026-10-14T00:00:00Z");
 

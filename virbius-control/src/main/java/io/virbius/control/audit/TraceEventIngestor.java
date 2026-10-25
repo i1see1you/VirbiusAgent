@@ -155,7 +155,7 @@ public class TraceEventIngestor {
                 int updated = jdbc.update(
                         "UPDATE tb_trace_chain_state SET seq = ?, last_hash = ?, version = version + 1, updated_at = ? "
                                 + "WHERE tenant_id = ? AND session_id = ? AND version = ?",
-                        seq, currHash, java.time.Instant.now().toString(), tenantId, sessionId, version);
+                        seq, currHash, java.sql.Timestamp.from(java.time.Instant.now()), tenantId, sessionId, version);
                 if (updated == 0) {
                     continue; // lost the race, re-read state
                 }
@@ -186,6 +186,7 @@ public class TraceEventIngestor {
                 + "|" + str(event.get("tool_decision"))
                 + "|" + str(event.get("rule_id"))
                 + "|" + str(event.get("reason_code"))
+                + "|" + strOr(event.get("layer"), "edge")
                 + "|" + canonicalRiskScore(event.get("risk_score"))
                 + "|" + MerkleUtil.canonicalTs(event.get("occurred_at"));
         return "sha256:" + sha256Hex(input);

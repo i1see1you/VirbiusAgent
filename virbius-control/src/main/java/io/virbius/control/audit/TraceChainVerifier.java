@@ -27,7 +27,7 @@ public class TraceChainVerifier {
         String sql = """
                 SELECT chain_seq, prev_hash, curr_hash, trace_id, step_id, step_type,
                        tool_name, tool_args_hash, tool_decision, rule_id, reason_code,
-                       risk_score, occurred_at, tenant_id
+                       risk_score, occurred_at, tenant_id, layer
                 FROM tb_agent_trace
                 WHERE tenant_id = ? AND session_id = ?
                 ORDER BY chain_seq ASC

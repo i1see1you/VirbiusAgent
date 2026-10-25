@@ -117,24 +117,33 @@ public final class MerkleUtil {
             return String.valueOf(d.toInstant().getEpochSecond());
         }
         if (o instanceof Number n) {
-            return String.valueOf(n.longValue());
+            // Raw epoch seconds, or a 13+ digit driver-produced epoch-millis value
+            // (sqlite-jdbc writes java.sql.Timestamp as a plain millis number).
+            long v = n.longValue();
+            return String.valueOf(v >= 100_000_000_000L ? roundMsToSeconds(v) : v);
         }
         String s = o.toString().trim();
         if (s.isEmpty()) {
             return "";
         }
+        // MySQL folds TIMESTAMP(0) writes by ROUNDING to the nearest second, not
+        // truncating — the hash must reproduce the stored instant exactly.
         try {
-            return String.valueOf(java.time.Instant.parse(s).getEpochSecond());
+            return String.valueOf(roundInstantToSeconds(java.time.Instant.parse(s)));
         } catch (Exception ignored) {
             // fall through
         }
+        // Some drivers (e.g. sqlite-jdbc) store java.sql.Timestamp as a raw
+        // epoch-millis string; fold it back to epoch-seconds.
+        if (s.matches("\\d{13,}")) {
+            return String.valueOf(roundMsToSeconds(Long.parseLong(s)));
+        }
         for (String pattern : new String[] {"yyyy-MM-dd HH:mm:ss.SSS", "yyyy-MM-dd HH:mm:ss"}) {
             try {
-                return String.valueOf(java.time.LocalDateTime
+                return String.valueOf(roundInstantToSeconds(java.time.LocalDateTime
                         .parse(s.length() > pattern.length() ? s.substring(0, pattern.length()) : s,
                                 java.time.format.DateTimeFormatter.ofPattern(pattern))
-                        .toInstant(java.time.ZoneOffset.UTC)
-                        .getEpochSecond());
+                        .toInstant(java.time.ZoneOffset.UTC)));
             } catch (Exception ignored) {
                 // try next pattern
             }
@@ -143,6 +152,15 @@ public final class MerkleUtil {
     }
 
     public record ProofStep(String hash, String position) {}
+
+    private static long roundInstantToSeconds(java.time.Instant i) {
+        return i.getEpochSecond() + (i.getNano() >= 500_000_000 ? 1L : 0L);
+    }
+
+    private static long roundMsToSeconds(long millis) {
+        long whole = millis / 1000L;
+        return (millis % 1000L) >= 500L ? whole + 1L : whole;
+    }
 
     public static String sha256Hex(String input) {
         try {

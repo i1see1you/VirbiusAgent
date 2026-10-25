@@ -59,14 +59,14 @@ public class SessionCheckpointService {
                                 + "last_occurred_at, event_count, tool_names, saved_at) "
                                 + "VALUES (?, ?, ?, ?, ?, ?, ?)",
                         tenantId, sessionId, maxSeq, occurredAt, count, toolList,
-                        java.time.Instant.now().toString());
+                        java.sql.Timestamp.from(java.time.Instant.now()));
             } else {
                 jdbc.update(
                         "UPDATE tb_session_checkpoint SET last_chain_seq = ?, last_occurred_at = ?, "
                                 + "event_count = ?, tool_names = ?, saved_at = ? "
                                 + "WHERE tenant_id = ? AND session_id = ?",
                         maxSeq, occurredAt, count, toolList,
-                        java.time.Instant.now().toString(), tenantId, sessionId);
+                        java.sql.Timestamp.from(java.time.Instant.now()), tenantId, sessionId);
             }
         } catch (Exception e) {
             // best-effort.

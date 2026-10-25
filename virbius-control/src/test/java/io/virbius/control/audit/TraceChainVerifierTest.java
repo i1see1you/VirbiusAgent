@@ -40,7 +40,7 @@ class TraceChainVerifierTest {
         jdbc = new JdbcTemplate(ds);
         jdbc.execute("CREATE TABLE tb_agent_trace ("
                 + "tenant_id TEXT, trace_id TEXT, session_id TEXT, step_id TEXT, step_seq INTEGER,"
-                + " step_type TEXT, tool_name TEXT, tool_args_hash TEXT, tool_decision TEXT,"
+                + " step_type TEXT, layer TEXT, tool_name TEXT, tool_args_hash TEXT, tool_decision TEXT,"
                 + " rule_id TEXT, reason_code TEXT, risk_score INTEGER, chain_seq INTEGER,"
                 + " prev_hash TEXT, curr_hash TEXT, occurred_at TEXT)");
         verifier = new TraceChainVerifier(jdbc);
@@ -213,9 +213,9 @@ class TraceChainVerifierTest {
                 : TraceEventIngestor.computeTraceHash(effectivePrev, chainSeq, content);
         jdbc.update(
                 "INSERT INTO tb_agent_trace (tenant_id,trace_id,session_id,step_id,step_seq,step_type,"
-                        + "tool_name,tool_args_hash,tool_decision,rule_id,reason_code,risk_score,"
-                        + "chain_seq,prev_hash,curr_hash,occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                TENANT, trace, session, stepId, stepSeq, "tool_call", tool, argsHash, decision,
+                        + "layer,tool_name,tool_args_hash,tool_decision,rule_id,reason_code,risk_score,"
+                        + "chain_seq,prev_hash,curr_hash,occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                TENANT, trace, session, stepId, stepSeq, "tool_call", "edge", tool, argsHash, decision,
                 "", "", risk, chainSeq, effectivePrev, effectiveCurr, occurredAt);
         return effectiveCurr;
     }

@@ -105,12 +105,12 @@ public class AuditExportService {
                     "UPDATE tb_audit_export_job SET status='done', file_path=?, file_sha256=?, file_bytes=?, "
                             + "completed_at=? WHERE job_id=?",
                     file.toString(), sha, (long) bytes.length,
-                    java.time.Instant.now().toString(), jobId);
+                    java.sql.Timestamp.from(java.time.Instant.now()), jobId);
         } catch (Exception e) {
             log.warn("audit export failed job={}: {}", jobId, e.getMessage());
             jdbc.update(
                     "UPDATE tb_audit_export_job SET status='failed', error=?, completed_at=? WHERE job_id=?",
-                    e.getMessage(), java.time.Instant.now().toString(), jobId);
+                    e.getMessage(), java.sql.Timestamp.from(java.time.Instant.now()), jobId);
         }
         return get(tenantId, jobId);
     }

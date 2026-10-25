@@ -168,7 +168,7 @@ public class HashChainOrchestrator {
             int updated = jdbc.update(
                     "UPDATE tb_audit_chain_state SET seq = ?, last_hash = ?, version = version + 1, updated_at = ? " +
                     "WHERE tenant_id = ? AND version = ?",
-                    seq, prevHash, Instant.now().toString(), tenantId, version);
+                    seq, prevHash, java.sql.Timestamp.from(Instant.now()), tenantId, version);
 
             if (updated > 0) {
                 return;
@@ -219,11 +219,11 @@ public class HashChainOrchestrator {
                 + "|" + str(event.get("layer"))
                 + "|" + str(event.get("reason_code"))
                 + "|" + str(event.get("rule_id"))
-                + "|" + str(event.get("scene"))
+                + "|" + sceneForHash(event)
                 + "|" + str(event.get("user_id"))
                 + "|" + str(event.get("device_id"))
                 + "|" + str(event.get("agent_aid"))
-                + "|" + str(event.get("intercepted_at"));
+                + "|" + MerkleUtil.canonicalTs(event.get("intercepted_at"));
         return "sha256:" + sha256Hex(input);
     }
 
@@ -240,6 +240,16 @@ public class HashChainOrchestrator {
 
     private static String str(Object o) {
         return o == null ? "" : o.toString();
+    }
+
+    /**
+     * Must mirror {@code AuditEventIngestor.sceneOf}: the persisted scene column
+     * falls back to event_type when scene is blank, so the hash input must use
+     * the same value or the verifier's row-based recomputation mismatches.
+     */
+    private static String sceneForHash(Map<String, Object> event) {
+        String scene = str(event.get("scene"));
+        return scene.isBlank() ? str(event.get("event_type")) : scene;
     }
 
     private static String sha256Hex(String input) {
