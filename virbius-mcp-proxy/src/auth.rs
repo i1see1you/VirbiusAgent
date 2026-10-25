@@ -58,6 +58,13 @@ impl TokenManager {
     pub fn new(cfg: AuthConfig) -> Self {
         let http = reqwest::Client::builder()
             .timeout(cfg.timeout)
+            // Short idle timeout: a pooled control connection goes stale across
+            // control restarts (the remote side disappears without FIN under the
+            // Docker NAT); reusing it turns every exchange into a permanent
+            // transport failure until the proxy restarts. Exchange traffic is
+            // tiny (one request per session TTL), so fresh connections cost
+            // nothing.
+            .pool_idle_timeout(std::time::Duration::from_secs(5))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
         Self {
@@ -84,7 +91,18 @@ impl TokenManager {
         if let Some(cached) = self.get_cached(sid, now) {
             return cached;
         }
-        match self.exchange(license_jwt, sid).await {
+        // One retry on failure: the first attempt may have consumed a stale
+        // pooled connection (control restarted underneath us); the retry must
+        // not silently leave every request in fail_open until proxy restart.
+        let first = self.exchange(license_jwt, sid).await;
+        let outcome = match first {
+            Ok(ok) => Ok(ok),
+            Err(e) => match self.exchange(license_jwt, sid).await {
+                Ok(ok) => Ok(ok),
+                Err(e2) => Err(format!("{e}; retry: {e2}")),
+            },
+        };
+        match outcome {
             Ok((token, ttl)) => {
                 let mut cache = self.cache.lock().unwrap();
                 cache.insert(
