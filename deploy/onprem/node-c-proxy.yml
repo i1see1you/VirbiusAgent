@@ -12,6 +12,8 @@ services:
       # ── 跨机指向 A/B 机 ──
       VIRBIUS_CONTROL_URL: http://${NODE_A}:8080
       VIRBIUS_ENGINE_URL: http://${NODE_B}:8082
+      # 决策评估 token 短时换取（缺了则 proxy→engine 401，所有决策 fail_open）
+      VIRBIUS_AUTH_CONTROL_URL: http://${NODE_A}:8080
       # ── 客户 Redis（规则快照订阅/降级兜底） ──
       VIRBIUS_REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}
       # ── 审计/链路 → 客户 Kafka（Kafka-only 后端；SASL 见下） ──
@@ -26,6 +28,9 @@ services:
       # ── 被代理的 MCP Server ──
       VIRBIUS_UPSTREAM_URL: ${VIRBIUS_UPSTREAM_URL:?set VIRBIUS_UPSTREAM_URL}
       VIRBIUS_LICENSE_FILE: /config/license.lic
+      # license 公钥（A 机 GET /api/v1/admin/tenants/{t}/licenses/public-key 导出，
+      # 存为 ./license_pub.pem 与 license.lic 同目录；缺了则 license verify 恒 failed）
+      VIRBIUS_LICENSE_PUBLIC_KEY: /config/license_pub.pem
       VIRBIUS_LOG_DIR: /var/log/virbius
       HTTP_PROXY: ""
       HTTPS_PROXY: ""
@@ -35,6 +40,7 @@ services:
       no_proxy: "*"
     volumes:
       - ./license.lic:/config/license.lic:ro
+      - ./license_pub.pem:/config/license_pub.pem:ro
       - proxy-logs:/var/log/virbius
     ports:
       - "9090:9090"

@@ -41,6 +41,10 @@ services:
     image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-control:${IMAGE_TAG:-v1.0.0}
     environment:
       SPRING_PROFILES_ACTIVE: prod
+      # auth 先启动并已建表（同库、独立 auth_schema_history）；control 的 Flyway
+      # 看到非空 schema 必须先 baseline，否则启动失败（Fresh install 实测踩坑）
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: "true"
+      SPRING_FLYWAY_BASELINE_VERSION: "0"
       # ── 客户 MySQL（与 auth 同库，独立 Flyway 历史表 auth_schema_history） ──
       VIRBIUS_JDBC_URL: ${VIRBIUS_JDBC_URL:?set VIRBIUS_JDBC_URL}
       VIRBIUS_JDBC_USER: ${MYSQL_USER}
@@ -60,12 +64,15 @@ services:
       VIRBIUS_API_KEY_PEPPER: ${VIRBIUS_API_KEY_PEPPER:?set VIRBIUS_API_KEY_PEPPER}
       VIRBIUS_DELEGATED_MASTER_KEY: ${VIRBIUS_DELEGATED_MASTER_KEY:-}
       VIRBIUS_AUDIT_EXPORT_KEY: ${VIRBIUS_AUDIT_EXPORT_KEY:-}
-      # ── 运营台登录（auth 同机部署，回环直连） ──
+      # ── 运营台登录（auth 是独立容器：compose 网络走服务名，不能写 127.0.0.1） ──
       VIRBIUS_OPERATOR_JWT_ENABLED: "true"
-      VIRBIUS_AUTH_JWKS_URL: http://127.0.0.1:8083/.well-known/jwks.json
+      VIRBIUS_AUTH_JWKS_URL: http://virbius-auth:8083/.well-known/jwks.json
       VIRBIUS_AUTH_ISSUER: http://127.0.0.1:8083
-      VIRBIUS_AUTH_LOGIN_URL: ${CONTROL_PUBLIC_URL}/login
-      VIRBIUS_AUTH_TOKEN_URL: http://127.0.0.1:8083/oauth/token
+      # 登录页在 auth（8083）上，浏览器必须直达：填 A 机可达 IP（即 NODE_A）。
+      # 走 nginx 反代时也可改回 ${CONTROL_PUBLIC_URL}/login，但 nginx 须把
+      # /login 路由到 8083（手册 §6）。
+      VIRBIUS_AUTH_LOGIN_URL: http://${NODE_A:?set NODE_A}:8083/login
+      VIRBIUS_AUTH_TOKEN_URL: http://virbius-auth:8083/oauth/token
       # ── 本地文件态（edge manifest / 审计导出落本机磁盘；单副本即可） ──
       VIRBIUS_DATA_DIR: /data
       VIRBIUS_LOG_DIR: /var/log/virbius

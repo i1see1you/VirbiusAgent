@@ -14,8 +14,8 @@
 | 项 | 要求 | 由谁提供 |
 |---|---|---|
 | MySQL | 8.0+（或 MariaDB 10.6+），建库 `virbius` + 账号密码；**1.0.0 全部迁移已在 MySQL 8.0 / MariaDB 11 双方言实测** | 客户 |
-| Kafka | 3.x，SASL_PLAINTEXT + SCRAM-SHA-256 账号；若机制不同改 `.env` 的 `KAFKA_SASL_MECHANISM` | 客户 |
-| Redis | 7.x，带密码；**需开持久化（AOF/RDB）**——审计链头在 Redis，断电丢链头会触发审计校验告警 | 客户 |
+| Kafka | 3.x。**v1.0.1 必须提供三机均可达的 PLAINTEXT（无 SASL、无 TLS）listener**——mcp-proxy 的 librdkafka 编译未启用 SASL（仅 control/engine 支持 SASL_PLAINTEXT + SCRAM-SHA-256/512）。客户仅开放 SASL listener 时，proxy 审计/链路无法投递，属 1.0.1 已知限制（需排期改构建，见 §10）；无认证 → 必须以网络层隔离补偿（§2）。现场须把三份 compose 的 `KAFKA_SECURITY_PROTOCOL` 改为 `PLAINTEXT`（§0.1 有步骤）。topic `virbius-audit-events`、`virbius-trace-events` 预建（分区 ≥3）或授权我方自建 | 客户 |
+| Redis | 7.x。**standalone（或主从+固定入口；不支持 Cluster / Sentinel 寻址）**；必须设密码；**不支持 TLS**（`rediss://` 不可用）；**必须开 AOF（或至少 RDB）且禁用数据淘汰类 `maxmemory-policy`**——审计链头/会话状态仅存 Redis，v1.0.1 丢失后审计链**永久分叉、不可自愈**（§10） | 客户 |
 | vLLM | 可选（模型选项B）；OpenAI 兼容端点 | 客户 |
 | 机器 | Docker 20.10+（含 compose v2）。三机：彼此网络互通、每台磁盘 ≥20G；单机：磁盘 ≥40G（镜像/日志/导出同机） | 客户 |
 | 镜像 | 现场无法拉外网仓库 → 用 §3 离线包 | 我方 |
@@ -35,8 +35,8 @@
 | 变量 | 注意 |
 |---|---|
 | `VIRBIUS_JDBC_URL` | 按客户 MySQL TLS 策略选 `sslMode`；`VERIFY_IDENTITY` 需放 CA 并解开 `node-a-control.yml` certs 卷注释（§6） |
-| `KAFKA_SASL_*` | 四件套齐全；机制非 SCRAM-SHA-256 时改 `KAFKA_SASL_MECHANISM` |
-| `REDIS_PASSWORD` | 同时确认客户已开 AOF/RDB（审计链头依赖） |
+| `KAFKA_SASL_*` | v1.0.1 全栈只能跑 PLAINTEXT（proxy 无 SASL，见 §0）。现场须改三份 compose：`KAFKA_SECURITY_PROTOCOL` 由 `SASL_PLAINTEXT` 改为 `PLAINTEXT`（node-a/node-b/node-c 各一处），`KAFKA_SASL_USERNAME/PASSWORD` 必填项填占位值；`.env` 的 `KAFKA_BOOTSTRAP_SERVERS` 填客户 PLAINTEXT listener。客户仅开放 SASL listener → 无法交付，升级为排期项 |
+| `REDIS_PASSWORD` | 同时确认客户已开 AOF/RDB 且 `maxmemory-policy` 不会淘汰数据（审计链头仅存 Redis，丢失不可自愈） |
 | `VIRBIUS_LICENSE_MASTER_KEY` / `VIRBIUS_API_KEY_PEPPER` | 均 ≥32 字符，否则 control 拒绝启动 |
 | `CONTROL_PUBLIC_URL` | 必须等于浏览器实际访问地址，否则登录回跳 401 |
 | `PROMPT_LLM_BASE_URL` / `VIRBIUS_PROMPT_LLM_MODEL` | 选项B 指向客户 vLLM，模型名与 served-name 一致 |
@@ -94,7 +94,7 @@ A/B/C 三个角色合并到一台机器：使用**同一份 `.env`**，三个 co
 | 运维办公网 → A | 443/8080 | 运营台（§6 TLS） | ✅ |
 | MCP 客户端 → C | 9090 | 业务入口 | ✅ |
 
-东西向组件流量默认明文，依赖客户内网隔离（与 K8s 路径 §9.3 同一口径：Kafka SASL 认证 + 网络层隔离；如需传输加密，由客户侧升级 TLS 后调整 `.env`）。
+东西向组件流量默认明文，依赖客户内网隔离（与 K8s 路径 §9.3 同一口径）。**Kafka 尤其如此**：v1.0.1 proxy 仅支持 PLAINTEXT（§0），认证不可用，必须保证 listener 仅三机可达（如 Kafka 侧 firewall/安全组白名单 A/B/C 三 IP）。
 
 > **单机部署**：上表中 A↔B、A↔C、B↔C 行全部视为本机互通（无需放通）；只保留「单机 → 客户 MySQL/Kafka/Redis/vLLM」与「办公网 → 8080」「MCP 客户端 → 9090」。
 
@@ -195,6 +195,20 @@ curl -sf http://localhost:8080/api/v1/health           # control 就绪
 # 浏览器打开 CONTROL_PUBLIC_URL，用 AUTH_BOOTSTRAP_USERNAME/PASSWORD 登录
 ```
 
+**签发 license + 导出公钥（A 机就绪后、C 机启动前）**：
+
+```bash
+# 1) 登录运营台拿会话 cookie 后（或脚本登录），签发——
+#    请求体字段必须 snake_case，camelCase 会 409 "failed to sign license"
+curl -X POST http://localhost:8080/api/v1/admin/tenants/default/licenses/issue \
+  -H 'Content-Type: application/json' -b <会话cookie> \
+  -d '{"app_id":"mcp-demo","agent_name":"onprem-proxy","allowed_tools":["read_file"],"risk_quota":100,"tool_rate_limit":50,"expiry_seconds":86400}'
+# 2) 把返回 data.jwt 单独写入文件，拷到 C 机 onprem/license.lic（FLAT 文件，仅 JWT 本体）
+# 3) 拉 license 公钥，拷到 C 机 onprem/license_pub.pem（与 license.lic 同目录）
+curl -b <会话cookie> http://localhost:8080/api/v1/admin/tenants/default/licenses/public-key
+#    → data.public_key_pem
+```
+
 **B 机**（模型选项A：先把 GGUF 放到 `onprem/models/` 再起，见 §4）：
 
 ```bash
@@ -205,11 +219,15 @@ curl -s  http://localhost:8082/admin/ready    # 应 200；not-ready 时看 body 
 docker exec onprem-ollama-1 ollama list       # 选项A：应见 i1see1you/virbiusguard:v2.0
 ```
 
-**C 机**（先放 license）：
+**C 机**（先放 license.lic 与 license_pub.pem，见 §5.2 A 机步骤）：
 
 ```bash
-# license.lic：A 机运营台 Licenses 页签发并下载，拷到 onprem/license.lic
 docker compose --env-file .env -f node-c-proxy.yml up -d
+# 就绪自检：license verify 应为 ok；未放 license_pub.pem 时恒 failed
+docker exec onprem-virbius-mcp-proxy-1 virbius-mcp-proxy doctor
+# MCP 调用一次后，决策健康检查：recent_decisions 应为 engine:allow；
+# 出现 fail_open:engine_unavailable → 查 proxy→A:8080 / proxy→B:8082 连通
+curl -s http://localhost:9090/status | head -c 400
 ```
 
 ## 6. TLS（生产必做）
@@ -222,11 +240,13 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
       server_name virbius-console.customer.internal;
       ssl_certificate     /etc/nginx/certs/console.crt;
       ssl_certificate_key /etc/nginx/certs/console.key;
+      location /login { proxy_pass http://127.0.0.1:8083; proxy_set_header Host $host; }
+      location /oauth/ { proxy_pass http://127.0.0.1:8083; proxy_set_header Host $host; }
       location / { proxy_pass http://127.0.0.1:8080; proxy_set_header Host $host; }
   }
   ```
 
-  配置后把 `.env` 的 `CONTROL_PUBLIC_URL` 改成 `https://virbius-console.customer.internal` 并重启 A 机（登录回跳地址依赖它）。
+  配置后把 `.env` 的 `CONTROL_PUBLIC_URL` 改成 `https://virbius-console.customer.internal`，并把 A 机 compose 的 `VIRBIUS_AUTH_LOGIN_URL` 改回 `${CONTROL_PUBLIC_URL}/login` 后重启（登录页/auth API 路由依赖上面两条 location；**不加这两条 location 登录必 400**）。
 - **MCP 入口（C 机 9090）**：TCP 协议。跨网段时由客户前置 LB/nginx `stream` 块做 TCP 直通或 TLS 终结；同内网可直连明文。
 - **MySQL**：用 `sslMode=VERIFY_IDENTITY` 时，把 `.env` 换成注释里的 VERIFY_IDENTITY 版 `VIRBIUS_JDBC_URL`（含 `serverSslCert=/certs/ca.pem`），把客户 CA 放到 `./certs/ca.pem`，并解开 A 机两个服务的 certs 卷注释。
 
@@ -240,7 +260,7 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
 | 数据 | 位置 | 方式 |
 |---|---|---|
 | 规则/租户/审计/签发记录 | 客户 MySQL `virbius` 库 | 客户统一备份 |
-| 审计链头/会话状态 | 客户 Redis | **客户必须开 AOF/RDB** |
+| 审计链头/会话状态 | 客户 Redis | **客户必须开 AOF/RDB 且禁用数据淘汰**；v1.0.1 链头丢失不可自愈（§10），备份是唯一兜底 |
 | edge manifest / 审计导出 | A 机卷 `control-data` | 定期拷贝 |
 | auth JWT 签名密钥 | A 机卷 `auth-data` | 定期拷贝；丢失则全部会话需重登 |
 | engine / proxy | 无状态 | 仅日志卷 |
@@ -256,9 +276,10 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
 | 3 | 引擎就绪 | B: `curl :8082/admin/ready` | 200 `status=ready` |
 | 4 | 规则下发闭环 | 运营台建一条规则→发布快照→B 机 `curl :8082/admin/policy-version?tenant_id=default` | `rule_count` ≥1 |
 | 5 | 模型（按选项） | 选项A：B 机 `ollama list` / 选项B：curl vLLM | 模型在列 / 返回 choices |
-| 6 | MCP 端到端 | MCP 客户端经 C:9090 调一次白名单工具 | 调用成功，运营台审计可见 |
+| 6 | MCP 端到端 | MCP 客户端经 C:9090 调一次白名单工具 | 调用成功；C:9090/status 的 recent_decisions 为 `engine:allow`；运营台审计可见 |
 | 7 | 拦截闭环 | 触发一条 deny 规则 | 客户端被拒，运营台有 deny 记录 |
-| 8 | 审计导出（如启用） | 运营台导出一次 | `data/exports/` 出密文文件 |
+| 8 | 审计链自检 | A 机：`curl -X POST :8080/api/v1/admin/tenants/default/audit/verify`；`curl :8080/api/v1/admin/tenants/default/audit/trace-chain/verify`（带运营台会话 cookie） | 两处均 `passed:true` |
+| 9 | 审计导出（如启用） | 运营台导出一次 | `data/exports/` 出密文文件 |
 
 ## 10. 故障速查
 
@@ -271,8 +292,8 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
 | 控制台登录后 401/回跳异常 | auth 与 control 的 `VIRBIUS_AUTH_ISSUER` 必须一致；`CONTROL_PUBLIC_URL` 必须等于浏览器实际地址 |
 | 审批队列页报错 | control→B 机 8082 网络；1.0.0 起失败响应返回 JSON 错误体而非空 body |
 | 单机容器间互相调不通 | 常见为 `NODE_*` 误填 `127.0.0.1`（容器内是自身回环），或宿主防火墙未放通 8080/8082/8083/9090 |
-| 审计链校验告警 | 客户 Redis 未开持久化，链头丢失；恢复后 control 会重建 |
-| proxy 审计不落 | `VIRBIUS_AUDIT_BACKEND=kafka` + SASL 四件套是否配置；proxy 只支持 Kafka 后端 |
+| 审计链校验告警（`seq gap` / `curr_hash mismatch`） | v1.0.1 **链头丢失不可自愈**：Redis 未开 AOF/RDB、未持久化重启、FLUSH 或淘汰策略逐出 key 都会让链头从 0 重起，与 DB 已链行永久分叉，校验持续报篡改。预防：§0 Redis 三项硬要求；已分叉需联系我方人工修复（对齐链头或重置审计数据），现场不要自行清库 |
+| proxy 审计不落 | ① proxy **不支持 SASL/TLS**（v1.0.1）：`KAFKA_BOOTSTRAP_SERVERS` 必须指 PLAINTEXT listener，指到 SASL listener 会连不上；② 确认 `VIRBIUS_AUDIT_BACKEND=kafka`；③ proxy 只支持 Kafka 后端。topic 未预建时看 proxy 日志 |
 
 ---
 
