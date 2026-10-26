@@ -88,7 +88,7 @@ public class ObservationQueryService {
                 + " SELECT app_id, COALESCE(last_seen, last_event_ts) AS last_seen FROM "
                 + ToolObservationIngestor.LIVENESS_TABLE
                 + " WHERE tenant_id = ?"
-                + ") t GROUP BY app_id ORDER BY last_seen IS NULL, last_seen DESC";
+                + ") t GROUP BY app_id ORDER BY MAX(last_seen) IS NULL, MAX(last_seen) DESC";
         return jdbc.query(sql, (rs, rowNum) -> {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("app_id", rs.getString("app_id"));
