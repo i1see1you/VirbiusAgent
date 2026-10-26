@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Evaluation async Agent probes via an adapter contract (v1)**: VirbiusEvaluation no longer needs to speak a customer's async Agent protocol directly — the customer deploys an adapter exposing eight stable endpoints (`/v1/health`, sessions, turns, runs, approvals, cancel, messages), and VE drives probes through it. Stable behavior: approvals default to `deny`, decisions are idempotent by `decision_id`, terminal run states never regress, and `session_lost` / `no_assistant_message` / `deadline_exceeded` always stay `pending` (never "pass"). Optional HMAC signing (`VE_PROBE_ADAPTER_TOKEN`, timestamp + single-use nonce + body digest) and a per-adapter tenant header are enforced when configured. Reports gain `trace` (run status/phase/elapsed), `tool` (call summaries) and `approval` (decision) evidence, and `GET /api/v1/capabilities` exposes `adapter{configured,hmac_configured,contract_version}`. `probe --adapter-url=...` and REST `target_type=adapter` (`adapter_url`, `adapter_timeout_ms`, `adapter_poll_ms`, `adapter_session_ttl_seconds`, `adapter_approval_policy`) share the same client; the console probe form gains an "async adapter" mode. M0 deliberately scopes to integration and evidence capture — verdict/scoring logic is unchanged. Includes a JWT-login reference adapter (`virbius-evaluation/examples/adapters/http-async/`), 20 adapter contract unit cases, and an offline-stub shell E2E (`tests/test_adapter_probe_flow.sh`, 10 scenarios, CLI/REST only) covering capabilities, full CLI flow with re-scan `fixed=14`, approval policies, hang→cancel recovery, contract-mismatch fail-closed, HMAC 401, tenant 403, REST 202 + idempotency + 400 matrix, and session hygiene.
+- **Evaluation shell E2E resolves the fat jar dynamically**: the twelve `tests/test_*.sh` flows no longer hardcode `virbius-evaluation-0.1.0-SNAPSHOT.jar` (they pick the newest `virbius-evaluation-*.jar`), so they keep working across version bumps.
+
 ## [1.0.2] - 2026-10-25
 
 ### Added

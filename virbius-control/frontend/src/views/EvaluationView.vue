@@ -249,6 +249,7 @@
             <el-option value="scan" :label="t('ev.run-scan')" />
             <el-option value="http" :label="t('ev.run-http')" />
             <el-option value="mcp" :label="t('ev.run-mcp')" />
+            <el-option value="adapter" :label="t('ev.run-adapter')" />
             <el-option value="replay" :label="t('ev.run-replay')" />
             <el-option value="skill" :label="t('ev.run-skill')" />
             <el-option value="jsonl" :label="t('ev.run-jsonl')" />
@@ -277,6 +278,27 @@
                       :placeholder="t('ev.target-spec')" />
             <p class="v-hint">{{ t('ev.target-spec-hint') }}</p>
           </div>
+        </template>
+
+        <template v-else-if="runType === 'adapter'">
+          <div class="v-row" style="margin-top:12px">
+            <el-input v-model="adapterUrl" style="width:520px"
+                      :placeholder="t('ev.adapter-url')" />
+            <el-input v-model="adapterTimeoutMs" style="width:150px"
+                      :placeholder="t('ev.adapter-timeout')" />
+          </div>
+          <div class="v-row" style="margin-top:8px">
+            <el-input v-model="adapterPollMs" style="width:150px"
+                      :placeholder="t('ev.adapter-poll')" />
+            <el-input v-model="adapterSessionTtl" style="width:150px"
+                      :placeholder="t('ev.adapter-ttl')" />
+            <el-select v-model="adapterApprovalPolicy" style="width:170px">
+              <el-option value="deny" label="deny" />
+              <el-option value="allow" label="allow" />
+              <el-option value="fail" label="fail" />
+            </el-select>
+          </div>
+          <p class="v-hint">{{ t('ev.adapter-hint') }}</p>
         </template>
 
         <template v-else-if="runType === 'mcp'">
@@ -559,7 +581,7 @@ const filteredFindings = computed(() => {
   });
 });
 
-const runType = ref<'scan' | 'http' | 'mcp' | 'replay' | 'skill' | 'jsonl'>('scan');
+const runType = ref<'scan' | 'http' | 'mcp' | 'adapter' | 'replay' | 'skill' | 'jsonl'>('scan');
 const agentName = ref('');
 const baselineId = ref('');
 const targetPath = ref('');
@@ -568,6 +590,11 @@ const model = ref('');
 const probeIdentity = ref('');
 const targetSpec = ref('');
 const mcpCmd = ref('');
+const adapterUrl = ref('');
+const adapterTimeoutMs = ref('120000');
+const adapterPollMs = ref('500');
+const adapterSessionTtl = ref('300');
+const adapterApprovalPolicy = ref<'deny' | 'allow' | 'fail'>('deny');
 const allowDangerous = ref(false);
 const replayTenant = ref('');
 const replayApp = ref('');
@@ -731,15 +758,24 @@ async function run() {
   try {
     const baseline = baselineId.value || undefined;
     const agent = agentName.value || undefined;
-    if (runType.value === 'http' || runType.value === 'mcp') {
-      const submit = await createProbe(runType.value === 'http'
-        ? { target_type: 'http', url: targetUrl.value, model: model.value || undefined,
+    if (runType.value === 'http' || runType.value === 'mcp' || runType.value === 'adapter') {
+      const body = runType.value === 'http'
+        ? { target_type: 'http' as const, url: targetUrl.value, model: model.value || undefined,
             identity: probeIdentity.value || undefined,
             target_spec: targetSpec.value.trim() || undefined,
             agent_name: agent, baseline_report_id: baseline }
-        : { target_type: 'mcp', mcp_cmd: mcpCmd.value.trim().split(/\s+/).filter(Boolean),
-            allow_dangerous: allowDangerous.value,
-            agent_name: agent, baseline_report_id: baseline });
+        : runType.value === 'mcp'
+          ? { target_type: 'mcp' as const, mcp_cmd: mcpCmd.value.trim().split(/\s+/).filter(Boolean),
+              allow_dangerous: allowDangerous.value,
+              agent_name: agent, baseline_report_id: baseline }
+          : { target_type: 'adapter' as const, adapter_url: adapterUrl.value,
+              adapter_timeout_ms: Number(adapterTimeoutMs.value) || undefined,
+              adapter_poll_ms: Number(adapterPollMs.value) || undefined,
+              adapter_session_ttl_seconds: Number(adapterSessionTtl.value) || undefined,
+              adapter_approval_policy: adapterApprovalPolicy.value,
+              identity: probeIdentity.value || undefined,
+              agent_name: agent, baseline_report_id: baseline };
+      const submit = await createProbe(body);
       ElMessage.info(t('ev.job-submitted', { id: submit.job_id }));
       await pollJob(submit.job_id);
       return;

@@ -152,12 +152,17 @@ export interface ScanRequest {
 }
 
 export interface ProbeRequest {
-  target_type: 'http' | 'mcp';
+  target_type: 'http' | 'mcp' | 'adapter';
   url?: string;
   model?: string;
   identity?: string;
   target_spec?: string;
   mcp_cmd?: string[];
+  adapter_url?: string;
+  adapter_timeout_ms?: number;
+  adapter_poll_ms?: number;
+  adapter_session_ttl_seconds?: number;
+  adapter_approval_policy?: 'deny' | 'allow' | 'fail';
   agent_name?: string;
   baseline_report_id?: string;
   allow_dangerous?: boolean;
