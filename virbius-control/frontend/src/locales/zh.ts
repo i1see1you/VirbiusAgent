@@ -1335,7 +1335,7 @@ export default {
   'ev.probe-identity': '凭据 identity（可选）',
   'ev.probe-identity-hint': '对应 VE_PROBE_HEADER_<identity>_<header> 环境变量；凭据会发送给目标地址，建议配置 VE_PROBE_ALLOW_HOSTS 收紧目标。',
   'ev.target-spec': 'TargetSpec（可选，YAML/JSON）：url / method / headers / body / response_path',
-  'ev.target-spec-hint': '填写后覆盖上方 URL；headers 内的 {{env:...}} 仅允许 VE_PROBE_HEADER_ 前缀。',
+  'ev.target-spec-hint': '填写后覆盖上方 URL；headers 内的 {\'{\'}{\'{\'}env:...{\'}\'}{\'}\'} 仅允许 VE_PROBE_HEADER_ 前缀。',
   'ev.mcp-cmd': 'MCP 服务命令（如 python3 server.py）',
   'ev.mcp-gate': '我确认该命令会在评估主机上执行（双闸）',
   'ev.mcp-gate-hint': 'MCP 探针会在本机执行给定命令；命令与确认缺一不可。',
