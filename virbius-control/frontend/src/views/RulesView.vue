@@ -344,6 +344,23 @@ const feedback = useFeedbackStore();
 const rules = useRulesStore();
 const session = useSessionStore();
 
+const BUILTIN_PROMPT_RULE_IDS = new Set([
+  'prompt-violent', 'prompt-illegal', 'prompt-sexual', 'prompt-pii', 'prompt-self-harm',
+  'prompt-unethical', 'prompt-political', 'prompt-copyright', 'prompt-jailbreak', 'prompt-agent'
+]);
+const JUDGE_BODY_DEFAULT = JSON.stringify({
+  version: 1,
+  mode: 'judge',
+  criterion: '',
+  threshold: 0.5,
+  on_error: 'fail_open',
+  enforcement_ready: false
+}, null, 2);
+const isBuiltinPromptRule = computed(() => BUILTIN_PROMPT_RULE_IDS.has(String(form.rule_id || '').trim()));
+function promptDefaultBody(ruleId: string): string {
+  return BUILTIN_PROMPT_RULE_IDS.has(String(ruleId || '').trim()) ? t('rules.prompt-default') : JUDGE_BODY_DEFAULT;
+}
+
 const page = ref(1);
 const size = ref(50);
 const total = ref(0);
@@ -405,7 +422,7 @@ const bodyHint = computed(() => {
   const r = form.runtime;
   if (r === 'groovy') return t('hint.groovy');
   if (r === 'lua') return t('hint.lua');
-  if (isPrompt.value) return t('hint.prompt');
+  if (isPrompt.value) return isBuiltinPromptRule.value ? t('hint.prompt') : t('hint.prompt-judge');
   if (isEdgeDsl.value) return t('hint.edge-dsl');
   if (isDlp.value) return t('hint.dlp-dsl');
   if (r === 'landlock') return t('hint.landlock');
@@ -457,7 +474,8 @@ const appIdOptions = computed(() => {
 const editorLanguage = computed(() => {
   if (form.runtime === 'groovy') return 'groovy' as const;
   if (form.runtime === 'lua') return 'lua' as const;
-  if (['lua-dsl', 'dlp-dsl', 'falco', 'landlock', 'gvisor', 'prompt'].includes(form.runtime)) return 'json' as const;
+  if (form.runtime === 'prompt') return isBuiltinPromptRule.value ? 'prompt' as const : 'json' as const;
+  if (['lua-dsl', 'dlp-dsl', 'falco', 'landlock', 'gvisor'].includes(form.runtime)) return 'json' as const;
   return 'groovy' as const;
 });
 
@@ -576,10 +594,10 @@ function effectiveLayer(): string {
   if (rules.currentLayer === 'kernel') return form.runtime === 'falco' ? 'falco' : 'sandbox';
   return rules.currentLayer;
 }
-function defaultBody(layer: string, runtime: string): string {
+function defaultBody(layer: string, runtime: string, ruleId = ''): string {
   if (runtime === 'groovy') return "def decide(ctx) {\n  return ctx.listMatch('deny_keyword')\n}";
   if (runtime === 'lua') return "function decide(ctx)\n  return listMatch('deny_keyword', ctx.content)\nend";
-  if (runtime === 'prompt') return t('rules.prompt-default');
+  if (runtime === 'prompt') return promptDefaultBody(ruleId);
   if (runtime === 'lua-dsl') return JSON.stringify({ list_type: 'deny', keywords: [] }, null, 2);
   if (runtime === 'dlp-dsl') return JSON.stringify({ entity_type: 'phone_cn', priority: 0, dry_run: false }, null, 2);
   if (runtime === 'falco') return JSON.stringify({ condition: 'evt.num > 0', output: 'Falco rule triggered', priority: 'WARNING', tags: [] }, null, 2);
@@ -682,7 +700,7 @@ function doOpenNew() {
   isNew.value = true; selectedRuleId.value = null; editMeta.value = { layer: rules.currentLayer, rollout_state: 'draft' };
   resetEditor();
   form.runtime = layerRuntimes.value[0];
-  form.body = defaultBody(rules.currentLayer, form.runtime);
+  form.body = defaultBody(rules.currentLayer, form.runtime, form.rule_id);
   if (isScript.value) {
     form.editor_mode = 'simple';
     conditionLeaves.value = [{ type: 'list_match', list_name: listCatalog.value[0] || 'deny_keyword', value_source: 'content' }];
@@ -708,7 +726,7 @@ function loadBindUiFromScope(scope: any) {
 async function selectRule(ruleId: string) {
   try {
     const r = await admin<any>('/rules/' + encodeURIComponent(ruleId));
-    isNew.value = false; selectedRuleId.value = ruleId; editMeta.value = r;
+    isNew.value = false; selectedRuleId.value = ruleId; form.rule_id = ruleId; editMeta.value = r;
     form.reason = r.reason_code || ''; form.risk = r.risk_score ?? 100; form.intent = r.intent_action || 'deny';
     form.is_async = !!r.is_async;
     loadAsyncCfg(r.async_action_config);
@@ -758,8 +776,18 @@ function loadAsyncCfg(jsonStr: string) {
   } catch { /* ignore */ }
 }
 
+watch(() => form.rule_id, (id, oldId) => {
+  if (!isNew.value || !isPrompt.value) return;
+  const oldDefault = promptDefaultBody(oldId || '');
+  const nextDefault = promptDefaultBody(id || '');
+  if (form.body === oldDefault && oldDefault !== nextDefault) {
+    form.body = nextDefault;
+    rules.markDirty();
+  }
+});
+
 function onRuntimeChange() {
-  form.body = defaultBody(rules.currentLayer, form.runtime);
+  form.body = defaultBody(rules.currentLayer, form.runtime, form.rule_id);
   if (isScript.value) { form.editor_mode = 'simple'; conditionLeaves.value = [{ type: 'list_match', list_name: listCatalog.value[0] || 'deny_keyword', value_source: 'content' }]; }
   else if (isEdgeDsl.value) { form.editor_mode = 'simple'; edgeBody.list_type = 'deny'; edgeBody.keywordsText = ''; }
   else if (isDlp.value) { form.editor_mode = 'simple'; }
