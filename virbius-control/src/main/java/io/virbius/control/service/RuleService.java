@@ -10,6 +10,7 @@ import io.virbius.control.domain.dto.response.RuleResponseMapper;
 import io.virbius.control.domain.enums.IntentAction;
 import io.virbius.control.domain.enums.RolloutState;
 import io.virbius.control.script.ScriptRuleValidator;
+import io.virbius.control.script.AsyncActionConfigValidator;
 import io.virbius.control.gateway.DlpRuleValidator;
 import io.virbius.control.gateway.RuleBindScopeValidator;
 import io.virbius.control.groovy.GroovyRuleBodies;
@@ -39,7 +40,7 @@ public class RuleService {
     }
 
     public Map<String, Object> validateScript(String tenantId, ValidateScriptRequest req) {
-        return scriptRuleValidator.validate(tenantId, req.runtime(), req.body());
+        return scriptRuleValidator.validate(tenantId, req.ruleId(), req.runtime(), req.body());
     }
 
     public List<Map<String, Object>> listRules(String tenantId, String layer) {
@@ -86,7 +87,11 @@ public class RuleService {
         if (isAsync && !IntentAction.ALLOW.value().equals(intentAction)) {
             throw new IllegalArgumentException("async rule must have intent_action=allow");
         }
+        if (isAsync || (req.asyncActionConfig() != null && !req.asyncActionConfig().isBlank())) {
+            AsyncActionConfigValidator.validate(req.asyncActionConfig(), JSON);
+        }
 
+        String resolvedBody = resolveBody(req);
         RuleRevision draft = new RuleRevision(
                 tenantId,
                 req.ruleId(),
@@ -98,7 +103,7 @@ public class RuleService {
                 normalizedRisk,
                 intentAction,
                 req.scope() != null ? req.scope() : Map.of(),
-                resolveBody(req),
+                resolvedBody,
                 rolloutState,
                 canaryPercent,
                 null,
@@ -106,8 +111,11 @@ public class RuleService {
                 null,
                 isAsync,
                 req.asyncActionConfig());
-        if ("groovy".equals(req.runtime()) || "lua".equals(req.runtime()) || "agent-groovy".equals(req.runtime())) {
-            scriptRuleValidator.validateOrThrow(tenantId, req.runtime(), resolveBody(req));
+        if ("groovy".equals(req.runtime())
+                || "lua".equals(req.runtime())
+                || "agent-groovy".equals(req.runtime())
+                || "prompt".equals(req.runtime())) {
+            scriptRuleValidator.validateOrThrow(tenantId, req.ruleId(), req.runtime(), resolvedBody);
         }
         if ("cumulative".equals(req.runtime()) || "list_match".equals(req.runtime())) {
             throw new IllegalArgumentException("runtime " + req.runtime()

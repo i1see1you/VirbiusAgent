@@ -1,10 +1,14 @@
 package io.virbius.control.script;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.virbius.control.groovy.GroovyRuleBodies;
 import io.virbius.control.repository.CumulativeRepository;
 import io.virbius.control.repository.ListMetaRepository;
 import io.virbius.groovy.l3.GroovyL3ValidationException;
 import io.virbius.groovy.l3.GroovyL3Validator;
+import io.virbius.policy.prompt.PromptRuleKind;
+import io.virbius.policy.prompt.PromptRuleParser;
+import io.virbius.policy.prompt.PromptRuleValidationException;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -12,6 +16,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -24,13 +29,23 @@ public class ScriptRuleValidator {
 
     private final ListMetaRepository listMetaRepo;
     private final CumulativeRepository cumulativeRepo;
+    private final ObjectMapper objectMapper;
 
     public ScriptRuleValidator(ListMetaRepository listMetaRepo, CumulativeRepository cumulativeRepo) {
-        this.listMetaRepo = listMetaRepo;
-        this.cumulativeRepo = cumulativeRepo;
+        this(listMetaRepo, cumulativeRepo, new ObjectMapper());
     }
 
-    public Map<String, Object> validate(String tenantId, String runtime, Object body) {
+    @Autowired
+    public ScriptRuleValidator(
+            ListMetaRepository listMetaRepo,
+            CumulativeRepository cumulativeRepo,
+            ObjectMapper objectMapper) {
+        this.listMetaRepo = listMetaRepo;
+        this.cumulativeRepo = cumulativeRepo;
+        this.objectMapper = objectMapper;
+    }
+
+    public Map<String, Object> validate(String tenantId, String ruleId, String runtime, Object body) {
         List<String> errors = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
         String rt = runtime != null ? runtime.trim().toLowerCase() : "";
@@ -58,23 +73,25 @@ public class ScriptRuleValidator {
             } else if ("lua".equals(rt)) {
             validateLua(script, errors);
         } else if ("prompt".equals(rt)) {
-            if (script.length() > 4096) {
-                warnings.add("prompt body is long (>4096 chars)");
-            }
+            validatePrompt(ruleId, body, script, errors, warnings);
         } else if (!"lua-dsl".equals(rt)) {
             warnings.add("runtime " + rt + ": no script validation");
         }
 
-        Set<String> lists = extract(LIST_REF, script);
-        Set<String> cumulatives = extract(CUM_REF, script);
-        for (String name : lists) {
-            if (listMetaRepo.getMeta(tenantId, name).isEmpty()) {
-                errors.add("list not found: " + name);
+        Set<String> lists = Set.of();
+        Set<String> cumulatives = Set.of();
+        if (!"prompt".equals(rt)) {
+            lists = extract(LIST_REF, script);
+            cumulatives = extract(CUM_REF, script);
+            for (String name : lists) {
+                if (listMetaRepo.getMeta(tenantId, name).isEmpty()) {
+                    errors.add("list not found: " + name);
+                }
             }
-        }
-        for (String name : cumulatives) {
-            if (cumulativeRepo.get(tenantId, name).isEmpty()) {
-                errors.add("cumulative not found: " + name);
+            for (String name : cumulatives) {
+                if (cumulativeRepo.get(tenantId, name).isEmpty()) {
+                    errors.add("cumulative not found: " + name);
+                }
             }
         }
 
@@ -93,12 +110,31 @@ public class ScriptRuleValidator {
                 "referenced_cumulatives", List.copyOf(cumulatives));
     }
 
-    public void validateOrThrow(String tenantId, String runtime, Object body) {
-        Map<String, Object> result = validate(tenantId, runtime, body);
+    public void validateOrThrow(String tenantId, String ruleId, String runtime, Object body) {
+        Map<String, Object> result = validate(tenantId, ruleId, runtime, body);
         @SuppressWarnings("unchecked")
         List<String> errors = (List<String>) result.get("errors");
         if (!errors.isEmpty()) {
             throw new IllegalArgumentException(String.join("; ", errors));
+        }
+    }
+
+    private void validatePrompt(
+            String ruleId, Object body, String script, List<String> errors, List<String> warnings) {
+        if (script.length() > 4096) {
+            warnings.add("prompt body is long (>4096 chars)");
+        }
+        if (PromptRuleKind.isBuiltInCategory(ruleId)) {
+            return;
+        }
+        if (ruleId == null || ruleId.isBlank()) {
+            errors.add("rule_id is required for custom prompt rules");
+            return;
+        }
+        try {
+            PromptRuleParser.parse(body, objectMapper);
+        } catch (PromptRuleValidationException e) {
+            errors.add(e.getMessage());
         }
     }
 

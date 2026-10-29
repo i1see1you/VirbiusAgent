@@ -8,4 +8,12 @@ public record PromptSimulateResponseDto(
         @JsonProperty("triggered_id") String triggeredId,
         String reason,
         @JsonProperty("llm_response") String llmResponse,
-        String error) {}
+        String error,
+        String mode,
+        String backend,
+        Double probability,
+        Double threshold,
+        @JsonProperty("judge_hit") Boolean judgeHit,
+        @JsonProperty("error_policy") String errorPolicy,
+        @JsonProperty("error_applied") Boolean errorApplied,
+        @JsonProperty("latency_ms") Long latencyMs) {}

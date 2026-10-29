@@ -678,12 +678,27 @@ dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新�
 | `virbius.evaluate-token.exchange.rate-limit-per-license-per-min`（control） | `10` | 换取端点限速 |
 | `auth.control_base_url`（proxy） | 空 | 非空即启用 proxy 端换取（每会话一次 + 主动刷新） |
 | `virbius.review.input-risk-dedup-ttl-ms` | `600000` | 输入审查风险计分去重窗口（同 trace 只计一次，10 分钟） |
-| `VIRBIUS_JDBC_INIT_SQL`（control/auth · prod/staging） | `SET time_zone = '+00:00'` | 连接初始化 SQL；把 MySQL/MariaDB 会话固定为 UTC，使 `NOW()`/`CURRENT_TIMESTAMP` 与应用写入的 ISO-UTC 字符串一致（SQLite 本就是 UTC） |
-
-> 上述键目前均由代码 `@Value` 提供默认值，`application*.yml` 未显式声明；如需覆盖，用启动参数或同名 `VIRBIUS_*` env。
-> **已移至 SDK 侧**（原引擎 chat 内置审查的配置）：`skip-models`、`refusal-text`、`fail-closed`、`streaming.{window-chars,context-chars,stream-first}` —— 见 `virbius-review-sdk` README。`virbius.trace.*` 已随 `TraceStepPublisher` 删除。
+| `virbius.prompt-judge.default-backend`（engine） | `neohorse-4b` | 非内置 `runtime=prompt` rule_id 的 judge 后端；十个 `prompt-*` category 规则仍走 guard LLM |
+| `virbius.prompt-judge.timeout-ms`（engine） | `2000` | judge 单批超时；超时按规则 `on_error` 处理 |
+| `virbius.prompt-judge.backends.<id>.base-url`（engine） | `http://127.0.0.1:8091`（`neohorse-4b`） | judge backend 地址（默认后端对应 env `VIRBIUS_NEOHORSE_URL`） |
+| `virbius.prompt-judge.max-rules-per-batch`（engine） | `8` | 单次 judge 调用的规则数；实际大小取 `min(后端声明的能力, 每后端覆盖值或该值)` |
+| `virbius.prompt-judge.backends.<id>.max-rules-per-batch`（engine） | `0` = 继承 | 每后端覆盖；`neohorse-4b` = 1（声明为单问题）、`startlux-4b` = 8、`laya-zh` = 1 |
+| `virbius.async-action.enabled`（engine） | `true` | 异步动作投递开关；`false` 时仅计 `unknown/skipped`，不外呼 |
+| `virbius.async-action.delivery-threads`（engine） | `2` | 专用投递线程数（与判定线程池隔离） |
+| `virbius.async-action.delivery-queue-max`（engine） | `1000` | 投递队列上限；队满直接丢弃并计 `skipped`（不背压判定链路） |
+| `virbius.async-action.content-max-chars`（engine） | `2000` | `{{content}}` 渲染上限 |
+| `virbius.async-action.field-max-chars`（engine） | `500` | 其余占位符渲染上限；`{{content_preview}}` 固定 512 |
+| `virbius.async-action.webhook.timeout-ms`（engine） | `5000` | webhook 连接+读取预算；非 2xx 计 `failure` |
+| `virbius.async-action.webhook.allowed-hosts`（engine） | 空 | 逗号分隔 `host[:port]`；空=放行全部；永不跟随重定向 |
+| `virbius.async-action.kafka.topic`（engine） | `virbius-rule-actions` | Kafka 默认 topic（env `VIRBIUS_ASYNC_KAFKA_TOPIC`）；broker 禁自动建 topic 时须预建 |
+| `virbius.async-action.kafka.max-block-ms`（engine） | `1000` | `send()` 元数据等待上限；同步抛出与回调失败均计 `failure` |
 | `virbius.chain-patterns.enforce` | `false` | 时序链式检测：`false`=dry-run（仅审计），`true`=执行 |
 | `virbius.retry-escape.enforce` | `false` | 重试逃逸检测同上（dry-run by default） |
+| `VIRBIUS_JDBC_INIT_SQL`（control/auth · prod/staging） | `SET time_zone = '+00:00'` | 连接初始化 SQL；把 MySQL/MariaDB 会话固定为 UTC，使 `NOW()`/`CURRENT_TIMESTAMP` 与应用写入的 ISO-UTC 字符串一致（SQLite 本就是 UTC） |
+
+> 上述键目前均由代码 `@Value` 提供默认值，`application*.yml` 未显式声明；如需覆盖，用启动参数或同名 `VIRBIUS_*` env。例外：`virbius.prompt-judge.*` 与 `virbius.async-action.*` 已在 engine `application.yml` 中声明。
+> **异步动作是 at-most-once**：不重试、无 outbox；失败只记日志（target 仅记 `scheme://host`）并计入 `virbius.async_action{type,result}`（Prometheus `virbius_async_action_total`），永不改变判定。异步规则必须 `intent=allow`。control 在 upsert 时校验 `async_action_config`，发布时再校验一次（非法配置被丢弃并 warn，但保留规则执法）。webhook 主机白名单由 engine 运行期执行；Kafka topic 需预建。
+> **已移至 SDK 侧**（原引擎 chat 内置审查的配置）：`skip-models`、`refusal-text`、`fail-closed`、`streaming.{window-chars,context-chars,stream-first}` —— 见 `virbius-review-sdk` README。`virbius.trace.*` 已随 `TraceStepPublisher` 删除。
 
 > 上述键目前均由代码 `@Value` 提供默认值，`application*.yml` 未显式声明；如需覆盖，用启动参数或同名 `VIRBIUS_*` env。
 > **多副本语义（限流）**：`/v1/evaluate` 限流器与 control 的 evaluate-token 换取限速（`virbius.evaluate-token.exchange.rate-limit-per-license-per-min`）均为**进程内**计数（best-effort 滥用边界，非精确配额）。多副本部署时上表相应配额为**每副本**值，全局有效配额 = 配置值 × 副本数；需要精确全局配额时先按「全局值 / 副本数」摊薄配置，或改用 Redis 化限流器。

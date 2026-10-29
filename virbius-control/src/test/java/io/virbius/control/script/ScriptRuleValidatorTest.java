@@ -38,9 +38,84 @@ class ScriptRuleValidatorTest {
     }
 
     @Test
+    void promptJudgeBodyIsValidated() {
+        String body = """
+                {
+                  "version": 1,
+                  "mode": "judge",
+                  "criterion": "具体基金买卖建议",
+                  "threshold": 0.5,
+                  "on_error": "fail_closed"
+                }
+                """;
+
+        Map<String, Object> r = validator.validate(TENANT, "e2e-judge-fund", "prompt", body);
+
+        assertFalse((Boolean) r.get("valid"));
+        @SuppressWarnings("unchecked")
+        List<String> errors = (List<String>) r.get("errors");
+        assertTrue(errors.stream().anyMatch(e -> e.contains("enforcement_ready")));
+    }
+
+    @Test
+    void promptJudgeBodyAcceptsReadyFailClosed() {
+        String body = """
+                {
+                  "version": 1,
+                  "mode": "judge",
+                  "criterion": "具体基金买卖建议",
+                  "threshold": 0.5,
+                  "on_error": "fail_closed",
+                  "enforcement_ready": true
+                }
+                """;
+
+        Map<String, Object> r = validator.validate(TENANT, "e2e-judge-fund", "prompt", body);
+
+        assertTrue((Boolean) r.get("valid"));
+    }
+
+    @Test
+    void legacyPromptTextRemainsValid() {
+        Map<String, Object> r = validator.validate(
+                TENANT, "prompt-pii", "prompt", "当用户请求具体基金买卖建议时命中");
+
+        assertTrue((Boolean) r.get("valid"));
+    }
+
+    @Test
+    void customPromptTextIsRejectedAsInvalidJudge() {
+        Map<String, Object> r = validator.validate(
+                TENANT, "e2e-custom-prompt", "prompt", "当用户请求具体基金买卖建议时命中");
+
+        assertFalse((Boolean) r.get("valid"));
+        @SuppressWarnings("unchecked")
+        List<String> errors = (List<String>) r.get("errors");
+        assertTrue(errors.stream().anyMatch(e -> e.contains("valid JSON")));
+    }
+
+    @Test
+    void promptJudgeCriterionDoesNotTriggerListReferenceValidation() {
+        String body = """
+                {
+                  "version": 1,
+                  "mode": "judge",
+                  "criterion": "命中 listMatch('missing_list') 或 getCumulative('missing_cum')",
+                  "threshold": 0.5
+                }
+                """;
+
+        Map<String, Object> r = validator.validate(TENANT, "e2e-judge-fund", "prompt", body);
+
+        assertTrue((Boolean) r.get("valid"));
+        assertEquals(List.of(), r.get("referenced_lists"));
+        assertEquals(List.of(), r.get("referenced_cumulatives"));
+    }
+
+    @Test
     void luaRejectsJsonDslBody() {
         String body = "{\"list_type\":\"deny\",\"keywords\":[\"x\"]}";
-        Map<String, Object> r = validator.validate(TENANT, "lua", body);
+        Map<String, Object> r = validator.validate(TENANT, null, "lua", body);
         assertFalse((Boolean) r.get("valid"));
     }
 
@@ -49,7 +124,7 @@ class ScriptRuleValidatorTest {
         when(listMetaRepo.getMeta(TENANT, "deny_keyword"))
                 .thenReturn(Optional.of(new AccessListMeta(TENANT, "deny_keyword", "keyword", null)));
         String body = "def decide(ctx) { return ctx.listMatch('deny_keyword') }";
-        Map<String, Object> r = validator.validate(TENANT, "groovy", body);
+        Map<String, Object> r = validator.validate(TENANT, null, "groovy", body);
         assertTrue((Boolean) r.get("valid"));
         assertEquals(List.of("deny_keyword"), r.get("referenced_lists"));
     }
@@ -58,7 +133,7 @@ class ScriptRuleValidatorTest {
     void luaRejectsMissingCumulative() {
         when(cumulativeRepo.get(TENANT, "user_req_1h")).thenReturn(Optional.empty());
         String body = "function decide(ctx)\n  return getCumulative('user_req_1h') >= 120\nend";
-        Map<String, Object> r = validator.validate(TENANT, "lua", body);
+        Map<String, Object> r = validator.validate(TENANT, null, "lua", body);
         assertFalse((Boolean) r.get("valid"));
         @SuppressWarnings("unchecked")
         List<String> errors = (List<String>) r.get("errors");
@@ -71,7 +146,7 @@ class ScriptRuleValidatorTest {
                 .thenReturn(Optional.of(new CumulativeDef(
                         TENANT, "user_req_1h", null, "user_id", "rolling", 60, null, null, 0, "active", null, null)));
         String body = "function decide(ctx)\n  return getCumulative('user_req_1h') >= 120\nend";
-        Map<String, Object> r = validator.validate(TENANT, "lua", body);
+        Map<String, Object> r = validator.validate(TENANT, null, "lua", body);
         assertTrue((Boolean) r.get("valid"));
     }
 }

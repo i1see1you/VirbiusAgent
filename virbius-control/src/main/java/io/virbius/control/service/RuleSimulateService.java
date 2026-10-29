@@ -118,6 +118,15 @@ public class RuleSimulateService {
                 decideError = e.getMessage();
                 wouldExecute = false;
             }
+            if (promptRuntime && decideError == null) {
+                Object promptError = decideDetail.get("error");
+                if (promptError != null && !String.valueOf(promptError).isBlank()) {
+                    decideError = String.valueOf(promptError);
+                    if (!Boolean.TRUE.equals(decideDetail.get("error_applied"))) {
+                        wouldExecute = false;
+                    }
+                }
+            }
         }
         decideDetail.put("result", hit);
         decideDetail.put("skipped", !bindMatched);
@@ -171,18 +180,26 @@ public class RuleSimulateService {
         String body = GroovyRuleBodies.asScript(rule.get("body"));
         String reasonCode = str(rule.get("reason_code"));
         Map<String, Object> llm = promptSimulateClient.simulate(ruleId, body, reasonCode, matchCtx.content());
-        putPromptLlmDetail(decideDetail, llm);
-        Object err = llm.get("error");
-        if (err != null && !String.valueOf(err).isBlank()) {
-            throw new IllegalStateException(String.valueOf(err));
-        }
+        putPromptDetail(decideDetail, llm);
         return Boolean.TRUE.equals(llm.get("hit"));
     }
 
-    private static void putPromptLlmDetail(Map<String, Object> decideDetail, Map<String, Object> llm) {
+    private static void putPromptDetail(Map<String, Object> decideDetail, Map<String, Object> llm) {
+        decideDetail.put("mode", llm.get("mode"));
+        decideDetail.put("backend", llm.get("backend"));
+        decideDetail.put("probability", llm.get("probability"));
+        decideDetail.put("threshold", llm.get("threshold"));
+        decideDetail.put("judge_hit", llm.get("judge_hit"));
+        decideDetail.put("error_policy", llm.get("error_policy"));
+        decideDetail.put("error_applied", llm.get("error_applied"));
+        decideDetail.put("latency_ms", llm.get("latency_ms"));
         decideDetail.put("llm_hit_rule", llm.get("llm_hit_rule"));
         decideDetail.put("triggered_id", llm.get("triggered_id"));
         decideDetail.put("reason", llm.get("reason"));
+        Object err = llm.get("error");
+        if (err != null && !String.valueOf(err).isBlank()) {
+            decideDetail.put("error", String.valueOf(err));
+        }
         if (isAbnormalLlmResponse(llm)) {
             Object raw = llm.get("llm_response");
             if (raw != null && !String.valueOf(raw).isBlank()) {
@@ -373,11 +390,18 @@ public class RuleSimulateService {
         if (!bindMatched) {
             return promptRuntime ? "bind_scope did not match, will not invoke 1B" : "bind_scope did not match, script will not execute";
         }
-        if (!hit) {
-            Object llmErr = decideDetail.get("error");
-            if (promptRuntime && llmErr != null && !String.valueOf(llmErr).isBlank()) {
-                return "bind matched but 1B call failed: " + llmErr;
+        Object promptErr = decideDetail.get("error");
+        if (promptRuntime && promptErr != null && !String.valueOf(promptErr).isBlank()) {
+            String source = "judge".equals(decideDetail.get("mode")) ? "judge" : "1B";
+            if ("judge".equals(decideDetail.get("mode"))
+                    && Boolean.TRUE.equals(decideDetail.get("error_applied"))) {
+                return "bind matched but " + source + " call failed: " + promptErr
+                        + "; error_policy=" + decideDetail.get("error_policy")
+                        + ", effective_action=" + effective;
             }
+            return "bind matched but " + source + " call failed: " + promptErr;
+        }
+        if (!hit) {
             if (promptRuntime && Boolean.TRUE.equals(decideDetail.get("llm_hit_rule"))) {
                 return "bind matched but triggered_id is not this rule, draft did not hit";
             }

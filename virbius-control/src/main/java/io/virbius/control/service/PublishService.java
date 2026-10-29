@@ -68,7 +68,20 @@ public class PublishService {
             rule.put("rollout_state", r.rolloutState() != null ? r.rolloutState() : "dry_run");
             rule.put("is_async", r.isAsync());
             if (r.asyncActionConfig() != null && !r.asyncActionConfig().isBlank()) {
-                rule.put("async_action_config", r.asyncActionConfig());
+                // Defense in depth: re-validate at publish so legacy/foreign rows that
+                // bypassed upsert validation never reach the engine. On failure we keep the
+                // rule's enforcement (async eval still runs) but drop the action config —
+                // silently removing the whole rule would silently disable enforcement.
+                // Note: a config that passes format validation may still be skipped by the
+                // engine's webhook allowed-hosts at runtime (documented responsibility split).
+                try {
+                    io.virbius.control.script.AsyncActionConfigValidator.validate(
+                            r.asyncActionConfig(), new ObjectMapper());
+                    rule.put("async_action_config", r.asyncActionConfig());
+                } catch (IllegalArgumentException e) {
+                    log.warn("dropping invalid async_action_config at publish rule={}: {}",
+                            r.ruleId(), e.getMessage());
+                }
             }
             if (r.exportedCanaryPercent() != null) {
                 rule.put("canary_percent", r.exportedCanaryPercent());

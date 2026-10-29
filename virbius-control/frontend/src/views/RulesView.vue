@@ -114,12 +114,12 @@
         <div class="v-row">
           <label>{{ t('rules.action-type') }}
             <el-select popper-class="rules-select-popper" v-model="asyncCfg.type" style="width:150px">
-              <el-option value="redis_stream" label="Redis Stream" />
+              <el-option value="kafka" label="Kafka" />
               <el-option value="webhook" label="Webhook" />
             </el-select>
           </label>
-          <label v-if="asyncCfg.type === 'redis_stream'">{{ t('rules.stream-key') }}
-            <el-input v-model="asyncCfg.stream_key" style="width:240px" /></label>
+          <label v-if="asyncCfg.type === 'kafka'">{{ t('rules.topic') }}
+            <el-input v-model="asyncCfg.topic" style="width:240px" /></label>
           <label v-else>{{ t('rules.webhook-url') }}
             <el-input v-model="asyncCfg.url" style="width:240px" /></label>
         </div>
@@ -127,7 +127,7 @@
         <el-input v-model="asyncCfg.message" type="textarea" :rows="5" />
         <p class="v-hint">{{ t('rules.async-hint') }}</p>
         <AsyncPreview :message="asyncCfg.message" :type="asyncCfg.type"
-          :stream-key="asyncCfg.stream_key" :webhook-url="asyncCfg.url" />
+          :topic="asyncCfg.topic" :webhook-url="asyncCfg.url" />
       </div>
 
       <section v-if="showBindScope" class="rules-section">
@@ -392,7 +392,7 @@ const form = reactive<any>({
   is_async: false, bind_scope: 'global', bind_tools: '', bind_mcp_servers: '', bind_app_ids: '',
   editor_mode: 'simple', body: ''
 });
-const asyncCfg = reactive<any>({ type: 'redis_stream', stream_key: '', url: '', message: '' });
+const asyncCfg = reactive<any>({ type: 'kafka', topic: '', url: '', message: '' });
 const edgeBody = reactive<any>({ list_type: 'deny', keywordsText: '' });
 const dlpBody = reactive<any>({ entity_type: 'phone_cn', priority: 0, pattern: '', mask_template: '' });
 
@@ -664,7 +664,7 @@ async function onRowClick(row: any) {
 
 function resetEditor() {
   Object.assign(form, { rule_id: '', runtime: layerRuntimes.value[0], reason: '', risk: 100, intent: 'deny', is_async: false, bind_scope: 'global', bind_tools: '', bind_mcp_servers: '', bind_app_ids: '', editor_mode: 'simple', body: '' });
-  Object.assign(asyncCfg, { type: 'redis_stream', stream_key: '', url: '', message: '' });
+  Object.assign(asyncCfg, { type: 'kafka', topic: '', url: '', message: '' });
   Object.assign(edgeBody, { list_type: 'deny', keywordsText: '' });
   Object.assign(dlpBody, { entity_type: 'phone_cn', priority: 0, pattern: '', mask_template: '' });
   conditionLeaves.value = [];
@@ -748,13 +748,13 @@ async function selectRule(ruleId: string) {
 }
 
 function loadAsyncCfg(jsonStr: string) {
-  Object.assign(asyncCfg, { type: 'redis_stream', stream_key: '', url: '', message: '' });
+  Object.assign(asyncCfg, { type: 'kafka', topic: '', url: '', message: '' });
   if (!jsonStr) return;
   try {
     const cfg = JSON.parse(jsonStr);
-    asyncCfg.type = cfg.type || 'redis_stream';
-    if (cfg.type === 'webhook') { asyncCfg.url = cfg.url || ''; asyncCfg.message = cfg.body ? JSON.stringify(cfg.body, null, 2) : ''; }
-    else { asyncCfg.stream_key = cfg.stream_key || ''; asyncCfg.message = cfg.message ? JSON.stringify(cfg.message, null, 2) : ''; }
+    asyncCfg.type = cfg.type === 'webhook' ? 'webhook' : 'kafka';
+    if (asyncCfg.type === 'webhook') { asyncCfg.url = cfg.url || ''; asyncCfg.message = cfg.body ? JSON.stringify(cfg.body, null, 2) : ''; }
+    else { asyncCfg.topic = cfg.topic || ''; asyncCfg.message = cfg.message ? JSON.stringify(cfg.message, null, 2) : ''; }
   } catch { /* ignore */ }
 }
 
@@ -787,7 +787,7 @@ function buildAsyncCfg(): string | null {
   let message: any = asyncCfg.message.trim();
   try { message = JSON.parse(message); } catch { /* keep string */ }
   const cfg: any = { type: asyncCfg.type };
-  if (asyncCfg.type === 'redis_stream') { if (asyncCfg.stream_key) cfg.stream_key = asyncCfg.stream_key; cfg.message = message || {}; }
+  if (asyncCfg.type === 'kafka') { if (asyncCfg.topic) cfg.topic = asyncCfg.topic; cfg.message = message || {}; }
   else { if (asyncCfg.url) cfg.url = asyncCfg.url; cfg.body = message || {}; }
   return JSON.stringify(cfg);
 }
@@ -831,7 +831,7 @@ async function resolveBodyForSave(): Promise<any> {
 async function validateScript() {
   try {
     const body = await resolveBodyForSave();
-    const data = await admin<any>('/rules/validate-script', { method: 'POST', body: JSON.stringify({ layer: effectiveLayer(), runtime: form.runtime, body }) });
+    const data = await admin<any>('/rules/validate-script', { method: 'POST', body: JSON.stringify({ rule_id: form.rule_id.trim(), layer: effectiveLayer(), runtime: form.runtime, body }) });
     validateOk.value = !!data.valid;
     const warns = data.warnings || [];
     validateMsg.value = data.valid ? (warns.length ? t('rules.valid-pass-with-warn', [warns.join('; ')]) : t('rules.valid-pass')) : t('rules.valid-fail', [(data.errors || []).join('; ')]);

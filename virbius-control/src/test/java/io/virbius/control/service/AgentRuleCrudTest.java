@@ -113,7 +113,7 @@ class AgentRuleCrudTest {
         ruleService.upsertRule(TENANT, req);
 
         // Verify that script validation was called with agent-groovy runtime
-        verify(scriptRuleValidator).validateOrThrow(eq(TENANT), eq(RuleRuntime.AGENT_GROOVY.value()), anyString());
+        verify(scriptRuleValidator).validateOrThrow(eq(TENANT), eq("agent_rule_1"), eq(RuleRuntime.AGENT_GROOVY.value()), anyString());
     }
 
     @Test
@@ -170,11 +170,12 @@ class AgentRuleCrudTest {
 
     @Test
     void validateAgentGroovyScript_callsValidator() {
-        when(scriptRuleValidator.validate(eq(TENANT), eq(RuleRuntime.AGENT_GROOVY.value()), any()))
+        when(scriptRuleValidator.validate(eq(TENANT), eq("agent_rule_1"), eq(RuleRuntime.AGENT_GROOVY.value()), any()))
                 .thenReturn(Map.of("valid", true, "errors", List.of(), "warnings", List.of(),
                         "referenced_lists", List.of(), "referenced_cumulatives", List.of()));
 
         ValidateScriptRequest req = new ValidateScriptRequest(
+                "agent_rule_1",
                 RuleLayer.AGENT.value(),
                 RuleRuntime.AGENT_GROOVY.value(),
                 "def decide(ctx) { return true }");
@@ -182,7 +183,7 @@ class AgentRuleCrudTest {
         Map<String, Object> result = ruleService.validateScript(TENANT, req);
 
         assertTrue((boolean) result.get("valid"));
-        verify(scriptRuleValidator).validate(TENANT, RuleRuntime.AGENT_GROOVY.value(), "def decide(ctx) { return true }");
+        verify(scriptRuleValidator).validate(eq(TENANT), eq("agent_rule_1"), eq(RuleRuntime.AGENT_GROOVY.value()), eq("def decide(ctx) { return true }"));
     }
 
     // ---- Helpers ----

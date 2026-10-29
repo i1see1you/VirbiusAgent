@@ -16,8 +16,8 @@ import { useI18n } from 'vue-i18n';
 
 const props = defineProps<{
   message: string;
-  type: 'redis_stream' | 'webhook';
-  streamKey?: string;
+  type: 'kafka' | 'webhook';
+  topic?: string;
   webhookUrl?: string;
 }>();
 
@@ -33,8 +33,8 @@ const previewText = computed(() => {
   let message: any = (props.message || '').trim();
   try { message = JSON.parse(message); } catch { /* keep raw */ }
   const cfg: any = { type: props.type };
-  if (props.type === 'redis_stream') {
-    if (props.streamKey) cfg.stream_key = props.streamKey;
+  if (props.type === 'kafka') {
+    if (props.topic) cfg.topic = props.topic;
     cfg.message = message || {};
   } else {
     if (props.webhookUrl) cfg.url = props.webhookUrl;

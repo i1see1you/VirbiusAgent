@@ -2,29 +2,39 @@ package io.virbius.engine.eval;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.virbius.engine.config.PromptJudgeProperties;
 import io.virbius.engine.config.PromptLlmProperties;
+import io.virbius.engine.eval.judge.PromptJudgeBackend;
+import io.virbius.engine.eval.judge.PromptJudgeBackendRegistry;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 class PromptSimulateServiceTest {
 
     private PromptLlmClient llmClient;
+    private PromptLlmProperties llmProps;
+    private PromptAuditJsonParser auditParser;
     private PromptSimulateService service;
 
     @BeforeEach
     void setUp() {
         llmClient = mock(PromptLlmClient.class);
-        PromptLlmProperties props =
-                new PromptLlmProperties("http://127.0.0.1:11434", "m", "/v1/chat/completions", 3000, true,
-                        "<|im_start|>", "", null, Map.of("Violent", "prompt-violent"));
-        service = new PromptSimulateService(props, llmClient, new PromptAuditJsonParser(new ObjectMapper()));
+        llmProps = new PromptLlmProperties("http://127.0.0.1:11434", "m", "/v1/chat/completions", 3000, true,
+                "<|im_start|>", "", null, Map.of("Violent", "prompt-violent"));
+        auditParser = new PromptAuditJsonParser(new ObjectMapper());
+        service = new PromptSimulateService(llmProps, llmClient, auditParser, judgeRegistry(List.of()));
     }
 
     @Test
@@ -40,6 +50,7 @@ class PromptSimulateServiceTest {
         assertTrue(resp.llmHitRule());
         assertEquals("SYSTEM", resp.triggeredId());
         assertEquals("Violent", resp.reason());
+        assertEquals("category", resp.mode());
     }
 
     @Test
@@ -144,5 +155,148 @@ class PromptSimulateServiceTest {
 
         assertFalse(resp.hit());
         assertFalse(resp.llmHitRule());
+    }
+
+    @Test
+    void judgeRuleHitsAboveThresholdWithoutCallingCategoryLlm() {
+        FakeBackend backend = new FakeBackend();
+        backend.answer = PromptJudgeBackend.JudgeAnswer.probability(0.8);
+        PromptSimulateService judgeService =
+                new PromptSimulateService(llmProps, llmClient, auditParser, judgeRegistry(List.of(backend)));
+
+        PromptSimulateResponseDto resp = judgeService.simulate(new PromptSimulateRequestDto(
+                "e2e-judge-fund", judgeBody("fail_open", false), "E2E", "请推荐一只基金"));
+
+        assertTrue(resp.hit());
+        assertTrue(resp.judgeHit());
+        assertEquals("judge", resp.mode());
+        assertEquals("neohorse-4b", resp.backend());
+        assertEquals(0.8, resp.probability());
+        assertEquals(0.5, resp.threshold());
+        assertNull(resp.error());
+        assertEquals(1, backend.calls.get());
+        verify(llmClient, never()).completeDetail(any(), any());
+    }
+
+    @Test
+    void judgeRuleMissesBelowThreshold() {
+        FakeBackend backend = new FakeBackend();
+        backend.answer = PromptJudgeBackend.JudgeAnswer.probability(0.49);
+        PromptSimulateService judgeService =
+                new PromptSimulateService(llmProps, llmClient, auditParser, judgeRegistry(List.of(backend)));
+
+        PromptSimulateResponseDto resp = judgeService.simulate(new PromptSimulateRequestDto(
+                "e2e-judge-fund", judgeBody("fail_open", false), "E2E", "hello"));
+
+        assertFalse(resp.hit());
+        assertFalse(resp.judgeHit());
+        assertEquals(0.49, resp.probability());
+        verify(llmClient, never()).completeDetail(any(), any());
+    }
+
+    @Test
+    void invalidJudgeBodyDoesNotCallBackendOrCategoryLlm() {
+        FakeBackend backend = new FakeBackend();
+        PromptSimulateService judgeService =
+                new PromptSimulateService(llmProps, llmClient, auditParser, judgeRegistry(List.of(backend)));
+
+        PromptSimulateResponseDto resp = judgeService.simulate(new PromptSimulateRequestDto(
+                "e2e-judge-fund", "{\"mode\":\"judge\"", "E2E", "hello"));
+
+        assertFalse(resp.hit());
+        assertFalse(resp.judgeHit());
+        assertTrue(resp.error().contains("must be valid JSON"));
+        assertEquals(0, backend.calls.get());
+        verify(llmClient, never()).completeDetail(any(), any());
+    }
+
+    @Test
+    void failOpenBackendErrorDoesNotSignal() {
+        FakeBackend backend = new FakeBackend();
+        backend.result = PromptJudgeBackend.JudgeResult.failed("down", 7);
+        PromptSimulateService judgeService =
+                new PromptSimulateService(llmProps, llmClient, auditParser, judgeRegistry(List.of(backend)));
+
+        PromptSimulateResponseDto resp = judgeService.simulate(new PromptSimulateRequestDto(
+                "e2e-judge-fund", judgeBody("fail_open", false), "E2E", "hello"));
+
+        assertFalse(resp.hit());
+        assertFalse(resp.judgeHit());
+        assertTrue(resp.errorApplied());
+        assertEquals("fail_open", resp.errorPolicy());
+        assertEquals("down", resp.error());
+        assertEquals(7L, resp.latencyMs());
+    }
+
+    @Test
+    void failClosedBackendErrorProducesSignal() {
+        FakeBackend backend = new FakeBackend();
+        backend.result = PromptJudgeBackend.JudgeResult.failed("down", 9);
+        PromptSimulateService judgeService =
+                new PromptSimulateService(llmProps, llmClient, auditParser, judgeRegistry(List.of(backend)));
+
+        PromptSimulateResponseDto resp = judgeService.simulate(new PromptSimulateRequestDto(
+                "e2e-judge-fund", judgeBody("fail_closed", true), "E2E", "hello"));
+
+        assertTrue(resp.hit());
+        assertFalse(resp.judgeHit());
+        assertTrue(resp.errorApplied());
+        assertEquals("fail_closed", resp.errorPolicy());
+        assertEquals("down", resp.error());
+    }
+
+    private static String judgeBody(String onError, boolean ready) {
+        return """
+                {
+                  "version": 1,
+                  "mode": "judge",
+                  "criterion": "Detect the target behavior",
+                  "threshold": 0.5,
+                  "on_error": "%s",
+                  "enforcement_ready": %s
+                }
+                """.formatted(onError, ready);
+    }
+
+    private static PromptJudgeBackendRegistry judgeRegistry(List<PromptJudgeBackend> backends) {
+        PromptJudgeProperties properties = new PromptJudgeProperties(
+                "neohorse-4b",
+                1000,
+                16,
+                Map.of("neohorse-4b", new PromptJudgeProperties.Backend(
+                        "http", "http://127.0.0.1", true, "test", true, false, "test", 0)));
+        return new PromptJudgeBackendRegistry(backends, properties);
+    }
+
+    private static final class FakeBackend implements PromptJudgeBackend {
+
+        private final AtomicInteger calls = new AtomicInteger();
+        private volatile JudgeAnswer answer = JudgeAnswer.probability(0);
+        private volatile JudgeResult result;
+
+        @Override
+        public String id() {
+            return "neohorse-4b";
+        }
+
+        @Override
+        public JudgeCapabilities capabilities() {
+            return new JudgeCapabilities(true, false, false, 0, 1, "test", true);
+        }
+
+        @Override
+        public JudgeResult judge(JudgeRequest request) {
+            calls.incrementAndGet();
+            JudgeResult failed = result;
+            if (failed != null) {
+                return failed;
+            }
+            return new JudgeResult(Map.of(request.rules().get(0).id(), answer), 1, null);
+        }
+
+        @Override
+        public JudgeHealth health() {
+            return JudgeHealth.up();
+        }
     }
 }

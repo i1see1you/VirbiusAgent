@@ -11,7 +11,9 @@ import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.virbius.engine.cache.RuleCache;
 import io.virbius.engine.cache.RuleEntry;
+import io.virbius.engine.config.PromptJudgeProperties;
 import io.virbius.engine.config.PromptLlmProperties;
+import io.virbius.engine.eval.judge.PromptJudgeBackendRegistry;
 import io.virbius.policy.MatchContext;
 import java.util.List;
 import java.util.Map;
@@ -32,15 +34,23 @@ class PromptRunnerBindTest {
         PromptLlmProperties props =
                 new PromptLlmProperties("http://127.0.0.1:11434", "m", "/v1/chat/completions", 3000, true,
                         "<|im_start|>", "", null,
-                        Map.of("Jailbreak", "Rule_201", "Violent", "Rule_202"));
-        runner = new PromptRunner(cache, props, llmClient, new PromptAuditJsonParser(new ObjectMapper()),
-                mock(TenantAwareTaskExecutor.class), mock(AsyncActionHandler.class));
+                        Map.of("Jailbreak", "prompt-jailbreak", "Violent", "prompt-violent"));
+        runner = newRunner(props);
+    }
+
+    private PromptRunner newRunner(PromptLlmProperties props) {
+        PromptJudgeProperties judgeProps =
+                new PromptJudgeProperties("neohorse-4b", 1000, 16, Map.of());
+        return new PromptRunner(cache, props, llmClient,
+                new PromptAuditJsonParser(new ObjectMapper()),
+                mock(TenantAwareTaskExecutor.class), mock(AsyncActionHandler.class),
+                new PromptJudgeBackendRegistry(List.of(), judgeProps), judgeProps);
     }
 
     @Test
     void skipsLlmWhenNoBindMatchedPromptRules() {
         RuleEntry toolOnly = promptRule(
-                "Rule_201",
+                "prompt-jailbreak",
                 Map.of("bind_scope", "tool", "bind_ref", Map.of("tool_names", List.of("write_file"))));
         when(cache.rulesForTenant("default")).thenReturn(List.of(toolOnly));
 
@@ -55,9 +65,9 @@ class PromptRunnerBindTest {
 
     @Test
     void triggersRuleByJsonCategoryMapping() {
-        RuleEntry global = promptRule("Rule_202", Map.of("bind_scope", "global"));
+        RuleEntry global = promptRule("prompt-violent", Map.of("bind_scope", "global"));
         RuleEntry toolChat = promptRule(
-                "Rule_201",
+                "prompt-jailbreak",
                 Map.of("bind_scope", "tool", "bind_ref", Map.of("tool_names", List.of("read_file"))));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global, toolChat));
         when(llmClient.completeDetail(any(), any()))
@@ -70,12 +80,12 @@ class PromptRunnerBindTest {
         List<SignalDto> signals = runner.run("default", ctx);
 
         assertEquals(1, signals.size());
-        assertEquals("Rule_201", signals.get(0).ruleId());
+        assertEquals("prompt-jailbreak", signals.get(0).ruleId());
     }
 
     @Test
     void triggersRuleByQwen3GuardNativeFormat() {
-        RuleEntry global = promptRule("Rule_202", Map.of("bind_scope", "global"));
+        RuleEntry global = promptRule("prompt-violent", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global));
         when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
@@ -87,12 +97,12 @@ class PromptRunnerBindTest {
         List<SignalDto> signals = runner.run("default", ctx);
 
         assertEquals(1, signals.size());
-        assertEquals("Rule_202", signals.get(0).ruleId());
+        assertEquals("prompt-violent", signals.get(0).ruleId());
     }
 
     @Test
     void fallsBackToFirstRuleWhenCategoryUnmapped() {
-        RuleEntry fallback = promptRule("Rule_999", Map.of("bind_scope", "global"));
+        RuleEntry fallback = promptRule("prompt-pii", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(fallback));
         when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
@@ -104,7 +114,7 @@ class PromptRunnerBindTest {
         List<SignalDto> signals = runner.run("default", ctx);
 
         assertEquals(1, signals.size());
-        assertEquals("Rule_999", signals.get(0).ruleId());
+        assertEquals("prompt-pii", signals.get(0).ruleId());
     }
 
     // === V11 compatibility tests ===
@@ -114,7 +124,7 @@ class PromptRunnerBindTest {
 
     @Test
     void v11SafeWithNoneReasonDoesNotTrigger() {
-        RuleEntry global = promptRule("Rule_202", Map.of("bind_scope", "global"));
+        RuleEntry global = promptRule("prompt-violent", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global));
         when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
@@ -131,7 +141,7 @@ class PromptRunnerBindTest {
     @Test
     void v11HardNegativeSafeNotFlagged() {
         // V11 hard negative: suspicious-looking but safe input
-        RuleEntry global = promptRule("Rule_201", Map.of("bind_scope", "global"));
+        RuleEntry global = promptRule("prompt-jailbreak", Map.of("bind_scope", "global"));
         when(cache.rulesForTenant("default")).thenReturn(List.of(global));
         when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
@@ -148,17 +158,15 @@ class PromptRunnerBindTest {
 
     @Test
     void v11AgentToolMisuseTriggersCorrectRule() {
-        RuleEntry agentRule = promptRule("Rule_201", Map.of("bind_scope", "global"));
+        RuleEntry agentRule = promptRule("prompt-jailbreak", Map.of("bind_scope", "global"));
         // Update mapping to include Agent Tool Misuse -> Rule_201
         PromptLlmProperties v11Props =
                 new PromptLlmProperties("http://127.0.0.1:11434", "virbiusguard",
                         "/v1/chat/completions", 3000, true,
                         "<|im_start|>", "", null,
-                        Map.of("Jailbreak", "Rule_201", "Violent", "Rule_202",
-                                "Agent Tool Misuse", "Rule_201"));
-        PromptRunner v11Runner = new PromptRunner(cache, v11Props, llmClient,
-                new PromptAuditJsonParser(new ObjectMapper()),
-                mock(TenantAwareTaskExecutor.class), mock(AsyncActionHandler.class));
+                        Map.of("Jailbreak", "prompt-jailbreak", "Violent", "prompt-violent",
+                                "Agent Tool Misuse", "prompt-jailbreak"));
+        PromptRunner v11Runner = newRunner(v11Props);
         when(cache.rulesForTenant("default")).thenReturn(List.of(agentRule));
         when(llmClient.completeDetail(any(), any()))
                 .thenReturn(new PromptLlmClient.CompleteResult(
@@ -170,7 +178,7 @@ class PromptRunnerBindTest {
         List<SignalDto> signals = v11Runner.run("default", ctx);
 
         assertEquals(1, signals.size());
-        assertEquals("Rule_201", signals.get(0).ruleId());
+        assertEquals("prompt-jailbreak", signals.get(0).ruleId());
     }
 
     private static RuleEntry promptRule(String ruleId, Map<String, Object> scope) {

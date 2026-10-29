@@ -100,7 +100,7 @@ public class AgentRuleAdminController {
             @PathVariable("tenantId") String tenantId,
             @RequestBody ValidateScriptRequest body) {
         String runtime = body.runtime() != null ? body.runtime() : RuleRuntime.AGENT_GROOVY.value();
-        ValidateScriptRequest fixed = new ValidateScriptRequest(RuleLayer.AGENT.value(), runtime, body.body());
+        ValidateScriptRequest fixed = new ValidateScriptRequest(body.ruleId(), RuleLayer.AGENT.value(), runtime, body.body());
         return ApiResult.ok(ruleService.validateScript(tenantId, fixed));
     }
 

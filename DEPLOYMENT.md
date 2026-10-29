@@ -688,11 +688,26 @@ Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lac
 | `virbius.evaluate-token.exchange.rate-limit-per-license-per-min` (control) | `10` | exchange-endpoint rate limit |
 | `auth.control_base_url` (proxy) | empty | non-empty enables proxy-side exchange (once per session + proactive refresh) |
 | `virbius.review.input-risk-dedup-ttl-ms` | `600000` | input-review risk dedup window (once per trace, 10 min) |
+| `virbius.prompt-judge.default-backend` (engine) | `neohorse-4b` | judge backend for non-built-in `runtime=prompt` rule ids; the ten `prompt-*` category rules keep the guard-LLM path |
+| `virbius.prompt-judge.timeout-ms` (engine) | `2000` | per-batch judge timeout; a timeout follows the rule's `on_error` policy |
+| `virbius.prompt-judge.backends.<id>.base-url` (engine) | `http://127.0.0.1:8091` (`neohorse-4b`) | judge backend endpoint (`VIRBIUS_NEOHORSE_URL` for the default backend) |
+| `virbius.prompt-judge.max-rules-per-batch` (engine) | `8` | rules per judge call; the effective size is `min(backend-declared capability, per-backend override or this value)` |
+| `virbius.prompt-judge.backends.<id>.max-rules-per-batch` (engine) | `0` = inherit | per-backend override; `neohorse-4b` = 1 (declared single-question), `startlux-4b` = 8, `laya-zh` = 1 |
+| `virbius.async-action.enabled` (engine) | `true` | async action delivery switch; `false` only counts `unknown/skipped` and never calls out |
+| `virbius.async-action.delivery-threads` (engine) | `2` | dedicated delivery threads (isolated from the evaluation pool) |
+| `virbius.async-action.delivery-queue-max` (engine) | `1000` | delivery queue bound; a full queue drops the action and counts `skipped` (never back-pressures evaluation) |
+| `virbius.async-action.content-max-chars` (engine) | `2000` | render cap for `{{content}}` |
+| `virbius.async-action.field-max-chars` (engine) | `500` | render cap for other placeholders; `{{content_preview}}` is fixed at 512 |
+| `virbius.async-action.webhook.timeout-ms` (engine) | `5000` | webhook connect+read budget; non-2xx counts `failure` |
+| `virbius.async-action.webhook.allowed-hosts` (engine) | empty | comma-separated `host[:port]`; empty = allow all; redirects are never followed |
+| `virbius.async-action.kafka.topic` (engine) | `virbius-rule-actions` | default Kafka topic (env `VIRBIUS_ASYNC_KAFKA_TOPIC`); pre-create it when the broker disables auto-creation |
+| `virbius.async-action.kafka.max-block-ms` (engine) | `1000` | `send()` metadata wait bound; both sync throws and callback failures count `failure` |
 | `virbius.chain-patterns.enforce` | `false` | temporal chain-pattern detection: `false`=dry-run (audit only), `true`=enforce |
 | `virbius.retry-escape.enforce` | `false` | retry-escape detection likewise (dry-run by default) |
 | `VIRBIUS_JDBC_INIT_SQL` (control/auth · prod/staging) | `SET time_zone = '+00:00'` | per-connection init SQL; pins MySQL/MariaDB sessions to UTC so `NOW()`/`CURRENT_TIMESTAMP` match the ISO-UTC strings the app writes (SQLite is already UTC) |
 
-> These keys currently get their defaults from code (`@Value`); `application*.yml` does not declare them. Override with a startup argument or the same-named `VIRBIUS_*` env var.
+> These keys currently get their defaults from code (`@Value`); `application*.yml` does not declare them. Override with a startup argument or the same-named `VIRBIUS_*` env var. Exception: `virbius.prompt-judge.*` and `virbius.async-action.*` are declared in the engine `application.yml`.
+> **Async actions are at-most-once**: no retries, no outbox; failures are logged (target `scheme://host` only) and counted in `virbius.async_action{type,result}` (Prometheus `virbius_async_action_total`); delivery never affects the decision. Async rules must be `intent=allow`. Control validates `async_action_config` on upsert and re-validates at publish (an invalid config is dropped with a warning while the rule's enforcement is kept). Webhook host allow-listing is enforced by the engine at runtime; Kafka topics must be pre-created.
 > **Multi-replica semantics (rate limits)**: the `/v1/evaluate` limiter and the control evaluate-token exchange limit (`virbius.evaluate-token.exchange.rate-limit-per-license-per-min`) both count **within each process** (best-effort abuse bounds, not exact quotas). With N replicas the values above are **per-replica**; the effective global quota = configured value × replica count. For exact global quotas, divide the config by the replica count first, or adopt a Redis-backed limiter.
 > **Operational env vars (not in the table above)**: `VIRBIUS_DATA_DIR` (local file-state root: edge manifests, audit exports, the allow log) and `VIRBIUS_AUDIT_ALLOW_PATH` (allow-audit log path, default `${virbius.data-dir}/audit-allow.jsonl`; Helm renders it from `control.auditAllowPath`); multi-replica handling in §8.5.
 

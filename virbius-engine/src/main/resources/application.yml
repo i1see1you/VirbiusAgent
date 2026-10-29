@@ -65,6 +65,28 @@ virbius:
       backend: kafka
       kafka:
         topic: virbius-audit-events
+  # Async rule-hit action delivery (webhook / kafka). At-most-once: no retries, no
+  # outbox; failures are logged + metered (virbius.async_action{type,result}) and never
+  # affect the evaluation outcome. Delivery runs on a dedicated bounded pool so slow
+  # webhooks or a dead broker cannot starve the async rule-evaluation pool.
+  # NOTE: the kafka topic must be pre-created when the broker forbids auto-creation.
+  async-action:
+    enabled: ${VIRBIUS_ASYNC_ACTION_ENABLED:true}
+    delivery-threads: ${VIRBIUS_ASYNC_ACTION_DELIVERY_THREADS:2}
+    delivery-queue-max: ${VIRBIUS_ASYNC_ACTION_DELIVERY_QUEUE_MAX:1000}
+    # Per-field caps applied while rendering placeholders (keeps serialized JSON valid;
+    # the serialized body itself is never truncated). {{content}} uses content-max-chars,
+    # every other placeholder uses field-max-chars.
+    content-max-chars: ${VIRBIUS_ASYNC_CONTENT_MAX_CHARS:2000}
+    field-max-chars: ${VIRBIUS_ASYNC_FIELD_MAX_CHARS:500}
+    webhook:
+      timeout-ms: ${VIRBIUS_ASYNC_WEBHOOK_TIMEOUT_MS:5000}
+      # Empty = allow all (self-hosted default). Comma-separated host[:port] list to
+      # restrict outbound targets; redirects are never followed (HttpClient NEVER).
+      allowed-hosts: ${VIRBIUS_ASYNC_WEBHOOK_ALLOWED_HOSTS:}
+    kafka:
+      topic: ${VIRBIUS_ASYNC_KAFKA_TOPIC:virbius-rule-actions}
+      max-block-ms: ${VIRBIUS_ASYNC_KAFKA_MAX_BLOCK_MS:1000}
   prompt-llm:
     base-url: ${VIRBIUS_PROMPT_LLM_BASE_URL:http://127.0.0.1:11434}
     model: ${VIRBIUS_PROMPT_LLM_MODEL:i1see1you/virbiusguard:v2.0}
@@ -90,6 +112,36 @@ virbius:
       Copyright Violation: prompt-copyright
       Jailbreak: prompt-jailbreak
       Agent Tool Misuse: prompt-agent
+  prompt-judge:
+    default-backend: neohorse-4b
+    timeout-ms: ${VIRBIUS_PROMPT_JUDGE_TIMEOUT_MS:2000}
+    max-rules-per-batch: 8
+    backends:
+      neohorse-4b:
+        type: neohorse
+        base-url: ${VIRBIUS_NEOHORSE_URL:http://127.0.0.1:8091}
+        enabled: true
+        license: Apache-2.0
+        commercial-use: true
+        model-version: NeoHorse-Jev-4B-Q4_K_M
+        max-rules-per-batch: 8
+      startlux-4b:
+        type: startlux
+        base-url: ${VIRBIUS_STARTLUX_URL:http://127.0.0.1:8090}
+        enabled: false
+        license: CC-BY-NC-4.0
+        commercial-use: false
+        model-version: StartLux-Decision-v1.1-4B-Instant
+        max-rules-per-batch: 8
+      laya-zh:
+        type: laya
+        base-url: ${VIRBIUS_LAYA_URL:http://127.0.0.1:8092}
+        enabled: false
+        license: unknown
+        commercial-use: false
+        experimental: true
+        model-version: laya-mlx-zh
+        max-rules-per-batch: 8
   guard-detect:
     injection-enabled: ${VIRBIUS_INJECTION_DETECT_ENABLED:true}
     taint-enabled: ${VIRBIUS_TAINT_DETECT_ENABLED:true}
