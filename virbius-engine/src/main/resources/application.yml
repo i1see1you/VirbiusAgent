@@ -124,7 +124,7 @@ virbius:
         license: Apache-2.0
         commercial-use: true
         model-version: NeoHorse-Jev-4B-Q4_K_M
-        max-rules-per-batch: 8
+        max-rules-per-batch: 1
       startlux-4b:
         type: startlux
         base-url: ${VIRBIUS_STARTLUX_URL:http://127.0.0.1:8090}
@@ -141,7 +141,7 @@ virbius:
         commercial-use: false
         experimental: true
         model-version: laya-mlx-zh
-        max-rules-per-batch: 8
+        max-rules-per-batch: 1
   guard-detect:
     injection-enabled: ${VIRBIUS_INJECTION_DETECT_ENABLED:true}
     taint-enabled: ${VIRBIUS_TAINT_DETECT_ENABLED:true}
