@@ -2,9 +2,9 @@
 
 [English](README.md)
 
-适用版本：**v1.0.2**。
+适用版本：**v1.0.3**。
 本手册只部署 VirbiusAgent 自身组件；**MySQL / Kafka / Redis / vLLM 由客户统一环境提供**。
-随离线包 `virbius-onprem-v1.0.2.tar.gz` 分发（即 `deploy/onprem/` 目录）。
+随离线包 `virbius-onprem-v1.0.3.tar.gz` 分发（即 `deploy/onprem/` 目录）。
 默认按**三机**编写；**单机**（全部组件同机、客户 infra 外置）见 §0.1、§1.2 与 §5.1。
 
 ---
@@ -36,7 +36,7 @@ control/auth 启动时会检查 `@@character_set_database`；不是 `utf8mb4` �
 
 **我方提前准备**（有网机器）：
 
-1. 离线包：`./deploy/scripts/offline-bundle.sh --tag v1.0.2`（单机走客户 vLLM 时**不要加 `--with-ollama`**），拷贝 `dist/offline/` 三个产物。
+1. 离线包：`./deploy/scripts/offline-bundle.sh --tag v1.0.3`（单机走客户 vLLM 时**不要加 `--with-ollama`**），拷贝 `dist/offline/` 三个产物。
 2. vLLM 权重：按 §4 选项B 下载 7 个 safetensors 文件交给客户，并**提前约好**加载方式与 `--served-model-name`（`.env` 的 `VIRBIUS_PROMPT_LLM_MODEL` 必须与之一致）。
 3. 许可：确认 `license.lic` 的签发/上传方式（首次登录运营台后在 Licenses 页签发并下载）。
 
@@ -64,7 +64,7 @@ control/auth 启动时会检查 `@@character_set_database`；不是 `utf8mb4` �
 | B（`NODE_B`） | 决策面 | `virbius-engine`（8082），可 `--scale` 多副本；模型选项A时 + Ollama（11434） | 8082 | 8C16G；选项A加 8G 内存（模型常驻） |
 | C（`NODE_C`） | 接入面 | `virbius-mcp-proxy`（9090） | 9090（MCP 客户端入口） | 2C4G |
 
-副本策略（v1.0.2 能力边界）：
+副本策略（v1.0.3 能力边界）：
 
 - **engine 可多副本**：横向扩容请加主机，每台一个 engine（本 compose 固定发布 8082，单机 `--scale` 会端口冲突）。每个副本的 `VIRBIUS_INSTANCE_ID` 必须唯一（compose 容器 hostname 天然唯一；手动 `docker run` 需显式设置）。多于一个 engine 时前置 LB，control 与 proxy 的 `VIRBIUS_ENGINE_URL` 指向 LB。
 - **control / auth / proxy 单副本**：auth 的 JWT 签名密钥落在本机卷（扩副本会互踢登录）；control 多副本需共享 NFS（K8s 路径见 DEPLOYMENT.md §8.5，裸机本期不做）；proxy 是 MCP 客户端的单 TCP 入口。
@@ -113,11 +113,11 @@ A/B/C 三个角色合并到一台机器：使用**同一份 `.env`**，三个 co
 **构建侧**（我方有网机器，仓库根目录）：
 
 ```bash
-./deploy/scripts/offline-bundle.sh --tag v1.0.2 --with-ollama
+./deploy/scripts/offline-bundle.sh --tag v1.0.3 --with-ollama
 # 产物 dist/offline/：
-#   virbius-images-v1.0.2.tar.gz   engine/control/auth/mcp-proxy (+ollama)
-#   virbius-onprem-v1.0.2.tar.gz   本目录全部资产 + .env 样例
-#   SHA256SUMS-v1.0.2.txt
+#   virbius-images-v1.0.3.tar.gz   engine/control/auth/mcp-proxy (+ollama)
+#   virbius-onprem-v1.0.3.tar.gz   本目录全部资产 + .env 样例
+#   SHA256SUMS-v1.0.3.txt
 ```
 
 > **镜像架构必须匹配客户服务器**：`docker build` 默认跟随构建机架构（Apple Silicon 上为 arm64）。客户是 x86_64 服务器时必须加 `--platform linux/amd64`（或在 x86_64 构建机执行），否则现场 `docker load` 后容器会 `exec format error`。当前离线包可用 `docker image inspect <image> --format '{{.Architecture}}'` 核对。
@@ -125,10 +125,10 @@ A/B/C 三个角色合并到一台机器：使用**同一份 `.env`**，三个 co
 **现场侧**（三台机器各执行一次，或按角色只 load 所需镜像）：
 
 ```bash
-sha256sum -c SHA256SUMS-v1.0.2.txt          # 先校验
-gunzip -c virbius-images-v1.0.2.tar.gz | docker load
-tar -xzf virbius-onprem-v1.0.2.tar.gz       # 得到 onprem/ 目录
-docker images | grep v1.0.2                 # 确认 5 个镜像就位
+sha256sum -c SHA256SUMS-v1.0.3.txt          # 先校验
+gunzip -c virbius-images-v1.0.3.tar.gz | docker load
+tar -xzf virbius-onprem-v1.0.3.tar.gz       # 得到 onprem/ 目录
+docker images | grep v1.0.3                 # 确认 5 个镜像就位
 ```
 
 ## 4. 提示词审查模型（二选一）
@@ -320,7 +320,7 @@ kafka:  { enabled: false, bootstrapServers: "<客户Kafka>:9092" }
 redis:  { enabled: false, url: "redis://:<密码>@<客户Redis>:6379" }
 ollama: { enabled: false }            # 模型选项B；选项A仍可用集群内 Ollama
 engine: { promptLlm: { baseUrl: "http://<客户vLLM>:8000", model: virbiusguard } }
-global: { imageRegistry: <现场可写的镜像仓库或 load 后的 registry>, imageTag: v1.0.2 }
+global: { imageRegistry: <现场可写的镜像仓库或 load 后的 registry>, imageTag: v1.0.3 }
 ```
 
 三机放置用 `nodeSelector`/亲和性把 control/auth、engine、mcp-proxy 分别钉到三台节点；engine/control 多副本时 chart 已自带软性主机分散（`maxSkew: 1`、`ScheduleAnyway`）；端口矩阵、TLS、验收与本手册相同。离线镜像包在 K8s 路径同样适用：`docker load` 到各节点后把 `imageRegistry` 指向本地 tag 即可。

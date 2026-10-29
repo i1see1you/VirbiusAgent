@@ -1,7 +1,7 @@
 # VirbiusAgent On-Prem Three-Host Deployment Runbook (offline; K8s optional)
 
-Version: **v1.0.2**.
-This runbook deploys only VirbiusAgent components; **MySQL / Kafka / Redis / vLLM are provided by the customer's shared platform**. It ships inside the offline bundle `virbius-onprem-v1.0.2.tar.gz` (the `deploy/onprem/` directory). 中文现场版见 [README.zh.md](README.zh.md).
+Version: **v1.0.3**.
+This runbook deploys only VirbiusAgent components; **MySQL / Kafka / Redis / vLLM are provided by the customer's shared platform**. It ships inside the offline bundle `virbius-onprem-v1.0.3.tar.gz` (the `deploy/onprem/` directory). 中文现场版见 [README.zh.md](README.zh.md).
 
 ---
 
@@ -37,10 +37,10 @@ control/auth verify `@@character_set_database` before Flyway runs and refuse to 
 | B (`NODE_B`) | Decision plane | `virbius-engine` (8082), scalable; + Ollama (11434) for model option A | 8082 | 8C16G (+8 GB RAM for option A) |
 | C (`NODE_C`) | Edge ingress | `virbius-mcp-proxy` (9090) | 9090 (MCP client entry) | 2C4G |
 
-Replica policy (v1.0.2 capability boundaries):
+Replica policy (v1.0.3 capability boundaries):
 
 - **engine can be multi-replica**: scale out by adding hosts — one engine per host (this compose file publishes a fixed 8082, so `--scale` on a single host collides). Each replica needs a unique `VIRBIUS_INSTANCE_ID`; compose container hostnames are already unique, and with bare `docker run` set it explicitly. With more than one engine, front them with an LB and point `VIRBIUS_ENGINE_URL` / the proxy at the LB.
-- **control / auth / proxy stay single-replica**: auth's JWT signing key lives on a local volume (scaling it would invalidate logins); multi-replica control requires shared NFS (K8s path, DEPLOYMENT.md §8.5 — not covered for bare metal in v1.0.2); the proxy is the single TCP entry for MCP clients.
+- **control / auth / proxy stay single-replica**: auth's JWT signing key lives on a local volume (scaling it would invalidate logins); multi-replica control requires shared NFS (K8s path, DEPLOYMENT.md §8.5 — not covered for bare metal in v1.0.3); the proxy is the single TCP entry for MCP clients.
 
 ## 2. Network & firewall matrix
 
@@ -67,11 +67,11 @@ East-west component traffic is plaintext by default and relies on customer netwo
 **Build side** (our machine with network, repo root):
 
 ```bash
-./deploy/scripts/offline-bundle.sh --tag v1.0.2 --with-ollama
+./deploy/scripts/offline-bundle.sh --tag v1.0.3 --with-ollama
 # outputs dist/offline/:
-#   virbius-images-v1.0.2.tar.gz   engine/control/auth/mcp-proxy (+ollama)
-#   virbius-onprem-v1.0.2.tar.gz   all assets in this directory + .env sample
-#   SHA256SUMS-v1.0.2.txt
+#   virbius-images-v1.0.3.tar.gz   engine/control/auth/mcp-proxy (+ollama)
+#   virbius-onprem-v1.0.3.tar.gz   all assets in this directory + .env sample
+#   SHA256SUMS-v1.0.3.txt
 ```
 
 > **Image architecture must match the customer hosts**: `docker build` defaults to the build host's architecture (arm64 on Apple Silicon). For x86_64 servers add `--platform linux/amd64` (or build on an x86_64 host), otherwise `docker load` succeeds but containers fail with `exec format error`. Check the bundle with `docker image inspect <image> --format '{{.Architecture}}'`.
@@ -79,10 +79,10 @@ East-west component traffic is plaintext by default and relies on customer netwo
 **On site** (on every host, or load only the images that host needs):
 
 ```bash
-sha256sum -c SHA256SUMS-v1.0.2.txt          # verify first
-gunzip -c virbius-images-v1.0.2.tar.gz | docker load
-tar -xzf virbius-onprem-v1.0.2.tar.gz       # yields onprem/
-docker images | grep v1.0.2                 # 5 images present
+sha256sum -c SHA256SUMS-v1.0.3.txt          # verify first
+gunzip -c virbius-images-v1.0.3.tar.gz | docker load
+tar -xzf virbius-onprem-v1.0.3.tar.gz       # yields onprem/
+docker images | grep v1.0.3                 # 5 images present
 ```
 
 ## 4. Prompt-review model (pick one)
@@ -226,7 +226,7 @@ kafka:  { enabled: false, bootstrapServers: "<customer-kafka>:9092" }
 redis:  { enabled: false, url: "redis://:<password>@<customer-redis>:6379" }
 ollama: { enabled: false }            # model option B; option A can still use the in-cluster Ollama
 engine: { promptLlm: { baseUrl: "http://<customer-vllm>:8000", model: virbiusguard } }
-global: { imageRegistry: <registry reachable on site>, imageTag: v1.0.2 }
+global: { imageRegistry: <registry reachable on site>, imageTag: v1.0.3 }
 ```
 
 Pin control/auth, engine, and mcp-proxy onto the three nodes with `nodeSelector`/affinity; the chart already applies a soft hostname spread for engine/control replicas (`maxSkew: 1`, `ScheduleAnyway`). The port matrix, TLS, and the acceptance checklist are identical to this runbook. The offline image bundle also works on K8s: `docker load` on each node (or import into the customer's registry) and set `imageRegistry` accordingly.
