@@ -5,7 +5,7 @@ name: virbius-onprem-b
 
 services:
   virbius-engine:
-    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-engine:${IMAGE_TAG:-v1.0.2}
+    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-engine:${IMAGE_TAG:-v1.0.3}
     environment:
       SPRING_PROFILES_ACTIVE: prod
       # ── 客户 Kafka（SASL） ──

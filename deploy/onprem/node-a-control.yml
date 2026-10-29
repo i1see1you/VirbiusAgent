@@ -5,7 +5,7 @@ name: virbius-onprem-a
 
 services:
   virbius-auth:
-    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-auth:${IMAGE_TAG:-v1.0.2}
+    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-auth:${IMAGE_TAG:-v1.0.3}
     environment:
       SPRING_PROFILES_ACTIVE: prod
       SERVER_PORT: "8083"
@@ -38,7 +38,7 @@ services:
     restart: unless-stopped
 
   virbius-control:
-    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-control:${IMAGE_TAG:-v1.0.2}
+    image: ${IMAGE_REGISTRY:-hb.grainmind.cn/library}/virbius-control:${IMAGE_TAG:-v1.0.3}
     environment:
       SPRING_PROFILES_ACTIVE: prod
       # auth 先启动并已建表（同库、独立 auth_schema_history）；control 的 Flyway

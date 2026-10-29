@@ -1,4 +1,4 @@
-# VirbiusAgent API 参考（v1.0.2 稳定契约）
+# VirbiusAgent API 参考（v1.0.3 稳定契约）
 
 [English](API_REFERENCE.md)
 

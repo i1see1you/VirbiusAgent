@@ -452,7 +452,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 ```bash
 ./deploy/scripts/k8s-deploy.sh \
   --registry registry.example.com/virbius \
-  --tag v1.0.2 \
+  --tag v1.0.3 \
   --namespace virbius \
   --values deploy/helm/virbius/values-prod.yaml
 ```
@@ -460,7 +460,7 @@ cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 Build and push images only:
 
 ```bash
-./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v1.0.2
+./deploy/scripts/k8s-build-push.sh --registry registry.example.com/virbius --tag v1.0.3
 ```
 
 Images already in the registry, install the chart only:
@@ -468,7 +468,7 @@ Images already in the registry, install the chart only:
 ```bash
 ./deploy/scripts/k8s-deploy.sh --skip-build \
   --registry registry.example.com/virbius \
-  --tag v1.0.2 \
+  --tag v1.0.3 \
   --values deploy/helm/virbius/values-prod.yaml
 ```
 

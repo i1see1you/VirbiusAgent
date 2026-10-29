@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-29
+
 ### Added
 - **Custom prompt judge rules with a real judge backend**: `runtime=prompt` rules now split by rule id — the ten built-in `prompt-*` category ids keep the guard-LLM category path, and every other id is a judge rule whose body (`version:1`, `mode:judge`, `criterion`, `examples.hit`, `threshold` 0.05–0.95, `on_error`, `enforcement_ready`) is validated identically on create, draft edit and simulate. Judge evaluation calls the configured backend (default `neohorse-4b`, Apache-2.0) with a per-batch timeout and the rule's fail-open/fail-closed policy; the simulate response exposes `mode`, `backend`, `probability`, `threshold`, `judge_hit` and the applied error policy.
 - **Judge batching is configurable per backend**: `virbius.prompt-judge.max-rules-per-batch` now defaults to `8`, and each backend can override it with `backends.<id>.max-rules-per-batch` (effective size = `min(declared backend capability, override or global)`). `neohorse-4b` stays at `1` because its declared capability is one question per call; `startlux-4b` is set to `8` after verifying the official llama.cpp/GGUF runtime returns all 8 (and 20) `answers` in one `/v1/systemone` request, and `laya-zh` stays at `1`. Note the StartLux GGUF server still performs one llama.cpp forward per question — batching removes HTTP round-trips, not forwards.

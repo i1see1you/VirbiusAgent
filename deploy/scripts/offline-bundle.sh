@@ -4,7 +4,7 @@
 #   dist/offline/virbius-images-<TAG>.tar.gz   镜像包（现场 docker load）
 #   dist/offline/virbius-onprem-<TAG>.tar.gz   部署资产（deploy/onprem/* + 校验和）
 # 用法：
-#   ./deploy/scripts/offline-bundle.sh [--tag v1.0.2] [--platform linux/amd64]
+#   ./deploy/scripts/offline-bundle.sh [--tag v1.0.3] [--platform linux/amd64]
 #                                      [--with-demo] [--with-ollama]
 #                                      [--apt-mirror cn] [--crates-mirror cn]
 set -euo pipefail
@@ -12,7 +12,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
-TAG="v1.0.2"
+TAG="v1.0.3"
 REGISTRY="hb.grainmind.cn/library"
 WITH_DEMO=0
 WITH_OLLAMA=0
