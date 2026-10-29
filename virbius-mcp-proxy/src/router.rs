@@ -291,7 +291,7 @@ pub(crate) async fn handle_initialize(
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "serverInfo": {"name": "virbius-mcp-proxy", "version": "0.1.0"}
+                    "serverInfo": {"name": "virbius-mcp-proxy", "version": env!("CARGO_PKG_VERSION")}
                 }
             })));
         }
@@ -368,7 +368,7 @@ pub(crate) async fn handle_initialize(
                 "result": {
                     "protocolVersion": "2024-11-05",
                     "capabilities": {},
-                    "serverInfo": {"name": "virbius-mcp-proxy", "version": "0.1.0"}
+                    "serverInfo": {"name": "virbius-mcp-proxy", "version": env!("CARGO_PKG_VERSION")}
                 }
             })));
         }
@@ -382,7 +382,7 @@ pub(crate) async fn handle_initialize(
                     "result": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {},
-                        "serverInfo": {"name": "virbius-mcp-proxy", "version": "0.1.0"}
+                        "serverInfo": {"name": "virbius-mcp-proxy", "version": env!("CARGO_PKG_VERSION")}
                     }
                 })));
             }
