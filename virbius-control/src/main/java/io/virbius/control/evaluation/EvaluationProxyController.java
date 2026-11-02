@@ -2,6 +2,7 @@ package io.virbius.control.evaluation;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -60,6 +61,7 @@ public class EvaluationProxyController {
     }
 
     private final EvaluationSettingsService settings;
+    private final EvaluationSuppressionsService suppressions;
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(2)).build();
     /** 转发超时（> evaluation 同步截止 90s；jobs 提交立即返回，不受影响）。 */
@@ -69,7 +71,15 @@ public class EvaluationProxyController {
     private final AtomicReference<CacheEntry> cache = new AtomicReference<>();
 
     public EvaluationProxyController(EvaluationSettingsService settings) {
+        this(settings, null);
+    }
+
+    /** 生产构造（注入注册表服务：转发 /scans、/skills 时自动注入活跃抑制规则）。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    public EvaluationProxyController(EvaluationSettingsService settings,
+            EvaluationSuppressionsService suppressions) {
         this.settings = settings;
+        this.suppressions = suppressions;
     }
 
     /** 三态聚合（45s 缓存；配置变更自动失效；?refresh=true 强制刷新）。 */
@@ -145,7 +155,8 @@ public class EvaluationProxyController {
 
     @PostMapping("/scans")
     public ResponseEntity<String> scan(@PathVariable String tenantId, @RequestBody String body) {
-        return forward(tenantId, post(body), "/api/v1/evaluations/scans");
+        return forward(tenantId, post(injectSuppress(tenantId, body)),
+                "/api/v1/evaluations/scans");
     }
 
     @PostMapping("/probes")
@@ -170,7 +181,8 @@ public class EvaluationProxyController {
 
     @PostMapping("/skills")
     public ResponseEntity<String> skill(@PathVariable String tenantId, @RequestBody String body) {
-        return forward(tenantId, post(body), "/api/v1/evaluations/skills");
+        return forward(tenantId, post(injectSuppress(tenantId, body)),
+                "/api/v1/evaluations/skills");
     }
 
     @GetMapping("/jobs/{jobId}")
@@ -343,6 +355,34 @@ public class EvaluationProxyController {
     /** 处置链路复用：GET 转发（同包 RemediationService 取报告用；错误码语义同上）。 */
     ResponseEntity<String> forwardGet(String tenantId, String path) {
         return forward(tenantId, HttpRequest.newBuilder().GET(), path);
+    }
+
+    /**
+     * 抑制注入（P1）：请求体未显式携带 suppress 且该租户有活跃（active 且未过期）规则时，
+     * 把注册表序列化的 yaml 注入 body.suppress（VE P0-S1 inline 通道）。
+     *
+     * <p>优先级：请求级显式 suppress > 注册表注入（与 CLI --suppress > env 同口气）。
+     * 任何解析/查询失败都退回原 body（不阻断代理主流程；坏 JSON 由 VE 400 兜底）。
+     */
+    String injectSuppress(String tenantId, String body) {
+        if (suppressions == null || body == null || body.isBlank()) {
+            return body;
+        }
+        try {
+            JsonNode node = JSON.readTree(body);
+            if (!(node instanceof ObjectNode obj) || obj.has("suppress")) {
+                return body;
+            }
+            String yaml = suppressions.activeYaml(tenantId);
+            if (yaml == null) {
+                return body;
+            }
+            obj.put("suppress", yaml);
+            return JSON.writeValueAsString(obj);
+        } catch (Exception e) {
+            log.debug("suppress injection skipped: {}", e.toString());
+            return body;
+        }
     }
 
     private static String jsonQuote(String s) {
