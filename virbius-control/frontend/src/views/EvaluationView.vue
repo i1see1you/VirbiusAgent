@@ -148,7 +148,9 @@
           <el-table-column :label="t('ev.accepted')" width="95">
             <template #default="{ row }">{{ row.suppressed_count ?? 0 }}</template>
           </el-table-column>
-          <el-table-column prop="scanned_at" :label="t('ev.col-time')" width="190" />
+          <el-table-column prop="scanned_at" :label="t('ev.col-time')" width="190">
+            <template #default="{ row }">{{ fmtTime(row.scanned_at) }}</template>
+          </el-table-column>
         </el-table>
         <div class="v-row" style="margin-top:10px">
           <el-button size="small" :disabled="offset === 0" @click="prevPage">{{ t('ev.prev') }}</el-button>
@@ -391,6 +393,7 @@ import RescanDiffPanel from '@/components/RescanDiffPanel.vue';
 import EvaluationIntroPanel from '@/components/EvaluationIntroPanel.vue';
 import EvaluationSettingsPanel from '@/components/EvaluationSettingsPanel.vue';
 import { useEvaluationStore } from '@/stores/evaluation';
+import { fmtTime } from '@/utils/format';
 import {
   cancelJob, createProbe, createReplay, createScan, createSkillScan, downloadReport,
   getJob, getReport, importReplay, listReports, remediationApply, remediationPreview,
