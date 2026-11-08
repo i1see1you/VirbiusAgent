@@ -37,6 +37,17 @@ cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT
 
 report_id_of() { grep -oE 'report_id=[a-z0-9-]+' "$1" | head -1 | cut -d= -f2; }
+newest_jar() { # $1=dir $2=pattern $3=exclude substring —— 取最新的匹配 jar
+  local d=$1 pat=$2 ex=$3 f
+  local -a jars=()
+  shopt -s nullglob
+  for f in "$d"/$pat; do
+    case "$f" in *"$ex"*) ;; *) jars+=("$f") ;; esac
+  done
+  shopt -u nullglob
+  [ ${#jars[@]} -gt 0 ] || return 1
+  ls -t "${jars[@]}" | head -1
+}
 api() { # $1=method $2=url $3=body(opt) $4=out —— VE 面自带 Bearer
   local m=$1 u=$2 b=${3:-} out=${4:-/dev/null}
   if [ -n "$b" ]; then
@@ -59,10 +70,8 @@ info "===== 抑制注册表 + inline suppress 全流程 E2E ====="
 info "work=$WORK redis=$REDISP eval=$EVALP control=$CTRLP"
 
 # ---------- [0] 构建 + 启动三件套 ----------
-EVAL_JAR=$(ls -t "$ROOT/virbius-evaluation/target/virbius-evaluation-"*.jar 2>/dev/null \
-  | grep -v original | head -1 || true)
-CTRL_JAR=$(ls -t "$ROOT/virbius-control/target/virbius-control-"*.jar 2>/dev/null \
-  | grep -v sources | head -1 || true)
+EVAL_JAR=$(newest_jar "$ROOT/virbius-evaluation/target" 'virbius-evaluation-*.jar' original || true)
+CTRL_JAR=$(newest_jar "$ROOT/virbius-control/target" 'virbius-control-*.jar' sources || true)
 if [ "${SKIP_BUILD:-0}" = "1" ] && [ -n "$EVAL_JAR" ] && [ -n "$CTRL_JAR" ]; then
   info "跳过构建（SKIP_BUILD=1）"
 else
@@ -72,10 +81,8 @@ else
   (cd "$ROOT/virbius-control" && mvn -o -q -DskipTests package) \
     >"$WORK/build-ctrl.log" 2>&1 && ok "[0] control 构建成功" \
     || { err "[0] control 构建失败"; tail -20 "$WORK/build-ctrl.log"; exit 1; }
-  EVAL_JAR=$(ls -t "$ROOT/virbius-evaluation/target/virbius-evaluation-"*.jar 2>/dev/null \
-    | grep -v original | head -1)
-  CTRL_JAR=$(ls -t "$ROOT/virbius-control/target/virbius-control-"*.jar 2>/dev/null \
-    | grep -v sources | head -1)
+  EVAL_JAR=$(newest_jar "$ROOT/virbius-evaluation/target" 'virbius-evaluation-*.jar' original)
+  CTRL_JAR=$(newest_jar "$ROOT/virbius-control/target" 'virbius-control-*.jar' sources)
 fi
 [ -n "$EVAL_JAR" ] && [ -n "$CTRL_JAR" ] || { err "[0] jar 缺失"; exit 1; }
 command -v redis-server >/dev/null || { err "[0] redis-server 未安装"; exit 1; }
