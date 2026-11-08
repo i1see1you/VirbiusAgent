@@ -1,12 +1,29 @@
 [project]
 name = "virbius-integrate"
-version = "1.0.0"
+version = "1.0.3"
 description = "VirbiusAgent native-tool integration: observe, audit, inventory (advisory grade)."
+readme = "README.md"
 requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "VirbiusAgent" }]
+keywords = ["langchain", "llm", "security", "observability", "ai-agents", "mcp"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Security",
+]
 dependencies = [
   "langchain-core>=0.2",
   "httpx>=0.27",
 ]
+
+[project.urls]
+Homepage = "https://www.virbius.tech"
+Repository = "https://github.com/i1see1you/VirbiusAgent"
+Documentation = "https://github.com/i1see1you/VirbiusAgent/blob/main/virbius-integrate/README.md"
+Issues = "https://github.com/i1see1you/VirbiusAgent/issues"
 
 [build-system]
 requires = ["setuptools>=69"]

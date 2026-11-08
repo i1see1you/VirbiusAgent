@@ -4,6 +4,12 @@ version = "1.0.3"
 edition = "2021"
 rust-version.workspace = true
 license = "MIT"
+description = "VirbiusAgent MCP proxy: stdio/SSE routing with a security pipeline (license, allowlist, engine adjudication, audit)"
+repository = "https://github.com/i1see1you/VirbiusAgent"
+homepage = "https://www.virbius.tech"
+readme = "README.md"
+keywords = ["mcp", "security", "proxy", "ai-agents", "guardrails"]
+categories = ["security", "network-programming"]
 
 [features]
 # Test-only seam: lets the cross-process E2E harness drive the delegated hit
@@ -12,7 +18,7 @@ license = "MIT"
 test-harness = []
 
 [dependencies]
-virbius-core = { path = "../virbius-core" }
+virbius-core = { version = "1.0.3", path = "../virbius-core" }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

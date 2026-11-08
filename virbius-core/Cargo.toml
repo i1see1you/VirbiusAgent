@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "VirbiusAgent edge SDK: DLP, precheck, sandbox, Prompt Gateway, License"
+repository = "https://github.com/i1see1you/VirbiusAgent"
+homepage = "https://www.virbius.tech"
+readme = "README.md"
+keywords = ["security", "ai-agents", "llm", "mcp", "dlp"]
+categories = ["security", "development-tools"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]

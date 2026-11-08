@@ -219,7 +219,7 @@ docker compose --profile full up -d
 
 ```toml
 [dependencies]
-virbius-core = { git = "https://github.com/i1see1you/VirbiusAgent" }
+virbius-core = "1.0"
 ```
 
 ```bash
@@ -229,6 +229,20 @@ cargo test --test e2e_integration -- --nocapture
 ```
 
 该测试套件覆盖完整的端层安全管线：License 验证 → 工具预检 → Prompt 网关 → MCP 执行 → STI 污点检测 → 审计链路追踪。
+
+## 软件包
+
+与 GitHub Release 使用同一批 `v*` tag 发布：
+
+| Registry | Package | 安装 |
+|----------|---------|------|
+| crates.io | `virbius-core` | `cargo add virbius-core` |
+| crates.io | `virbius-mcp-proxy` | `cargo install virbius-mcp-proxy` |
+| PyPI | `virbius-review-sdk` | `pip install virbius-review-sdk` |
+| PyPI | `virbius-integrate` | `pip install virbius-integrate` |
+| PyPI | `virbius-mcp-python` | `pip install virbius-mcp-python` |
+| npm | `virbius-mcp-node` | `npm install virbius-mcp-node` |
+| GHCR | `virbius-control` · `virbius-engine` · `virbius-auth` · `virbius-mcp-proxy` | `docker pull ghcr.io/i1see1you/virbius-control:v1.0.3` |
 
 ## 部署架构
 

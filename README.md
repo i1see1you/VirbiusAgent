@@ -219,7 +219,7 @@ docker compose --profile full up -d
 
 ```toml
 [dependencies]
-virbius-core = { git = "https://github.com/i1see1you/VirbiusAgent" }
+virbius-core = "1.0"
 ```
 
 ```bash
@@ -231,6 +231,20 @@ cargo test --test e2e_integration -- --nocapture
 The suite walks through the full edge-layer security pipeline: License
 verification → tool precheck → Prompt Gateway → MCP execution → STI taint
 detection → audit trace propagation.
+
+## Packages
+
+Published from the same `v*` tags as GitHub Releases:
+
+| Registry | Package | Install |
+|----------|---------|---------|
+| crates.io | `virbius-core` | `cargo add virbius-core` |
+| crates.io | `virbius-mcp-proxy` | `cargo install virbius-mcp-proxy` |
+| PyPI | `virbius-review-sdk` | `pip install virbius-review-sdk` |
+| PyPI | `virbius-integrate` | `pip install virbius-integrate` |
+| PyPI | `virbius-mcp-python` | `pip install virbius-mcp-python` |
+| npm | `virbius-mcp-node` | `npm install virbius-mcp-node` |
+| GHCR | `virbius-control` · `virbius-engine` · `virbius-auth` · `virbius-mcp-proxy` | `docker pull ghcr.io/i1see1you/virbius-control:v1.0.3` |
 
 ## Deployment Architecture
 

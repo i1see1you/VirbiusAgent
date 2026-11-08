@@ -9,12 +9,21 @@ description = "VirbiusAgent edge enforcement primitives for Python (PyO3 binding
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
+authors = [{ name = "VirbiusAgent" }]
+keywords = ["security", "ai-agents", "llm", "mcp", "guardrails", "pyo3"]
 classifiers = [
   "Programming Language :: Rust",
   "Programming Language :: Python :: Implementation :: CPython",
   "License :: OSI Approved :: MIT License",
+  "Topic :: Security",
 ]
 # 运行时零第三方依赖（纯扩展模块）
+
+[project.urls]
+Homepage = "https://www.virbius.tech"
+Repository = "https://github.com/i1see1you/VirbiusAgent"
+Documentation = "https://github.com/i1see1you/VirbiusAgent/blob/main/virbius-mcp-python/README.md"
+Issues = "https://github.com/i1see1you/VirbiusAgent/issues"
 
 [project.optional-dependencies]
 test = ["pytest>=8"]

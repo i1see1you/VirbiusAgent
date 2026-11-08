@@ -1,0 +1,60 @@
+{
+  "name": "virbius-mcp-node",
+  "version": "1.0.3",
+  "description": "VirbiusAgent edge enforcement primitives for Node.js (napi-rs binding of virbius-core): tool precheck, License verification, DLP and Prompt Gateway.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "author": "VirbiusAgent",
+  "homepage": "https://www.virbius.tech",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/i1see1you/VirbiusAgent.git",
+    "directory": "virbius-mcp-node"
+  },
+  "bugs": {
+    "url": "https://github.com/i1see1you/VirbiusAgent/issues"
+  },
+  "keywords": [
+    "mcp",
+    "security",
+    "ai-agents",
+    "llm",
+    "guardrails",
+    "napi",
+    "rust"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node",
+    "README.md"
+  ],
+  "napi": {
+    "name": "virbius-mcp-node",
+    "triples": {
+      "defaults": false,
+      "additional": [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "x86_64-apple-darwin",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc"
+      ]
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "artifacts": "napi artifacts"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
