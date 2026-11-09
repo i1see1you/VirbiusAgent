@@ -3,7 +3,10 @@ name = "virbius-mcp-node"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
 description = "VirbiusAgent Node.js MCP bindings via napi-rs"
+repository = "https://github.com/i1see1you/VirbiusAgent"
+homepage = "https://www.virbius.cn"
 
 [lib]
 crate-type = ["cdylib"]
