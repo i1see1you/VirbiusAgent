@@ -41,5 +41,5 @@ if (!decision.allowed) {
 ## Links
 
 - Repository: <https://github.com/i1see1you/VirbiusAgent>
-- Website: <https://www.virbius.tech>
+- Website: <https://www.virbius.cn>
 - License: MIT

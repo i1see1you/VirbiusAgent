@@ -23,5 +23,5 @@ VIRBIUS_TRANSPORT=tcp://0.0.0.0:9090 virbius-mcp-proxy
 
 - Repository: <https://github.com/i1see1you/VirbiusAgent>
 - Documentation: <https://github.com/i1see1you/VirbiusAgent#readme>
-- Website: <https://www.virbius.tech>
+- Website: <https://www.virbius.cn>
 - License: MIT

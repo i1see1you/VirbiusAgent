@@ -7,7 +7,7 @@
 
 ### 0.1 修好 GitHub About 元数据
 
-- Homepage: `https://www.virbius.tech`（`CNAME` 已指向该域名）
+- Homepage: `https://www.virbius.cn`（`CNAME` 已指向该域名）
 - Description（≤160 字符，关键词靠前）：
   `Open-source Agent security platform: MCP proxy + edge SDK + eBPF runtime + LLM guardrails. Blocks prompt injection, tool abuse and privilege escalation.`
 - Topics（全量替换现有 3 个）：

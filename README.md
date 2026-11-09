@@ -13,7 +13,7 @@
 
 **VirbiusAgent** is a deep security platform purpose-built for AI Agents. Leveraging eBPF and a four-tier **Edge–Gateway–Kernel–Cloud**  architecture, it provides real-time visibility and precise blocking of Agent behaviors, effectively tackling the challenges of privilege abuse and loss of security control.
 
-The Agent security landscape falls into two categories: **endpoint-side controls** — DLP and related measures to govern employee usage of AI and Agents, preventing data leaks, shadow AI, and prompt leakage — and **server-side protection**, which is VirbiusAgent's core focus. As an Agent security platform, VirbiusAgent secures your self-developed intelligent agents against prompt injection, MCP tool abuse, and privilege escalation. It fully aligns with national AI safety regulations, supporting enterprise compliance filings and audits. Endpoint controls are largely standardized with low business coupling, whereas VirbiusAgent provides a highly customizable security policy framework on the server side, requiring security engineers who understand both policy and business to tailor configurations for precise, scenario-matched protection.
+The Agent security landscape falls into two categories: **endpoint-side controls** — DLP and related measures to govern employee usage of AI and Agents, preventing data leaks, shadow AI, and prompt leakage — and **server-side protection**, which is VirbiusAgent's core focus. As an Agent security platform, VirbiusAgent secures your self-developed intelligent agents against prompt injection, MCP tool abuse, and privilege escalation. It is designed to support enterprise security review and audit workflows; map its controls to the regulations that apply to your jurisdiction. Endpoint controls are largely standardized with low business coupling, whereas VirbiusAgent provides a highly customizable security policy framework on the server side, requiring security engineers who understand both policy and business to tailor configurations for precise, scenario-matched protection.
 
 ## Operations Console
 
@@ -76,9 +76,9 @@ flowchart TD
 
 ## Why VirbiusAgent
 
-### Rules + Models: The Engineering Best Practice
+### Rules + Models: A Practical Engineering Pattern
 
-Industry security engineering has proven that **the best defense combines deterministic rules with ML models** — neither alone is sufficient. This principle, practiced at scale by security teams at Alibaba and Meituan, is the foundation of VirbiusAgent's design.
+Industry security engineering has shown that **combining deterministic rules with ML models is an effective defense** — neither alone is sufficient. This principle is the foundation of VirbiusAgent's design.
 
 | Aspect | Rules (Deterministic) | Models (ML/LLM) | VirbiusAgent Approach |
 |--------|----------------------|------------------|-----------------------|
@@ -88,41 +88,37 @@ Industry security engineering has proven that **the best defense combines determ
 | **Cost** | Near-zero (CPU only) | High (GPU/LLM API per call) | Rules and models combined |
 | **Maintainability** | Transparent, auditable, version-controlled | Black-box, hard to debug | Rules in Git; models as augmenting signal |
 
-> **Design philosophy**: Not merely using models to fight models, but combining rules and models. Rules are cheap and fast, and new attacks can be addressed more flexibly with targeted rule patches; models generalize well but are expensive to iterate. Combining them achieves **high performance, precision and recall** at relatively low cost. This draws on the layered security architecture practices of Alibaba's and Meituan's production security platforms (I previously worked on security architecture and security management at Alibaba and Meituan).
+> **Design philosophy**: Not merely using models to fight models, but combining rules and models. Rules are cheap and fast, and new attacks can be addressed more flexibly with targeted rule patches; models generalize well but are expensive to iterate. Combining them achieves **high performance, precision and recall** at relatively low cost.
 
 We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student model, performing knowledge distillation to create **VirbiusGuard** — which covers and optimizes prompt semantic scenarios that Qwen3Guard does not support (such as Agent behavioral safety, multilingual mixed inputs, etc.), progressively expanding the detection scope of Prompt L1.
 
 > **VirbiusGuard model download**: [HuggingFace](https://huggingface.co/i1see1you/VirbiusGuard) | [ModelScope](https://modelscope.cn/models/i1see1you/VirbiusGuard)
+>
+> **VirbiusGuard demo**: <https://www.virbius.cn/demo> — paste text in the browser and see the 10 safety categories plus agent-attack samples.
 
 ### Comparison with Industry Solutions
 
+A high-level comparison as of 2026-11, based on public documentation. These are
+different products with different scopes; see [docs/COMPARISON.md](docs/COMPARISON.md)
+for the full matrix and source links. Capabilities may change as upstreams evolve.
+
 | Capability | VirbiusAgent | Microsoft AGT | Meta LlamaFirewall | IBM ContextForge |
 |-----------|:------------:|:-------------:|:------------------:|:----------------:|
-| **Architecture** | 4-layer (Edge–Gateway–Kernel–Cloud) | SDK governance kernel (policy → identity → audit) | SDK guardrail stack (in-process scanners) | Gateway/proxy (MCP/A2A/REST federation registry) |
-| **Defense-in-depth** | ✅ Edge precheck → Gateway enforce → Kernel observe → Cloud adjudicate | ⚠️ Optional layers (policy → identity → sandbox → audit) | ⚠️ Layered scanners (prompt/alignment/code) but in-process only | ⚠️ Gateway-centric (auth/rate-limit/plugins) |
-| **Detection method** | Rules + ML models (hybrid) | Policy/rules (YAML/OPA/Cedar) + prompt-injection audit | ML classifiers + LLM reasoning audit (PromptGuard 2 / AlignmentCheck) | Config + plugins (auth, rate limit, guardrails) — mostly deterministic |
-| **Rule engine** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ✅ Policy engine (YAML/OPA/Cedar) | ⚠️ Scanner config + regex filters (no risk-rule DSL) | ⚠️ Plugin/config engine (no risk-rule DSL) |
-| **Runtime observability** | ✅ eBPF / Falco (syscall-level) | ⚠️ App-level audit trail (no kernel) | ❌ | ⚠️ OpenTelemetry tracing (app-level) |
-| **MCP protocol support** | ✅ Native (stdio/SSE proxy) | ✅ MCP security gateway | ⚠️ Agent-framework guardrail (OpenAI / LangChain), not MCP-native | ✅ Native (MCP + A2A + REST/gRPC federation) |
-| **Tool-call security** | ✅ Core focus (precheck → adjudicate → audit) | ✅ Deterministic in-app interception | ⚠️ Scans agent reasoning/output, not a per-tool allowlist | ⚠️ Gateway auth/rate-limit + plugin guardrails |
-| **Human-in-the-loop** | ✅ Challenge → approve → token-gated execution | ✅ Approval policies | ❌ | ❌ |
-| **Decision trace** | ✅ Full-chain causal visualization | ✅ Tamper-evident audit log | ⚠️ Logs / scan results | ⚠️ OTel tracing |
-| **DLP (PII masking)** | ✅ Edge-layer, sub-ms, offline | ❌ | ❌ | ❌ |
-| **Sandbox isolation** | ✅ Landlock / gVisor | ✅ Execution sandbox (privilege rings) | ❌ | ❌ |
-| **Deployment** | Self-hosted (Sidecar / Remote / SDK) | SDK / library (pip/npm/NuGet) | SDK (Python) | Self-hosted (PyPI / Docker / Helm) |
-| **Open source** | ✅ MIT | ✅ MIT | ✅ Open source (Llama Community License) | ✅ Apache-2.0 |
-
-> Competitor summaries are drawn from public repos/docs (Microsoft Agent Governance Toolkit — MIT, public preview; Meta LlamaFirewall — open source under the Llama Community License; IBM ContextForge / `mcp-context-forge` — Apache-2.0) and may drift as upstreams evolve.
+| **Scope** | Agent runtime security across four layers | In-process agent governance | Prompt/agent guardrail scanners | MCP/A2A/REST gateway |
+| **Runtime observability** | eBPF/Falco syscall visibility | App-level audit trail | In-process scan logs | App-level tracing |
+| **MCP support** | Native stdio/SSE proxy | MCP security gateway | Agent-framework guardrails | Native MCP/A2A/REST federation |
+| **Human-in-the-loop** | Challenge → approve → token-gated execution | Approval policies | Not documented | Not documented |
+| **Deployment** | Self-hosted (sidecar / remote / SDK) | SDK / library | Python SDK | Self-hosted (PyPI / Docker / Helm) |
 
 ### Key Differentiators
 
-1. **Four-layer defense-in-depth** — Prompt-layer guardrails check a single point, and SDK-based peers (e.g. Microsoft Agent Governance Toolkit) add governance layers *in-process*. VirbiusAgent instead spans four independent layers across the runtime (Edge → Gateway → **Kernel** → Cloud), so even if one layer is bypassed, others still catch the threat — including **syscall-level (eBPF/Falco) observation** that no SDK peer offers. This architecture is inspired by the **defense-in-depth principle** used in Alibaba's and Meituan's production security systems.
+1. **Four-layer defense-in-depth** — Prompt-layer guardrails check a single point, and SDK-based peers (e.g. Microsoft Agent Governance Toolkit) add governance layers *in-process*. VirbiusAgent instead spans four independent layers across the runtime (Edge → Gateway → **Kernel** → Cloud), so even if one layer is bypassed, others still catch the threat — including **syscall-level (eBPF/Falco) observation** that SDK-based guardrails typically do not provide. This follows the **defense-in-depth principle**.
 
-2. **Rules and models combined** — Rules catch known threats at sub-millisecond latency; models generalize better. Combining them yields high precision/recall and high performance at relatively low cost. This **hybrid approach** is the industry-proven optimal balance of cost, speed, and coverage.
+2. **Rules and models combined** — Rules catch known threats at sub-millisecond latency; models generalize better. Combining them yields high precision/recall and high performance at relatively low cost. This **hybrid approach** is a practical balance of cost, speed, and coverage.
 
 3. **Agent-native, not just LLM-native** — Guardrail and scanner peers target the prompt or static analysis; VirbiusAgent secures the entire **tool-call lifecycle** across layers: pre-execution precheck → on-path gateway enforcement → runtime kernel observation → post-execution audit. This is purpose-built for the MCP era where Agents execute real actions.
 
-4. **Runtime visibility at the kernel level** — Via eBPF/Falco, VirbiusAgent observes Agent processes at the syscall level (file access, network connections, process spawns). No competitor offers this depth of runtime observability.
+4. **Runtime visibility at the kernel level** — Via eBPF/Falco, VirbiusAgent observes Agent processes at the syscall level (file access, network connections, process spawns). This adds syscall-level runtime observability that application-layer guardrails typically cannot provide.
 
 ### Agent Security vs Traditional Security
 
@@ -139,6 +135,41 @@ We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student mo
 | **Policy dynamism** | Relatively static; signature DBs updated periodically | Evolves in real time within a session - risk accumulation crosses thresholds to auto-escalate protection, supports canary rollout and hot-switching; due to high business relevance, different businesses require different policies, and policies shift as the business changes |
 
 > In short: **Traditional security defends against "external break-ins"; Agent security must also defend against "the model being led astray and attacking from within"** - it must understand business semantics and adapt dynamically to session risk and business change.
+
+## Benchmarks
+
+Results for **VirbiusGuard v2.1** (the prompt-safety model used by the cloud
+layer), measured with a locked auditor prompt, greedy decoding, and parse
+failures counted as misses. The harness is in
+[`scripts/benchmarks/`](scripts/benchmarks/); public-set numbers can be
+reproduced with the command below.
+
+| Set | n | Metric | Result |
+|---|---:|---|---|
+| gold_1000 (internal; 615 unsafe / 385 safe) | 1,000 | accuracy / recall / FP rate | 97.9% / 97.89% / 1.82% |
+| WildGuardTest (public) | 1,699 | recall / FP rate | 71.88% / 4.52% |
+| WildGuardTest adversarial slice | 458 | precision / recall | 95.73% / 59.24% |
+| XSTest (public) | 450 | over-refusal (count) / false negatives | 15 / 5 |
+| ToxicChat 1k slice | 1,000 | false positives / jailbreak recall | 84 / 90.7% |
+| AgentDojo v1.2.2 (949 pairs, `important_instructions`) | 949 | attack success rate: base → guarded | 1.58% → 0% |
+| AgentDojo v1.2.2 (same sweep) | 949 | utility (under attack): base → guarded | 86.62% → 90.20% |
+
+Notes:
+
+- WildGuardTest and XSTest are public; `gold_1000` is an internal bilingual set.
+- The AgentDojo agent is `deepseek-flash`, which is already injection-robust
+  (baseline ASR 1.58%); the utility/ASR shift is specific to that setting.
+- Quantized Q4 builds did **not** pass the same gate set (WildGuardTest FPR
+  5.2%, XSTest over-refusal 18). Use f16/bf16 for the reported numbers.
+- Reproduce the public sets:
+
+```bash
+pip install torch transformers
+python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl
+```
+
+See [`scripts/benchmarks/README.md`](scripts/benchmarks/README.md) for dataset
+export, field mapping, and the adversarial slice.
 
 ## Quick Start
 
@@ -523,6 +554,14 @@ without it.
 ## Security
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+## Contact
+
+- Website: <https://www.virbius.cn>
+- VirbiusGuard demo: <https://www.virbius.cn/demo>
+- Issues / Discussions: <https://github.com/i1see1you/VirbiusAgent/issues>
+- Business: <i1see1you@virbius.cn>
+- Security reports: GitHub Security Advisories (see [SECURITY.md](SECURITY.md))
 
 ## License
 

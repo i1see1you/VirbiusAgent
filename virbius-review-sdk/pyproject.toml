@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://www.virbius.tech"
+Homepage = "https://www.virbius.cn"
 Repository = "https://github.com/i1see1you/VirbiusAgent"
 Documentation = "https://github.com/i1see1you/VirbiusAgent/blob/main/virbius-review-sdk/README.md"
 Issues = "https://github.com/i1see1you/VirbiusAgent/issues"

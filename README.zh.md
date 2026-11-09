@@ -11,9 +11,9 @@
 
 English: [README.md](README.md)
 
-**VirbiusAgent** 是专为AI Agent 打造的深层安全防护平台。基于 eBPF 与**端—管—核—云**架构实现了对 Agent 行为的实时感知与精准阻断，解决Agent 越权与安全失控难题。
+**VirbiusAgent** 是专为AI Agent 打造的运行时深层安全防护平台。基于 eBPF 与**端—管—核—云**架构实现了对 Agent 行为的实时感知与精准阻断，解决Agent 越权与安全失控难题。
 
-Agent 安全体系大致分为两类：一是终端侧管控，即通过 DLP 等手段管控员工使用 AI 和 Agent 带来的风险，防范机密外发、影子 AI、Prompt 泄露等风险；二是服务端防护，这也是 VirbiusAgent 的核心定位。作为 Agent 安全防护平台，VirbiusAgent 专注于保障自研智能体的内生安全，有效抵御提示注入、MCP 工具滥用及 Agent 越权逃逸等攻击。此外，产品完全契合国家 AI 安全合规要求，可有力支撑企业的安全备案与合规审查工作。终端侧管控和业务耦合度低，基本都是标准化的一套策略和产品，VirbiusAgent 是服务端 Agent 护栏，可提供高度可定制的安全策略框架，需要懂安全策略的安全工程师基于对业务的理解，针对不同业务差异化的配置和优化策略，才能确保防护效果精准匹配实际业务场景。
+Agent 安全体系大致分为两类：一是终端侧管控，即通过 DLP 等手段管控员工使用 AI 和 Agent 带来的风险，防范机密外发、影子 AI、Prompt 泄露等风险；二是服务端防护，这也是 VirbiusAgent 的核心定位。作为 Agent 安全防护平台，VirbiusAgent 专注于保障自研智能体的内生安全，有效抵御提示注入、MCP 工具滥用及 Agent 越权逃逸等攻击。产品可支撑企业安全评审与审计流程；具体合规要求请按所在司法辖区映射。终端侧管控和业务耦合度低，基本都是标准化的一套策略和产品，VirbiusAgent 是服务端 Agent 护栏，可提供高度可定制的安全策略框架，需要懂安全策略的安全工程师基于对业务的理解，针对不同业务差异化的配置和优化策略，才能确保防护效果精准匹配实际业务场景。
 
 ## 运营台
 
@@ -76,9 +76,9 @@ flowchart TD
 
 ## 为什么选择 VirbiusAgent
 
-### 规则 + 模型：安全工程的最佳实践
+### 规则 + 模型：一种实用的工程实践
 
-业界安全工程实践证明，**最好的防御是确定性规则与 ML 模型结合使用**——单靠任何一种都不够。这一原则在阿里和美团安全团队的大规模生产实践中得到验证，也是 VirbiusAgent 设计的基石。
+业界安全工程实践表明，**确定性规则与 ML 模型结合使用通常是更有效的防御**——单靠任何一种都不够。这一原则也是 VirbiusAgent 设计的基石。
 
 | 维度 | 规则（确定性） | 模型（ML/LLM） | VirbiusAgent 方案 |
 |------|--------------|---------------|-------------------|
@@ -88,41 +88,36 @@ flowchart TD
 | **成本** | 近零（仅 CPU） | 高（GPU/LLM API 按次计费） | 规则和模型相结合 |
 | **可维护性** | 透明、可审计、可版本管理 | 黑盒、难以调试 | 规则入 Git；模型作为增强信号 |
 
-> **设计哲学**：不仅仅是以模治模,而是将规则和模型结合起来,规则成本低、速度快,如有新型攻击可以更加灵活和针对性的补规则；模型泛化能力强但迭代成本高。将两者结合,可以在较低成本的同时获得**高性能、精确率和召回率**。这参考了阿里和美团生产安全平台的分层安全架构实践(本人曾在阿里和美团从事安全架构和安全管理工作)。
+> **设计哲学**：不仅仅是以模治模,而是将规则和模型结合起来,规则成本低、速度快,如有新型攻击可以更加灵活和针对性的补规则；模型泛化能力强但迭代成本高。将两者结合,可以在较低成本的同时获得**高性能、精确率和召回率**。
 
 我们以 **GLM5.2** 作为教师模型、**Qwen3Guard** 作为基座学生模型，通过知识蒸馏创建 **VirbiusGuard** —— 覆盖并优化目前 Qwen3Guard 不支持的 Prompt 语义场景（如 Agent 行为安全、多语言混合输入等），逐步扩大 Prompt L1 的检测范围。
 
 > **VirbiusGuard 模型下载**：[HuggingFace](https://huggingface.co/i1see1you/VirbiusGuard) | [ModelScope](https://modelscope.cn/models/i1see1you/VirbiusGuard)
+>
+> **VirbiusGuard 在线演示**：<https://www.virbius.cn/demo> —— 浏览器内直接输入文本，查看 10 类安全判定与 Agent 攻击样本。
 
 ### 与同类产品对比
 
+以下为 2026-11 基于公开文档的高层对比。各产品定位不同，完整矩阵与来源链接见
+[docs/COMPARISON.zh.md](docs/COMPARISON.zh.md)；能力可能随上游迭代变动。
+
 | 能力 | VirbiusAgent | Microsoft AGT | Meta LlamaFirewall | IBM ContextForge |
 |------|:------------:|:-------------:|:------------------:|:----------------:|
-| **架构** | 四层（端—管—核—云） | SDK 治理内核（策略 → 身份 → 审计） | SDK 护栏栈（进程内扫描器） | 网关/代理（MCP/A2A/REST 联邦注册中心） |
-| **纵深防御** | ✅ 端预检 → 管阻断 → 核观测 → 云终判 | ⚠️ 可选分层（策略 → 身份 → 沙箱 → 审计） | ⚠️ 分层扫描器（prompt/对齐/代码）但仅进程内 | ⚠️ 网关为中心（认证/限流/插件） |
-| **检测方式** | 规则 + ML 模型（混合） | 策略/规则（YAML/OPA/Cedar）+ Prompt 注入审计 | ML 分类器 + LLM 推理审计（PromptGuard 2 / AlignmentCheck） | 配置 + 插件（认证、限流、护栏）——以确定性为主 |
-| **规则引擎** | ✅ Lua DSL + Groovy L3 + Falco eBPF | ✅ 策略引擎（YAML/OPA/Cedar） | ⚠️ 扫描器配置 + 正则过滤（无风险规则 DSL） | ⚠️ 插件/配置引擎（无风险规则 DSL） |
-| **运行时观测** | ✅ eBPF / Falco（syscall 级） | ⚠️ 应用层审计日志（非内核） | ❌ | ⚠️ OpenTelemetry 追踪（应用层） |
-| **MCP 协议支持** | ✅ 原生（stdio/SSE 代理） | ✅ MCP 安全网关 | ⚠️ 智能体框架护栏（OpenAI/LangChain），非 MCP 原生 | ✅ 原生（MCP + A2A + REST/gRPC 联邦） |
-| **工具调用安全** | ✅ 核心能力（预检 → 终判 → 审计） | ✅ 应用内确定性拦截 | ⚠️ 扫描智能体推理/输出，非逐工具 allowlist | ⚠️ 网关认证/限流 + 插件护栏 |
-| **人工审批** | ✅ 挑战 → 审批 → token 验证放行 | ✅ 审批策略 | ❌ | ❌ |
-| **决策链路追踪** | ✅ 全链路因果可视化 | ✅ 防篡改审计日志 | ⚠️ 日志 / 扫描结果 | ⚠️ OTel 追踪 |
-| **DLP（PII 脱敏）** | ✅ 端层、亚毫秒、可离线 | ❌ | ❌ | ❌ |
-| **沙箱隔离** | ✅ Landlock / gVisor | ✅ 执行沙箱（特权环） | ❌ | ❌ |
-| **部署方式** | 自部署（Sidecar / 远程 / SDK） | SDK / 库（pip/npm/NuGet） | SDK（Python） | 自部署（PyPI / Docker / Helm） |
-| **开源** | ✅ MIT | ✅ MIT | ✅ 开源（Llama Community License） | ✅ Apache-2.0 |
-
-> 竞品信息摘自上列项目的公开仓库/文档（Microsoft Agent Governance Toolkit — MIT，公开预览；Meta LlamaFirewall — 开源，Llama Community License；IBM ContextForge / `mcp-context-forge` — Apache-2.0），可能随上游迭代变动。
+| **定位** | 四层 Agent 运行时安全 | 进程内 Agent 治理 | 提示/Agent 护栏扫描器 | MCP/A2A/REST 网关 |
+| **运行时观测** | eBPF/Falco 系统调用级可见性 | 应用层审计轨迹 | 进程内扫描日志 | 应用层追踪 |
+| **MCP 支持** | 原生 stdio/SSE 代理 | MCP 安全网关 | Agent 框架护栏 | 原生 MCP/A2A/REST 联邦 |
+| **人工审批** | Challenge → 审批 → token 门控执行 | 审批策略 | 公开文档未提及 | 公开文档未提及 |
+| **部署方式** | 自托管（sidecar / 远程 / SDK） | SDK / 库 | Python SDK | 自托管（PyPI / Docker / Helm） |
 
 ### 核心差异化
 
-1. **四层纵深防御** — Prompt 层护栏只做单点检查，基于 SDK 的同类（如 Microsoft Agent Governance Toolkit）在**进程内**增加了治理分层。VirbiusAgent 则在运行时贯穿四个独立层级（端 → 管 → **核** → 云），即使某一层被绕过，其他层仍能拦截——包括 SDK 同类都不具备的 **syscall 级（eBPF/Falco）观测**。此架构参考了**阿里和美团生产安全系统的纵深防御原则**。
+1. **四层纵深防御** — Prompt 层护栏只做单点检查，基于 SDK 的同类（如 Microsoft Agent Governance Toolkit）在**进程内**增加了治理分层。VirbiusAgent 则在运行时贯穿四个独立层级（端 → 管 → **核** → 云），即使某一层被绕过，其他层仍能拦截——包括 SDK 类护栏通常不具备的 **syscall 级（eBPF/Falco）观测**。这遵循**纵深防御原则**。
 
-2. **规则和模型相结合** — 规则以亚毫秒延迟已知威胁,模型泛化能力更强,将两者结合可以在较低成本的同时获得较高的准召率和高性能。这种**混合方案**是业界验证的成本、速度与覆盖率的最佳平衡。
+2. **规则和模型相结合** — 规则以亚毫秒延迟已知威胁,模型泛化能力更强,将两者结合可以在较低成本的同时获得较高的准召率和高性能。这种**混合方案**在成本、速度与覆盖率之间提供了实用的平衡。
 
 3. **Agent 原生，而非仅 LLM 原生** — 护栏与扫描类同类聚焦 Prompt 或静态分析；VirbiusAgent 则跨层保护完整的**工具调用生命周期**：执行前预检 → 在线网关阻断 → 运行时内核观测 → 执行后审计。这是为 MCP 时代量身定制的，因为 Agent 会执行真实操作。
 
-4. **内核级运行时可见性** — 通过 eBPF/Falco，VirbiusAgent 在 syscall 级别观测 Agent 进程（文件访问、网络连接、进程创建）。没有竞品提供这种深度的运行时观测能力。
+4. **内核级运行时可见性** — 通过 eBPF/Falco，VirbiusAgent 在 syscall 级别观测 Agent 进程（文件访问、网络连接、进程创建）。这是应用层护栏通常无法提供的系统调用级运行时观测。
 
 ### Agent 安全 vs 传统安全
 
@@ -139,6 +134,38 @@ flowchart TD
 | **策略动态性** | 相对静态,签名库定期更新 | 会话内实时演化--风险累计达阈值自动升级防护,支持灰度发布与热切换;且因业务关联度高,不同业务需配置不同策略,业务变化时策略也随之调整 |
 
 > 一句话:**传统安全防"外部打进来",Agent 安全还要防"模型被带偏后从内部打出去"**--既要懂业务语义,又要随会话风险和业务变化动态调整。
+
+## 基准测试
+
+下表为 **VirbiusGuard v2.1**（云层使用的 Prompt 安全模型）在固定审计提示词、贪心解码、
+解析失败计为漏检的口径下的结果。评测脚本见 [`scripts/benchmarks/`](scripts/benchmarks/)，
+公开数据集可按下方命令复现。
+
+| 数据集 | n | 指标 | 结果 |
+|---|---:|---|---|
+| gold_1000（内部集；615 unsafe / 385 safe） | 1,000 | 准确率 / 召回 / FP 率 | 97.9% / 97.89% / 1.82% |
+| WildGuardTest（公开） | 1,699 | 召回 / FP 率 | 71.88% / 4.52% |
+| WildGuardTest 对抗切片 | 458 | precision / 召回 | 95.73% / 59.24% |
+| XSTest（公开） | 450 | 过拒数 / 漏检数 | 15 / 5 |
+| ToxicChat 1k 切片 | 1,000 | 误报数 / jailbreak 召回 | 84 / 90.7% |
+| AgentDojo v1.2.2（949 对，`important_instructions`） | 949 | 攻击成功率：基线 → 加护栏 | 1.58% → 0% |
+| AgentDojo v1.2.2（同口径） | 949 | utility（受攻击下）：基线 → 加护栏 | 86.62% → 90.20% |
+
+说明：
+
+- WildGuardTest 与 XSTest 为公开数据集；`gold_1000` 为内部中英双语集。
+- AgentDojo 的 agent 为 `deepseek-flash`，本身已较抗注入（基线 ASR 1.58%）；
+  utility/ASR 的变化仅代表该设置。
+- Q4 量化版**未通过**同一组门禁（WildGuardTest FPR 5.2%、XSTest 过拒 18）；
+  上述数字请以 f16/bf16 为准。
+- 复现公开数据集：
+
+```bash
+pip install torch transformers
+python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl
+```
+
+数据集导出、字段映射与对抗切片见 [`scripts/benchmarks/README.md`](scripts/benchmarks/README.md)。
 
 ## 快速开始
 
@@ -512,6 +539,14 @@ VirbiusAgent/
 ## 安全报告
 
 参见 [SECURITY.md](SECURITY.md)。
+
+## 联系方式
+
+- 官网：<https://www.virbius.cn>
+- VirbiusGuard 在线演示：<https://www.virbius.cn/demo>
+- Issues / Discussions：<https://github.com/i1see1you/VirbiusAgent/issues>
+- 商务合作：<i1see1you@virbius.cn>
+- 安全漏洞：请走 GitHub Security Advisories（见 [SECURITY.md](SECURITY.md)）
 
 ## License
 

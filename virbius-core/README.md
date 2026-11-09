@@ -17,5 +17,5 @@ virbius-core = "1.0"
 
 - Repository: <https://github.com/i1see1you/VirbiusAgent>
 - Documentation: <https://github.com/i1see1you/VirbiusAgent#readme>
-- Website: <https://www.virbius.tech>
+- Website: <https://www.virbius.cn>
 - License: MIT

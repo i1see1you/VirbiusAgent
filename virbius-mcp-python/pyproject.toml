@@ -20,7 +20,7 @@ classifiers = [
 # 运行时零第三方依赖（纯扩展模块）
 
 [project.urls]
-Homepage = "https://www.virbius.tech"
+Homepage = "https://www.virbius.cn"
 Repository = "https://github.com/i1see1you/VirbiusAgent"
 Documentation = "https://github.com/i1see1you/VirbiusAgent/blob/main/virbius-mcp-python/README.md"
 Issues = "https://github.com/i1see1you/VirbiusAgent/issues"
