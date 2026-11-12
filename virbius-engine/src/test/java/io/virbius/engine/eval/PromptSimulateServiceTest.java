@@ -263,8 +263,10 @@ class PromptSimulateServiceTest {
                 "neohorse-4b",
                 1000,
                 16,
+                24000,
+                4000,
                 Map.of("neohorse-4b", new PromptJudgeProperties.Backend(
-                        "http", "http://127.0.0.1", true, "test", true, false, "test", 0)));
+                        "http://127.0.0.1", true, "test-model", "", 0)));
         return new PromptJudgeBackendRegistry(backends, properties);
     }
 
@@ -281,7 +283,7 @@ class PromptSimulateServiceTest {
 
         @Override
         public JudgeCapabilities capabilities() {
-            return new JudgeCapabilities(true, false, false, 0, 1, "test", true);
+            return new JudgeCapabilities(1, false, 2048);
         }
 
         @Override
@@ -294,9 +296,5 @@ class PromptSimulateServiceTest {
             return new JudgeResult(Map.of(request.rules().get(0).id(), answer), 1, null);
         }
 
-        @Override
-        public JudgeHealth health() {
-            return JudgeHealth.up();
-        }
     }
 }

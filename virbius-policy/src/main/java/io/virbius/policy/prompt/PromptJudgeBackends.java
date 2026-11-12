@@ -6,7 +6,7 @@ public final class PromptJudgeBackends {
 
     public static final String NEOHORSE = "neohorse-4b";
     public static final String STARTLUX = "startlux-4b";
-    public static final String LAYA = "laya-zh";
+    public static final String LAYA = "laya";
 
     public static final Set<String> ALL = Set.of(NEOHORSE, STARTLUX, LAYA);
 

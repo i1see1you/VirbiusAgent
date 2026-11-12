@@ -97,7 +97,7 @@ public class PromptRunner {
             signals.addAll(runMatrixLlm(matchCtx.content(), syncCategory));
         }
         if (!syncJudge.isEmpty()) {
-            signals.addAll(runJudge(tenantId, matchCtx.content(), syncJudge));
+            signals.addAll(runJudge(tenantId, matchCtx.content(), syncJudge, false));
         }
         return signals;
     }
@@ -113,7 +113,7 @@ public class PromptRunner {
                 signals.addAll(runMatrixLlm(matchCtx.content(), categoryRules));
             }
             if (!judgeRules.isEmpty()) {
-                signals.addAll(runJudge(tenantId, matchCtx.content(), judgeRules));
+                signals.addAll(runJudge(tenantId, matchCtx.content(), judgeRules, true));
             }
             List<RuleEntry> allRules = new ArrayList<>(categoryRules);
             allRules.addAll(judgeRules.keySet());
@@ -162,7 +162,8 @@ public class PromptRunner {
     private List<SignalDto> runJudge(
             String tenantId,
             String content,
-            Map<RuleEntry, JudgeRuleContext> judgeRules) {
+            Map<RuleEntry, JudgeRuleContext> judgeRules,
+            boolean allowBusyRetry) {
         List<SignalDto> signals = new ArrayList<>();
         Map<RuleEntry, PromptRuleSpec> validRules = new LinkedHashMap<>();
         for (Map.Entry<RuleEntry, JudgeRuleContext> entry : judgeRules.entrySet()) {
@@ -185,17 +186,35 @@ public class PromptRunner {
         }
 
         int batchSize = batchSize(backend);
+        log.debug("prompt judge backend={} multiQuestionSingleForward={} batchSize={}",
+                backend.id(), backend.capabilities().multiQuestionSingleForward(), batchSize);
         List<Map.Entry<RuleEntry, PromptRuleSpec>> entries = new ArrayList<>(validRules.entrySet());
-        for (int from = 0; from < entries.size(); from += batchSize) {
-            int to = Math.min(entries.size(), from + batchSize);
-            List<Map.Entry<RuleEntry, PromptRuleSpec>> batch = entries.subList(from, to);
-            List<PromptJudgeBackend.JudgeRule> requestRules = new ArrayList<>();
-            for (Map.Entry<RuleEntry, PromptRuleSpec> entry : batch) {
-                requestRules.add(new PromptJudgeBackend.JudgeRule(
-                        entry.getKey().ruleId(), "noul", PromptJudgeSupport.instructions(entry.getValue())));
+        List<PromptJudgeBackend.JudgeRule> requestRules = new ArrayList<>(entries.size());
+        for (Map.Entry<RuleEntry, PromptRuleSpec> entry : entries) {
+            requestRules.add(new PromptJudgeBackend.JudgeRule(
+                    entry.getKey().ruleId(), "noul", PromptJudgeSupport.instructions(entry.getValue())));
+        }
+        int budget = judgeProps.maxPromptChars();
+        int from = 0;
+        while (from < entries.size()) {
+            int to = from;
+            int chars = 0;
+            while (to < entries.size()) {
+                int nextChars = requestRules.get(to).instructions().length();
+                if (to > from && (to - from >= batchSize || chars + nextChars > budget)) {
+                    break;
+                }
+                if (to == from && nextChars > budget) {
+                    log.warn("prompt judge rule {} instructions {} chars exceeds batch budget {}",
+                            entries.get(to).getKey().ruleId(), nextChars, budget);
+                }
+                chars += nextChars;
+                to++;
             }
+            List<Map.Entry<RuleEntry, PromptRuleSpec>> batch = entries.subList(from, to);
             PromptJudgeBackend.JudgeResult result =
-                    backend.judge(new PromptJudgeBackend.JudgeRequest(content, requestRules));
+                    backend.judge(new PromptJudgeBackend.JudgeRequest(
+                            content, requestRules.subList(from, to), allowBusyRetry));
             if (result.error() != null && !result.error().isBlank()) {
                 log.warn("prompt judge failed tenant={} backend={} error={}",
                         tenantId, backend.id(), result.error());
@@ -206,6 +225,7 @@ public class PromptRunner {
                     signals.add(signal);
                 }
             }
+            from = to;
         }
         return signals;
     }
@@ -267,7 +287,7 @@ public class PromptRunner {
     }
 
     private int batchSize(PromptJudgeBackend backend) {
-        int declaredMax = backend.capabilities().maxRulesPerBatch();
+        int declaredMax = backend.capabilities().maxQuestionsPerRequest();
         PromptJudgeProperties.Backend config = judgeProps.backends().get(backend.id());
         int backendLimit = config == null ? 0 : config.maxRulesPerBatch();
         int requested = backendLimit > 0 ? backendLimit : judgeProps.maxRulesPerBatch();

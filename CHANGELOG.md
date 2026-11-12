@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING: prompt judge backends unified on the Jev `POST /v1/systemone` protocol** (wire contract verified against the NeoHorse official runtime on a T4): the engine now sends `{model, state, questions}` and parses `answers.<id>.noul` from `{model, answers, usage}`. The legacy `/v1/judge` + `rules`-array encoding, the `systemOneBody` fork and `PromptJudgeBackend.health()`/`PromptJudgeBackendRegistry.catalog()` are removed. Backend config: `type`/`model-version` replaced by the required `model` wire name (`NeoHorse-Jev-4B`, not the artifact label — the old value would 422) plus optional `auth-token` (Bearer); the unused `license`/`commercial-use`/`experimental` backend keys are removed (licensing is documented per backend in `docs/judge-protocol-v1.md`, the canary status is expressed by `enabled: false`). `neohorse-4b` now answers up to 16 questions per request (8 effective), `laya-zh` is renamed `laya` and points at the `laya-multilingual` checkpoint (322M mmBERT, 100+ languages incl. Chinese; the 421M English root checkpoint cannot read non-Latin scripts), internal canary only. Errors are HTTP status + `{"detail"}`; 429/529 (busy) is retried once honouring `Retry-After` on the async and simulate paths only — the synchronous decision path fails fast to `on_error` so a busy backend never adds latency to `effective_action`; out-of-range `noul` is clamped with a warning. Metrics moved into the backend layer: `virbius.prompt.judge.requests{backend,result}`, `latency.ms`, `batch.questions`, `noul`, `content.truncated`.
+
+### Added
+- **Startup sanity warnings for judge backend wiring**: an enabled backend id with no registered implementation, a registered backend with no configuration entry, and a missing or disabled `default-backend` are reported at startup (WARN only, matching the existing non-fail-fast policy) instead of surfacing as silent per-request `on_error`.
+- **Oversized-input protection for judge rules**: content is truncated head+tail to a CJK-aware token budget (75% of the backend's `maxStateTokens`, since ~1 Chinese char ≈ 1 token) and the `virbius.prompt-judge.max-content-chars` ceiling (default 4000) before being sent — a char-only budget overflows on Chinese, so fail_open rules could otherwise be bypassed by inputs exceeding the vendor 2048-token `state` limit. Batches are also split early when cumulative `instructions` exceed `virbius.prompt-judge.max-prompt-chars` (default 24000). `virbius.prompt-judge.timeout-ms` defaults to 5000 (was 2000). New protocol reference: `docs/judge-protocol-v1.md` (includes the measured golden request/response pair).
+
 ## [1.0.3] - 2026-10-29
 
 ### Added

@@ -40,7 +40,7 @@ class PromptRunnerBindTest {
 
     private PromptRunner newRunner(PromptLlmProperties props) {
         PromptJudgeProperties judgeProps =
-                new PromptJudgeProperties("neohorse-4b", 1000, 16, Map.of());
+                new PromptJudgeProperties("neohorse-4b", 1000, 16, 24000, 4000, Map.of());
         return new PromptRunner(cache, props, llmClient,
                 new PromptAuditJsonParser(new ObjectMapper()),
                 mock(TenantAwareTaskExecutor.class), mock(AsyncActionHandler.class),

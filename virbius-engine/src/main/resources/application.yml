@@ -114,33 +114,26 @@ virbius:
       Agent Tool Misuse: prompt-agent
   prompt-judge:
     default-backend: neohorse-4b
-    timeout-ms: ${VIRBIUS_PROMPT_JUDGE_TIMEOUT_MS:2000}
+    timeout-ms: ${VIRBIUS_PROMPT_JUDGE_TIMEOUT_MS:5000}
     max-rules-per-batch: 8
+    max-prompt-chars: ${VIRBIUS_PROMPT_JUDGE_MAX_PROMPT_CHARS:24000}
+    max-content-chars: ${VIRBIUS_PROMPT_JUDGE_MAX_CONTENT_CHARS:4000}
     backends:
       neohorse-4b:
-        type: neohorse
         base-url: ${VIRBIUS_NEOHORSE_URL:http://127.0.0.1:8091}
+        model: NeoHorse-Jev-4B
+        auth-token: ${VIRBIUS_NEOHORSE_TOKEN:}
         enabled: true
-        license: Apache-2.0
-        commercial-use: true
-        model-version: NeoHorse-Jev-4B-Q4_K_M
-        max-rules-per-batch: 1
-      startlux-4b:
-        type: startlux
-        base-url: ${VIRBIUS_STARTLUX_URL:http://127.0.0.1:8090}
-        enabled: false
-        license: CC-BY-NC-4.0
-        commercial-use: false
-        model-version: StartLux-Decision-v1.1-4B-Instant
         max-rules-per-batch: 8
-      laya-zh:
-        type: laya
-        base-url: ${VIRBIUS_LAYA_URL:http://127.0.0.1:8092}
+      startlux-4b:
+        base-url: ${VIRBIUS_STARTLUX_URL:http://127.0.0.1:8090}
+        model: StartLux-Decision-v1.1-4B-Instant
         enabled: false
-        license: unknown
-        commercial-use: false
-        experimental: true
-        model-version: laya-mlx-zh
+        max-rules-per-batch: 8
+      laya:
+        base-url: ${VIRBIUS_LAYA_URL:http://127.0.0.1:8092}
+        model: laya-multilingual
+        enabled: false
         max-rules-per-batch: 1
   guard-detect:
     injection-enabled: ${VIRBIUS_INJECTION_DETECT_ENABLED:true}

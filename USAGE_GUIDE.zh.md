@@ -681,7 +681,7 @@ curl -X POST http://localhost:8080/api/v1/admin/tenants/default/tools \
 
 运营台模拟（`POST .../rules/simulate`）返回 `mode`（`category`/`judge`）、`backend`、`probability`、`threshold`、`judge_hit` 与实际生效的异常策略；创建、草稿编辑、模拟三处共用同一套校验。
 
-judge 规则按批调用后端。默认每批 8 条，可用全局 `virbius.prompt-judge.max-rules-per-batch` 或每后端 `virbius.prompt-judge.backends.<id>.max-rules-per-batch` 调整；实际批量不会超过后端声明的能力上限。见 `DEPLOYMENT.zh.md` §10.2。
+judge 规则统一走 Jev `POST /v1/systemone` 协议（线上契约见 `docs/judge-protocol-v1.md`）按批调用后端。默认每批 8 条，可用全局 `virbius.prompt-judge.max-rules-per-batch` 或每后端 `virbius.prompt-judge.backends.<id>.max-rules-per-batch` 调整；实际批量不会超过后端声明的能力上限。批量节省的是 HTTP 往返；是否减少前向取决于后端（NeoHorse 8 问一次前向，StartLux gguf 服务端每问一次前向）。累计 `instructions` 超过 `virbius.prompt-judge.max-prompt-chars` 会提前切批；content 在发送前头尾各半截断到「CJK 感知 token 预算（后端 `maxStateTokens` 的 75%，中文约 1 字≈1 token）与 `virbius.prompt-judge.max-content-chars`」的较小值。HTTP 429/529（busy）时仅在异步与 simulate 路径按 `Retry-After` 重试一次；同步判定路径直接走 `on_error` 快速失败，busy 不会拖慢 `effective_action`。见 `DEPLOYMENT.zh.md` §10.2。
 
 **异步动作（webhook / Kafka）：** 异步规则必须 `intent=allow`，且脱离判定链路求值——命中不会改变当次 `effective_action`。`async_action_config` 为 JSON 对象，上限 8192 字符：
 

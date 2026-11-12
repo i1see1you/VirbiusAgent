@@ -154,6 +154,8 @@ class PromptRunnerJudgeTest {
                 defaultBackend,
                 1000,
                 globalBatch,
+                24000,
+                4000,
                 Map.of(
                         PromptJudgeBackends.NEOHORSE, backendConfig(true, backendBatch),
                         PromptJudgeBackends.STARTLUX, backendConfig(true, backendBatch)));
@@ -173,7 +175,7 @@ class PromptRunnerJudgeTest {
 
     private static PromptJudgeProperties.Backend backendConfig(boolean enabled, int batch) {
         return new PromptJudgeProperties.Backend(
-                "http", "http://127.0.0.1", enabled, "test", true, false, "test", batch);
+                "http://127.0.0.1", enabled, "test-model", "", batch);
     }
 
     private static RuleEntry promptRule(String ruleId, String body) {
@@ -242,8 +244,7 @@ class PromptRunnerJudgeTest {
 
         @Override
         public JudgeCapabilities capabilities() {
-            return new JudgeCapabilities(
-                    true, false, false, 0, maxRulesPerBatch, "test", true);
+            return new JudgeCapabilities(maxRulesPerBatch, false, 2048);
         }
 
         @Override
@@ -261,9 +262,5 @@ class PromptRunnerJudgeTest {
             return new JudgeResult(answers, 1, null);
         }
 
-        @Override
-        public JudgeHealth health() {
-            return JudgeHealth.up();
-        }
     }
 }

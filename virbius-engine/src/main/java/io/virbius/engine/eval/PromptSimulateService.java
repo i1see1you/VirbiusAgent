@@ -107,7 +107,7 @@ public class PromptSimulateService {
         PromptJudgeBackend.JudgeResult result = backend.get().judge(new PromptJudgeBackend.JudgeRequest(
                 content,
                 List.of(new PromptJudgeBackend.JudgeRule(
-                        ruleId, "noul", PromptJudgeSupport.instructions(spec)))));
+                        ruleId, "noul", PromptJudgeSupport.instructions(spec))), true));
         PromptJudgeSupport.Outcome outcome = PromptJudgeSupport.evaluate(spec, result, ruleId);
         return new PromptSimulateResponseDto(
                 outcome.signal(),

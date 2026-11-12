@@ -689,10 +689,14 @@ Dev disables Flyway and builds from `db/schema.sql`: **an older dev database lac
 | `auth.control_base_url` (proxy) | empty | non-empty enables proxy-side exchange (once per session + proactive refresh) |
 | `virbius.review.input-risk-dedup-ttl-ms` | `600000` | input-review risk dedup window (once per trace, 10 min) |
 | `virbius.prompt-judge.default-backend` (engine) | `neohorse-4b` | judge backend for non-built-in `runtime=prompt` rule ids; the ten `prompt-*` category rules keep the guard-LLM path |
-| `virbius.prompt-judge.timeout-ms` (engine) | `2000` | per-batch judge timeout; a timeout follows the rule's `on_error` policy |
+| `virbius.prompt-judge.timeout-ms` (engine) | `5000` | per-batch judge timeout; a timeout follows the rule's `on_error` policy |
 | `virbius.prompt-judge.backends.<id>.base-url` (engine) | `http://127.0.0.1:8091` (`neohorse-4b`) | judge backend endpoint (`VIRBIUS_NEOHORSE_URL` for the default backend) |
+| `virbius.prompt-judge.backends.<id>.model` (engine) | `NeoHorse-Jev-4B` | **required** wire model name for the Jev `/v1/systemone` protocol; must be a vendor alias (not the artifact label) |
+| `virbius.prompt-judge.backends.<id>.auth-token` (engine) | empty | sent as `Authorization: Bearer` when set (`VIRBIUS_NEOHORSE_TOKEN`) |
 | `virbius.prompt-judge.max-rules-per-batch` (engine) | `8` | rules per judge call; the effective size is `min(backend-declared capability, per-backend override or this value)` |
-| `virbius.prompt-judge.backends.<id>.max-rules-per-batch` (engine) | `0` = inherit | per-backend override; `neohorse-4b` = 1 (declared single-question), `startlux-4b` = 8, `laya-zh` = 1 |
+| `virbius.prompt-judge.backends.<id>.max-rules-per-batch` (engine) | `0` = inherit | per-backend override; `neohorse-4b` = 8 (16 declared), `startlux-4b` = 8, `laya` = 1 |
+| `virbius.prompt-judge.max-prompt-chars` (engine) | `24000` | approximate questions-side budget in characters; a batch is split early when cumulative `instructions` exceed it |
+| `virbius.prompt-judge.max-content-chars` (engine) | `4000` | content is truncated head+tail to the smaller of a CJK-aware token budget (75% of the backend's `maxStateTokens`) and this char ceiling before being sent (vendor `state` limit is 2048 tokens; ~1 Chinese char ≈ 1 token, so a char-only budget overflows); counted in `virbius.prompt.judge.content.truncated` |
 | `virbius.async-action.enabled` (engine) | `true` | async action delivery switch; `false` only counts `unknown/skipped` and never calls out |
 | `virbius.async-action.delivery-threads` (engine) | `2` | dedicated delivery threads (isolated from the evaluation pool) |
 | `virbius.async-action.delivery-queue-max` (engine) | `1000` | delivery queue bound; a full queue drops the action and counts `skipped` (never back-pressures evaluation) |

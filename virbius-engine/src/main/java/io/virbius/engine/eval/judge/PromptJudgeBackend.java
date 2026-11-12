@@ -11,11 +11,10 @@ public interface PromptJudgeBackend {
 
     JudgeResult judge(JudgeRequest request);
 
-    JudgeHealth health();
-
     record JudgeRule(String id, String type, String instructions) {}
 
-    record JudgeRequest(String content, List<JudgeRule> rules) {
+    // allowBusyRetry=false on the sync decision path: a busy sleep-retry would block effective_action.
+    record JudgeRequest(String content, List<JudgeRule> rules, boolean allowBusyRetry) {
         public JudgeRequest {
             rules = rules == null ? List.of() : List.copyOf(rules);
         }
@@ -42,21 +41,7 @@ public interface PromptJudgeBackend {
     }
 
     record JudgeCapabilities(
-            boolean supportsNoul,
-            boolean supportsChoice,
-            boolean supportsBatch,
-            int maxContextTokens,
-            int maxRulesPerBatch,
-            String license,
-            boolean commercialUseAllowed) {}
-
-    record JudgeHealth(boolean healthy, String detail) {
-        public static JudgeHealth up() {
-            return new JudgeHealth(true, "ok");
-        }
-
-        public static JudgeHealth down(String detail) {
-            return new JudgeHealth(false, detail);
-        }
-    }
+            int maxQuestionsPerRequest,
+            boolean multiQuestionSingleForward,
+            int maxStateTokens) {}
 }

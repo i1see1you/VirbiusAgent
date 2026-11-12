@@ -289,6 +289,8 @@ else:
 PY
 }
 
+# 长度 <= 4000 的输入要求 judge 收到等长原文（透传）；
+# > 4000 的输入按 v2 契约要求头尾各半截断 + [truncated] 标记。
 stub_assert_judge_content() {
   local expected_file="$1" label="$2"
   curl -sS --noproxy '*' --max-time 5 "${STUB}/calls" > "${WORK}/calls.json"
@@ -297,13 +299,41 @@ stub_assert_judge_content() {
 import json, sys
 calls = json.load(open(sys.argv[1], encoding="utf-8"))
 want = open(sys.argv[2], encoding="utf-8").read()
-print("1" if any(c.get("kind") == "judge" and c.get("content") == want for c in calls) else "0")
+LIMIT = 4000
+def matches(c):
+    got = c.get("content") or ""
+    if len(want) <= LIMIT:
+        return got == want
+    half = LIMIT // 2
+    return (got.startswith(want[:half])
+            and got.endswith(want[-half:])
+            and "[truncated " in got
+            and len(got) < len(want))
+print("1" if any(c.get("kind") == "judge" and matches(c) for c in calls) else "0")
 PY
 )
   if [ "$found" = "1" ]; then
-    ok "${label}（judge 收到完整未截断原文）"
+    ok "${label}（长度<=4000 等长透传；>4000 头尾各半截断）"
   else
-    bad "${label}（未找到等长原文；可能被分块/截断或未走 judge）"
+    bad "${label}（原文透传/截断断言失败）"
+  fi
+}
+
+stub_assert_judge_contract() {
+  curl -sS --noproxy '*' --max-time 5 "${STUB}/calls" > "${WORK}/calls.json"
+  local ok_flag
+  ok_flag=$(python3 - "${WORK}/calls.json" <<'PY'
+import json, sys
+calls = json.load(open(sys.argv[1], encoding="utf-8"))
+judges = [c for c in calls if c.get("kind") == "judge"]
+bad = [c for c in judges if not c.get("model") or not c.get("rules")]
+print("1" if judges and not bad else "0")
+PY
+)
+  if [ "$ok_flag" = "1" ]; then
+    ok "Jev /v1/systemone 契约（每次调用带 model + questions 键控）"
+  else
+    bad "Jev 契约断言失败（存在缺 model 或 questions 为空的 judge 调用）"
   fi
 }
 
@@ -482,29 +512,37 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(raw.decode("utf-8"))
         except Exception:
             body = {}
-        if self.path == "/v1/judge":
-            content = str((body.get("state") or {}).get("content") or "")
-            rules = body.get("rules") or []
-            if not isinstance(rules, list):
-                rules = []
+        if self.path == "/v1/systemone":
+            model = body.get("model")
+            if not isinstance(model, str) or not model:
+                self.send_json(422, {"detail": "model is required; use NeoHorse-Jev-4B"})
+                return
+            state = body.get("state")
+            if isinstance(state, dict):
+                content = str(state.get("content") or "")
+            else:
+                content = str(state or "")
+            questions = body.get("questions")
+            if not isinstance(questions, dict):
+                questions = {}
             if "JUDGE_DOWN" in content:
                 record({"kind": "judge", "content": content,
-                        "rules": [r.get("id") for r in rules if isinstance(r, dict)],
+                        "rules": list(questions.keys()), "model": model,
                         "error": "stub down"})
-                self.send_json(500, {"error": "stub down"})
+                self.send_json(500, {"detail": "stub down"})
                 return
             if "JUDGE_EXACT_095" in content:
                 probability = 0.95
             else:
                 probability = 0.9 if any(k in content for k in ("基金", "医疗", "阈值")) else 0.1
             answers = {}
-            for rule in rules:
-                if isinstance(rule, dict) and rule.get("id"):
-                    answers[str(rule["id"])] = {"noul": probability}
+            for qid in questions:
+                answers[str(qid)] = {"type": "noul", "noul": probability}
             record({"kind": "judge", "content": content,
-                    "rules": [r.get("id") for r in rules if isinstance(r, dict)],
+                    "rules": list(questions.keys()), "model": model,
                     "probability": probability})
-            self.send_json(200, {"answers": answers})
+            self.send_json(200, {"model": model, "answers": answers,
+                                 "usage": {"input_tokens": 32, "output_tokens": 30}})
             return
         if self.path == "/hook":
             record({"kind": "hook", "body": raw.decode("utf-8", "replace")[:800]})
@@ -803,8 +841,11 @@ else
   bad "engine 未调用 judge backend"
 fi
 stub_assert_judge_content "${WORK}/expected-content.txt" "full-content 透传"
+stub_assert_judge_contract
 
+printf '%s' "今天天气不错，适合出去散步" > "${WORK}/expected-short.txt"
 wait_eval "dry_run judge 未命中（良性）" "今天天气不错，适合出去散步" effective_action allow || true
+stub_assert_judge_content "${WORK}/expected-short.txt" "short-content 等长透传"
 
 # ============================================================
 # [6] 灰度 100% → 全量，验证真实拦截

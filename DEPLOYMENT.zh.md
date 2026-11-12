@@ -679,10 +679,14 @@ dev 环境关闭 Flyway，用 `db/schema.sql` 建表：**旧库不含上述新�
 | `auth.control_base_url`（proxy） | 空 | 非空即启用 proxy 端换取（每会话一次 + 主动刷新） |
 | `virbius.review.input-risk-dedup-ttl-ms` | `600000` | 输入审查风险计分去重窗口（同 trace 只计一次，10 分钟） |
 | `virbius.prompt-judge.default-backend`（engine） | `neohorse-4b` | 非内置 `runtime=prompt` rule_id 的 judge 后端；十个 `prompt-*` category 规则仍走 guard LLM |
-| `virbius.prompt-judge.timeout-ms`（engine） | `2000` | judge 单批超时；超时按规则 `on_error` 处理 |
+| `virbius.prompt-judge.timeout-ms`（engine） | `5000` | judge 单批超时；超时按规则 `on_error` 处理 |
 | `virbius.prompt-judge.backends.<id>.base-url`（engine） | `http://127.0.0.1:8091`（`neohorse-4b`） | judge backend 地址（默认后端对应 env `VIRBIUS_NEOHORSE_URL`） |
+| `virbius.prompt-judge.backends.<id>.model`（engine） | `NeoHorse-Jev-4B` | **必填**：Jev `/v1/systemone` 协议的 wire 模型名，必须是厂商别名（不是制品标签） |
+| `virbius.prompt-judge.backends.<id>.auth-token`（engine） | 空 | 非空时以 `Authorization: Bearer` 发送（`VIRBIUS_NEOHORSE_TOKEN`） |
 | `virbius.prompt-judge.max-rules-per-batch`（engine） | `8` | 单次 judge 调用的规则数；实际大小取 `min(后端声明的能力, 每后端覆盖值或该值)` |
-| `virbius.prompt-judge.backends.<id>.max-rules-per-batch`（engine） | `0` = 继承 | 每后端覆盖；`neohorse-4b` = 1（声明为单问题）、`startlux-4b` = 8、`laya-zh` = 1 |
+| `virbius.prompt-judge.backends.<id>.max-rules-per-batch`（engine） | `0` = 继承 | 每后端覆盖；`neohorse-4b` = 8（声明 16）、`startlux-4b` = 8、`laya` = 1 |
+| `virbius.prompt-judge.max-prompt-chars`（engine） | `24000` | questions 侧字符预算（近似值）；累计 `instructions` 超限则提前切批 |
+| `virbius.prompt-judge.max-content-chars`（engine） | `4000` | 超长 content 发送前头尾各半截断到「CJK 感知 token 预算（后端 `maxStateTokens` 的 75%）与本字符上限」的较小值（厂商 `state` 上限 2048 token；中文约 1 字≈1 token，仅按字符截断会溢出）；计数进 `virbius.prompt.judge.content.truncated` |
 | `virbius.async-action.enabled`（engine） | `true` | 异步动作投递开关；`false` 时仅计 `unknown/skipped`，不外呼 |
 | `virbius.async-action.delivery-threads`（engine） | `2` | 专用投递线程数（与判定线程池隔离） |
 | `virbius.async-action.delivery-queue-max`（engine） | `1000` | 投递队列上限；队满直接丢弃并计 `skipped`（不背压判定链路） |

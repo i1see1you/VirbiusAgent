@@ -9,7 +9,11 @@ import io.virbius.engine.config.PromptJudgeProperties;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 
+@ExtendWith(OutputCaptureExtension.class)
 class PromptJudgeBackendRegistryTest {
 
     @Test
@@ -35,21 +39,9 @@ class PromptJudgeBackendRegistryTest {
         PromptJudgeBackendRegistry missingDefault = new PromptJudgeBackendRegistry(
                 List.of(new FakeBackend("neohorse-4b")),
                 new PromptJudgeProperties(
-                        "startlux-4b", 0, 0,
+                        "startlux-4b", 0, 0, 0, 0,
                         Map.of("neohorse-4b", backend(true))));
         assertThrows(IllegalStateException.class, missingDefault::defaultBackend);
-    }
-
-    @Test
-    void catalogShowsConfiguredButMissingAdapter() {
-        PromptJudgeBackendRegistry registry = registry(Map.of("neohorse-4b", backend(true)));
-
-        List<PromptJudgeBackendRegistry.BackendView> catalog = registry.catalog();
-
-        assertEquals(1, catalog.size());
-        assertEquals("neohorse-4b", catalog.get(0).id());
-        assertTrue(catalog.get(0).enabled());
-        assertTrue(catalog.get(0).available());
     }
 
     @Test
@@ -64,6 +56,72 @@ class PromptJudgeBackendRegistryTest {
                         props(Map.of("neohorse-4b", backend(true)))));
     }
 
+    @Test
+    void constructsFineWithEnabledBackendMissingModel() {
+        // Startup only logs a WARN in this case; construction must not fail.
+        PromptJudgeProperties.Backend blankModel = new PromptJudgeProperties.Backend(
+                "http://127.0.0.1", true, "", "", 0);
+
+        PromptJudgeBackendRegistry registry = registry(Map.of("neohorse-4b", blankModel));
+
+        assertTrue(registry.findEnabled("neohorse-4b").isPresent());
+    }
+
+    @Test
+    void warnsWhenDefaultBackendHasNoConfigEntry(CapturedOutput output) {
+        new PromptJudgeBackendRegistry(
+                List.of(new FakeBackend("neohorse-4b")),
+                new PromptJudgeProperties("neohorse", 0, 0, 0, 0,
+                        Map.of("neohorse-4b", backend(true))));
+
+        assertTrue(output.getAll().contains(
+                "default backend neohorse has no configuration entry"));
+    }
+
+    @Test
+    void warnsWhenEnabledBackendHasNoImplementation(CapturedOutput output) {
+        new PromptJudgeBackendRegistry(
+                List.of(new FakeBackend("neohorse-4b")),
+                new PromptJudgeProperties("neohorse-4b", 0, 0, 0, 0,
+                        Map.of("neohorse-4b", backend(true), "startlux", backend(true))));
+
+        assertTrue(output.getAll().contains(
+                "backend startlux is enabled but no implementation is registered"));
+    }
+
+    @Test
+    void warnsWhenDefaultBackendHasNoImplementation(CapturedOutput output) {
+        new PromptJudgeBackendRegistry(
+                List.of(new FakeBackend("startlux-4b")),
+                new PromptJudgeProperties("neohorse-4b", 0, 0, 0, 0,
+                        Map.of("neohorse-4b", backend(true))));
+
+        assertTrue(output.getAll().contains(
+                "default backend neohorse-4b has no implementation registered"));
+    }
+
+    @Test
+    void warnsWhenBackendHasNoConfigEntry(CapturedOutput output) {
+        new PromptJudgeBackendRegistry(
+                List.of(new FakeBackend("neohorse-4b")),
+                new PromptJudgeProperties("startlux-4b", 0, 0, 0, 0,
+                        Map.of("startlux-4b", backend(false))));
+
+        assertTrue(output.getAll().contains(
+                "backend neohorse-4b is registered but has no configuration entry"));
+    }
+
+    @Test
+    void warnsWhenDefaultBackendIsDisabled(CapturedOutput output) {
+        new PromptJudgeBackendRegistry(
+                List.of(new FakeBackend("neohorse-4b")),
+                new PromptJudgeProperties("neohorse-4b", 0, 0, 0, 0,
+                        Map.of("neohorse-4b", backend(false))));
+
+        assertTrue(output.getAll().contains(
+                "default backend neohorse-4b is disabled"));
+    }
+
     private static PromptJudgeBackendRegistry registry(
             Map<String, PromptJudgeProperties.Backend> config) {
         return new PromptJudgeBackendRegistry(
@@ -73,12 +131,12 @@ class PromptJudgeBackendRegistryTest {
     private static PromptJudgeProperties props(
             Map<String, PromptJudgeProperties.Backend> config) {
         return new PromptJudgeProperties(
-                "neohorse-4b", 0, 0, config);
+                "neohorse-4b", 0, 0, 0, 0, config);
     }
 
     private static PromptJudgeProperties.Backend backend(boolean enabled) {
         return new PromptJudgeProperties.Backend(
-                "test", "http://127.0.0.1", enabled, "Apache-2.0", true, false, "v1", 0);
+                "http://127.0.0.1", enabled, "NeoHorse-Jev-4B", "", 0);
     }
 
     private static final class FakeBackend implements PromptJudgeBackend {
@@ -96,17 +154,12 @@ class PromptJudgeBackendRegistryTest {
 
         @Override
         public JudgeCapabilities capabilities() {
-            return new JudgeCapabilities(true, false, true, 4096, 16, "Apache-2.0", true);
+            return new JudgeCapabilities(16, true, 2048);
         }
 
         @Override
         public JudgeResult judge(JudgeRequest request) {
             return new JudgeResult(Map.of(), 0, null);
-        }
-
-        @Override
-        public JudgeHealth health() {
-            return JudgeHealth.up();
         }
     }
 }
