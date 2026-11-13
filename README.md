@@ -32,7 +32,7 @@
 
 ```bash
 git clone https://github.com/i1see1you/VirbiusAgent.git && cd VirbiusAgent
-docker compose build && docker compose up -d   # Redis + engine + control plane
+docker compose build && docker compose up -d   # Redis + engine + control + auth (+ Kafka/Ollama)
 curl -s http://localhost:8080/api/v1/health    # verify
 ```
 
@@ -209,7 +209,7 @@ export, field mapping, and the adversarial slice.
 | Rust | 1.80+ | virbius-core, virbius-mcp-proxy, virbius-kernel, virbius-mcp-python (PyO3), virbius-mcp-node (napi-rs) |
 | Go | 1.22+ | WASM plugin (Gateway), virbius-expr |
 | Node.js | 18+ | virbius-mcp-node |
-| Python | 3.10+ | virbius-integrate, virbius-mcp-python (built via maturin) |
+| Python | 3.10+ | virbius-integrate, virbius-mcp-python (built via maturin), virbius-review-sdk |
 | Redis | 7+ | Audit ingest, cumulative counters, cache |
 | OpenSSL | 3.x (4.x experimental) | librdkafka via rdkafka-sys (see build note below) |
 | MySQL | 8+ | Production database (SQLite for dev) |
@@ -260,7 +260,7 @@ curl -s http://localhost:8080/api/v1/health
 
 ### Docker (Compose)
 
-Start the full stack with a single command (Redis + engine + control plane):
+Start the full stack with a single command (Redis + engine + control plane + auth; Kafka and Ollama included):
 
 ```bash
 git clone https://github.com/i1see1you/VirbiusAgent.git && cd VirbiusAgent
@@ -584,15 +584,8 @@ VirbiusAgent/
 | [API_REFERENCE.md](API_REFERENCE.md) | REST API stability contract (envelope, auth, status codes, versioning) |
 | [PROXY_CONFIG.md](PROXY_CONFIG.md) | MCP proxy configuration reference |
 | [SSO_INTEGRATION.md](SSO_INTEGRATION.md) | Unified login (OAuth2/OIDC) — auth-broker design (finalized, not yet implemented) |
-| [FAQ-agent-scenarios.md](FAQ-agent-scenarios.md) | FAQ — common agent-security scenarios |
+| [FAQ.md](FAQ.md) | FAQ — agent-security scenarios and product answers |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
-
-## Roadmap
-
-- [ ] Publish `virbius-core` / `virbius-mcp-proxy` to crates.io and `virbius-mcp-node` to npm (the PyPI packages are live).
-- [ ] Cross-platform wheels (`virbius-mcp-python`) and napi platform packages (`virbius-mcp-node`) via a CI matrix.
-- [ ] Enable GitHub Discussions and label `good first issue` / `help wanted` for contributor onboarding.
-- [ ] SSO / OIDC auth-broker (designed, not yet implemented — see [SSO_INTEGRATION.md](SSO_INTEGRATION.md)).
 
 ## Contributing
 

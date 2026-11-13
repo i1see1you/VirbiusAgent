@@ -32,7 +32,7 @@ English: [README.md](README.md)
 
 ```bash
 git clone https://github.com/i1see1you/VirbiusAgent.git && cd VirbiusAgent
-docker compose build && docker compose up -d   # Redis + 引擎 + 控制面
+docker compose build && docker compose up -d   # Redis + 引擎 + 控制面 + 认证（含 Kafka/Ollama）
 curl -s http://localhost:8080/api/v1/health    # 验证
 ```
 
@@ -205,7 +205,7 @@ python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl
 | Rust | 1.80+ | virbius-core, virbius-mcp-proxy, virbius-kernel, virbius-mcp-python (PyO3), virbius-mcp-node (napi-rs) |
 | Go | 1.22+ | WASM 插件（Gateway）、virbius-expr |
 | Node.js | 18+ | virbius-mcp-node |
-| Python | 3.10+ | virbius-integrate、virbius-mcp-python（经 maturin 构建） |
+| Python | 3.10+ | virbius-integrate、virbius-mcp-python（经 maturin 构建）、virbius-review-sdk |
 | Redis | 7+ | 审计消费、累计计数器、缓存 |
 | OpenSSL | 3.x（4.x 实验） | librdkafka（经 rdkafka-sys，见下方构建说明） |
 | MySQL | 8+ | 生产数据库（开发用 SQLite） |
@@ -255,12 +255,12 @@ curl -s http://localhost:8080/api/v1/health
 
 ### Docker (Compose)
 
-一条命令启动完整服务栈（Redis + 引擎 + 控制面）：
+一条命令启动完整服务栈（Redis + 引擎 + 控制面 + 认证，含 Kafka/Ollama）：
 
 ```bash
 git clone https://github.com/i1see1you/VirbiusAgent.git && cd VirbiusAgent
 docker compose build     # 构建所有镜像（仅首次）
-docker compose up -d     # 启动所有服务
+docker compose up -d     # 启动默认栈（MCP 代理需 --profile full）
 docker compose ps        # 查看状态
 ```
 
@@ -575,7 +575,7 @@ VirbiusAgent/
 | [API_REFERENCE.zh.md](API_REFERENCE.zh.md) | REST API 稳定性契约（错误信封、认证、状态码、版本策略） |
 | [PROXY_CONFIG.zh.md](PROXY_CONFIG.zh.md) | MCP 代理配置参考 |
 | [SSO_INTEGRATION.zh.md](SSO_INTEGRATION.zh.md) | 统一登录（OAuth2/OIDC）— auth-broker 方案（已定稿，尚未实现） |
-| [FAQ-agent-scenarios.md](FAQ-agent-scenarios.md) | 常见问题 — Agent 安全典型场景 |
+| [FAQ.zh.md](FAQ.zh.md) | 常见问题 — Agent 安全场景与产品答疑 |
 | [CHANGELOG.md](CHANGELOG.md)（英文） | 版本历史 |
 
 > 语言说明：以上文档均提供中文版，点击链接即可查看；CHANGELOG 目前仅提供英文版。
