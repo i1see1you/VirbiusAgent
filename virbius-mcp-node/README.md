@@ -13,6 +13,16 @@ four-tier **Edge–Gateway–Kernel–Cloud** security platform for AI Agents.
 npm install virbius-mcp-node
 ```
 
+## Platform support
+
+Prebuilt native binaries are currently published for **macOS arm64 (Apple
+Silicon)** only. Linux (x64/arm64), macOS x64 and Windows binaries are
+produced by the CI matrix (see the repository roadmap); until then, on other
+platforms `require('virbius-mcp-node')` throws `Failed to load native
+binding`. As a workaround, build from source on your platform: clone the
+repository and run `npm run build` in `virbius-mcp-node/` (requires the Rust
+toolchain).
+
 ## Usage
 
 ```js
