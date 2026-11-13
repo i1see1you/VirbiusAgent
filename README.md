@@ -2,7 +2,10 @@
 
 [![CI](https://github.com/i1see1you/VirbiusAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/i1see1you/VirbiusAgent/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/i1see1you/VirbiusAgent/actions/workflows/codeql.yml/badge.svg)](https://github.com/i1see1you/VirbiusAgent/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/i1see1you/VirbiusAgent?sort=semver)](https://github.com/i1see1you/VirbiusAgent/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/dm/virbius-review-sdk?label=review-sdk%20downloads)](https://pypi.org/project/virbius-review-sdk/)
+[![HuggingFace](https://img.shields.io/badge/HuggingFace-VirbiusGuard-yellow)](https://huggingface.co/i1see1you/VirbiusGuard)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange)](https://adoptium.net/)
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange)](https://www.rust-lang.org/)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8)](https://go.dev/)
@@ -11,15 +14,50 @@
 
 [中文文档](README.zh.md)
 
-**VirbiusAgent** is a deep security platform purpose-built for AI Agents. Leveraging eBPF and a four-tier **Edge–Gateway–Kernel–Cloud**  architecture, it provides real-time visibility and precise blocking of Agent behaviors, effectively tackling the challenges of privilege abuse and loss of security control.
+**VirbiusAgent** is an open-source runtime security platform for self-hosted AI Agents. It blocks prompt injection, MCP tool abuse and privilege escalation across four independent layers — **Edge → Gateway → Kernel → Cloud** — combining sub-millisecond rules, eBPF/Falco syscall observation and LLM guardrails.
 
-The Agent security landscape falls into two categories: **endpoint-side controls** — DLP and related measures to govern employee usage of AI and Agents, preventing data leaks, shadow AI, and prompt leakage — and **server-side protection**, which is VirbiusAgent's core focus. As an Agent security platform, VirbiusAgent secures your self-developed intelligent agents against prompt injection, MCP tool abuse, and privilege escalation. It is designed to support enterprise security review and audit workflows; map its controls to the regulations that apply to your jurisdiction. Endpoint controls are largely standardized with low business coupling, whereas VirbiusAgent provides a highly customizable security policy framework on the server side, requiring security engineers who understand both policy and business to tailor configurations for precise, scenario-matched protection.
+> **Scope:** VirbiusAgent protects *your self-developed agents* (server-side runtime security), not endpoint DLP for employee AI usage. It provides a highly customizable policy framework for enterprise security review and audit; map its controls to the regulations that apply to your jurisdiction. Precise, scenario-matched protection requires security engineers who understand both policy and your business.
 
-## Operations Console
+### Proof at a glance
 
-![VirbiusAgent operations console — rule registry (English)](docs/images/ops-en.png)
+- **Prompt injection blocked** — AgentDojo v1.2.2 (949 pairs): attack success **1.58% → 0%**, utility **86.62% → 90.20%**. [Full benchmarks →](#benchmarks)
+- **Sub-millisecond** edge precheck, offline-capable
+- **eBPF/Falco** syscall-level runtime observation (file / process / network)
+- **Rules + LLM** hybrid detection (VirbiusGuard), human approval, hash-chained audit
 
-Main pages: rule registry & rollout, policy-cache hot reload, audit center, **Audit Integrity** (integrity verification / Decision BOM / audit export / session checkpoints, 4 tabs), **Alerts** (list / status filter / acknowledge / expand Decision BOM), sessions & traces, delegated credentials, and more.
+### Try it
+
+- **Live demo (no install):** <https://www.virbius.cn/demo> — paste text in the browser and see the 10 safety categories plus agent-attack samples.
+- **Full stack from source (one command):**
+
+```bash
+git clone https://github.com/i1see1you/VirbiusAgent.git && cd VirbiusAgent
+docker compose build && docker compose up -d   # Redis + engine + control plane
+curl -s http://localhost:8080/api/v1/health    # verify
+```
+
+- **Or the guided local setup:** `bash scripts/run-local.sh` then `bash scripts/smoke-test.sh`. More in [Quick Start](#quick-start).
+
+![VirbiusAgent operations console, recorded live: Alerts lists two real blocks (prompt injection, risk 100; credential access, risk 80), the Decision BOM explains the injection block, and Audit Integrity verifies the session hash chain 3/3](docs/images/ops-demo-en.gif)
+
+## Features
+
+| Capability | Description |
+|-----------|-------------|
+| **MCP Secure Proxy** | stdio/SSE proxy + security pipeline (License + allowlist + engine adjudication) + multi-upstream routing |
+| **Fast Path** | Bypass cloud layer for low-risk tools, latency optimization |
+| **Decision Trace** | Full-chain tool_call/tool_result tracing, session timeline + causal chain visualization |
+| **Human Approval** | High-risk tool approval flow: engine challenge → console approve → token-gated execution |
+| **Audit Dashboard** | Session risk, tool calls, alerts, approval queue, decision trace visualization |
+| **Prompt Injection Detection** | Single-model semantic detection with dynamic risk scoring |
+| **LLM + Traditional Models** | LLM safety classification built on VirbiusGuard (replaceable with other safety models) + Groovy L3 `mlPredict()` for external ML models |
+| **STI Taint Tracking** | Track untrusted outputs across tool chains, prevent data leakage |
+| **Hash Chain Audit** | Tamper-proof audit log with SHA-256 hash chain integrity verification |
+| **Memory Interceptor** | Desensitize sensitive data written to Agent memory |
+| **Output Review** | PII/credential leak detection in tool return values |
+| **Review API + Python SDK** | Input/output review as an engine API with a dedicated Python SDK (`virbius-review-sdk`): dispositions, streaming review windows, sync + async |
+| **Falco Rules Management** | Custom eBPF rules managed through console with canary deployment |
+| **Native Tool Integration** | LangChain callback observation (Mode A) + native-tool enforcement SDK (Mode B): tool inventory, coverage classification, warnings |
 
 ## Architecture
 
@@ -55,28 +93,36 @@ flowchart TD
 | **③ Kernel** | Runtime observability: file/process/network monitoring via eBPF. Custom Falco rules with canary deploy. | `virbius-kernel` (Falco plugin) |
 | **④ Cloud** | Policy management, LLM-based prompt/DLP detection, Groovy L3 terminal adjudication, decision trace, audit dashboard. | `virbius-engine` + `virbius-control` (Spring Boot) |
 
-## Features
-
-| Capability | Description |
-|-----------|-------------|
-| **MCP Secure Proxy** | stdio/SSE proxy + security pipeline (License + allowlist + engine adjudication) + multi-upstream routing |
-| **Fast Path** | Bypass cloud layer for low-risk tools, latency optimization |
-| **Decision Trace** | Full-chain tool_call/tool_result tracing, session timeline + causal chain visualization |
-| **Human Approval** | High-risk tool approval flow: engine challenge → console approve → token-gated execution |
-| **Audit Dashboard** | Session risk, tool calls, alerts, approval queue, decision trace visualization |
-| **Prompt Injection Detection** | Single-model semantic detection with dynamic risk scoring |
-| **LLM + Traditional Models** | LLM safety classification built on VirbiusGuard (replaceable with other safety models) + Groovy L3 `mlPredict()` for external ML models |
-| **STI Taint Tracking** | Track untrusted outputs across tool chains, prevent data leakage |
-| **Hash Chain Audit** | Tamper-proof audit log with SHA-256 hash chain integrity verification |
-| **Memory Interceptor** | Desensitize sensitive data written to Agent memory |
-| **Output Review** | PII/credential leak detection in tool return values |
-| **Review API + Python SDK** | Input/output review as an engine API with a dedicated Python SDK (`virbius-review-sdk`): dispositions, streaming review windows, sync + async |
-| **Falco Rules Management** | Custom eBPF rules managed through console with canary deployment |
-| **Native Tool Integration** | LangChain callback observation (Mode A) + native-tool enforcement SDK (Mode B): tool inventory, coverage classification, warnings |
+> **Deep dive:** layer-by-layer responsibilities, the request main path, rule runtimes and the rule-selection guide live in [ARCHITECTURE.md](ARCHITECTURE.md) and [USAGE_GUIDE.md](USAGE_GUIDE.md), and are collapsed under [Architecture Deep Dive](#architecture-deep-dive-reference) below.
 
 ## Why VirbiusAgent
 
-### Rules + Models: A Practical Engineering Pattern
+### Key Differentiators
+
+1. **Four-layer defense-in-depth** — Prompt-layer guardrails check a single point, and SDK-based peers (e.g. Microsoft Agent Governance Toolkit) add governance layers *in-process*. VirbiusAgent instead spans four independent layers across the runtime (Edge → Gateway → **Kernel** → Cloud), so even if one layer is bypassed, others still catch the threat — including **syscall-level (eBPF/Falco) observation** that SDK-based guardrails typically do not provide. This follows the **defense-in-depth principle**.
+
+2. **Rules and models combined** — Rules catch known threats at sub-millisecond latency; models generalize better. Combining them yields high precision/recall and high performance at relatively low cost. This **hybrid approach** is a practical balance of cost, speed, and coverage.
+
+3. **Agent-native, not just LLM-native** — Guardrail and scanner peers target the prompt or static analysis; VirbiusAgent secures the entire **tool-call lifecycle** across layers: pre-execution precheck → on-path gateway enforcement → runtime kernel observation → post-execution audit. This is purpose-built for the MCP era where Agents execute real actions.
+
+4. **Runtime visibility at the kernel level** — Via eBPF/Falco, VirbiusAgent observes Agent processes at the syscall level (file access, network connections, process spawns). This adds syscall-level runtime observability that application-layer guardrails typically cannot provide.
+
+### Comparison with Industry Solutions
+
+A high-level comparison as of 2026-11, based on public documentation. These are
+different products with different scopes; see [docs/COMPARISON.md](docs/COMPARISON.md)
+for the full matrix and source links. Capabilities may change as upstreams evolve.
+
+| Capability | VirbiusAgent | Microsoft AGT | Meta LlamaFirewall | IBM ContextForge |
+|-----------|:------------:|:-------------:|:------------------:|:----------------:|
+| **Scope** | Agent runtime security across four layers | In-process agent governance | Prompt/agent guardrail scanners | MCP/A2A/REST gateway |
+| **Runtime observability** | eBPF/Falco syscall visibility | App-level audit trail | In-process scan logs | App-level tracing |
+| **MCP support** | Native stdio/SSE proxy | MCP security gateway | Agent-framework guardrails | Native MCP/A2A/REST federation |
+| **Human-in-the-loop** | Challenge → approve → token-gated execution | Approval policies | Not documented | Not documented |
+| **Deployment** | Self-hosted (sidecar / remote / SDK) | SDK / library | Python SDK | Self-hosted (PyPI / Docker / Helm) |
+
+<details>
+<summary><b>Rules + Models: a practical engineering pattern</b></summary>
 
 Industry security engineering has shown that **combining deterministic rules with ML models is an effective defense** — neither alone is sufficient. This principle is the foundation of VirbiusAgent's design.
 
@@ -96,31 +142,10 @@ We use **GLM5.2** as the teacher model and **Qwen3Guard** as the base student mo
 >
 > **VirbiusGuard demo**: <https://www.virbius.cn/demo> — paste text in the browser and see the 10 safety categories plus agent-attack samples.
 
-### Comparison with Industry Solutions
+</details>
 
-A high-level comparison as of 2026-11, based on public documentation. These are
-different products with different scopes; see [docs/COMPARISON.md](docs/COMPARISON.md)
-for the full matrix and source links. Capabilities may change as upstreams evolve.
-
-| Capability | VirbiusAgent | Microsoft AGT | Meta LlamaFirewall | IBM ContextForge |
-|-----------|:------------:|:-------------:|:------------------:|:----------------:|
-| **Scope** | Agent runtime security across four layers | In-process agent governance | Prompt/agent guardrail scanners | MCP/A2A/REST gateway |
-| **Runtime observability** | eBPF/Falco syscall visibility | App-level audit trail | In-process scan logs | App-level tracing |
-| **MCP support** | Native stdio/SSE proxy | MCP security gateway | Agent-framework guardrails | Native MCP/A2A/REST federation |
-| **Human-in-the-loop** | Challenge → approve → token-gated execution | Approval policies | Not documented | Not documented |
-| **Deployment** | Self-hosted (sidecar / remote / SDK) | SDK / library | Python SDK | Self-hosted (PyPI / Docker / Helm) |
-
-### Key Differentiators
-
-1. **Four-layer defense-in-depth** — Prompt-layer guardrails check a single point, and SDK-based peers (e.g. Microsoft Agent Governance Toolkit) add governance layers *in-process*. VirbiusAgent instead spans four independent layers across the runtime (Edge → Gateway → **Kernel** → Cloud), so even if one layer is bypassed, others still catch the threat — including **syscall-level (eBPF/Falco) observation** that SDK-based guardrails typically do not provide. This follows the **defense-in-depth principle**.
-
-2. **Rules and models combined** — Rules catch known threats at sub-millisecond latency; models generalize better. Combining them yields high precision/recall and high performance at relatively low cost. This **hybrid approach** is a practical balance of cost, speed, and coverage.
-
-3. **Agent-native, not just LLM-native** — Guardrail and scanner peers target the prompt or static analysis; VirbiusAgent secures the entire **tool-call lifecycle** across layers: pre-execution precheck → on-path gateway enforcement → runtime kernel observation → post-execution audit. This is purpose-built for the MCP era where Agents execute real actions.
-
-4. **Runtime visibility at the kernel level** — Via eBPF/Falco, VirbiusAgent observes Agent processes at the syscall level (file access, network connections, process spawns). This adds syscall-level runtime observability that application-layer guardrails typically cannot provide.
-
-### Agent Security vs Traditional Security
+<details>
+<summary><b>Agent Security vs Traditional Security</b></summary>
 
 | Dimension | Traditional Security | Agent Security |
 |------------|----------------------|----------------|
@@ -135,6 +160,8 @@ for the full matrix and source links. Capabilities may change as upstreams evolv
 | **Policy dynamism** | Relatively static; signature DBs updated periodically | Evolves in real time within a session - risk accumulation crosses thresholds to auto-escalate protection, supports canary rollout and hot-switching; due to high business relevance, different businesses require different policies, and policies shift as the business changes |
 
 > In short: **Traditional security defends against "external break-ins"; Agent security must also defend against "the model being led astray and attacking from within"** - it must understand business semantics and adapt dynamically to session risk and business change.
+
+</details>
 
 ## Benchmarks
 
@@ -330,6 +357,9 @@ flowchart TB
     CONTROL -.->|publish| FALCO
 ```
 
+<details>
+<summary><b>Component ports & roles</b></summary>
+
 | Component | Port | Stack | Role |
 |-----------|------|-------|------|
 | **virbius-core** | Embedded | Rust | Edge SDK: tool-call precheck, license verify, DLP, STI taint. Sub-ms, offline-capable. |
@@ -345,9 +375,14 @@ flowchart TB
 | **Redis** | 6379 | — | Audit event stream, cumulative counters (rate limiting), session cache. |
 | **Database** | — | SQLite / MySQL | Rule metadata, rollout state, agent traces, audit events. |
 
-> **Native tool integration** (Mode A observe / Mode B enforce for LangChain native tools, with coverage classification and warnings) — see [NATIVE_TOOL_INTEGRATION.md](NATIVE_TOOL_INTEGRATION.md).
+> **Native tool integration** (Mode A observe / Mode B enforce for LangChain native tools, with coverage classification and warnings) — see [NATIVE_TOOL_INTEGRATION.md](NATIVE_TOOL_INTEGRATION.md). Full deployment topology and operations: [DEPLOYMENT.md](DEPLOYMENT.md).
 
-## Layer Responsibilities
+</details>
+
+## Architecture Deep Dive (reference)
+
+<details>
+<summary><b>Layer Responsibilities</b></summary>
 
 Building on the four-tier architecture, each layer has distinct responsibilities, coordinated through the **rule pipeline** (Edge precheck → Gateway enforce → Kernel observe → Cloud adjudicate).
 
@@ -400,13 +435,16 @@ The kernel layer operates at the OS level, providing visibility and isolation th
 The cloud is the central decision-making layer, aggregating signals from all layers and computing the final disposition.
 
 - **Policy management**: rule authoring, versioning, progressive rollout (draft → dry_run → canary → full)
-- **LLM-based detection**: Prompt L1 safety classification (VirbiusGuard, 9 safety categories), multi-category jailbreak/injection detection
+- **LLM-based detection**: Prompt L1 safety classification (VirbiusGuard, 10 safety categories), multi-category jailbreak/injection detection
 - **Groovy L3 adjudication**: terminal policy decision merging signals from all layers, calling external ML models via `mlPredict`, outputting `effective_action` (allow / deny / challenge)
 - **Decision trace**: full-chain tool_call/tool_result tracing with causal chain visualization
 - **Audit dashboard**: session risk, tool calls, alerts, approval queue, tamper-proof hash chain audit
 - **Human-in-the-loop**: challenge approval flow for high-risk tool calls — engine issues challenge → console approves → token-gated execution
 
-## Request Main Path
+</details>
+
+<details>
+<summary><b>Request Main Path</b></summary>
 
 A typical request flows through the layers as follows:
 
@@ -439,7 +477,10 @@ Agent tool call
 - **Kernel is passive**: Falco never blocks the request path; it emits events for risk scoring. Sandbox (Landlock/gVisor) blocks at syscall level independently
 - **All phases carry `trace_id`**: Edge, Gateway, Kernel, and Cloud events are correlated by `trace_id` for end-to-end audit
 
-## Rule Runtimes
+</details>
+
+<details>
+<summary><b>Rule Runtimes</b></summary>
 
 Each layer supports specific rule types, compiled by `virbius-compiler` into layer-specific artifacts:
 
@@ -453,7 +494,12 @@ Each layer supports specific rule types, compiled by `virbius-compiler` into lay
 | **Kernel** | `falco` | JSON (condition + output) | Custom eBPF rules: file/process/network monitoring. Canary deploy. |
 | | Landlock / gVisor | JSON profile | Sandbox profiles for high-risk tool execution isolation. |
 
-## Edge–Gateway–Kernel–Cloud Rule Selection
+Rule authoring details: [USAGE_GUIDE.md](USAGE_GUIDE.md) · [rule-examples.en.md](rule-examples.en.md).
+
+</details>
+
+<details>
+<summary><b>Edge–Gateway–Kernel–Cloud Rule Selection</b></summary>
 
 The four layers differ in **execution location, latency, and purpose**. Guiding principle: push deterministic rules forward; defer high-latency rules to the back; keep observation layers passive.
 
@@ -497,6 +543,8 @@ The four layers differ in **execution location, latency, and purpose**. Guiding 
 - **Production defense-in-depth** → Edge + Gateway + Cloud; Kernel on-demand
 - **High-compliance / Finance / Gov** → All four layers
 
+</details>
+
 ## Project Structure
 
 ```
@@ -539,16 +587,23 @@ VirbiusAgent/
 | [FAQ-agent-scenarios.md](FAQ-agent-scenarios.md) | FAQ — common agent-security scenarios |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
+## Roadmap
+
+- [ ] Publish `virbius-core` / `virbius-mcp-proxy` to crates.io and `virbius-mcp-node` to npm (the PyPI packages are live).
+- [ ] Cross-platform wheels (`virbius-mcp-python`) and napi platform packages (`virbius-mcp-node`) via a CI matrix.
+- [ ] Enable GitHub Discussions and label `good first issue` / `help wanted` for contributor onboarding.
+- [ ] SSO / OIDC auth-broker (designed, not yet implemented — see [SSO_INTEGRATION.md](SSO_INTEGRATION.md)).
+
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines. If VirbiusAgent is useful to you, **star and watch** the repo to follow releases, and use [Issues](https://github.com/i1see1you/VirbiusAgent/issues) to report bugs or request features.
 
 ## Commercial Evaluation Extension (Optional)
 
-The Operations Console exposes an optional entry to **VirbiusEvaluation**, a separately
-licensed closed-source assessment module (on-prem or cloud). This repository does not
-contain it and does not depend on it — builds, images, CI and the default stack work
-without it.
+The Operations Console exposes an optional entry to **VirbiusEvaluation**, a separately licensed closed-source assessment module (on-prem or cloud). This repository does not contain it and does not depend on it — builds, images, CI and the default stack work without it. The entry stays hidden until the evaluation service is connected; no telemetry is reported.
+
+<details>
+<summary><b>Configuration & behavior details</b></summary>
 
 - Not connected (default): the **entry is hidden** — the console stays clean for
   open-source users who have not installed the commercial module.
@@ -565,6 +620,8 @@ without it.
   evidence binding, executability) → `dry_run` rule; idempotent, never overwrites an
   existing rule, and app binding requires explicit confirmation.
 - No telemetry: nothing is reported; links open only on user click.
+
+</details>
 
 ## Security
 

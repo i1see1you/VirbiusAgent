@@ -2,7 +2,10 @@
 
 [![CI](https://github.com/i1see1you/VirbiusAgent/actions/workflows/ci.yml/badge.svg)](https://github.com/i1see1you/VirbiusAgent/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/i1see1you/VirbiusAgent/actions/workflows/codeql.yml/badge.svg)](https://github.com/i1see1you/VirbiusAgent/actions/workflows/codeql.yml)
+[![Release](https://img.shields.io/github/v/release/i1see1you/VirbiusAgent?sort=semver)](https://github.com/i1see1you/VirbiusAgent/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![PyPI](https://img.shields.io/pypi/dm/virbius-review-sdk?label=review-sdk%20downloads)](https://pypi.org/project/virbius-review-sdk/)
+[![HuggingFace](https://img.shields.io/badge/HuggingFace-VirbiusGuard-yellow)](https://huggingface.co/i1see1you/VirbiusGuard)
 [![Java](https://img.shields.io/badge/Java-17%2B-orange)](https://adoptium.net/)
 [![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange)](https://www.rust-lang.org/)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8)](https://go.dev/)
@@ -11,15 +14,50 @@
 
 English: [README.md](README.md)
 
-**VirbiusAgent** 是专为AI Agent 打造的运行时深层安全防护平台。基于 eBPF 与**端—管—核—云**架构实现了对 Agent 行为的实时感知与精准阻断，解决Agent 越权与安全失控难题。
+**VirbiusAgent** 是面向自托管 AI Agent 的开源运行时安全平台。它在四个独立层级——**端 → 管 → 核 → 云**——上拦截提示注入、MCP 工具滥用与越权逃逸，融合亚毫秒规则、eBPF/Falco 系统调用观测与 LLM 护栏。
 
-Agent 安全体系大致分为两类：一是终端侧管控，即通过 DLP 等手段管控员工使用 AI 和 Agent 带来的风险，防范机密外发、影子 AI、Prompt 泄露等风险；二是服务端防护，这也是 VirbiusAgent 的核心定位。作为 Agent 安全防护平台，VirbiusAgent 专注于保障自研智能体的内生安全，有效抵御提示注入、MCP 工具滥用及 Agent 越权逃逸等攻击。产品可支撑企业安全评审与审计流程；具体合规要求请按所在司法辖区映射。终端侧管控和业务耦合度低，基本都是标准化的一套策略和产品，VirbiusAgent 是服务端 Agent 护栏，可提供高度可定制的安全策略框架，需要懂安全策略的安全工程师基于对业务的理解，针对不同业务差异化的配置和优化策略，才能确保防护效果精准匹配实际业务场景。
+> **定位：** VirbiusAgent 保护的是*你自研的智能体*（服务端运行时安全），而非管控员工 AI 使用的终端侧 DLP。它为企业安全评审与审计提供高度可定制的策略框架；具体合规要求请按所在司法辖区映射。精准匹配业务场景的防护，需要既懂安全策略又懂业务的工程师来配置和优化。
 
-## 运营台
+### 硬证据速览
 
-![VirbiusAgent 运营台 — 规则配置（中文）](docs/images/ops-zh.png)
+- **拦截提示注入** — AgentDojo v1.2.2（949 对）：攻击成功率 **1.58% → 0%**，utility **86.62% → 90.20%**。[完整基准 →](#基准测试)
+- **亚毫秒**端层预检，可离线
+- **eBPF/Falco** 系统调用级运行时观测（文件 / 进程 / 网络）
+- **规则 + LLM** 混合检测（VirbiusGuard）、人工审批、哈希链审计
 
-主要页面：规则配置与下发、策略缓存热加载、审计中心、**审计完整性**（完整性校验 / 决策 BOM / 审计导出 / 会话检查点，4 tab）、**告警**（列表 / 状态过滤 / 确认 / 展开决策 BOM）、会话与追踪、代客凭证等。
+### 立即体验
+
+- **在线演示（免安装）：** <https://www.virbius.cn/demo> —— 浏览器内直接输入文本，查看 10 类安全判定与 Agent 攻击样本。
+- **从源码一键启动完整栈：**
+
+```bash
+git clone https://github.com/i1see1you/VirbiusAgent.git && cd VirbiusAgent
+docker compose build && docker compose up -d   # Redis + 引擎 + 控制面
+curl -s http://localhost:8080/api/v1/health    # 验证
+```
+
+- **或引导式本地启动：** `bash scripts/run-local.sh` 然后 `bash scripts/smoke-test.sh`。详见 [快速开始](#快速开始)。
+
+![VirbiusAgent 运营台实拍：告警列表两条真实拦截（提示注入 100 / 凭据访问 80）、决策 BOM 展开注入告警、审计完整性会话哈希链校验 3/3 通过](docs/images/ops-demo-zh.gif)
+
+## 核心能力
+
+| 能力 | 说明 |
+|------|------|
+| MCP 安全代理 | stdio/SSE 代理 + 安全管线（License + allowlist + engine 终判）+ 多上游路由 |
+| 快速通道 | 低风险工具跳过云层，延迟优化 |
+| Agent 决策链路追踪 | tool_call/tool_result 全链路 trace，session 时间线 + 因果链可视化 |
+| 高风险人工审批 | engine challenge → 运营台审批 → token 验证放行 |
+| 运营台审计大盘 | session risk + 工具调用 + 告警 + 审批队列 + 决策链路可视化 |
+| Prompt 注入检测 | 单模型语义检测 + 动态风险评分 |
+| **LLM + 传统模型** | 默认基于 VirbiusGuard（可更改为其他安全模型）LLM 安全分类 + Groovy L3 `mlPredict()` 调用外部 ML 模型 |
+| STI Taint 污点追踪 | 跨工具追踪不可信输出，阻断数据泄漏 |
+| Hash Chain 审计完整性 | SHA-256 哈希链审计日志防篡改 |
+| 记忆管控 | Agent 写入记忆前的敏感数据脱敏 |
+| 输出审查 | 工具返回值中的 PII/凭据泄漏检测 |
+| **审查 API + Python SDK** | 引擎 API 化的输入/输出审查 + 专用 Python SDK（`virbius-review-sdk`）：disposition、流式审查窗口、同步 + 异步 |
+| Falco 规则管理 | 运营台统一管理 eBPF 规则，支持灰度部署 |
+| **原生工具集成** | LangChain 回调观测（模式 A）+ 原生工具执法 SDK（模式 B）：工具清单、覆盖分级、警示 |
 
 ## 架构
 
@@ -55,28 +93,35 @@ flowchart TD
 | **③ 核层** | virbius-kernel (Falco + eBPF) | 运行时观测：文件/进程/网络监控。自定义 Falco 规则灰度部署。 |
 | **④ 云层** | virbius-engine + virbius-control (Spring Boot) | 策略管理、LLM 检测、Groovy L3 终判、决策链路、审计大盘。 |
 
-## 核心能力
-
-| 能力 | 说明 |
-|------|------|
-| MCP 安全代理 | stdio/SSE 代理 + 安全管线（License + allowlist + engine 终判）+ 多上游路由 |
-| 快速通道 | 低风险工具跳过云层，延迟优化 |
-| Agent 决策链路追踪 | tool_call/tool_result 全链路 trace，session 时间线 + 因果链可视化 |
-| 高风险人工审批 | engine challenge → 运营台审批 → token 验证放行 |
-| 运营台审计大盘 | session risk + 工具调用 + 告警 + 审批队列 + 决策链路可视化 |
-| Prompt 注入检测 | 单模型语义检测 + 动态风险评分 |
-| **LLM + 传统模型** | 默认基于 VirbiusGuard（可更改为其他安全模型）LLM 安全分类 + Groovy L3 `mlPredict()` 调用外部 ML 模型 |
-| STI Taint 污点追踪 | 跨工具追踪不可信输出，阻断数据泄漏 |
-| Hash Chain 审计完整性 | SHA-256 哈希链审计日志防篡改 |
-| 记忆管控 | Agent 写入记忆前的敏感数据脱敏 |
-| 输出审查 | 工具返回值中的 PII/凭据泄漏检测 |
-| **审查 API + Python SDK** | 引擎 API 化的输入/输出审查 + 专用 Python SDK（`virbius-review-sdk`）：disposition、流式审查窗口、同步 + 异步 |
-| Falco 规则管理 | 运营台统一管理 eBPF 规则，支持灰度部署 |
-| **原生工具集成** | LangChain 回调观测（模式 A）+ 原生工具执法 SDK（模式 B）：工具清单、覆盖分级、警示 |
+> **深读：** 逐层职责、请求主路径、规则运行时与规则选型指南见 [ARCHITECTURE.zh.md](ARCHITECTURE.zh.md) 与 [USAGE_GUIDE.zh.md](USAGE_GUIDE.zh.md)，并折叠在下方 [架构深读](#架构深读) 中。
 
 ## 为什么选择 VirbiusAgent
 
-### 规则 + 模型：一种实用的工程实践
+### 核心差异化
+
+1. **四层纵深防御** — Prompt 层护栏只做单点检查，基于 SDK 的同类（如 Microsoft Agent Governance Toolkit）在**进程内**增加了治理分层。VirbiusAgent 则在运行时贯穿四个独立层级（端 → 管 → **核** → 云），即使某一层被绕过，其他层仍能拦截——包括 SDK 类护栏通常不具备的 **syscall 级（eBPF/Falco）观测**。这遵循**纵深防御原则**。
+
+2. **规则和模型相结合** — 规则以亚毫秒延迟已知威胁,模型泛化能力更强,将两者结合可以在较低成本的同时获得较高的准召率和高性能。这种**混合方案**在成本、速度与覆盖率之间提供了实用的平衡。
+
+3. **Agent 原生，而非仅 LLM 原生** — 护栏与扫描类同类聚焦 Prompt 或静态分析；VirbiusAgent 则跨层保护完整的**工具调用生命周期**：执行前预检 → 在线网关阻断 → 运行时内核观测 → 执行后审计。这是为 MCP 时代量身定制的，因为 Agent 会执行真实操作。
+
+4. **内核级运行时可见性** — 通过 eBPF/Falco，VirbiusAgent 在 syscall 级别观测 Agent 进程（文件访问、网络连接、进程创建）。这是应用层护栏通常无法提供的系统调用级运行时观测。
+
+### 与同类产品对比
+
+以下为 2026-11 基于公开文档的高层对比。各产品定位不同，完整矩阵与来源链接见
+[docs/COMPARISON.zh.md](docs/COMPARISON.zh.md)；能力可能随上游迭代变动。
+
+| 能力 | VirbiusAgent | Microsoft AGT | Meta LlamaFirewall | IBM ContextForge |
+|------|:------------:|:-------------:|:------------------:|:----------------:|
+| **定位** | 四层 Agent 运行时安全 | 进程内 Agent 治理 | 提示/Agent 护栏扫描器 | MCP/A2A/REST 网关 |
+| **运行时观测** | eBPF/Falco 系统调用级可见性 | 应用层审计轨迹 | 进程内扫描日志 | 应用层追踪 |
+| **MCP 支持** | 原生 stdio/SSE 代理 | MCP 安全网关 | Agent 框架护栏 | 原生 MCP/A2A/REST 联邦 |
+| **人工审批** | Challenge → 审批 → token 门控执行 | 审批策略 | 公开文档未提及 | 公开文档未提及 |
+| **部署方式** | 自托管（sidecar / 远程 / SDK） | SDK / 库 | Python SDK | 自托管（PyPI / Docker / Helm） |
+
+<details>
+<summary><b>规则 + 模型：一种实用的工程实践</b></summary>
 
 业界安全工程实践表明，**确定性规则与 ML 模型结合使用通常是更有效的防御**——单靠任何一种都不够。这一原则也是 VirbiusAgent 设计的基石。
 
@@ -96,30 +141,10 @@ flowchart TD
 >
 > **VirbiusGuard 在线演示**：<https://www.virbius.cn/demo> —— 浏览器内直接输入文本，查看 10 类安全判定与 Agent 攻击样本。
 
-### 与同类产品对比
+</details>
 
-以下为 2026-11 基于公开文档的高层对比。各产品定位不同，完整矩阵与来源链接见
-[docs/COMPARISON.zh.md](docs/COMPARISON.zh.md)；能力可能随上游迭代变动。
-
-| 能力 | VirbiusAgent | Microsoft AGT | Meta LlamaFirewall | IBM ContextForge |
-|------|:------------:|:-------------:|:------------------:|:----------------:|
-| **定位** | 四层 Agent 运行时安全 | 进程内 Agent 治理 | 提示/Agent 护栏扫描器 | MCP/A2A/REST 网关 |
-| **运行时观测** | eBPF/Falco 系统调用级可见性 | 应用层审计轨迹 | 进程内扫描日志 | 应用层追踪 |
-| **MCP 支持** | 原生 stdio/SSE 代理 | MCP 安全网关 | Agent 框架护栏 | 原生 MCP/A2A/REST 联邦 |
-| **人工审批** | Challenge → 审批 → token 门控执行 | 审批策略 | 公开文档未提及 | 公开文档未提及 |
-| **部署方式** | 自托管（sidecar / 远程 / SDK） | SDK / 库 | Python SDK | 自托管（PyPI / Docker / Helm） |
-
-### 核心差异化
-
-1. **四层纵深防御** — Prompt 层护栏只做单点检查，基于 SDK 的同类（如 Microsoft Agent Governance Toolkit）在**进程内**增加了治理分层。VirbiusAgent 则在运行时贯穿四个独立层级（端 → 管 → **核** → 云），即使某一层被绕过，其他层仍能拦截——包括 SDK 类护栏通常不具备的 **syscall 级（eBPF/Falco）观测**。这遵循**纵深防御原则**。
-
-2. **规则和模型相结合** — 规则以亚毫秒延迟已知威胁,模型泛化能力更强,将两者结合可以在较低成本的同时获得较高的准召率和高性能。这种**混合方案**在成本、速度与覆盖率之间提供了实用的平衡。
-
-3. **Agent 原生，而非仅 LLM 原生** — 护栏与扫描类同类聚焦 Prompt 或静态分析；VirbiusAgent 则跨层保护完整的**工具调用生命周期**：执行前预检 → 在线网关阻断 → 运行时内核观测 → 执行后审计。这是为 MCP 时代量身定制的，因为 Agent 会执行真实操作。
-
-4. **内核级运行时可见性** — 通过 eBPF/Falco，VirbiusAgent 在 syscall 级别观测 Agent 进程（文件访问、网络连接、进程创建）。这是应用层护栏通常无法提供的系统调用级运行时观测。
-
-### Agent 安全 vs 传统安全
+<details>
+<summary><b>Agent 安全 vs 传统安全</b></summary>
 
 | 维度 | 传统安全 | Agent 安全 |
 |------|----------|-----------|
@@ -134,6 +159,8 @@ flowchart TD
 | **策略动态性** | 相对静态,签名库定期更新 | 会话内实时演化--风险累计达阈值自动升级防护,支持灰度发布与热切换;且因业务关联度高,不同业务需配置不同策略,业务变化时策略也随之调整 |
 
 > 一句话:**传统安全防"外部打进来",Agent 安全还要防"模型被带偏后从内部打出去"**--既要懂业务语义,又要随会话风险和业务变化动态调整。
+
+</details>
 
 ## 基准测试
 
@@ -323,6 +350,9 @@ flowchart TB
     CONTROL -.->|publish| FALCO
 ```
 
+<details>
+<summary><b>组件端口与职责</b></summary>
+
 | 组件 | 端口 | 技术栈 | 职责 |
 |------|------|--------|------|
 | virbius-core | 内嵌 | Rust | Edge SDK：工具预检、许可证校验、DLP、STI 污点追踪。毫秒级，可离线。 |
@@ -338,9 +368,14 @@ flowchart TB
 | Redis | 6379 | — | 审计事件流、累计计数器、会话缓存。 |
 | 数据库 | — | SQLite / MySQL | 规则元数据、灰度状态、Agent 链路、审计事件。 |
 
-> **原生工具集成**（LangChain 原生工具的模式 A 观测 / 模式 B 执法，含覆盖分级与警示）见 [NATIVE_TOOL_INTEGRATION.zh.md](NATIVE_TOOL_INTEGRATION.zh.md)。
+> **原生工具集成**（LangChain 原生工具的模式 A 观测 / 模式 B 执法，含覆盖分级与警示）见 [NATIVE_TOOL_INTEGRATION.zh.md](NATIVE_TOOL_INTEGRATION.zh.md)。完整部署拓扑与运维见 [DEPLOYMENT.zh.md](DEPLOYMENT.zh.md)。
 
-## 层职责
+</details>
+
+## 架构深读
+
+<details>
+<summary><b>层职责</b></summary>
 
 在四层架构基础上，各层通过**规则流水线**（端层预检→管层执行→核层观测→云层终判）协同工作。
 
@@ -393,13 +428,16 @@ flowchart TB
 云层是中心决策层，聚合所有层的信号并输出最终处置动作。
 
 - **策略管理**：规则编写、版本管理、渐进式灰度（draft → dry_run → canary → full）
-- **LLM 检测**：Prompt L1 安全分类（VirbiusGuard，9 类安全标签），越狱/注入检测
+- **LLM 检测**：Prompt L1 安全分类（VirbiusGuard，10 类安全标签），越狱/注入检测
 - **Groovy L3 终判**：合并各层信号的策略终判，通过 `mlPredict` 调用外部 ML 模型，输出 `effective_action`（allow / deny / challenge）
 - **决策链路**：全链路 tool_call/tool_result 追踪，因果链可视化
 - **审计大盘**：会话风险、工具调用、告警、审批队列、防篡改哈希链审计
 - **人工审批**：高风险工具调用的 challenge 审批流——引擎下发 challenge → 运营台审批 → token 限权执行
 
-## 请求主路径
+</details>
+
+<details>
+<summary><b>请求主路径</b></summary>
 
 典型请求经过以下路径：
 
@@ -432,7 +470,10 @@ Agent 工具调用
 - **核层旁路**：Falco 从不阻断请求路径，仅发射事件用于风险评分。沙箱（Landlock/gVisor）在 syscall 层独立阻断
 - **全链路 trace_id**：端层、管层、核层、云层事件通过 `trace_id` 关联，实现端到端审计
 
-## 规则运行时
+</details>
+
+<details>
+<summary><b>规则运行时</b></summary>
 
 | 层 | Runtime | Body 格式 | 用途 |
 |----|---------|-----------|------|
@@ -444,7 +485,12 @@ Agent 工具调用
 | 核层 | `falco` | JSON（condition + output） | 自定义 eBPF 规则：文件/进程/网络监控，支持灰度。 |
 | | Landlock / gVisor | JSON 配置 | 高风险工具执行隔离沙箱配置。 |
 
-## 端管云核规则选型
+规则编写细节：[USAGE_GUIDE.zh.md](USAGE_GUIDE.zh.md) · [rule-examples.zh.md](rule-examples.zh.md)。
+
+</details>
+
+<details>
+<summary><b>端管云核规则选型</b></summary>
 
 四层规则在**执行位置、延迟和目标**上各有差异。选型原则：确定性规则前移，高延迟规则后置，观测层旁路。
 
@@ -487,6 +533,8 @@ Agent 工具调用
 - **Web/API 无 Proxy 嵌入** → 管层 + 云层，跳过端层和核层
 - **生产环境纵深防御** → 端层 + 管层 + 云层，核层按需开启观测
 - **高合规 / 金融 / 政务** → 四层全开
+
+</details>
 
 ## 项目结构
 
@@ -534,12 +582,14 @@ VirbiusAgent/
 
 ## 贡献指南
 
-参见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+贡献指南参见 [CONTRIBUTING.md](CONTRIBUTING.md)。如果 VirbiusAgent 对你有帮助，欢迎 **star 和 watch** 本仓库以跟进发布，并通过 [Issues](https://github.com/i1see1you/VirbiusAgent/issues) 反馈缺陷或提出需求。
 
 ## 商业评估扩展（可选）
 
-控制台提供指向 **VirbiusEvaluation** 的可选入口——它是独立授权的闭源评估模块（支持本地部署或云端）。
-本仓库不包含、也不依赖它：构建、镜像、CI 与默认技术栈在其缺席时完全可用。
+运营台提供指向 **VirbiusEvaluation** 的可选入口——它是独立授权的闭源评估模块（支持本地部署或云端）。本仓库不包含、也不依赖它：构建、镜像、CI 与默认技术栈在其缺席时完全可用。入口在接入评估服务前保持隐藏；不上报任何遥测。
+
+<details>
+<summary><b>配置与行为细节</b></summary>
 
 - 未接入（默认）：**入口隐藏**——未安装商业模块的开源用户看到的是干净导航。
 - 接入评估服务（保存 base-url）后，入口在下次状态刷新时**自动出现**，无需重启控制面。
@@ -549,6 +599,8 @@ VirbiusAgent/
 - `VIRBIUS_EVALUATION_*` env 仅作**首次启动种子**；之后以 DB 配置为准。
 - 检测报告支持**一键生成规则**：Finding → 预览（变量/证据绑定/可执行性）→ 生成 `dry_run` 观察态规则；幂等、不覆盖已有规则、应用绑定需显式确认。
 - 无遥测：不上报任何数据；外链仅在用户点击时打开。
+
+</details>
 
 ## 安全报告
 
