@@ -216,7 +216,10 @@ python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl
 > 因此导出 OpenSSL 的 `CFLAGS`/`LDFLAGS` 会造出“@3 头文件 + @4 库”的混用并
 > 在链接期报缺符号。`scripts/run-local.sh`（以及各构建脚本）统一 source
 > `scripts/lib/openssl.sh`，只解析一个根目录，导出 `OPENSSL_DIR` 以及由同一根
-> 目录派生的头文件/库路径与前置的 `$root/lib/pkgconfig`。librdkafka 的
+> 目录派生的头文件/库路径与前置的 `$libdir/pkgconfig`。Linux multiarch 下库在
+> `lib/<triplet>`（如 `/usr/lib/x86_64-linux-gnu`），`openssl-sys` 设了
+> `OPENSSL_DIR` 便不再探测它——因此脚本还会导出指向真实库目录的
+> `OPENSSL_LIB_DIR`。librdkafka 的
 > configure 优先走 pkg-config 通道，且在 macOS 上会追加无版本的
 > `/opt/homebrew/opt/openssl` 别名（`openssl-sys` 不看它）；前置本树路径才能
 > 让三条通道同源。可用

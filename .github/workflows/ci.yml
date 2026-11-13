@@ -21,9 +21,6 @@ jobs:
   rust:
     name: Rust (fmt · clippy · build · test)
     runs-on: ubuntu-latest
-    env:
-      # Pin the OpenSSL tree so runner-image drift cannot switch majors.
-      OPENSSL_DIR: /usr
     steps:
       - uses: actions/checkout@v5
 

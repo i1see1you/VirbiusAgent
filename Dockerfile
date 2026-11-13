@@ -87,11 +87,6 @@ RUN set -e; for m in virbius-engine virbius-control virbius-auth; do \
 FROM rust:1.94-slim-bookworm AS rust-build
 WORKDIR /build
 
-# Pin the OpenSSL tree: openssl-sys otherwise picks whatever it discovers and
-# rdkafka-sys compiles librdkafka against it; an @3-headers/@4-library mix
-# fails the link. Debian bookworm ships OpenSSL 3.x under /usr.
-ENV OPENSSL_DIR=/usr
-
 # Clear proxy env vars inherited from Docker daemon (not reachable inside container)
 ENV HTTP_PROXY=""
 ENV HTTPS_PROXY=""

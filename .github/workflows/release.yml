@@ -38,9 +38,7 @@ jobs:
           go-version: '1.22'
 
       - name: Install native deps for librdkafka (SASL/SSL)
-        run: |
-          sudo apt-get update && sudo apt-get install -y libsasl2-dev libkrb5-dev pkg-config libssl-dev zlib1g-dev
-          echo "OPENSSL_DIR=/usr" >> "$GITHUB_ENV"
+        run: sudo apt-get update && sudo apt-get install -y libsasl2-dev libkrb5-dev pkg-config libssl-dev zlib1g-dev
 
       - name: Java tests
         run: mvn -B -e test
@@ -110,9 +108,7 @@ jobs:
 
       - name: Install native deps for librdkafka (Linux)
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update && sudo apt-get install -y libsasl2-dev libkrb5-dev pkg-config libssl-dev zlib1g-dev
-          echo "OPENSSL_DIR=/usr" >> "$GITHUB_ENV"
+        run: sudo apt-get update && sudo apt-get install -y libsasl2-dev libkrb5-dev pkg-config libssl-dev zlib1g-dev
 
       - name: Install native deps for librdkafka (macOS)
         if: runner.os == 'macOS'

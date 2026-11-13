@@ -18,5 +18,5 @@
 
 ## 构建约束
 
-- Rust 构建的 OpenSSL 根目录只能通过 `OPENSSL_DIR` 指定（由 `scripts/lib/openssl.sh` 解析并校验头文件/库主版本一致；`CFLAGS`/`LDFLAGS`/`PKG_CONFIG_PATH` 只能由该脚本从同一根目录派生/前置——librdkafka 的 configure 优先走 pkg-config 且在 macOS 会追加无版本别名 `/opt/homebrew/opt/openssl`）。禁止手工指定 OpenSSL 的 `CFLAGS`/`LDFLAGS`/`PKG_CONFIG_PATH`（只允许由 `scripts/lib/openssl.sh` 从同一根目录派生）：`openssl-sys` 不认这些变量、`rdkafka-sys` 认 `DEP_OPENSSL_ROOT`，混用会造成 "@3 头文件 + @4 库" 的链接失败。
+- Rust 构建的 OpenSSL 根目录只能通过 `OPENSSL_DIR` 指定（由 `scripts/lib/openssl.sh` 解析并校验头文件/库主版本一致；`CFLAGS`/`LDFLAGS`/`PKG_CONFIG_PATH`/`OPENSSL_LIB_DIR` 只能由该脚本从同一根目录派生/前置——librdkafka 的 configure 优先走 pkg-config 且在 macOS 会追加无版本别名 `/opt/homebrew/opt/openssl`；Linux multiarch 根（如 `/usr`，库在 `lib/<triplet>` 如 `lib/x86_64-linux-gnu`）必须由脚本导出派生的 `OPENSSL_LIB_DIR` 指向真实库目录，因为 `openssl-sys` 一旦看到 `OPENSSL_DIR` 就只探测 `$root/lib{,64}` 并跳过 pkg-config，不导出会在其构建脚本 panic——2026-11-13 CI 红灯根因）。禁止手工指定 OpenSSL 的 `CFLAGS`/`LDFLAGS`/`PKG_CONFIG_PATH`/`OPENSSL_LIB_DIR`（只允许由 `scripts/lib/openssl.sh` 从同一根目录派生）：`openssl-sys` 不认 CFLAGS/LDFLAGS、`rdkafka-sys` 认 `DEP_OPENSSL_ROOT`，混用会造成 "@3 头文件 + @4 库" 的链接失败。
 - 默认 OpenSSL 3.x；4.x 通过 `VIRBIUS_OPENSSL_MAJOR=4` 实验性启用，CI 由 macOS + OpenSSL 4 job 提供信号。

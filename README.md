@@ -221,12 +221,16 @@ export, field mapping, and the adversarial slice.
 > `CFLAGS`/`LDFLAGS` therefore mixes "@3 headers with an @4 library" and fails
 > the link. `scripts/run-local.sh` (and every build script) sources
 > `scripts/lib/openssl.sh`, resolves exactly one tree and exports `OPENSSL_DIR`
-> plus include/library flags *and* a prepended `$root/lib/pkgconfig` — all
-> derived from that same tree. librdkafka's configure prefers the pkg-config
-> channel and, on macOS, appends the unversioned `/opt/homebrew/opt/openssl`
-> alias, which `openssl-sys` ignores; the prepended path keeps every channel on
-> the selected tree. Override with `OPENSSL_DIR=/path`, or select a major with
-> `VIRBIUS_OPENSSL_MAJOR=3|4` (3 is the default; 4 is experimental).
+> plus include/library flags *and* a prepended `$libdir/pkgconfig` — all
+> derived from that same tree. On multiarch Linux the libs live in
+> `lib/<triplet>` (e.g. `/usr/lib/x86_64-linux-gnu`), which `openssl-sys` never
+> probes once `OPENSSL_DIR` is set — so the script also exports
+> `OPENSSL_LIB_DIR` pointing at the real directory. librdkafka's configure
+> prefers the pkg-config channel and, on macOS, appends the unversioned
+> `/opt/homebrew/opt/openssl` alias, which `openssl-sys` ignores; the prepended
+> path keeps every channel on the selected tree. Override with
+> `OPENSSL_DIR=/path`, or select a major with `VIRBIUS_OPENSSL_MAJOR=3|4`
+> (3 is the default; 4 is experimental).
 
 ### Local Development
 

@@ -83,6 +83,28 @@ virbius_openssl_lib_major() {
   done
 }
 
+# Prints the directory under $root that actually holds libcrypto, looking in
+# lib64, lib, and their multiarch subdirs (e.g. /usr/lib/x86_64-linux-gnu).
+# openssl-sys never looks there: once OPENSSL_DIR is set it skips pkg-config
+# and only probes $root/lib{,64}, so multiarch distro roots panic in its build
+# script unless OPENSSL_LIB_DIR points at the real directory. Empty when the
+# root ships headers only.
+virbius_openssl_lib_dir() {
+  local root=${1:-} dir f
+  [[ -n "$root" ]] || return 0
+  for dir in "$root/lib64" "$root/lib" "$root"/lib/*/ "$root"/lib64/*/; do
+    [[ -d "$dir" ]] || continue
+    dir=${dir%/}
+    for f in "$dir"/libcrypto.so "$dir"/libcrypto.so.* \
+             "$dir"/libcrypto.dylib "$dir"/libcrypto.*.dylib "$dir"/libcrypto.a; do
+      [[ -e "$f" ]] || continue
+      printf '%s' "$dir"
+      return 0
+    done
+  done
+  return 0
+}
+
 # Prints the resolved major or '?' when the tree only ships headers.
 virbius_openssl_validate() {
   local root=${1:-} header lib
@@ -155,12 +177,26 @@ virbius_openssl_resolve() {
 }
 
 virbius_openssl_export() {
-  local root=${1:-} inc lib sasl
+  local root=${1:-} inc lib libdir sasl
   [[ -n "$root" ]] || return 0
   export OPENSSL_DIR="$root"
   export VIRBIUS_OPENSSL_ROOT="$root"
   VIRBIUS_OPENSSL_MAJOR_RESOLVED=$(virbius_openssl_validate "$root") || return 1
   export VIRBIUS_OPENSSL_MAJOR_RESOLVED
+
+  # openssl-sys honours OPENSSL_LIB_DIR ahead of OPENSSL_DIR's lib{,64} probe,
+  # and it stops consulting pkg-config once OPENSSL_DIR is set — so a root
+  # like /usr (libs in /usr/lib/x86_64-linux-gnu) panics in its build script
+  # unless OPENSSL_LIB_DIR points at the real directory. Derived from the same
+  # root as everything else below (never hand-written), so it cannot
+  # introduce a foreign tree.
+  libdir=$(virbius_openssl_lib_dir "$root")
+  if [[ -n "$libdir" ]]; then
+    export OPENSSL_LIB_DIR="$libdir"
+  else
+    unset OPENSSL_LIB_DIR
+    libdir="$root/lib"
+  fi
 
   # openssl-sys 0.9.117 publishes cargo:include but NOT cargo:root, so
   # rdkafka-sys cannot derive -I/-L from DEP_OPENSSL_ROOT and librdkafka's
@@ -169,7 +205,7 @@ virbius_openssl_export() {
   # they cannot introduce a @3/@4 mix; virbius_openssl_conflicts still guards
   # caller-supplied paths.
   inc="-I$root/include"
-  lib="-L$root/lib"
+  lib="-L$libdir"
   case " ${CFLAGS:-} " in *" $inc "*) ;; *) export CFLAGS="${CFLAGS:+$CFLAGS }$inc" ;; esac
   case " ${LDFLAGS:-} " in *" $lib "*) ;; *) export LDFLAGS="${LDFLAGS:+$LDFLAGS }$lib" ;; esac
 
@@ -181,10 +217,10 @@ virbius_openssl_export() {
   # that channel on the same tree too. Without this, any machine with
   # pkg-config installed builds librdkafka against the alias while
   # openssl-sys follows OPENSSL_DIR: the "@4 headers, @3 library" mix.
-  if [[ -d "$root/lib/pkgconfig" ]]; then
+  if [[ -d "$libdir/pkgconfig" ]]; then
     case ":${PKG_CONFIG_PATH:-}:" in
-      *":$root/lib/pkgconfig:"*) ;;
-      *) export PKG_CONFIG_PATH="$root/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" ;;
+      *":$libdir/pkgconfig:"*) ;;
+      *) export PKG_CONFIG_PATH="$libdir/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" ;;
     esac
   fi
 
