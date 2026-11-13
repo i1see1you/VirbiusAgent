@@ -595,31 +595,6 @@ VirbiusAgent/
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines. If VirbiusAgent is useful to you, **star and watch** the repo to follow releases, and use [Issues](https://github.com/i1see1you/VirbiusAgent/issues) to report bugs or request features.
 
-## Commercial Evaluation Extension (Optional)
-
-The Operations Console exposes an optional entry to **VirbiusEvaluation**, a separately licensed closed-source assessment module (on-prem or cloud). This repository does not contain it and does not depend on it — builds, images, CI and the default stack work without it. The entry stays hidden until the evaluation service is connected; no telemetry is reported.
-
-<details>
-<summary><b>Configuration & behavior details</b></summary>
-
-- Not connected (default): the **entry is hidden** — the console stays clean for
-  open-source users who have not installed the commercial module.
-- After the evaluation service is connected (base URL saved), the entry appears
-  automatically on the next status refresh — no console restart needed.
-- Platform admins configure it via `/ui/evaluation` (direct URL) or the entry's
-  Settings panel: base URL, service token, connection test, license upload —
-  applied immediately, no restart.
-- `VIRBIUS_EVALUATION_ENABLED=false` (seed) or the Settings toggle hides the entry
-  even when configured.
-- `VIRBIUS_EVALUATION_*` env is a **first-start seed only**; afterwards the DB row
-  is authoritative.
-- Reports support **one-click rule generation**: finding → preview (variables,
-  evidence binding, executability) → `dry_run` rule; idempotent, never overwrites an
-  existing rule, and app binding requires explicit confirmation.
-- No telemetry: nothing is reported; links open only on user click.
-
-</details>
-
 ## Security
 
 See [SECURITY.md](SECURITY.md) for vulnerability reporting.

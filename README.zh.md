@@ -587,24 +587,6 @@ VirbiusAgent/
 
 贡献指南参见 [CONTRIBUTING.md](CONTRIBUTING.md)。如果 VirbiusAgent 对你有帮助，欢迎 **star 和 watch** 本仓库以跟进发布，并通过 [Issues](https://github.com/i1see1you/VirbiusAgent/issues) 反馈缺陷或提出需求。
 
-## 商业评估扩展（可选）
-
-运营台提供指向 **VirbiusEvaluation** 的可选入口——它是独立授权的闭源评估模块（支持本地部署或云端）。本仓库不包含、也不依赖它：构建、镜像、CI 与默认技术栈在其缺席时完全可用。入口在接入评估服务前保持隐藏；不上报任何遥测。
-
-<details>
-<summary><b>配置与行为细节</b></summary>
-
-- 未接入（默认）：**入口隐藏**——未安装商业模块的开源用户看到的是干净导航。
-- 接入评估服务（保存 base-url）后，入口在下次状态刷新时**自动出现**，无需重启控制面。
-- 平台管理员可通过 `/ui/evaluation`（直接 URL）或入口内的「设置」完成配置：
-  base-url、服务 token、测试连接、许可证上传——即时生效，无需重启。
-- `VIRBIUS_EVALUATION_ENABLED=false`（种子）或设置页开关：即使已接入也隐藏入口。
-- `VIRBIUS_EVALUATION_*` env 仅作**首次启动种子**；之后以 DB 配置为准。
-- 检测报告支持**一键生成规则**：Finding → 预览（变量/证据绑定/可执行性）→ 生成 `dry_run` 观察态规则；幂等、不覆盖已有规则、应用绑定需显式确认。
-- 无遥测：不上报任何数据；外链仅在用户点击时打开。
-
-</details>
-
 ## 安全报告
 
 参见 [SECURITY.md](SECURITY.md)。
