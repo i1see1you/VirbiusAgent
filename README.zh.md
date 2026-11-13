@@ -180,7 +180,21 @@ python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl
 | Node.js | 18+ | virbius-mcp-node |
 | Python | 3.10+ | virbius-integrate、virbius-mcp-python（经 maturin 构建） |
 | Redis | 7+ | 审计消费、累计计数器、缓存 |
+| OpenSSL | 3.x（4.x 实验） | librdkafka（经 rdkafka-sys，见下方构建说明） |
 | MySQL | 8+ | 生产数据库（开发用 SQLite） |
+
+> **OpenSSL 选择（macOS/Linux）。** `openssl-sys` 自行探测 OpenSSL 根目录——
+> 在 macOS 上它优先选 Homebrew 的 `openssl@4` 而非 `@3`，且在 pkg-config 之前
+> 就返回；而 `rdkafka-sys` 用 `DEP_OPENSSL_ROOT` 传下来的根目录编译 librdkafka。
+> 因此导出 OpenSSL 的 `CFLAGS`/`LDFLAGS` 会造出“@3 头文件 + @4 库”的混用并
+> 在链接期报缺符号。`scripts/run-local.sh`（以及各构建脚本）统一 source
+> `scripts/lib/openssl.sh`，只解析一个根目录，导出 `OPENSSL_DIR` 以及由同一根
+> 目录派生的头文件/库路径与前置的 `$root/lib/pkgconfig`。librdkafka 的
+> configure 优先走 pkg-config 通道，且在 macOS 上会追加无版本的
+> `/opt/homebrew/opt/openssl` 别名（`openssl-sys` 不看它）；前置本树路径才能
+> 让三条通道同源。可用
+> `OPENSSL_DIR=/path` 覆盖，或用 `VIRBIUS_OPENSSL_MAJOR=3|4` 选择主版本
+> （默认 3；4 为实验支持）。
 
 ### 本地启动
 

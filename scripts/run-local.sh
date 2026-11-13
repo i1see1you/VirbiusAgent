@@ -4,6 +4,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# shellcheck source=scripts/lib/openssl.sh
+source "$ROOT/scripts/lib/openssl.sh"
+
 export JAVA_HOME="${JAVA_HOME:-$("/usr/libexec/java_home" -v 17 2>/dev/null || true)}"
 export PATH="${JAVA_HOME:+$JAVA_HOME/bin:}${PATH:-}"
 export VIRBIUS_DATA_DIR="${VIRBIUS_DATA_DIR:-$ROOT/data}"
@@ -150,6 +153,32 @@ ensure_ollama() {
   info "Ollama not detected; prompt LLM calls will fail until $VIRBIUS_PROMPT_LLM_BASE_URL is up"
 }
 
+# rdkafka-sys compiles librdkafka with --enable-ssl (the `sasl` feature implies
+# `ssl` regardless of whether the broker uses TLS), so OpenSSL development
+# files are a hard prerequisite on every platform. Selection lives in
+# scripts/lib/openssl.sh: OPENSSL_DIR is the only variable both openssl-sys and
+# rdkafka-sys honour. That helper derives CFLAGS/LDFLAGS from the same tree
+# (openssl-sys 0.9.117 publishes cargo:include but not cargo:root, so
+# librdkafka's configure cannot find a keg-only Homebrew tree on its own).
+# Hand-written OpenSSL flags are what mix @3 headers with an @4 library.
+ensure_openssl() {
+  local root major
+  if ! root="$(virbius_openssl_resolve)"; then
+    return 1
+  fi
+  if [[ -z "$root" ]]; then
+    err "OpenSSL headers not found — rdkafka-sys needs them to build librdkafka."
+    virbius_openssl_hint >&2
+    return 1
+  fi
+  virbius_openssl_export "$root"
+  major="${VIRBIUS_OPENSSL_MAJOR_RESOLVED:-?}"
+  ok "OpenSSL major $major via OPENSSL_DIR=$root"
+  if ! virbius_openssl_conflicts "$root"; then
+    err "Conflicting OpenSSL flags in CFLAGS/LDFLAGS; unset them and rely on OPENSSL_DIR."
+    return 1
+  fi
+}
 
 # ─── Pre-flight checks ───
 info "===== VirbiusAgent Local Dev ====="
@@ -159,25 +188,24 @@ echo "  Logs:       $LOG_DIR"
 echo "  Redis:      $VIRBIUS_REDIS_URL"
 echo ""
 
-# rdkafka-sys compiles librdkafka with --enable-ssl (the `sasl` feature pulls in
-# `ssl` regardless of whether the broker uses TLS). Homebrew openssl is
-# keg-only, so its headers are invisible to the configure script and the build
-# fails with "fatal error: 'openssl/ssl.h' file not found". Point the build at
-# it; explicit CFLAGS/LDFLAGS from the caller take precedence.
-if [[ "$(uname -s)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
-  OPENSSL_PREFIX="$(brew --prefix openssl@3 2>/dev/null || true)"
-  if [[ -n "$OPENSSL_PREFIX" && -f "$OPENSSL_PREFIX/include/openssl/ssl.h" ]]; then
-    export CFLAGS="${CFLAGS:-} -I$OPENSSL_PREFIX/include"
-    export LDFLAGS="${LDFLAGS:-} -L$OPENSSL_PREFIX/lib"
-  fi
-fi
+ensure_openssl || exit 1
 
 # ─── Step 1: Build Rust (virbius-core + virbius-kernel + virbius-mcp-proxy) ───
 info "Building Rust components..."
-if cargo build -p virbius-core -p virbius-kernel -p virbius-mcp-proxy 2>&1 | tail -3; then
+# Full output goes to a log: `| tail -3` used to swallow the actual compiler
+# errors (E0308 locations, missing headers), leaving failures undiagnosable.
+RUST_BUILD_LOG="$LOG_DIR/rust-build.log"
+if cargo build -p virbius-core -p virbius-kernel -p virbius-mcp-proxy >"$RUST_BUILD_LOG" 2>&1; then
+  tail -3 "$RUST_BUILD_LOG"
+  if ! virbius_openssl_assert_binary target/debug/virbius-mcp-proxy; then
+    err "OpenSSL linkage check failed — refusing to run a binary built against a different OpenSSL major than OPENSSL_DIR."
+    exit 1
+  fi
   ok "Rust components built"
 else
-  err "Rust build failed"; exit 1
+  err "Rust build failed — last 50 lines of $RUST_BUILD_LOG:"
+  tail -50 "$RUST_BUILD_LOG" >&2
+  exit 1
 fi
 
 # ─── Step 2: Run Rust unit tests ───

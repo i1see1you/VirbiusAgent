@@ -28,6 +28,10 @@
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# shellcheck source=scripts/lib/openssl.sh
+source "$ROOT/scripts/lib/openssl.sh"
+virbius_openssl_select || exit 1
 cd "$ROOT"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'; YELLOW='\033[0;33m'; NC='\033[0m'

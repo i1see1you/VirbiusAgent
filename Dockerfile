@@ -87,6 +87,11 @@ RUN set -e; for m in virbius-engine virbius-control virbius-auth; do \
 FROM rust:1.94-slim-bookworm AS rust-build
 WORKDIR /build
 
+# Pin the OpenSSL tree: openssl-sys otherwise picks whatever it discovers and
+# rdkafka-sys compiles librdkafka against it; an @3-headers/@4-library mix
+# fails the link. Debian bookworm ships OpenSSL 3.x under /usr.
+ENV OPENSSL_DIR=/usr
+
 # Clear proxy env vars inherited from Docker daemon (not reachable inside container)
 ENV HTTP_PROXY=""
 ENV HTTPS_PROXY=""
@@ -151,6 +156,8 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
     HTTP_PROXY= HTTPS_PROXY= http_proxy= https_proxy= ALL_PROXY= all_proxy= \
     cargo build --release -p virbius-mcp-proxy \
+    && ldd target/release/virbius-mcp-proxy | grep -q 'libcrypto\.so\.3' \
+    && ! ldd target/release/virbius-mcp-proxy | grep -q 'libcrypto\.so\.4' \
     && mkdir -p /out && cp target/release/virbius-mcp-proxy /out/
 
 # ── Stage 2b: virbius-expr (Go) ─────────────────────────────────────────────
@@ -280,7 +287,7 @@ RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
         /etc/apt/sources.list 2>/dev/null || true; \
     fi && \
     apt-get update && apt-get install -y --no-install-recommends curl python3 nodejs \
-    libsasl2-2 libgssapi-krb5-2 \
+    libssl3 libsasl2-2 libgssapi-krb5-2 \
     && rm -rf /var/lib/apt/lists/*
 
 # Run as root: the sandbox engine (gVisor runsc) creates its user/pid namespaces
@@ -291,6 +298,9 @@ RUN unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy; \
 RUN mkdir -p /var/log/virbius
 
 COPY --from=rust-build /out/virbius-mcp-proxy /usr/local/bin/virbius-mcp-proxy
+
+# Fail the image build if the libcrypto major the binary needs is missing.
+RUN ldd /usr/local/bin/virbius-mcp-proxy | grep -q 'libcrypto\.so\.3'
 
 USER root
 EXPOSE 9090

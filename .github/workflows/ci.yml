@@ -21,6 +21,9 @@ jobs:
   rust:
     name: Rust (fmt · clippy · build · test)
     runs-on: ubuntu-latest
+    env:
+      # Pin the OpenSSL tree so runner-image drift cannot switch majors.
+      OPENSSL_DIR: /usr
     steps:
       - uses: actions/checkout@v5
 
@@ -51,6 +54,13 @@ jobs:
             --exclude virbius-mcp-node \
             --verbose
 
+      - name: Assert a single OpenSSL major is linked
+        run: |
+          source scripts/lib/openssl.sh
+          VIRBIUS_OPENSSL_MAJOR_RESOLVED="$(virbius_openssl_validate "$(virbius_openssl_resolve)")"
+          export VIRBIUS_OPENSSL_MAJOR_RESOLVED
+          virbius_openssl_assert_binary target/debug/virbius-mcp-proxy
+
       - name: Test
         run: |
           cargo test \
@@ -58,6 +68,42 @@ jobs:
             --exclude virbius-mcp-python \
             --exclude virbius-mcp-node \
             --verbose
+
+  # ────────────────────────────────────────────────────────────
+  #  macOS + OpenSSL 4 (experimental)
+  #  librdkafka 2.12.1 is validated against OpenSSL 3.x. Homebrew's @4 defines
+  #  OPENSSL_NO_ENGINE, which compiles the ENGINE block out, but 4.0 may have
+  #  removed other APIs — this job turns that into a visible signal instead of
+  #  a local surprise. Non-blocking until the result is stable.
+  # ────────────────────────────────────────────────────────────
+  rust-openssl4:
+    name: Rust (macOS · OpenSSL 4 · experimental)
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install native deps (OpenSSL 4 + cyrus-sasl)
+        run: |
+          brew install openssl@4 cyrus-sasl pkg-config
+          echo "OPENSSL_DIR=$(brew --prefix openssl@4)" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$(brew --prefix cyrus-sasl)/lib/pkgconfig" >> "$GITHUB_ENV"
+
+      - name: Build proxy against OpenSSL 4
+        run: |
+          source scripts/lib/openssl.sh
+          virbius_openssl_select
+          echo "building librdkafka against $OPENSSL_DIR (major $VIRBIUS_OPENSSL_MAJOR_RESOLVED)"
+          cargo build -p virbius-mcp-proxy
+
+      - name: Assert a single OpenSSL major is linked
+        run: |
+          source scripts/lib/openssl.sh
+          VIRBIUS_OPENSSL_MAJOR_RESOLVED="$(virbius_openssl_validate "$(virbius_openssl_resolve)")"
+          export VIRBIUS_OPENSSL_MAJOR_RESOLVED
+          virbius_openssl_assert_binary target/debug/virbius-mcp-proxy
 
   # ────────────────────────────────────────────────────────────
   #  Rust FFI bindings (PyO3 + napi-rs)

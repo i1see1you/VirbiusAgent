@@ -23,6 +23,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# shellcheck source=scripts/lib/openssl.sh
+source "$ROOT/scripts/lib/openssl.sh"
+virbius_openssl_select || exit 1
 # shellcheck source=oss-agent-common.sh
 source "$ROOT/scripts/oss-agent-common.sh"
 

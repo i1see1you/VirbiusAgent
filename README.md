@@ -184,7 +184,22 @@ export, field mapping, and the adversarial slice.
 | Node.js | 18+ | virbius-mcp-node |
 | Python | 3.10+ | virbius-integrate, virbius-mcp-python (built via maturin) |
 | Redis | 7+ | Audit ingest, cumulative counters, cache |
+| OpenSSL | 3.x (4.x experimental) | librdkafka via rdkafka-sys (see build note below) |
 | MySQL | 8+ | Production database (SQLite for dev) |
+
+> **OpenSSL selection (macOS/Linux).** `openssl-sys` probes for its own tree —
+> on macOS it prefers Homebrew `openssl@4` over `@3` and returns before
+> pkg-config is consulted — while `rdkafka-sys` compiles librdkafka against
+> the root it receives via `DEP_OPENSSL_ROOT`. Exporting OpenSSL
+> `CFLAGS`/`LDFLAGS` therefore mixes "@3 headers with an @4 library" and fails
+> the link. `scripts/run-local.sh` (and every build script) sources
+> `scripts/lib/openssl.sh`, resolves exactly one tree and exports `OPENSSL_DIR`
+> plus include/library flags *and* a prepended `$root/lib/pkgconfig` — all
+> derived from that same tree. librdkafka's configure prefers the pkg-config
+> channel and, on macOS, appends the unversioned `/opt/homebrew/opt/openssl`
+> alias, which `openssl-sys` ignores; the prepended path keeps every channel on
+> the selected tree. Override with `OPENSSL_DIR=/path`, or select a major with
+> `VIRBIUS_OPENSSL_MAJOR=3|4` (3 is the default; 4 is experimental).
 
 ### Local Development
 
