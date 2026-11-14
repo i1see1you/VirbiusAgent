@@ -1,14 +1,11 @@
 graphify-out/graph.json merge=graphify
 
-# GitHub Linguist: generated architecture renderings and AI-assistant working
-# files dominated the byte count and made GitHub report this repository as
-# "HTML". Exclude them so language stats reflect the real product sources
+# GitHub Linguist: generated architecture renderings and vendored JS bundles
+# dominated the byte count and made GitHub report this repository as "HTML".
+# Excluding them makes language stats reflect the real product sources
 # (Java / Rust / Python). Does not affect the GitHub Pages build.
-**/archify/**                                        linguist-vendored
-.agents/**                                           linguist-vendored
-.cursor/**                                           linguist-vendored
-_bmad/**                                             linguist-vendored
-openspec/**                                          linguist-vendored
-design-system/**                                     linguist-vendored
-docs/**                                              linguist-documentation
-virbius-control/src/main/resources/static/vendor/**   linguist-vendored
+# NOTE: .gitattributes patterns are relative to the repo root and, unlike
+# .gitignore, directory patterns do not recurse; use explicit paths.
+docs/architecture/archify/*                          linguist-vendored
+docs/sales/*                                         linguist-vendored
+virbius-control/src/main/resources/static/vendor/*    linguist-vendored
