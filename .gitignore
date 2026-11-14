@@ -114,3 +114,9 @@ virbius-mcp-node/*.node
 .env.evaluation
 docker-compose.evaluation.yml
 data/evaluation-license/
+
+# AI-assistant skills are local tooling, not product source.
+# Removed from the index on 2026-11-14; local copies are kept.
+# Shared team config under .cursor/rules and .cursor/commands stays tracked.
+.agents/skills/
+.cursor/skills/
