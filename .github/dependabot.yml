@@ -7,13 +7,27 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     labels:
       - dependencies
       - rust
     commit-message:
       prefix: "cargo"
       include: scope
+    # Group minor/patch bumps into one auto-mergeable PR; majors stay separate for deliberate review.
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # Deliberate migration backlog (breaking API rewrites). Remove an ignore when the migration starts.
+    ignore:
+      - dependency-name: "axum"
+        versions: [">= 0.8"]
+      - dependency-name: "pyo3"
+        versions: [">= 0.23"]
+      - dependency-name: "ureq"
+        versions: [">= 3"]
 
   # Java dependencies — Maven (root pom.xml)
   - package-ecosystem: maven
@@ -21,13 +35,25 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     labels:
       - dependencies
       - java
     commit-message:
       prefix: "maven"
       include: scope
+    # Group minor/patch bumps into one auto-mergeable PR; majors stay separate for deliberate review.
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    # Deliberate migration backlog (Spring Boot 4, Jedis 5 -> 6/7). Remove an ignore when the migration starts.
+    ignore:
+      - dependency-name: "spring-boot.version"
+        versions: [">= 4"]
+      - dependency-name: "redis.clients:jedis"
+        versions: [">= 6"]
 
   # Go dependencies — virbius-expr
   - package-ecosystem: gomod
@@ -42,6 +68,11 @@ updates:
     commit-message:
       prefix: "go"
       include: scope
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # Go dependencies — virbius-gateway/wasm
   - package-ecosystem: gomod
@@ -56,6 +87,11 @@ updates:
     commit-message:
       prefix: "go"
       include: scope
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
 
   # GitHub Actions — keep workflow action versions current
   - package-ecosystem: github-actions
@@ -70,3 +106,8 @@ updates:
     commit-message:
       prefix: "ci"
       include: scope
+    groups:
+      minor-and-patch:
+        update-types:
+          - "minor"
+          - "patch"
