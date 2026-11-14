@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           components: rustfmt, clippy
 
@@ -80,7 +80,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
 
       - name: Install native deps (OpenSSL 4 + cyrus-sasl)
         run: |
@@ -112,7 +112,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
 
       - uses: actions/setup-python@v6
         with:
@@ -330,7 +330,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked || true
@@ -348,7 +348,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
       - name: Run sandbox integration tests
         run: cargo test -p virbius-core --test sandbox_integration -- --nocapture
 
