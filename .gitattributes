@@ -9,3 +9,4 @@ graphify-out/graph.json merge=graphify
 docs/architecture/archify/*                          linguist-vendored
 docs/sales/*                                         linguist-vendored
 virbius-control/src/main/resources/static/vendor/*    linguist-vendored
+virbius-control/src/main/resources/static/vendor/*/*  linguist-vendored
