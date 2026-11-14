@@ -10,10 +10,14 @@ target/
 # IDE
 .idea/
 *.iml
-.vscode/*
-!.vscode/launch.json
-!.vscode/tasks.json
 *~
+
+# Local tool state / AI-assistant config — untracked from the index on 2026-11-14.
+# Local copies are kept. These are per-machine files, not product source.
+.vscode/
+.cursor/
+.workbuddy/
+_bmad/
 
 # Tool private config
 .catpaw/
@@ -86,7 +90,6 @@ ppt/
 # Local tool credentials / worktrees
 dbhub.toml
 hindsight.toml
-.cursor/bug-evidence/
 .dev-worktree/
 scripts/falco-full-chain/falco-config-subscriber
 
@@ -117,6 +120,4 @@ data/evaluation-license/
 
 # AI-assistant skills are local tooling, not product source.
 # Removed from the index on 2026-11-14; local copies are kept.
-# Shared team config under .cursor/rules and .cursor/commands stays tracked.
 .agents/skills/
-.cursor/skills/
