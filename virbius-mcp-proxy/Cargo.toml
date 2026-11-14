@@ -41,7 +41,7 @@ sha2 = "0.10"
 # the proxy cannot authenticate to SASL_PLAINTEXT listeners (needs libsasl2 at
 # build time and libsasl2-2 in the runtime image, see Dockerfile).
 rdkafka = { version = "0.37", features = ["tokio", "sasl"] }
-redis = { version = "0.25", features = ["tokio-comp"] }
+redis = { version = "1.8", features = ["tokio-comp"] }
 aes-gcm = "0.10"
 zeroize = "1"
 
