@@ -26,8 +26,6 @@ updates:
         versions: [">= 0.8"]
       - dependency-name: "pyo3"
         versions: [">= 0.23"]
-      - dependency-name: "redis"
-        versions: [">= 1"]
       - dependency-name: "ureq"
         versions: [">= 3"]
 
