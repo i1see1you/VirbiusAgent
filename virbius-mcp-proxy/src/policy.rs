@@ -182,9 +182,9 @@ fn tenant_from_key(key: &str) -> Option<&str> {
 
 fn redis_string(v: &redis::Value) -> Option<String> {
     match v {
-        redis::Value::Data(b) => String::from_utf8(b.clone()).ok(),
-        redis::Value::Status(s) => Some(s.clone()),
-        redis::Value::Bulk(items) => items.first().and_then(redis_string),
+        redis::Value::BulkString(b) => String::from_utf8(b.clone()).ok(),
+        redis::Value::SimpleString(s) => Some(s.clone()),
+        redis::Value::Array(items) => items.first().and_then(redis_string),
         _ => None,
     }
 }
