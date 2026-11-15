@@ -27,12 +27,14 @@ public class SqliteSchemaEvolver implements SmartInitializingSingleton {
 
     private static final Logger log = LoggerFactory.getLogger(SqliteSchemaEvolver.class);
 
-    /** (table, column, SQLite type) additions; see V20__audit_event_session_id.sql. */
+    /** (table, column, SQLite type) additions; see V20 and V37. */
     private record ColumnDef(String table, String column, String type) {}
 
     private static final List<ColumnDef> COLUMNS = List.of(
             new ColumnDef("tb_audit_events", "session_id", "VARCHAR(128)"),
             new ColumnDef("tb_audit_events_archive", "session_id", "VARCHAR(128)"),
+            new ColumnDef("tb_audit_events", "tool_name", "VARCHAR(128)"),
+            new ColumnDef("tb_audit_events_archive", "tool_name", "VARCHAR(128)"),
             new ColumnDef("tb_evaluation_setting", "probe_tenants",
                     "VARCHAR(1024) NOT NULL DEFAULT ''"));
 
