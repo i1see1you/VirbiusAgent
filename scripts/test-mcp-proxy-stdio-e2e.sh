@@ -12,6 +12,7 @@
 #   * the `virbius/status` JSON-RPC method returns the license summary + recent
 #     decisions (stdio has no HTTP GET /status, so the operator surface rides
 #     the same wire)
+#   * upstream=stdio: the proxy spawns a local MCP child and proxies a call
 #   * the emitted audit events still carry the canonical field names (Kafka)
 #     and land in control (decision-bom via the ops API)
 #
@@ -98,7 +99,7 @@ nc -z 127.0.0.1 "$UPSTREAM_PORT" 2>/dev/null || { red "upstream failed to start"
 info "E2E: driving the real proxy over stdio (initialize -> read_doc -> danger_exec -> virbius/status)"
 CLIENT_OUT="$(
   VIRBIUS_UPSTREAM_URL="http://127.0.0.1:$UPSTREAM_PORT" \
-  VIRBIUS_UPSTREAM_TRANSPORT="sse" VIRBIUS_UPSTREAM_SSE_PATH="/sse" \
+  VIRBIUS_UPSTREAM_SSE_PATH="/sse" \
   VIRBIUS_LICENSE_FILE="$LICENSE_JWT_FILE" VIRBIUS_LICENSE_PUBLIC_KEY="$LICENSE_PUB_FILE" \
   VIRBIUS_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
   VIRBIUS_CONTROL_URL="http://127.0.0.1:$CONTROL_PORT" \
@@ -208,5 +209,68 @@ for _ in $(seq 1 40); do
   sleep 1
 done
 check "$OK" "stdio: control ingested the proxied audit row (decision-bom)"
+
+# ── stdio UPSTREAM (proxy spawns a local MCP server) ────────────────────────
+info "E2E: listen=stdio + upstream=stdio (proxy spawns the fixture server)"
+STDIO_UPSTREAM_JSON="[{\"name\":\"local\",\"transport\":\"stdio\",\"command\":\"$PY\",\"args\":[\"$ROOT/virbius-mcp-proxy/tests/fixtures/echo_mcp_stdio.py\"],\"env\":{\"FS_ROOT\":\"/data\"}}]"
+CLIENT_OUT="$(
+  VIRBIUS_UPSTREAMS="$STDIO_UPSTREAM_JSON" \
+  VIRBIUS_LICENSE_FILE="$LICENSE_JWT_FILE" VIRBIUS_LICENSE_PUBLIC_KEY="$LICENSE_PUB_FILE" \
+  VIRBIUS_ENGINE_URL="http://127.0.0.1:$ENGINE_PORT" \
+  VIRBIUS_CONTROL_URL="http://127.0.0.1:$CONTROL_PORT" \
+  VIRBIUS_AUDIT_BACKEND="disabled" \
+  VIRBIUS_REDIS_URL="redis://$REDIS_HOST:$REDIS_PORT" \
+  PROXY_STDERR="$OA_LOGS/proxy-stdio-upstream.log" \
+  "$PY" - "$PROXY_BIN" <<'PY'
+import json, os, subprocess, sys
+
+proxy = subprocess.Popen([sys.argv[1]], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=open(os.environ.get("PROXY_STDERR", "/dev/null"), "w"), text=True, bufsize=1)
+out = {}
+
+def send(obj):
+    proxy.stdin.write(json.dumps(obj) + "\n")
+    proxy.stdin.flush()
+
+def read_until(want_id, limit=200):
+    for _ in range(limit):
+        line = proxy.stdout.readline()
+        if not line:
+            break
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        msg = json.loads(line)
+        if msg.get("id") == want_id:
+            return msg
+    return {"error": "timeout awaiting id %s" % want_id}
+
+send({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+      "params": {"capabilities": {}, "protocolVersion": "2024-11-05",
+                 "clientInfo": {"name": "stdio-upstream-e2e", "version": "0.1"}}})
+out["initialize"] = read_until(1)
+send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+out["tools_list"] = read_until(2)
+send({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+      "params": {"name": "read_doc", "arguments": {"path": "/tmp/a"}}})
+out["call"] = read_until(3)
+
+proxy.stdin.close()
+try:
+    proxy.wait(timeout=8)
+except subprocess.TimeoutExpired:
+    proxy.kill()
+print(json.dumps(out))
+PY
+)"
+printf '%s\n' "$CLIENT_OUT" > "$OA_WORK/stdio_upstream.json"
+
+check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if d.get("initialize",{}).get("result",{}).get("serverInfo") else "0")')" \
+      "stdio-upstream: initialize succeeded through the spawned child"
+check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if "read_doc" in [t.get("name") for t in d.get("tools_list",{}).get("result",{}).get("tools",[])] else "0")')" \
+      "stdio-upstream: tools/list reached the child and returned read_doc"
+check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if d.get("call",{}).get("result") else "0")')" \
+      "stdio-upstream: tools/call proxied to the child (allowlisted read_doc)"
 
 oa_summary

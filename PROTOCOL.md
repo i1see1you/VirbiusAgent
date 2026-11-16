@@ -525,18 +525,23 @@ Default `auto`: Engine selects the path based on Agent's declared capabilities. 
 listen = "stdio"                    # stdio | tcp://0.0.0.0:9090
 
 # ── Single upstream mode (backward compatible) ──
-# The following three fields are equivalent to upstreams = [{ name = "default", url = "...", sse_path = "/sse" }]
+# The following two fields are equivalent to upstreams = [{ name = "default", url = "...", sse_path = "/sse" }]
 upstream_url = "http://mcp-server:8080"  # Real MCP Server address
-upstream_transport = "sse"          # stdio | sse
 upstream_sse_path = "/sse"
 
 # ── Multi-upstream mode (P1 addition, mutually exclusive with upstream_url) ──
 # When upstreams array is configured, the upstream_url field is ignored
 # Each upstream must have a unique name, used for tool name prefix and routing
+# transport: auto (default: probe Streamable HTTP, then legacy SSE)
+#            streamable-http | sse | stdio
 upstreams = [
-    { name = "filesystem", url = "http://fs-mcp:8081", sse_path = "/sse" },
-    { name = "github",     url = "http://gh-mcp:8082", sse_path = "/sse" },
-    { name = "database",   url = "http://db-mcp:8083", sse_path = "/sse" },
+    { name = "filesystem", url = "http://fs-mcp:8081", sse_path = "/sse" },   # auto: probe Streamable, fall back to SSE
+    { name = "github",     url = "http://gh-mcp:8082", http_path = "/mcp" }, # streamable-http (set transport explicitly to skip probing)
+    { name = "database",   url = "http://db-mcp:8083", transport = "sse" },  # legacy HTTP+SSE only
+    # stdio: the proxy spawns a local server (no shell, argv passed literally)
+    { name = "local-fs", transport = "stdio", command = "npx",
+      args = ["-y", "@modelcontextprotocol/server-filesystem", "/data"],
+      env = { FS_ROOT = "/data" }, cwd = "/data" },
 ]
 
 [security]

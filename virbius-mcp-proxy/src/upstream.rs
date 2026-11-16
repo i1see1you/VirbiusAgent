@@ -1,11 +1,11 @@
 /// Upstream MCP client: connects to upstream MCP Server(s) via SSE transport.
 ///
 /// Architecture:
-/// - `UpstreamClient` — one instance per (session, upstream), manages a single
+/// - `LegacySseUpstream` — one instance per (session, upstream), manages a single
 ///   SSE connection to one upstream MCP Server.
 /// - `UpstreamManager` — owns:
 ///   - `entries: Vec<UpstreamEntry>` — static upstream configs
-///   - `connections: DashMap<(session_id, upstream_name), UpstreamClient>`
+///   - `connections: DashMap<(session_id, upstream_name), LegacySseUpstream>`
 ///   - `tool_routes: DashMap<displayed_tool_name, (upstream_name, original_tool_name)>`
 ///
 /// Single-upstream mode (`entries.len() == 1`) is a fast path:
@@ -36,8 +36,12 @@ use tracing::{debug, warn};
 
 use futures_util::StreamExt;
 
-use crate::config::UpstreamEntry;
+use crate::config::{UpstreamEntry, UpstreamGates};
+use crate::net_guard;
 use crate::policy::PolicyRegistry;
+use crate::sse_util::SseParser;
+use crate::upstream_stdio::StdioUpstream;
+use crate::upstream_streamable::StreamableHttpUpstream;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamConfig {
@@ -73,27 +77,29 @@ struct UpstreamState {
 /// Each instance maintains a single SSE connection to the upstream.
 /// Created by `UpstreamManager` on a per-(session, upstream) basis.
 #[derive(Clone)]
-pub struct UpstreamClient {
+pub struct LegacySseUpstream {
     base_url: String,
     sse_path: String,
     http: reqwest::Client,
     timeout: Duration,
+    deny_private: bool,
     state: Arc<UpstreamState>,
 }
 
-impl UpstreamClient {
+impl LegacySseUpstream {
     pub fn new(config: UpstreamConfig) -> Self {
-        Self::with_http(config, reqwest::Client::new())
+        Self::with_http(config, reqwest::Client::new(), false)
     }
 
     /// Create with a shared HTTP client (connection pool reuse).
-    fn with_http(config: UpstreamConfig, http: reqwest::Client) -> Self {
+    fn with_http(config: UpstreamConfig, http: reqwest::Client, deny_private: bool) -> Self {
         let timeout = Duration::from_secs(config.timeout_secs);
         Self {
             base_url: config.url,
             sse_path: config.sse_path,
             http,
             timeout,
+            deny_private,
             state: Arc::new(UpstreamState {
                 endpoint_url: std::sync::Mutex::new(None),
                 pending: DashMap::new(),
@@ -138,6 +144,7 @@ impl UpstreamClient {
         // SSE connections are long-lived; use a separate client without a
         // total request timeout so the stream is not killed after N seconds.
         let sse_http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(UpstreamError::Http)?;
         let resp = sse_http
@@ -164,12 +171,13 @@ impl UpstreamClient {
         // Start background SSE reader
         let state = self.state.clone();
         let base_url = self.base_url.clone();
+        let deny_private = self.deny_private;
         tokio::spawn(async move {
-            sse_reader(state, base_url, resp).await;
+            sse_reader(state, base_url, deny_private, resp).await;
         });
 
         // Wait for endpoint URL to be set by the background reader
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10).min(self.timeout);
         loop {
             {
                 let url = self.state.endpoint_url.lock().unwrap();
@@ -281,6 +289,75 @@ impl UpstreamClient {
     }
 }
 
+/// One connected upstream, regardless of transport.
+#[derive(Clone)]
+pub enum UpstreamHandle {
+    LegacySse(LegacySseUpstream),
+    Streamable(Arc<StreamableHttpUpstream>),
+    Stdio(Arc<StdioUpstream>),
+}
+
+impl UpstreamHandle {
+    pub async fn forward(&self, request: &Value) -> Result<Value, UpstreamError> {
+        match self {
+            Self::LegacySse(c) => c.forward(request).await,
+            Self::Streamable(c) => c.forward(request).await,
+            Self::Stdio(c) => c.forward(request).await,
+        }
+    }
+
+    pub async fn forward_notification(&self, request: &Value) -> Result<(), UpstreamError> {
+        match self {
+            Self::LegacySse(c) => c.forward_notification(request).await,
+            Self::Streamable(c) => c.forward_notification(request).await,
+            Self::Stdio(c) => c.forward_notification(request).await,
+        }
+    }
+
+    pub fn is_connected(&self) -> bool {
+        match self {
+            Self::LegacySse(c) => c.is_connected(),
+            Self::Streamable(c) => c.is_connected(),
+            Self::Stdio(c) => c.is_connected(),
+        }
+    }
+
+    pub fn url(&self) -> &str {
+        match self {
+            Self::LegacySse(c) => c.url(),
+            Self::Streamable(c) => c.url(),
+            Self::Stdio(c) => c.url(),
+        }
+    }
+
+    /// Effective transport of this handle (`sse` / `streamable-http`).
+    pub fn transport(&self) -> &'static str {
+        match self {
+            Self::LegacySse(_) => "sse",
+            Self::Streamable(_) => "streamable-http",
+            Self::Stdio(_) => "stdio",
+        }
+    }
+
+    /// Abort an in-flight request; only Streamable supports cancellation.
+    pub fn cancel(&self, request_id: &Value) {
+        match self {
+            Self::Streamable(c) => c.cancel(request_id),
+            Self::Stdio(c) => c.cancel(request_id),
+            Self::LegacySse(_) => {}
+        }
+    }
+
+    /// Best-effort session termination.
+    pub fn shutdown(&self) {
+        match self {
+            Self::Streamable(c) => c.shutdown(),
+            Self::Stdio(c) => c.shutdown(),
+            Self::LegacySse(_) => {}
+        }
+    }
+}
+
 /// Manages per-(session, upstream) connections and tool routing.
 ///
 /// In single-upstream mode (`entries.len() == 1`), behavior is identical
@@ -297,9 +374,22 @@ pub struct UpstreamManager {
     session_tenant: DashMap<String, String>,
     /// Shared HTTP client (connection pool reuse across sessions).
     http: reqwest::Client,
+    /// Client without a total request timeout, for long-lived upstream
+    /// streams (Streamable HTTP POST/GET). `http` would kill them at
+    /// `timeout` because reqwest's timeout covers the response body.
+    stream_http: reqwest::Client,
     timeout: Duration,
-    /// (session_id, upstream_name) → UpstreamClient
-    connections: DashMap<(String, String), UpstreamClient>,
+    /// Deployment gates (transport allowlist, SSRF policy, stdio restrictions).
+    gates: UpstreamGates,
+    /// Single-flight locks so concurrent callers cannot spawn two upstreams.
+    connect_locks: DashMap<(String, String), Arc<TokioMutex<()>>>,
+    /// Optional sink for upstream-initiated notifications.
+    notify_tx: Option<tokio::sync::mpsc::Sender<Value>>,
+    /// Detection outcome counters (`auto` transport).
+    detected_sse: std::sync::atomic::AtomicU64,
+    detected_streamable: std::sync::atomic::AtomicU64,
+    /// (session_id, upstream_name) → connected handle
+    connections: DashMap<(String, String), UpstreamHandle>,
     /// displayed_tool_name → (upstream_name, original_tool_name)
     ///
     /// Populated during `tools/list` merge. Used by `tools/call` to route
@@ -313,6 +403,12 @@ impl UpstreamManager {
         let timeout = Duration::from_secs(timeout_secs);
         let http = reqwest::Client::builder()
             .timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+        let stream_http = reqwest::Client::builder()
+            .connect_timeout(timeout)
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
@@ -321,7 +417,13 @@ impl UpstreamManager {
             policies: Arc::new(PolicyRegistry::empty()),
             session_tenant: DashMap::new(),
             http,
+            stream_http,
             timeout,
+            gates: UpstreamGates::default(),
+            connect_locks: DashMap::new(),
+            notify_tx: None,
+            detected_sse: std::sync::atomic::AtomicU64::new(0),
+            detected_streamable: std::sync::atomic::AtomicU64::new(0),
             connections: DashMap::new(),
             tool_routes: DashMap::new(),
         }
@@ -330,6 +432,35 @@ impl UpstreamManager {
     /// Share the registry filled by the Redis policy subscriber.
     pub fn use_policies(&mut self, policies: Arc<PolicyRegistry>) {
         self.policies = policies;
+    }
+
+    /// Apply deployment gates (also used for SSRF checks before connecting).
+    pub fn set_gates(&mut self, gates: UpstreamGates) {
+        self.gates = gates;
+    }
+
+    /// Route upstream-initiated notifications to a logging drain task.
+    /// Keeps legacy parity (notifications are observed, not forwarded to
+    /// clients yet) while giving Streamable a real sink.
+    pub fn enable_notification_logging(&mut self) {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Value>(64);
+        self.notify_tx = Some(tx);
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(async move {
+                while let Some(msg) = rx.recv().await {
+                    debug!("upstream notification: {msg}");
+                }
+            });
+        }
+    }
+
+    /// (legacy-SSE detections, Streamable-HTTP detections).
+    pub fn detection_counts(&self) -> (u64, u64) {
+        (
+            self.detected_sse.load(std::sync::atomic::Ordering::Relaxed),
+            self.detected_streamable
+                .load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// Remember which tenant a session belongs to before the first upstream connect.
@@ -371,8 +502,9 @@ impl UpstreamManager {
     pub fn new_single(config: &UpstreamConfig) -> Self {
         let entry = UpstreamEntry {
             name: "default".to_string(),
-            url: config.url.clone(),
+            url: Some(config.url.clone()),
             sse_path: config.sse_path.clone(),
+            ..Default::default()
         };
         Self::new(vec![entry], config.timeout_secs)
     }
@@ -389,24 +521,39 @@ impl UpstreamManager {
 
     /// Get or create an upstream connection for a specific upstream.
     ///
-    /// On first call for a (session, upstream) pair, creates a new
-    /// `UpstreamClient` and establishes the SSE connection.
+    /// Single-flight: concurrent callers for the same (session, upstream) wait
+    /// on one per-key lock, so a stdio child or an `initialize` handshake is
+    /// never started twice.
     pub async fn get_or_connect(
         &self,
         session_id: &str,
         upstream_name: &str,
-    ) -> Result<UpstreamClient, UpstreamError> {
+    ) -> Result<UpstreamHandle, UpstreamError> {
         let key = (session_id.to_string(), upstream_name.to_string());
 
-        // Fast path: already exists and connected
-        if let Some(client) = self.connections.get(&key) {
-            if client.is_connected() {
-                return Ok(client.clone());
+        // Fast path: already exists and connected.
+        if let Some(handle) = self.connections.get(&key) {
+            if handle.is_connected() {
+                return Ok(handle.clone());
+            }
+        }
+
+        let lock = self
+            .connect_locks
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(TokioMutex::new(())))
+            .clone();
+        let _guard = lock.lock().await;
+
+        // Double-check under the lock (another caller may have connected).
+        if let Some(handle) = self.connections.get(&key) {
+            if handle.is_connected() {
+                return Ok(handle.clone());
             }
         }
 
         // Find the upstream entry in the tenant policy (or local toml).
-        // An already-connected client above is left alone when the list changes.
+        // An already-connected handle above is left alone when the list changes.
         let entries = self.entries_for(session_id);
         let entry = entries
             .iter()
@@ -414,22 +561,138 @@ impl UpstreamManager {
             .cloned()
             .ok_or_else(|| UpstreamError::UnknownUpstream(upstream_name.to_string()))?;
 
-        // Slow path: create or reconnect
+        let handle = self.build_handle(&entry).await?;
+        self.connections.insert(key, handle.clone());
+        debug!(
+            "upstream connection created for session={}, upstream={}, transport={}",
+            session_id,
+            upstream_name,
+            handle.transport()
+        );
+        Ok(handle)
+    }
+
+    /// Build and connect one handle according to the entry's transport.
+    async fn build_handle(&self, entry: &UpstreamEntry) -> Result<UpstreamHandle, UpstreamError> {
+        entry.validate().map_err(UpstreamError::UrlRejected)?;
+        if !self.gates.transport_enabled(&entry.transport) {
+            return Err(UpstreamError::UnsupportedTransport(format!(
+                "{} (disabled by enabled_upstream_transports)",
+                entry.transport
+            )));
+        }
+
+        match entry.transport.as_str() {
+            "stdio" => {
+                let handle = self.build_stdio(entry).await?;
+                Ok(UpstreamHandle::Stdio(handle))
+            }
+            "sse" => {
+                self.detected_sse
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(UpstreamHandle::LegacySse(self.build_legacy(entry).await?))
+            }
+            "streamable-http" => {
+                let handle = self.build_streamable(entry).await?;
+                handle.ensure_initialized().await?;
+                self.detected_streamable
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(UpstreamHandle::Streamable(handle))
+            }
+            "auto" => {
+                // Try Streamable first; fall back to legacy SSE only when the
+                // server clearly is not Streamable (404/405 or non-JSON body).
+                let streamable = self.build_streamable(entry).await?;
+                match streamable.ensure_initialized().await {
+                    Ok(()) => {
+                        self.detected_streamable
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        debug!("auto-detected streamable-http upstream '{}'", entry.name);
+                        Ok(UpstreamHandle::Streamable(streamable))
+                    }
+                    Err(UpstreamError::Status(404 | 405, _) | UpstreamError::Parse(_)) => {
+                        debug!(
+                            "auto: '{}' is not Streamable HTTP, falling back to legacy SSE",
+                            entry.name
+                        );
+                        self.detected_sse
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        Ok(UpstreamHandle::LegacySse(self.build_legacy(entry).await?))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            other => Err(UpstreamError::UnsupportedTransport(other.to_string())),
+        }
+    }
+
+    async fn build_legacy(
+        &self,
+        entry: &UpstreamEntry,
+    ) -> Result<LegacySseUpstream, UpstreamError> {
+        let url = entry.url.clone().ok_or_else(|| {
+            UpstreamError::UnsupportedTransport(format!("{} (no url)", entry.transport))
+        })?;
+        net_guard::validate_url(&url, self.gates.deny_private)
+            .await
+            .map_err(UpstreamError::UrlRejected)?;
         let config = UpstreamConfig {
-            url: entry.url.clone(),
+            url,
             transport: "sse".to_string(),
-            timeout_secs: self.timeout.as_secs(),
+            timeout_secs: self
+                .entry_timeout(entry)
+                .map(|d| d.as_secs())
+                .unwrap_or_else(|| self.timeout.as_secs()),
             sse_path: entry.sse_path.clone(),
         };
-
-        let client = UpstreamClient::with_http(config, self.http.clone());
+        let client =
+            LegacySseUpstream::with_http(config, self.http.clone(), self.gates.deny_private);
         client.ensure_connected().await?;
-        self.connections.insert(key, client.clone());
-        debug!(
-            "upstream connection created for session={}, upstream={}",
-            session_id, upstream_name
-        );
         Ok(client)
+    }
+
+    async fn build_streamable(
+        &self,
+        entry: &UpstreamEntry,
+    ) -> Result<Arc<StreamableHttpUpstream>, UpstreamError> {
+        let url = entry.url.clone().ok_or_else(|| {
+            UpstreamError::UnsupportedTransport(format!("{} (no url)", entry.transport))
+        })?;
+        net_guard::validate_url(&url, self.gates.deny_private)
+            .await
+            .map_err(UpstreamError::UrlRejected)?;
+        Ok(Arc::new(StreamableHttpUpstream::new(
+            url,
+            entry.http_path.clone(),
+            entry.headers.clone(),
+            self.stream_http.clone(),
+            self.http.clone(),
+            self.entry_timeout(entry).unwrap_or(self.timeout),
+            self.notify_tx.clone(),
+        )))
+    }
+
+    async fn build_stdio(
+        &self,
+        entry: &UpstreamEntry,
+    ) -> Result<Arc<StdioUpstream>, UpstreamError> {
+        let command = entry.command.clone().ok_or_else(|| {
+            UpstreamError::Spawn(format!("upstream '{}': no command", entry.name))
+        })?;
+        let handle = Arc::new(StdioUpstream::new(
+            entry.name.clone(),
+            command,
+            entry.args.clone(),
+            entry.env.clone(),
+            entry.cwd.clone(),
+            self.entry_timeout(entry).unwrap_or(self.timeout),
+        ));
+        handle.ensure_started().await?;
+        Ok(handle)
+    }
+
+    fn entry_timeout(&self, entry: &UpstreamEntry) -> Option<Duration> {
+        (entry.timeout_ms > 0).then(|| Duration::from_millis(entry.timeout_ms))
     }
 
     /// Convenience for single-upstream mode: connect to the sole upstream.
@@ -438,7 +701,7 @@ impl UpstreamManager {
     pub async fn get_or_connect_single(
         &self,
         session_id: &str,
-    ) -> Result<UpstreamClient, UpstreamError> {
+    ) -> Result<UpstreamHandle, UpstreamError> {
         let entries = self.entries_for(session_id);
         if entries.len() != 1 {
             return Err(UpstreamError::MultiUpstreamMode);
@@ -453,7 +716,7 @@ impl UpstreamManager {
     pub async fn connect_all(
         &self,
         session_id: &str,
-    ) -> Vec<Result<UpstreamClient, UpstreamError>> {
+    ) -> Vec<Result<UpstreamHandle, UpstreamError>> {
         let names = self.names_for(session_id);
         let mut results = Vec::with_capacity(names.len());
         for name in &names {
@@ -517,11 +780,23 @@ impl UpstreamManager {
 
         self.session_tenant.remove(session_id);
         for key in &keys_to_remove {
-            self.connections.remove(key);
+            if let Some((_, handle)) = self.connections.remove(key) {
+                handle.shutdown();
+            }
             debug!(
                 "upstream connection removed for session={}, upstream={}",
                 key.0, key.1
             );
+        }
+        self.connect_locks.retain(|key, _| key.0 != session_id);
+    }
+
+    /// Abort an in-flight request after a downstream `notifications/cancelled`.
+    pub fn cancel_request(&self, session_id: &str, request_id: &Value) {
+        for entry in self.connections.iter() {
+            if entry.key().0 == session_id {
+                entry.value().cancel(request_id);
+            }
         }
     }
 
@@ -564,49 +839,43 @@ impl UpstreamManager {
 /// - Parses `message` events to extract JSON-RPC responses
 /// - Matches responses to pending requests by JSON-RPC id
 /// - On connection loss, marks the connection as disconnected and fails pending requests
-async fn sse_reader(state: Arc<UpstreamState>, base_url: String, resp: reqwest::Response) {
+async fn sse_reader(
+    state: Arc<UpstreamState>,
+    base_url: String,
+    deny_private: bool,
+    resp: reqwest::Response,
+) {
     debug!("SSE reader started for {}", base_url);
 
     let mut stream = resp.bytes_stream();
-    let mut buffer = String::new();
+    let mut parser = SseParser::new();
 
     while let Some(chunk_result) = stream.next().await {
         match chunk_result {
             Ok(chunk) => {
-                // Normalize CRLF to LF and append to buffer
-                buffer.push_str(&String::from_utf8_lossy(&chunk).replace("\r\n", "\n"));
-
-                // Parse complete SSE events (separated by \n\n)
-                while let Some(pos) = buffer.find("\n\n") {
-                    let raw_event = buffer[..pos].to_string();
-                    buffer = buffer[pos + 2..].to_string();
-
-                    let mut event_type = String::new();
-                    let mut data = String::new();
-
-                    for line in raw_event.lines() {
-                        let line = line.trim();
-                        if let Some(val) = line.strip_prefix("event:") {
-                            event_type = val.trim().to_string();
-                        } else if let Some(val) = line.strip_prefix("data:") {
-                            data = val.trim().to_string();
-                        }
-                    }
-
-                    match event_type.as_str() {
-                        "endpoint" => {
-                            // Construct full URL from relative path
-                            let full_url = construct_endpoint_url(&base_url, &data);
-                            debug!("SSE endpoint received: {}", full_url);
-                            let mut url = state.endpoint_url.lock().unwrap();
-                            *url = Some(full_url);
-                        }
+                for event in parser.push(&chunk) {
+                    match event.event.as_str() {
+                        "endpoint" => match construct_endpoint_url(&base_url, &event.data) {
+                            Ok(full_url) => {
+                                match net_guard::validate_url(&full_url, deny_private).await {
+                                    Ok(()) => {
+                                        debug!("SSE endpoint received: {}", full_url);
+                                        let mut url = state.endpoint_url.lock().unwrap();
+                                        *url = Some(full_url);
+                                    }
+                                    Err(e) => {
+                                        warn!("SSE endpoint rejected ({e}): {full_url}");
+                                    }
+                                }
+                            }
+                            Err(e) => warn!("SSE endpoint rejected: {e}"),
+                        },
                         "message" => {
-                            if data.is_empty() {
+                            if event.data.is_empty() {
                                 continue;
                             }
                             // Parse JSON-RPC response and dispatch to pending request
-                            match serde_json::from_str::<Value>(&data) {
+                            match serde_json::from_str::<Value>(&event.data) {
                                 Ok(json) => {
                                     let id = json.get("id").cloned().unwrap_or(Value::Null);
                                     if let Some((_, sender)) = state.pending.remove(&id) {
@@ -616,12 +885,12 @@ async fn sse_reader(state: Arc<UpstreamState>, base_url: String, resp: reqwest::
                                     }
                                 }
                                 Err(e) => {
-                                    warn!("SSE message parse error: {} - data: {}", e, data);
+                                    warn!("SSE message parse error: {} - data: {}", e, event.data);
                                 }
                             }
                         }
                         _ => {
-                            debug!("SSE unknown event type: {}", event_type);
+                            debug!("SSE unknown event type: {}", event.event);
                         }
                     }
                 }
@@ -659,18 +928,36 @@ async fn sse_reader(state: Arc<UpstreamState>, base_url: String, resp: reqwest::
     }
 }
 
-/// Construct the full POST URL from a base URL and a relative path.
+/// Validate and normalize the POST endpoint URI announced by the upstream.
 ///
-/// The `endpoint` event data is a relative path like `/messages/?session_id=abc123`.
-/// This combines it with the base URL to get the full URL.
-fn construct_endpoint_url(base_url: &str, relative_path: &str) -> String {
-    if let Ok(base) = url::Url::parse(base_url) {
-        if let Ok(full) = base.join(relative_path) {
-            return full.to_string();
-        }
+/// The `endpoint` event data may be a relative path (e.g.
+/// `/messages/?session_id=abc123`) or an absolute URI, but it must stay on the
+/// origin of the configured SSE URL: a hostile or compromised upstream must not
+/// be able to redirect JSON-RPC payloads to another host.
+fn construct_endpoint_url(base_url: &str, data: &str) -> Result<String, String> {
+    if data.trim().is_empty() {
+        return Err("empty endpoint uri".to_string());
     }
-    // Fallback: simple concatenation
-    format!("{}{}", base_url.trim_end_matches('/'), relative_path)
+    let base =
+        url::Url::parse(base_url).map_err(|e| format!("invalid base url '{base_url}': {e}"))?;
+    let full = base
+        .join(data)
+        .map_err(|e| format!("invalid endpoint uri '{data}': {e}"))?;
+
+    let same_origin = full.scheme() == base.scheme()
+        && full.host_str() == base.host_str()
+        && full.port_or_known_default() == base.port_or_known_default()
+        && full.username() == base.username()
+        && full.password() == base.password();
+    if !same_origin {
+        return Err(format!(
+            "endpoint uri '{data}' is not same-origin with '{base_url}'"
+        ));
+    }
+    if !matches!(full.scheme(), "http" | "https") {
+        return Err(format!("unsupported endpoint scheme '{}'", full.scheme()));
+    }
+    Ok(full.to_string())
 }
 
 #[derive(Debug)]
@@ -681,6 +968,9 @@ pub enum UpstreamError {
     UnsupportedTransport(String),
     Timeout,
     NotConnected,
+    UrlRejected(String),
+    Spawn(String),
+    Cancelled,
     UnknownUpstream(String),
     MultiUpstreamMode,
 }
@@ -694,6 +984,9 @@ impl std::fmt::Display for UpstreamError {
             Self::UnsupportedTransport(t) => write!(f, "unsupported upstream transport: {t}"),
             Self::Timeout => write!(f, "upstream timeout"),
             Self::NotConnected => write!(f, "upstream not connected"),
+            Self::UrlRejected(e) => write!(f, "upstream url rejected: {e}"),
+            Self::Spawn(e) => write!(f, "upstream spawn failed: {e}"),
+            Self::Cancelled => write!(f, "upstream request cancelled"),
             Self::UnknownUpstream(name) => write!(f, "unknown upstream: {name}"),
             Self::MultiUpstreamMode => write!(f, "operation requires single-upstream mode"),
         }
@@ -708,22 +1001,57 @@ mod tests {
 
     #[test]
     fn test_construct_endpoint_url() {
-        let full = construct_endpoint_url("http://localhost:9091", "/messages/?session_id=abc123");
+        let full = construct_endpoint_url("http://localhost:9091", "/messages/?session_id=abc123")
+            .expect("relative endpoint should be accepted");
         assert_eq!(full, "http://localhost:9091/messages/?session_id=abc123");
     }
 
     #[test]
     fn test_construct_endpoint_url_trailing_slash() {
-        let full = construct_endpoint_url("http://localhost:9091/", "/messages/?session_id=abc");
+        let full = construct_endpoint_url("http://localhost:9091/", "/messages/?session_id=abc")
+            .expect("relative endpoint should be accepted");
         assert_eq!(full, "http://localhost:9091/messages/?session_id=abc");
+    }
+
+    #[test]
+    fn test_construct_endpoint_url_absolute_same_origin() {
+        let full = construct_endpoint_url(
+            "http://localhost:9091",
+            "http://localhost:9091/messages/?session_id=abc",
+        )
+        .expect("absolute same-origin endpoint should be accepted");
+        assert_eq!(full, "http://localhost:9091/messages/?session_id=abc");
+    }
+
+    #[test]
+    fn test_construct_endpoint_url_rejects_cross_origin() {
+        for bad in [
+            "http://evil.example/messages",
+            "//evil.example/messages",
+            "http://localhost:9092/messages",
+            "https://localhost:9091/messages",
+            "http://localhost:9091@evil.example/messages",
+        ] {
+            assert!(
+                construct_endpoint_url("http://localhost:9091", bad).is_err(),
+                "{bad} should have been rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_construct_endpoint_url_rejects_empty() {
+        assert!(construct_endpoint_url("http://localhost:9091", "").is_err());
+        assert!(construct_endpoint_url("http://localhost:9091", "   ").is_err());
     }
 
     #[test]
     fn test_cleanup_disconnected_removes_stale_connections() {
         let entries = vec![UpstreamEntry {
             name: "default".to_string(),
-            url: "http://127.0.0.1:59999".to_string(),
+            url: Some("http://127.0.0.1:59999".to_string()),
             sse_path: "/sse".to_string(),
+            ..Default::default()
         }];
         let mgr = UpstreamManager::new(entries, 1);
 
@@ -734,12 +1062,12 @@ mod tests {
             timeout_secs: 1,
             sse_path: "/sse".to_string(),
         };
-        let disconnected_client = UpstreamClient::new(client_config);
+        let disconnected_client = LegacySseUpstream::new(client_config);
         assert!(!disconnected_client.is_connected());
 
         mgr.connections.insert(
             ("stale-session".to_string(), "default".to_string()),
-            disconnected_client,
+            UpstreamHandle::LegacySse(disconnected_client),
         );
         assert_eq!(mgr.len(), 1);
 
@@ -752,8 +1080,9 @@ mod tests {
     fn test_cleanup_disconnected_keeps_connected() {
         let entries = vec![UpstreamEntry {
             name: "default".to_string(),
-            url: "http://127.0.0.1:59999".to_string(),
+            url: Some("http://127.0.0.1:59999".to_string()),
             sse_path: "/sse".to_string(),
+            ..Default::default()
         }];
         let mgr = UpstreamManager::new(entries, 1);
         assert_eq!(mgr.len(), 0);
@@ -765,8 +1094,9 @@ mod tests {
     fn test_route_tool_single_upstream() {
         let entries = vec![UpstreamEntry {
             name: "default".to_string(),
-            url: "http://localhost:8080".to_string(),
+            url: Some("http://localhost:8080".to_string()),
             sse_path: "/sse".to_string(),
+            ..Default::default()
         }];
         let mgr = UpstreamManager::new(entries, 30);
         assert!(mgr.is_single_upstream());
@@ -782,13 +1112,15 @@ mod tests {
         let entries = vec![
             UpstreamEntry {
                 name: "fs".to_string(),
-                url: "http://localhost:8081".to_string(),
+                url: Some("http://localhost:8081".to_string()),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
             UpstreamEntry {
                 name: "gh".to_string(),
-                url: "http://localhost:8082".to_string(),
+                url: Some("http://localhost:8082".to_string()),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
         ];
         let mgr = UpstreamManager::new(entries, 30);
@@ -825,13 +1157,15 @@ mod tests {
         let entries = vec![
             UpstreamEntry {
                 name: "fs".to_string(),
-                url: "http://localhost:8081".to_string(),
+                url: Some("http://localhost:8081".to_string()),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
             UpstreamEntry {
                 name: "gh".to_string(),
-                url: "http://localhost:8082".to_string(),
+                url: Some("http://localhost:8082".to_string()),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
         ];
         let mgr = UpstreamManager::new(entries, 30);
@@ -844,13 +1178,15 @@ mod tests {
         let entries = vec![
             UpstreamEntry {
                 name: "fs".to_string(),
-                url: "http://127.0.0.1:59999".to_string(),
+                url: Some("http://127.0.0.1:59999".to_string()),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
             UpstreamEntry {
                 name: "gh".to_string(),
-                url: "http://127.0.0.1:59998".to_string(),
+                url: Some("http://127.0.0.1:59998".to_string()),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
         ];
         let mgr = UpstreamManager::new(entries, 1);
@@ -871,15 +1207,15 @@ mod tests {
         let cfg1_clone = cfg1.clone();
         mgr.connections.insert(
             ("s1".to_string(), "fs".to_string()),
-            UpstreamClient::new(cfg1),
+            UpstreamHandle::LegacySse(LegacySseUpstream::new(cfg1)),
         );
         mgr.connections.insert(
             ("s1".to_string(), "gh".to_string()),
-            UpstreamClient::new(cfg2),
+            UpstreamHandle::LegacySse(LegacySseUpstream::new(cfg2)),
         );
         mgr.connections.insert(
             ("s2".to_string(), "fs".to_string()),
-            UpstreamClient::new(cfg1_clone),
+            UpstreamHandle::LegacySse(LegacySseUpstream::new(cfg1_clone)),
         );
 
         assert_eq!(mgr.len(), 3);

@@ -6,17 +6,28 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![PyPI](https://img.shields.io/pypi/dm/virbius-review-sdk?label=review-sdk%20downloads)](https://pypi.org/project/virbius-review-sdk/)
 [![HuggingFace](https://img.shields.io/badge/HuggingFace-VirbiusGuard-yellow)](https://huggingface.co/i1see1you/VirbiusGuard)
-[![Java](https://img.shields.io/badge/Java-17%2B-orange)](https://adoptium.net/)
-[![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange)](https://www.rust-lang.org/)
-[![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8)](https://go.dev/)
 [![GitHub stars](https://img.shields.io/github/stars/i1see1you/VirbiusAgent?style=social)](https://github.com/i1see1you/VirbiusAgent/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/i1see1you/VirbiusAgent?style=social)](https://github.com/i1see1you/VirbiusAgent/network/members)
 
 [中文文档](README.zh.md)
 
+**[Quick Start](#quick-start) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [Examples](#examples) · [Docs](#documentation) · [Limitations](docs/LIMITATIONS.md) · [Changelog](CHANGELOG.md) · [Releases](https://github.com/i1see1you/VirbiusAgent/releases) · [Live demo](https://www.virbius.cn/demo)**
+
 **VirbiusAgent** is an open-source runtime security platform for self-hosted AI Agents. It blocks prompt injection, MCP tool abuse and privilege escalation across four independent layers — **Edge → Gateway → Kernel → Cloud** — combining sub-millisecond rules, eBPF/Falco syscall observation and LLM guardrails.
 
 > **Scope:** VirbiusAgent protects *your self-developed agents* (server-side runtime security), not endpoint DLP for employee AI usage. It provides a highly customizable policy framework for enterprise security review and audit; map its controls to the regulations that apply to your jurisdiction. Precise, scenario-matched protection requires security engineers who understand both policy and your business.
+
+![VirbiusAgent operations console, recorded live: Alerts lists two real blocks (prompt injection, risk 100; credential access, risk 80), the Decision BOM explains the injection block, and Audit Integrity verifies the session hash chain 3/3](docs/images/ops-demo-en.gif)
+
+### The problem
+
+Your agent calls tools, reads untrusted content, and acts on it. Three questions decide whether that is safe:
+
+- **Is this action allowed?** An agent with `read_file` and `send_email` should not be able to `db_delete` or exfiltrate secrets. OAuth scopes control which services it reaches, not what it does once connected.
+- **Can a poisoned document redirect it?** Indirect prompt injection turns a fetched page or tool result into instructions. [OWASP LLM01:2025](https://genai.owasp.org/llmrisk/llm01-prompt-injection/) states there is no fool-proof prompt-level prevention; [AgentDojo](https://github.com/ethz-spylab/agentdojo) measures exactly this attack class against real tool-using agents.
+- **Can you prove what happened?** Auditors need tamper-evident records of every decision, not "the model said so".
+
+Prompt-level safety is a request to a stochastic system. VirbiusAgent adds deterministic, on-path controls around the tool call — precheck, gateway enforcement, syscall observation and adjudication — so a blocked action is blocked by policy, not by persuasion.
 
 ### Proof at a glance
 
@@ -38,8 +49,6 @@ curl -s http://localhost:8080/api/v1/health    # verify
 
 - **Or the guided local setup:** `bash scripts/run-local.sh` then `bash scripts/smoke-test.sh`. More in [Quick Start](#quick-start).
 
-![VirbiusAgent operations console, recorded live: Alerts lists two real blocks (prompt injection, risk 100; credential access, risk 80), the Decision BOM explains the injection block, and Audit Integrity verifies the session hash chain 3/3](docs/images/ops-demo-en.gif)
-
 ## Features
 
 | Capability | Description |
@@ -58,6 +67,20 @@ curl -s http://localhost:8080/api/v1/health    # verify
 | **Review API + Python SDK** | Input/output review as an engine API with a dedicated Python SDK (`virbius-review-sdk`): dispositions, streaming review windows, sync + async |
 | **Falco Rules Management** | Custom eBPF rules managed through console with canary deployment |
 | **Native Tool Integration** | LangChain callback observation (Mode A) + native-tool enforcement SDK (Mode B): tool inventory, coverage classification, warnings |
+
+## Framework & agent support
+
+| Framework / agent | Integration | Mode |
+|-------------------|-------------|------|
+| LangChain / LangGraph | `VirbiusAuditCallback` in `callbacks=[...]` | A observe |
+| LangChain / LangGraph native tools | `guard.langchain_tool(s)` | B enforce |
+| OpenAI Agents SDK | `guard.openai_tool(s)` | B enforce |
+| Any MCP client (stdio / SSE) | `virbius-mcp-proxy` in front of the server | B enforce (isolated) |
+| Native Python / Node.js tools | `virbius-mcp-python` / `virbius-mcp-node` `govern()` | B enforce |
+| Any OpenAI-compatible client (entry/exit review) | `virbius-review-sdk` against the engine | review (not tool enforcement) |
+| Third-party desktop/IDE agents (Cursor, Claude Code, Continue) | Not intercepted by VirbiusAgent; LLM entry/exit review only via the companion [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) | out of scope |
+
+Mode A = visibility / audit (advisory, no blocking); Mode B = pre-execution enforcement. Details: [NATIVE_TOOL_INTEGRATION.md](NATIVE_TOOL_INTEGRATION.md).
 
 ## Architecture
 
@@ -198,9 +221,32 @@ python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl
 See [`scripts/benchmarks/README.md`](scripts/benchmarks/README.md) for dataset
 export, field mapping, and the adversarial slice.
 
+## OWASP Agentic Top 10 coverage
+
+Honest coverage of the [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/): **2 Covered · 5 Partial · 3 Not covered**. The mapping derives from the 88-record `ai-agent-incidents` convenience sample (counts are risk mappings, not distinct incidents); per-layer detail in [docs/sales/VirbiusAgent_Customer_Scenarios.md](docs/sales/VirbiusAgent_Customer_Scenarios.md).
+
+| ASI | Risk | Coverage | What we claim |
+|-----|------|----------|---------------|
+| ASI01 | Agent Goal Hijack | Partial | Post-injection privilege abuse blocked; not "100% injection detection" |
+| ASI02 | Tool Misuse and Exploitation | Covered | Allowlist + on-path enforcement + approval for destructive actions |
+| ASI03 | Identity and Privilege Abuse | Partial | Token validation + syscall observation; identity governance is your IAM |
+| ASI04 | Agentic Supply Chain | Partial | Limits what a poisoned tool can do; does not prevent poisoning |
+| ASI05 | Unexpected Code Execution | Covered | Landlock/gVisor sandbox + syscall-level observation |
+| ASI06 | Memory and Context Poisoning | Partial | Write redaction + output review; provenance governance is yours |
+| ASI07 | Insecure Inter-Agent Communication | Not covered | Explicitly out of scope |
+| ASI08 | Cascading Agent Failures | Not covered | Explicitly out of scope |
+| ASI09 | Human-Agent Trust Exploitation | Not covered | Explicitly out of scope |
+| ASI10 | Rogue Agents | Partial | Visibility + gates + tamper-evident audit; not "prevents autonomous overreach" |
+
 ## Quick Start
 
+**Start small:** every layer is optional. Begin with one SDK (observe or enforce) or the proxy, and add Gateway / Kernel / Cloud as your risk profile grows — most teams do not need all four on day one. See [recommended layer combinations](#architecture-deep-dive-reference).
+
+**60 seconds, no install:** open the [live demo](https://www.virbius.cn/demo) — 10 safety categories plus agent-attack samples, right in the browser. Already running an engine? `pip install virbius-review-sdk` adds input/output review against it ([review SDK](virbius-review-sdk/README.md)). Neither needs an edge license or manifest — enforcement (Mode B) below does.
+
 ### Prerequisites
+
+For building and self-hosting (Mode B, Local Development, Docker below) — the live demo needs none of these.
 
 | Dependency | Version | Required for |
 |-----------|---------|-------------|
@@ -214,23 +260,33 @@ export, field mapping, and the adversarial slice.
 | OpenSSL | 3.x (4.x experimental) | librdkafka via rdkafka-sys (see build note below) |
 | MySQL | 8+ | Production database (SQLite for dev) |
 
-> **OpenSSL selection (macOS/Linux).** `openssl-sys` probes for its own tree —
-> on macOS it prefers Homebrew `openssl@4` over `@3` and returns before
-> pkg-config is consulted — while `rdkafka-sys` compiles librdkafka against
-> the root it receives via `DEP_OPENSSL_ROOT`. Exporting OpenSSL
-> `CFLAGS`/`LDFLAGS` therefore mixes "@3 headers with an @4 library" and fails
-> the link. `scripts/run-local.sh` (and every build script) sources
-> `scripts/lib/openssl.sh`, resolves exactly one tree and exports `OPENSSL_DIR`
-> plus include/library flags *and* a prepended `$libdir/pkgconfig` — all
-> derived from that same tree. On multiarch Linux the libs live in
-> `lib/<triplet>` (e.g. `/usr/lib/x86_64-linux-gnu`), which `openssl-sys` never
-> probes once `OPENSSL_DIR` is set — so the script also exports
-> `OPENSSL_LIB_DIR` pointing at the real directory. librdkafka's configure
-> prefers the pkg-config channel and, on macOS, appends the unversioned
-> `/opt/homebrew/opt/openssl` alias, which `openssl-sys` ignores; the prepended
-> path keeps every channel on the selected tree. Override with
-> `OPENSSL_DIR=/path`, or select a major with `VIRBIUS_OPENSSL_MAJOR=3|4`
-> (3 is the default; 4 is experimental).
+> **OpenSSL (macOS/Linux).** Build scripts source [`scripts/lib/openssl.sh`](scripts/lib/openssl.sh), which
+> resolves one OpenSSL tree and derives all flags from it — never hand-set `CFLAGS`/`LDFLAGS`/`PKG_CONFIG_PATH`.
+> Override with `OPENSSL_DIR=/path` or `VIRBIUS_OPENSSL_MAJOR=3|4` (default 3; 4 experimental). Full rationale:
+> the script's comments; for a crates.io `cargo install` see [virbius-mcp-proxy/README.md](virbius-mcp-proxy/README.md#build-prerequisites).
+
+### Protect a tool in two lines (Mode B, enforce)
+
+```python
+import json
+import virbius_mcp_python as v
+
+v.configure_rules(json.dumps({
+    "offline_manifest_path": "./edge-manifest.json",  # local edge rules; no network needed
+    "cache_dir": "./.virbius-edge-cache",
+    "tenant_id": "acme", "app_id": "crm-agent",
+}))
+
+# read_file / db_delete are your existing tool functions
+safe_read = v.govern(read_file, name="read_file")   # precheck on every call
+safe_read(path="/tmp/a")                            # executes: in license allowlist
+
+safe_delete = v.govern(db_delete, name="db_delete")
+safe_delete(id=1)                                   # raises VirbiusDenied:
+# The tool call was blocked by policy: tool 'db_delete' not in license allowlist.
+```
+
+Mode B needs an edge license + manifest (`VIRBIUS_LICENSE_FILE`, `VIRBIUS_LICENSE_PUBLIC_KEY`, `VIRBIUS_APP_ID`); mint a test license with [`scripts/mint_test_license.py`](scripts/mint_test_license.py). Observe-only (no blocking) is Mode A: one `VirbiusAuditCallback` in your LangChain `callbacks=[...]` ([virbius-integrate](virbius-integrate/README.md)). No install at all? Use the [live demo](https://www.virbius.cn/demo). A full runnable target agent: [examples/oss-agent-target/](examples/oss-agent-target/).
 
 ### Local Development
 
@@ -308,6 +364,17 @@ cargo test --test e2e_integration -- --nocapture
 The suite walks through the full edge-layer security pipeline: License
 verification → tool precheck → Prompt Gateway → MCP execution → STI taint
 detection → audit trace propagation.
+
+## Examples
+
+| Example | What it shows | Run |
+|---------|---------------|-----|
+| [Live demo](https://www.virbius.cn/demo) | 10 safety categories + agent-attack samples, no install | browser |
+| Edge e2e (no external services) | License → precheck → Prompt Gateway → MCP → STI → audit | `cd virbius-core && cargo test --test e2e_integration` |
+| [LangChain precheck](examples/langchain_precheck.py) | Mode B allow + deny on native tools (needs license fixtures) | `python examples/langchain_precheck.py` |
+| [OSS agent target](examples/oss-agent-target/) | Same agent via proxy vs SDK; error-wording A/B | see its README |
+| [Red-team playground](virbius-demo/) | OWASP LLM lab + attack samples | see [virbius-demo/README.md](virbius-demo/README.md) |
+| [Public benchmark repro](scripts/benchmarks/) | VirbiusGuard on WildGuardTest / XSTest / … | `python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl` |
 
 ## Packages
 
@@ -505,11 +572,10 @@ Rule authoring details: [USAGE_GUIDE.md](USAGE_GUIDE.md) · [rule-examples.en.md
 <details>
 <summary><b>Edge–Gateway–Kernel–Cloud Rule Selection</b></summary>
 
-The four layers differ in **execution location, latency, and purpose**. Guiding principle: push deterministic rules forward; defer high-latency rules to the back; keep observation layers passive.
+The four layers differ in **execution location, latency, and purpose** (typical latency: see the Layer overview table above). Guiding principle: push deterministic rules forward; defer high-latency rules to the back; keep observation layers passive.
 
 | Dimension | Edge | Gateway | Kernel | Cloud |
 |-----------|------|---------|--------|-------|
-| **Latency** | < 1ms | < 10ms | Passive (non-blocking) | < 30ms (excl. LLM inference) |
 | **Execution location** | In-process (MCP Proxy, Rust) | Higress WASM plugin | Falco DaemonSet (eBPF, passive) | virbius-engine (remote) |
 | **Offline capable** | ✅ | ❌ | ✅ | ❌ |
 | **Calls LLM** | No | No | No | Yes (Prompt L1) |
@@ -589,6 +655,7 @@ VirbiusAgent/
 | [PROXY_CONFIG.md](PROXY_CONFIG.md) | MCP proxy configuration reference |
 | [SSO_INTEGRATION.md](SSO_INTEGRATION.md) | Unified login (OAuth2/OIDC) — auth-broker design (finalized, not yet implemented) |
 | [FAQ.md](FAQ.md) | FAQ — agent-security scenarios and product answers |
+| [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Honest design boundaries and recommended layered defense |
 | [CHANGELOG.md](CHANGELOG.md) | Version history |
 
 ## Contributing
@@ -597,7 +664,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines. If VirbiusAg
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for vulnerability reporting.
+See [SECURITY.md](SECURITY.md) for vulnerability reporting, and [docs/LIMITATIONS.md](docs/LIMITATIONS.md) for honest design boundaries and recommended layered defense.
 
 ## Contact
 
@@ -609,4 +676,4 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## License
 
-MIT — Copyright (c) 2026 i1see1you
+MIT — Copyright (c) 2026 Virbius

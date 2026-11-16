@@ -52,20 +52,46 @@ If neither file exists, all defaults are used with environment variable override
 |-------|------|---------|-------------|
 | `listen` | string | `"stdio"` | Listen address: `"stdio"` (stdin/stdout) or `"tcp://0.0.0.0:9090"` / `"http://0.0.0.0:9090"` |
 | `upstream_url` | string | `"http://localhost:8080"` | Single upstream MCP Server URL (shorthand mode) |
-| `upstream_transport` | string | `"sse"` | Upstream transport: `"sse"` or `"stdio"` |
 | `upstream_sse_path` | string | `"/sse"` | Upstream SSE endpoint path |
 | `upstreams` | array | `[]` | Multi-upstream mode config (mutually exclusive with `upstream_url`; `upstreams` takes priority) |
 | `session_ttl_secs` | u64 | `1800` | Session TTL in seconds; cleaned up on expiry |
+| `enabled_upstream_transports` | array | `[]` (all) | Transports allowed in this deployment: `auto`, `sse`, `streamable-http`, `stdio`. Entries using a disabled transport are rejected at startup when explicitly configured (static) and dropped when coming from the pushed policy; the implicit legacy `default` upstream is skipped with a warning instead of aborting, so policy-driven deployments can run gated to a transport subset |
+| `allow_dynamic_stdio_upstreams` | bool | `false` | Allow Control-pushed policies to define stdio upstreams. Static TOML stdio entries are always allowed |
+| `allowed_stdio_commands` | array | `[]` (unrestricted) | Defense-in-depth command allowlist for **dynamic** stdio entries (basename or absolute path) |
+| `upstream_deny_private` | bool | `false` | Deny upstream URLs resolving to private/loopback addresses. Link-local and cloud-metadata addresses are always denied |
 
 **Multi-upstream `upstreams` array elements:**
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `name` | string | Upstream name (used for routing and logging) |
-| `url` | string | Upstream MCP Server URL |
-| `sse_path` | string | SSE endpoint path, defaults to `"/sse"` |
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | string | — | Upstream name (used for routing and logging) |
+| `transport` | string | `"auto"` | `auto` (probe Streamable HTTP, fall back to legacy SSE), `streamable-http`, `sse`, `stdio` |
+| `url` | string | — | HTTP-family upstream URL (required for `auto` / `sse` / `streamable-http`; forbidden for `stdio`) |
+| `http_path` | string | `"/mcp"` | Streamable HTTP endpoint path |
+| `sse_path` | string | `"/sse"` | Legacy SSE endpoint path |
+| `headers` | table | `{}` | Extra request headers (e.g. `Authorization`). **Static TOML only** — policy-pushed headers are rejected |
+| `command` | string | — | stdio: executable to spawn (no shell; argv is passed literally) |
+| `args` | array | `[]` | stdio: argv entries |
+| `env` | table | `{}` | stdio: extra environment. The child receives only these plus `PATH`/`HOME`/`LANG`/`LC_ALL`/`TMPDIR` — proxy secrets are never inherited |
+| `cwd` | string | — | stdio: working directory (must exist) |
+| `timeout_ms` | u64 | `30000` | Per-upstream request timeout: header phase, non-streaming body read, request-scoped SSE and the 202 reply wait. Long-lived server→client GET streams are not capped by it; they reconnect after a 120s idle period. |
 
-> If `upstreams` is empty and `upstream_url` is non-empty, it is auto-normalized into a single-entry `upstreams` array.
+> If `upstreams` is empty and `upstream_url` is non-empty, it is auto-normalized into a single-entry `upstreams` array with `transport = "auto"`.
+
+**Upstream transport semantics:**
+
+| Transport | Session model | Notes |
+|---|---|---|
+| `stdio` | One child process per (session, upstream); `listen = "stdio"` yields a single child | No auto-restart: a crashed child fails in-flight requests and is respawned on next use |
+| `streamable-http` | MCP 2025-06-18: `Mcp-Session-Id`, `MCP-Protocol-Version`, DELETE on close; 404 re-initializes once | Optional GET stream for server notifications (disabled automatically on 404/405) |
+| `sse` | Legacy HTTP+SSE (2024-11-05) | Kept for compatibility |
+| `auto` | Probes Streamable HTTP first, falls back to legacy SSE only on 404/405/non-JSON | Detection is cached per resolved entry |
+
+**Isolation semantics:** HTTP-family upstreams share one upstream session per
+(tenant, upstream) across downstream sessions (same as previous releases);
+stdio upstreams are one child per downstream session. Do not describe the
+proxy as "per-session isolated" for HTTP upstreams — server-side session state
+is shared across clients of the same tenant.
 
 ---
 
@@ -163,9 +189,12 @@ All configuration can be overridden via environment variables, **with higher pri
 |---------------------|---------|
 | `VIRBIUS_TRANSPORT` | `proxy.listen` |
 | `VIRBIUS_UPSTREAM_URL` | `proxy.upstream_url` |
-| `VIRBIUS_UPSTREAM_TRANSPORT` | `proxy.upstream_transport` |
 | `VIRBIUS_UPSTREAM_SSE_PATH` | `proxy.upstream_sse_path` |
 | `VIRBIUS_UPSTREAMS` | `proxy.upstreams` (JSON array format) |
+| `VIRBIUS_ENABLED_UPSTREAM_TRANSPORTS` | `proxy.enabled_upstream_transports` (comma list) |
+| `VIRBIUS_ALLOW_DYNAMIC_STDIO_UPSTREAMS` | `proxy.allow_dynamic_stdio_upstreams` |
+| `VIRBIUS_ALLOWED_STDIO_COMMANDS` | `proxy.allowed_stdio_commands` (comma list) |
+| `VIRBIUS_UPSTREAM_DENY_PRIVATE` | `proxy.upstream_deny_private` |
 | `VIRBIUS_SESSION_TTL_SECS` | `proxy.session_ttl_secs` |
 
 `VIRBIUS_UPSTREAMS` example:

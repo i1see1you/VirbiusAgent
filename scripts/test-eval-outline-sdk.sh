@@ -1112,7 +1112,6 @@ nc -z 127.0.0.1 "$UPSTREAM_PORT" 2>/dev/null || { red "upstream MCP server faile
 info "starting virbius-mcp-proxy :$PROXY_PORT ..."
 env VIRBIUS_TRANSPORT="tcp://127.0.0.1:$PROXY_PORT" \
     VIRBIUS_UPSTREAM_URL="http://127.0.0.1:$UPSTREAM_PORT" \
-    VIRBIUS_UPSTREAM_TRANSPORT="sse" \
     VIRBIUS_UPSTREAM_SSE_PATH="/sse" \
     VIRBIUS_LICENSE_FILE="$LIC_FILE" \
     VIRBIUS_LICENSE_PUBLIC_KEY="$LIC_PUB" \

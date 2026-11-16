@@ -14,6 +14,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Startup sanity warnings for judge backend wiring**: an enabled backend id with no registered implementation, a registered backend with no configuration entry, and a missing or disabled `default-backend` are reported at startup (WARN only, matching the existing non-fail-fast policy) instead of surfacing as silent per-request `on_error`.
 - **Oversized-input protection for judge rules**: content is truncated head+tail to a CJK-aware token budget (75% of the backend's `maxStateTokens`, since ~1 Chinese char ≈ 1 token) and the `virbius.prompt-judge.max-content-chars` ceiling (default 4000) before being sent — a char-only budget overflows on Chinese, so fail_open rules could otherwise be bypassed by inputs exceeding the vendor 2048-token `state` limit. Batches are also split early when cumulative `instructions` exceed `virbius.prompt-judge.max-prompt-chars` (default 24000). `virbius.prompt-judge.timeout-ms` defaults to 5000 (was 2000). New protocol reference: `docs/judge-protocol-v1.md` (includes the measured golden request/response pair).
 
+### Removed
+- **Dead config key `proxy.upstream_transport` / env `VIRBIUS_UPSTREAM_TRANSPORT` removed from the MCP proxy.** The key was parsed (defaulting to `"sse"`) but never consumed — upstream connections are always SSE via `upstreams[].url` + `sse_path`, and no stdio upstream exists. Removal changes no behavior; existing configs containing the key keep parsing (unknown keys are ignored by serde). Docs updated (`PROTOCOL.md`, `PROXY_CONFIG.md`, EN/ZH) and the key dropped from the e2e scripts. When stdio upstream is implemented it will be defined per `upstreams[]` entry, not as this global key.
+
+### Added
+- **MCP upstream transports: stdio subprocesses and Streamable HTTP.** The proxy
+  can now protect upstream MCP servers over three transports selected per entry
+  (`transport = "auto" | "streamable-http" | "sse" | "stdio"`). `auto` probes
+  Streamable HTTP first and falls back to legacy HTTP+SSE on 404/405/non-JSON.
+  Streamable HTTP implements the 2025-06-18 session model (`Mcp-Session-Id`,
+  `MCP-Protocol-Version`, notification `202`, cancellation by aborting the
+  request, `DELETE` on close, one re-initialization on 404, optional GET stream
+  for server notifications). stdio spawns a child with argv (no shell) and a
+  filtered environment, drains stderr, and reuses one child per downstream
+  session; listen=stdio uses a single child. Connection creation is
+  single-flight, so concurrent clients cannot spawn duplicate children or
+  handshakes.
+- **Upstream egress and configuration guards:** upstream URLs resolving to
+  link-local or cloud-metadata addresses are rejected (IPv4/IPv6, including
+  IPv4-mapped IPv6) with optional `upstream_deny_private`; redirects are not
+  followed; `enabled_upstream_transports` gates which transports may be used;
+  Control-pushed stdio upstreams are off by default
+  (`allow_dynamic_stdio_upstreams`) and honor `allowed_stdio_commands`;
+  `headers` are accepted from static TOML only. Invalid static entries fail
+  startup; invalid policy entries are dropped individually with a warning.
+- **Per-entry timeout and transport-aware diagnostics:** `timeout_ms` per
+  upstream (initialize uses a fixed 5s), `doctor` reports transport and target,
+  and the status surface distinguishes stdio targets from URLs.
+
+### Fixed
+- **stdio listen mode no longer writes logs to stdout.** The tracing subscriber
+  now targets stderr unconditionally; stdout carries only the newline-delimited
+  JSON-RPC stream, so strict MCP clients no longer choke on `INFO` lines
+  interleaved with protocol frames (the previous e2e scripts worked around this
+  by filtering non-`{` lines).
+- **`VIRBIUS_ENABLED_UPSTREAM_TRANSPORTS` no longer aborts startup in
+  policy-driven deployments.** With no config file the legacy single-upstream
+  fields synthesize an implicit `default` upstream (`transport = "auto"`), which
+  a transport gate such as `sse` rejected with `exit(2)` before the policy
+  subscriber could load Control-pushed upstreams. The implicit fallback is now
+  skipped with a warning; an explicitly configured entry using a disabled
+  transport still fails fast.
+
+### Changed
+- **Breaking: upstream entry schema.** `url` is now optional and paired with
+  `transport`; a missing `transport` defaults to `auto` (Streamable HTTP probe).
+  Static configs with only `url` keep working but will probe Streamable first.
+  Policy-pushed entries must use the new shape.
+
+### Removed
+- **Breaking: HTTP/SSE-only upstream assumptions.** `UpstreamManager` now
+  returns a transport-agnostic handle; callers that matched on the legacy client
+  type must use the handle API.
+
+### Fixed
+- **Streamable HTTP requests and streams are no longer capped at the manager's
+  30s client timeout.** reqwest's `ClientBuilder::timeout` covers the response
+  body, so the shared client silently killed every `tools/call` that took longer
+  than 30s (including plain JSON replies) and reconnected the server→client GET
+  stream every ~31s — regardless of the entry's `timeout_ms`. Upstream traffic
+  now uses a dedicated client without a total timeout (`connect_timeout` only);
+  header phases, non-streaming body reads, request-scoped SSE and the 202 wait
+  are bounded explicitly by `timeout_ms`, and long-lived GET streams use a 120s
+  idle timeout instead. `timeout_ms` is now the effective per-upstream limit.
+- **SSE parsing no longer corrupts UTF-8 split across HTTP chunks.** The parser
+  decoded every chunk independently with `String::from_utf8_lossy`, so a
+  multi-byte sequence cut by a TCP/TLS chunk boundary became U+FFFD on both
+  sides and the JSON-RPC message was dropped (surfacing as a tool-call timeout).
+  It now buffers raw bytes and decodes only complete lines — `\n`/`\r` are ASCII
+  and cannot occur inside a multi-byte sequence — and strips a leading UTF-8 BOM
+  (also when the BOM itself is split). Regression tests feed the same event one
+  byte at a time and at every possible split point, with Chinese and emoji
+  payloads in `data:`, `event:` and `id:`.
+
 ## [1.0.3] - 2026-10-29
 
 ### Added

@@ -1,5 +1,6 @@
 /// Configuration loading (TOML file + environment variable overrides).
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -117,23 +118,178 @@ pub struct ProxySection {
     pub listen: String,
     #[serde(default = "default_upstream")]
     pub upstream_url: String,
-    #[serde(default = "default_upstream_transport")]
-    pub upstream_transport: String,
     #[serde(default = "default_upstream_sse_path")]
     pub upstream_sse_path: String,
     #[serde(default)]
     pub upstreams: Vec<UpstreamEntry>,
     #[serde(default = "default_session_ttl_secs")]
     pub session_ttl_secs: u64,
+    /// Upstream transports enabled in this deployment. Entries using a
+    /// disabled transport are rejected at load time (static config) or
+    /// filtered out (Control-pushed policy). Empty = all enabled.
+    #[serde(default)]
+    pub enabled_upstream_transports: Vec<String>,
+    /// Allow Control-pushed tenant policies to define stdio upstreams.
+    /// Static TOML stdio entries are always allowed. Default: `false`.
+    #[serde(default)]
+    pub allow_dynamic_stdio_upstreams: bool,
+    /// Command allowlist for stdio upstreams (binary basename or absolute
+    /// path). Empty = unrestricted (defense-in-depth, not a sandbox).
+    #[serde(default)]
+    pub allowed_stdio_commands: Vec<String>,
+    /// Deny upstream URLs that resolve to private/loopback addresses.
+    /// Default: `false` (internal deployments run on private networks).
+    /// Link-local and cloud-metadata addresses are always denied.
+    #[serde(default)]
+    pub upstream_deny_private: bool,
 }
 
-/// A single upstream MCP Server entry for multi-upstream mode.
+/// Upstream MCP Server entry. One schema for static TOML and the
+/// Control-pushed policy, so both sources cannot drift.
+///
+/// `transport`:
+/// - `"auto"` (default) — try Streamable HTTP, fall back to legacy HTTP+SSE
+/// - `"streamable-http"` — single-endpoint Streamable HTTP
+/// - `"sse"` — legacy HTTP+SSE (2024-11-05 revision)
+/// - `"stdio"` — spawn a local MCP server subprocess
+///
+/// HTTP-family entries use `url` (+ `http_path` / `sse_path`); stdio entries
+/// use `command` (+ `args` / `env` / `cwd`). The two are mutually exclusive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpstreamEntry {
     pub name: String,
-    pub url: String,
+    #[serde(default = "default_upstream_transport")]
+    pub transport: String,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default = "default_http_path")]
+    pub http_path: String,
     #[serde(default = "default_upstream_sse_path")]
     pub sse_path: String,
+    /// Static extra request headers (e.g. upstream `Authorization`).
+    /// Static TOML only — dynamic policy entries carrying headers are rejected.
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default)]
+    pub command: Option<String>,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default = "default_upstream_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+pub const UPSTREAM_TRANSPORTS: [&str; 4] = ["auto", "sse", "streamable-http", "stdio"];
+
+impl Default for UpstreamEntry {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            transport: default_upstream_transport(),
+            url: None,
+            http_path: default_http_path(),
+            sse_path: default_upstream_sse_path(),
+            headers: BTreeMap::new(),
+            command: None,
+            args: Vec::new(),
+            env: BTreeMap::new(),
+            cwd: None,
+            timeout_ms: default_upstream_timeout_ms(),
+        }
+    }
+}
+
+impl UpstreamEntry {
+    /// HTTP-family entry using the default transport (`auto`).
+    pub fn http(
+        name: impl Into<String>,
+        url: impl Into<String>,
+        sse_path: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            url: Some(url.into()),
+            sse_path: sse_path.into(),
+            ..Self::default()
+        }
+    }
+
+    pub fn is_stdio(&self) -> bool {
+        self.transport == "stdio"
+    }
+
+    /// Single validation entry point, shared by static config loading and
+    /// policy parsing so the two sources cannot drift.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("upstream name must not be empty".to_string());
+        }
+        if !UPSTREAM_TRANSPORTS.contains(&self.transport.as_str()) {
+            return Err(format!(
+                "upstream '{}': unknown transport '{}' (expected one of {:?})",
+                self.name, self.transport, UPSTREAM_TRANSPORTS
+            ));
+        }
+        if self.timeout_ms == 0 {
+            return Err(format!("upstream '{}': timeout_ms must be > 0", self.name));
+        }
+        match self.transport.as_str() {
+            "stdio" => {
+                if self.url.is_some() {
+                    return Err(format!(
+                        "upstream '{}': stdio entries must not set url",
+                        self.name
+                    ));
+                }
+                if !self.headers.is_empty() {
+                    return Err(format!(
+                        "upstream '{}': stdio entries must not set headers",
+                        self.name
+                    ));
+                }
+                if self
+                    .command
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or("")
+                    .is_empty()
+                {
+                    return Err(format!(
+                        "upstream '{}': stdio requires a non-empty command",
+                        self.name
+                    ));
+                }
+            }
+            _ => {
+                if !self.args.is_empty()
+                    || !self.env.is_empty()
+                    || self.cwd.is_some()
+                    || self.command.is_some()
+                {
+                    return Err(format!(
+                        "upstream '{}': transport '{}' does not accept command/args/env/cwd",
+                        self.name, self.transport
+                    ));
+                }
+                if self.url.as_deref().map(str::trim).unwrap_or("").is_empty() {
+                    return Err(format!(
+                        "upstream '{}': transport '{}' requires url",
+                        self.name, self.transport
+                    ));
+                }
+                if !self.http_path.starts_with('/') || !self.sse_path.starts_with('/') {
+                    return Err(format!(
+                        "upstream '{}': http_path and sse_path must start with '/'",
+                        self.name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 fn default_listen() -> String {
@@ -143,7 +299,20 @@ fn default_upstream() -> String {
     "http://localhost:8080".to_string()
 }
 fn default_upstream_transport() -> String {
-    "sse".to_string()
+    "auto".to_string()
+}
+fn default_http_path() -> String {
+    "/mcp".to_string()
+}
+fn default_upstream_timeout_ms() -> u64 {
+    30_000
+}
+
+fn comma_list(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 fn default_upstream_sse_path() -> String {
     "/sse".to_string()
@@ -157,10 +326,56 @@ impl Default for ProxySection {
         Self {
             listen: default_listen(),
             upstream_url: default_upstream(),
-            upstream_transport: default_upstream_transport(),
             upstream_sse_path: default_upstream_sse_path(),
             upstreams: Vec::new(),
             session_ttl_secs: default_session_ttl_secs(),
+            enabled_upstream_transports: Vec::new(),
+            allow_dynamic_stdio_upstreams: false,
+            allowed_stdio_commands: Vec::new(),
+            upstream_deny_private: false,
+        }
+    }
+}
+
+/// Gate settings for upstream entries, derived from [`ProxySection`].
+/// Handed to the upstream manager so Control-pushed policies are filtered
+/// with the same rules as static config.
+#[derive(Debug, Clone, Default)]
+pub struct UpstreamGates {
+    pub enabled_transports: Vec<String>,
+    pub allow_dynamic_stdio: bool,
+    pub allowed_stdio_commands: Vec<String>,
+    pub deny_private: bool,
+}
+
+impl UpstreamGates {
+    pub fn transport_enabled(&self, transport: &str) -> bool {
+        self.enabled_transports.is_empty() || self.enabled_transports.iter().any(|t| t == transport)
+    }
+
+    /// Returns `true` when a stdio command is permitted by the allowlist.
+    /// Empty allowlist = unrestricted.
+    pub fn command_allowed(&self, command: &str) -> bool {
+        if self.allowed_stdio_commands.is_empty() {
+            return true;
+        }
+        let base = std::path::Path::new(command)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(command);
+        self.allowed_stdio_commands
+            .iter()
+            .any(|allowed| allowed == command || allowed == base)
+    }
+}
+
+impl ProxySection {
+    pub fn gates(&self) -> UpstreamGates {
+        UpstreamGates {
+            enabled_transports: self.enabled_upstream_transports.clone(),
+            allow_dynamic_stdio: self.allow_dynamic_stdio_upstreams,
+            allowed_stdio_commands: self.allowed_stdio_commands.clone(),
+            deny_private: self.upstream_deny_private,
         }
     }
 }
@@ -388,9 +603,6 @@ impl ProxyConfig {
         if let Ok(v) = std::env::var("VIRBIUS_UPSTREAM_URL") {
             cfg.proxy.upstream_url = v;
         }
-        if let Ok(v) = std::env::var("VIRBIUS_UPSTREAM_TRANSPORT") {
-            cfg.proxy.upstream_transport = v;
-        }
         if let Ok(v) = std::env::var("VIRBIUS_UPSTREAM_SSE_PATH") {
             cfg.proxy.upstream_sse_path = v;
         }
@@ -453,9 +665,24 @@ impl ProxyConfig {
             cfg.proxy.listen = v;
         }
         if let Ok(v) = std::env::var("VIRBIUS_UPSTREAMS") {
-            if let Ok(entries) = serde_json::from_str::<Vec<UpstreamEntry>>(&v) {
-                cfg.proxy.upstreams = entries;
+            match serde_json::from_str::<Vec<UpstreamEntry>>(&v) {
+                Ok(entries) => cfg.proxy.upstreams = entries,
+                Err(e) => eprintln!(
+                    "warning: VIRBIUS_UPSTREAMS is not a valid upstream array ({e}); ignoring"
+                ),
             }
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_ENABLED_UPSTREAM_TRANSPORTS") {
+            cfg.proxy.enabled_upstream_transports = comma_list(&v);
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_ALLOW_DYNAMIC_STDIO_UPSTREAMS") {
+            cfg.proxy.allow_dynamic_stdio_upstreams = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_ALLOWED_STDIO_COMMANDS") {
+            cfg.proxy.allowed_stdio_commands = comma_list(&v);
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_UPSTREAM_DENY_PRIVATE") {
+            cfg.proxy.upstream_deny_private = v == "1" || v.eq_ignore_ascii_case("true");
         }
         if let Ok(v) = std::env::var("VIRBIUS_POLICY_REDIS_URL") {
             cfg.policy.redis_url = v;
@@ -497,18 +724,70 @@ impl ProxyConfig {
             cfg.delegated.allow_external_bind = v == "1" || v.eq_ignore_ascii_case("true");
         }
 
-        // Normalize: if upstreams array is empty, synthesize from single upstream fields
-        if cfg.proxy.upstreams.is_empty() && !cfg.proxy.upstream_url.is_empty() {
-            cfg.proxy.upstreams = vec![UpstreamEntry {
-                name: "default".to_string(),
-                url: cfg.proxy.upstream_url.clone(),
-                sse_path: cfg.proxy.upstream_sse_path.clone(),
-            }];
+        // Explicit entries are an operator decision: a disabled transport or an
+        // invalid entry must fail fast, never be silently ignored.
+        if let Err(e) = cfg.validate_explicit_upstreams() {
+            eprintln!("error: {e}");
+            std::process::exit(2);
         }
+
+        // Normalize: with no explicit list, the legacy single-upstream fields
+        // synthesize one implicit `default` entry (gate-aware).
+        cfg.synthesize_implicit_upstream();
 
         Self::apply_base_url(&mut cfg);
 
         cfg
+    }
+
+    /// Validate explicitly-configured static upstreams and fail fast on a
+    /// disabled transport or an invalid entry.
+    fn validate_explicit_upstreams(&self) -> Result<(), String> {
+        let gates = self.proxy.gates();
+        for entry in &self.proxy.upstreams {
+            entry
+                .validate()
+                .map_err(|e| format!("invalid upstream configuration: {e}"))?;
+            if !gates.transport_enabled(&entry.transport) {
+                return Err(format!(
+                    "upstream '{}' uses transport '{}' which is disabled (enabled: {:?})",
+                    entry.name, entry.transport, self.proxy.enabled_upstream_transports
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Synthesize the implicit `default` upstream from the legacy
+    /// single-upstream fields when no explicit upstream list is configured.
+    ///
+    /// Unlike an explicit entry this is a fallback, not an operator decision:
+    /// when deployment gates disable its transport (e.g. a policy-driven
+    /// deployment restricted to `sse`), skip it with a warning instead of
+    /// aborting startup — Control-pushed tenant policies are authoritative in
+    /// that setup, and the built-in default would otherwise make
+    /// `VIRBIUS_ENABLED_UPSTREAM_TRANSPORTS` unusable there.
+    fn synthesize_implicit_upstream(&mut self) {
+        if !self.proxy.upstreams.is_empty() || self.proxy.upstream_url.is_empty() {
+            return;
+        }
+        let entry = UpstreamEntry::http(
+            "default",
+            self.proxy.upstream_url.clone(),
+            self.proxy.upstream_sse_path.clone(),
+        );
+        if self.proxy.gates().transport_enabled(&entry.transport) {
+            self.proxy.upstreams.push(entry);
+        } else {
+            // Startup diagnostic: the doctor/enroll paths call `load_from`
+            // before tracing is initialized, so write to stderr directly.
+            eprintln!(
+                "warning: built-in default upstream 'default' uses transport '{}' which is \
+                 disabled (enabled: {:?}); continuing without a static upstream \
+                 (policy-provided upstreams only)",
+                entry.transport, self.proxy.enabled_upstream_transports
+            );
+        }
     }
 
     /// Opt-in single-base endpoint derivation (`VIRBIUS_BASE_URL`).
@@ -785,7 +1064,6 @@ mod tests {
         let cfg = ProxyConfig::default();
         assert_eq!(cfg.proxy.listen, "stdio");
         assert_eq!(cfg.proxy.upstream_url, "http://localhost:8080");
-        assert_eq!(cfg.proxy.upstream_transport, "sse");
         assert_eq!(cfg.proxy.upstream_sse_path, "/sse");
         assert_eq!(cfg.proxy.session_ttl_secs, 1800);
         assert!(cfg.proxy.upstreams.is_empty());
@@ -855,6 +1133,53 @@ mod tests {
     }
 
     #[test]
+    fn test_implicit_default_upstream_respects_transport_gates() {
+        // All transports enabled: legacy single-upstream fields synthesize the
+        // implicit default entry as before.
+        let mut cfg = ProxyConfig::default();
+        cfg.synthesize_implicit_upstream();
+        assert_eq!(cfg.proxy.upstreams.len(), 1);
+        assert_eq!(cfg.proxy.upstreams[0].name, "default");
+        assert_eq!(cfg.proxy.upstreams[0].transport, "auto");
+
+        // sse-only deployment gate: the implicit default (auto) is skipped
+        // instead of aborting startup, so policy-driven deployments (which
+        // receive upstreams from Control) still boot.
+        let mut cfg = ProxyConfig::default();
+        cfg.proxy.enabled_upstream_transports = vec!["sse".to_string()];
+        cfg.synthesize_implicit_upstream();
+        assert!(cfg.proxy.upstreams.is_empty());
+
+        // No single-upstream fallback configured -> nothing synthesized.
+        let mut cfg = ProxyConfig::default();
+        cfg.proxy.upstream_url = String::new();
+        cfg.synthesize_implicit_upstream();
+        assert!(cfg.proxy.upstreams.is_empty());
+
+        // Explicit upstream lists are never touched by synthesis.
+        let mut cfg = ProxyConfig::default();
+        cfg.proxy.upstreams = vec![UpstreamEntry::http("mine", "http://127.0.0.1:1", "/sse")];
+        cfg.synthesize_implicit_upstream();
+        assert_eq!(cfg.proxy.upstreams.len(), 1);
+        assert_eq!(cfg.proxy.upstreams[0].name, "mine");
+    }
+
+    #[test]
+    fn test_explicit_upstream_with_disabled_transport_is_rejected() {
+        let mut cfg = ProxyConfig::default();
+        cfg.proxy.enabled_upstream_transports = vec!["sse".to_string()];
+        cfg.proxy.upstreams = vec![UpstreamEntry::http("mine", "http://127.0.0.1:1", "/sse")];
+
+        let err = cfg
+            .validate_explicit_upstreams()
+            .expect_err("auto entry must be rejected by an sse-only gate");
+        assert!(err.contains("disabled"), "unexpected error: {err}");
+
+        cfg.proxy.enabled_upstream_transports = vec!["auto".to_string()];
+        assert!(cfg.validate_explicit_upstreams().is_ok());
+    }
+
+    #[test]
     fn test_fallback_policy_enum_debug_clone() {
         let p = FallbackPolicy::DefaultDeny;
         assert_eq!(format!("{:?}", p), "DefaultDeny");
@@ -907,11 +1232,90 @@ mod tests {
     fn test_upstream_entry_defaults() {
         let entry = UpstreamEntry {
             name: "test".to_string(),
-            url: "http://localhost:8001".to_string(),
+            url: Some("http://localhost:8001".to_string()),
             sse_path: "/sse".to_string(),
+            ..Default::default()
         };
         assert_eq!(entry.name, "test");
         assert_eq!(entry.sse_path, "/sse");
+        assert_eq!(entry.transport, "auto");
+        assert_eq!(entry.http_path, "/mcp");
+        assert_eq!(entry.timeout_ms, 30_000);
+        entry.validate().expect("valid http entry");
+    }
+
+    #[test]
+    fn test_upstream_entry_validation_matrix() {
+        // HTTP entry needs a url.
+        let missing_url = UpstreamEntry {
+            name: "x".into(),
+            ..Default::default()
+        };
+        assert!(missing_url.validate().is_err());
+
+        // HTTP entry must not carry stdio fields.
+        let mixed = UpstreamEntry {
+            name: "x".into(),
+            url: Some("http://mcp:8080".into()),
+            command: Some("npx".into()),
+            ..Default::default()
+        };
+        assert!(mixed.validate().is_err());
+
+        // stdio needs a command and must not set url.
+        let stdio_ok = UpstreamEntry {
+            name: "fs".into(),
+            transport: "stdio".into(),
+            command: Some("npx".into()),
+            args: vec!["-y".into(), "server-filesystem".into()],
+            ..Default::default()
+        };
+        stdio_ok.validate().expect("valid stdio entry");
+
+        let stdio_no_cmd = UpstreamEntry {
+            name: "fs".into(),
+            transport: "stdio".into(),
+            ..Default::default()
+        };
+        assert!(stdio_no_cmd.validate().is_err());
+
+        let stdio_with_url = UpstreamEntry {
+            name: "fs".into(),
+            transport: "stdio".into(),
+            command: Some("npx".into()),
+            url: Some("http://mcp:8080".into()),
+            ..Default::default()
+        };
+        assert!(stdio_with_url.validate().is_err());
+
+        // Unknown transport is rejected.
+        let unknown = UpstreamEntry {
+            name: "x".into(),
+            transport: "websocket".into(),
+            url: Some("http://mcp:8080".into()),
+            ..Default::default()
+        };
+        assert!(unknown.validate().is_err());
+    }
+
+    #[test]
+    fn test_upstream_gates() {
+        let gates = UpstreamGates {
+            enabled_transports: vec!["sse".into()],
+            allow_dynamic_stdio: false,
+            allowed_stdio_commands: vec!["npx".into(), "/usr/bin/node".into()],
+            deny_private: false,
+        };
+        assert!(gates.transport_enabled("sse"));
+        assert!(!gates.transport_enabled("streamable-http"));
+        assert!(gates.command_allowed("npx"));
+        assert!(gates.command_allowed("/usr/local/bin/npx"));
+        assert!(gates.command_allowed("/usr/bin/node"));
+        assert!(!gates.command_allowed("bash"));
+
+        let open = UpstreamGates::default();
+        assert!(open.transport_enabled("stdio"));
+        assert!(open.command_allowed("anything"));
     }
 
     #[test]

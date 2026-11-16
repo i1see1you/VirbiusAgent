@@ -34,8 +34,12 @@ async fn main() {
         }
     }
 
-    // Initialize logging
+    // Initialize logging. Always write to stderr: in `listen = "stdio"` mode
+    // stdout carries the newline-delimited JSON-RPC stream, so a single log
+    // line there corrupts the protocol channel (MCP stdio transports require
+    // logs on stderr).
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "virbius_mcp_proxy=info".into()),
@@ -162,9 +166,15 @@ async fn main() {
 
     // Create upstream manager from normalized config (single or multi-upstream)
     let mut upstream_inner = UpstreamManager::new(cfg.proxy.upstreams.clone(), 30);
+    upstream_inner.set_gates(cfg.proxy.gates());
+    upstream_inner.enable_notification_logging();
     upstream_inner.use_policies(policies.clone());
     let upstream_mgr = Arc::new(upstream_inner);
-    spawn_subscriber(cfg.policy_redis_url().to_string(), policies);
+    spawn_subscriber(
+        cfg.policy_redis_url().to_string(),
+        policies,
+        cfg.proxy.gates(),
+    );
     if upstream_mgr.is_single_upstream() {
         info!("single-upstream mode");
     } else {
@@ -194,7 +204,13 @@ async fn main() {
             .proxy
             .upstreams
             .iter()
-            .map(|u| (u.name.clone(), u.url.clone()))
+            .map(|u| {
+                let target = u
+                    .url
+                    .clone()
+                    .unwrap_or_else(|| format!("stdio:{}", u.command.clone().unwrap_or_default()));
+                (u.name.clone(), target)
+            })
             .collect(),
         engine_url: cfg.security.engine_url.clone(),
         control_url: cfg.security.control_base_url.clone(),

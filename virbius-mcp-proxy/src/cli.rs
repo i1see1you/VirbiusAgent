@@ -193,7 +193,15 @@ pub async fn doctor(cfg: ProxyConfig) -> i32 {
     println!("virbius-mcp-proxy {} — doctor", env!("CARGO_PKG_VERSION"));
     println!("  transport       : {}", cfg.proxy.listen);
     for u in &cfg.proxy.upstreams {
-        println!("  upstream        : {} ({})", u.name, u.url);
+        let target = match (&u.url, &u.command) {
+            (Some(url), _) => url.clone(),
+            (None, Some(cmd)) => format!("stdio:{cmd}"),
+            _ => "<unset>".to_string(),
+        };
+        println!(
+            "  upstream        : {} ({}, {})",
+            u.name, u.transport, target
+        );
     }
     println!("  engine          : {}", cfg.security.engine_url);
     println!("  control         : {}", cfg.security.control_base_url);
@@ -347,7 +355,41 @@ pub async fn doctor(cfg: ProxyConfig) -> i32 {
             probe(&client, "token exchange", &auth).await;
         }
         for u in &cfg.proxy.upstreams {
-            probe(&client, &format!("upstream {}", u.name), &u.url).await;
+            match &u.url {
+                Some(url) => probe(&client, &format!("upstream {}", u.name), url).await,
+                None => {
+                    // stdio: spawn the server and complete the MCP handshake.
+                    let command = u.command.clone().unwrap_or_default();
+                    let handle = std::sync::Arc::new(crate::upstream_stdio::StdioUpstream::new(
+                        u.name.clone(),
+                        command.clone(),
+                        u.args.clone(),
+                        u.env.clone(),
+                        u.cwd.clone(),
+                        std::time::Duration::from_secs(5),
+                    ));
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        handle.ensure_started(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => println!(
+                            "  upstream {}  : OK (stdio: {} initialized)",
+                            u.name, command
+                        ),
+                        Ok(Err(e)) => {
+                            println!("  upstream {}  : FAIL ({e})", u.name);
+                            failures += 1;
+                        }
+                        Err(_) => {
+                            println!("  upstream {}  : FAIL (stdio initialize timed out)", u.name);
+                            failures += 1;
+                        }
+                    }
+                    handle.shutdown();
+                }
+            }
         }
     }
 

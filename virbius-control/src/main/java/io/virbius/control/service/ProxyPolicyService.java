@@ -132,6 +132,9 @@ public class ProxyPolicyService {
         return out;
     }
 
+    private static final List<String> UPSTREAM_TRANSPORTS =
+            List.of("auto", "sse", "streamable-http", "stdio");
+
     private static List<Map<String, Object>> normalizeUpstreams(Object raw) {
         List<Map<String, Object>> out = new ArrayList<>();
         if (!(raw instanceof List<?> list)) {
@@ -142,16 +145,72 @@ public class ProxyPolicyService {
                 continue;
             }
             String name = str(m.get("name"));
-            String url = str(m.get("url"));
-            if (name.isBlank() || url.isBlank()) {
-                throw new BusinessException(400, "each upstream needs a name and a url");
+            if (name.isBlank()) {
+                throw new BusinessException(400, "each upstream needs a name");
             }
-            String sse = str(m.get("sse_path"));
+            String transport = str(m.get("transport"));
+            if (transport.isBlank()) {
+                transport = "auto";
+            }
+            if (!UPSTREAM_TRANSPORTS.contains(transport)) {
+                throw new BusinessException(
+                        400, "upstream transport must be one of " + UPSTREAM_TRANSPORTS);
+            }
+            // Headers carry upstream credentials and are static-TOML only until
+            // the policy channel is signed.
+            if (m.get("headers") != null) {
+                throw new BusinessException(400, "upstream headers are static-TOML only");
+            }
+
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("name", name);
-            row.put("url", url);
-            row.put("sse_path", sse.isBlank() ? "/sse" : sse);
+            row.put("transport", transport);
+            row.put("timeout_ms", bound(m.get("timeout_ms"), 30000, 1000, 300000, "upstream timeout_ms"));
+
+            if ("stdio".equals(transport)) {
+                String command = str(m.get("command"));
+                if (command.isBlank()) {
+                    throw new BusinessException(400, "stdio upstream needs a command");
+                }
+                if (!str(m.get("url")).isBlank()) {
+                    throw new BusinessException(400, "stdio upstream must not set url");
+                }
+                row.put("command", command);
+                row.put("args", strings(m.get("args")));
+                row.put("env", stringMap(m.get("env")));
+                String cwd = str(m.get("cwd"));
+                if (!cwd.isBlank()) {
+                    row.put("cwd", cwd);
+                }
+            } else {
+                String url = str(m.get("url"));
+                if (url.isBlank()) {
+                    throw new BusinessException(400, "http upstream needs a url");
+                }
+                if (!str(m.get("command")).isBlank()) {
+                    throw new BusinessException(400, "http upstream must not set command");
+                }
+                row.put("url", url);
+                String sse = str(m.get("sse_path"));
+                row.put("sse_path", sse.isBlank() ? "/sse" : sse);
+                String httpPath = str(m.get("http_path"));
+                row.put("http_path", httpPath.isBlank() ? "/mcp" : httpPath);
+            }
             out.add(row);
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, String> stringMap(Object raw) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (raw instanceof Map<?, ?> m) {
+            m.forEach((k, v) -> {
+                String value = str(v);
+                if (!value.isEmpty()) {
+                    out.put(String.valueOf(k), value);
+                }
+            });
         }
         return out;
     }

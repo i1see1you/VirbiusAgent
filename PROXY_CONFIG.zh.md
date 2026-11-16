@@ -48,20 +48,42 @@ Proxy 启动时按以下顺序查找配置文件，找到第一个即加载：
 |------|------|--------|------|
 | `listen` | string | `"stdio"` | 监听地址：`"stdio"`（标准输入输出）或 `"tcp://0.0.0.0:9090"` / `"http://0.0.0.0:9090"` |
 | `upstream_url` | string | `"http://localhost:8080"` | 单上游 MCP Server 地址（简写模式） |
-| `upstream_transport` | string | `"sse"` | 上游传输协议：`"sse"` 或 `"stdio"` |
 | `upstream_sse_path` | string | `"/sse"` | 上游 SSE 端点路径 |
 | `upstreams` | array | `[]` | 多上游模式配置（与 `upstream_url` 二选一，`upstreams` 优先） |
 | `session_ttl_secs` | u64 | `1800` | 会话 TTL（秒），超时自动清理 |
+| `enabled_upstream_transports` | array | `[]`（全部） | 本部署允许的传输：`auto`、`sse`、`streamable-http`、`stdio`。使用被禁用传输的条目：显式静态配置在启动时直接拒绝，策略下发时丢弃；隐式遗留 `default` 上游改为跳过并告警（不中止启动），便于策略驱动部署只开放部分传输 |
+| `allow_dynamic_stdio_upstreams` | bool | `false` | 是否允许控制台下发的策略定义 stdio 上游。静态 TOML 的 stdio 条目始终允许 |
+| `allowed_stdio_commands` | array | `[]`（不限制） | **动态** stdio 条目的命令白名单（basename 或绝对路径），防御性措施 |
+| `upstream_deny_private` | bool | `false` | 拒绝解析到私网/环回地址的上游 URL；链路本地与云元数据地址始终拒绝 |
 
 **多上游 `upstreams` 数组元素：**
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `name` | string | 上游名称（用于路由和日志） |
-| `url` | string | 上游 MCP Server 地址 |
-| `sse_path` | string | SSE 端点路径，默认 `"/sse"` |
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `name` | string | — | 上游名称（用于路由和日志） |
+| `transport` | string | `"auto"` | `auto`（先探测 Streamable HTTP，失败回退旧 SSE）、`streamable-http`、`sse`、`stdio` |
+| `url` | string | — | HTTP 族上游地址（`auto`/`sse`/`streamable-http` 必填；`stdio` 禁止） |
+| `http_path` | string | `"/mcp"` | Streamable HTTP 端点路径 |
+| `sse_path` | string | `"/sse"` | 旧版 SSE 端点路径 |
+| `headers` | table | `{}` | 额外请求头（如 `Authorization`）。**仅限静态 TOML**，策略下发携带会被拒绝 |
+| `command` | string | — | stdio：要拉起的可执行文件（不经过 shell，argv 原样传递） |
+| `args` | array | `[]` | stdio：参数数组 |
+| `env` | table | `{}` | stdio：额外环境变量。子进程仅获得这些加上 `PATH`/`HOME`/`LANG`/`LC_ALL`/`TMPDIR`，**不继承**代理自身机密 |
+| `cwd` | string | — | stdio：工作目录（必须存在） |
+| `timeout_ms` | u64 | `30000` | 单上游请求超时：请求头阶段、非流式响应体读取、请求级 SSE 与 202 回复等待。服务端到客户端的长连 GET 流不受此值限制，改为静默 120s 后重连。 |
 
-> 如果 `upstreams` 为空且 `upstream_url` 非空，自动归一化为单条 `upstreams` 记录。
+> 如果 `upstreams` 为空且 `upstream_url` 非空，自动归一化为单条 `upstreams` 记录，`transport = "auto"`。
+
+**上游传输语义：**
+
+| 传输 | 会话模型 | 说明 |
+|---|---|---|
+| `stdio` | 每个（会话, 上游）一个子进程；`listen = "stdio"` 时为单例 | 无自动重启：子进程崩溃时在途请求报错，下次使用时重新拉起 |
+| `streamable-http` | MCP 2025-06-18：`Mcp-Session-Id`、`MCP-Protocol-Version`，关闭时 DELETE；404 自动重初始化一次 | 可选 GET 流接收服务端通知（404/405 自动禁用） |
+| `sse` | 旧版 HTTP+SSE（2024-11-05） | 兼容保留 |
+| `auto` | 先探测 Streamable HTTP，仅在 404/405/非 JSON 时回退旧 SSE | 探测结果按解析后的条目缓存 |
+
+**隔离语义：** HTTP 族上游按（租户, 上游）共享一个上游会话，跨下游会话复用（与此前版本一致）；stdio 上游为每个下游会话一个子进程。请勿把 HTTP 上游描述为"每会话隔离"——同一租户客户端的服务端会话状态是共享的。
 
 ---
 
@@ -159,9 +181,12 @@ Proxy 启动时按以下顺序查找配置文件，找到第一个即加载：
 |----------|-----------|
 | `VIRBIUS_TRANSPORT` | `proxy.listen` |
 | `VIRBIUS_UPSTREAM_URL` | `proxy.upstream_url` |
-| `VIRBIUS_UPSTREAM_TRANSPORT` | `proxy.upstream_transport` |
 | `VIRBIUS_UPSTREAM_SSE_PATH` | `proxy.upstream_sse_path` |
 | `VIRBIUS_UPSTREAMS` | `proxy.upstreams`（JSON 数组格式） |
+| `VIRBIUS_ENABLED_UPSTREAM_TRANSPORTS` | `proxy.enabled_upstream_transports`（逗号分隔） |
+| `VIRBIUS_ALLOW_DYNAMIC_STDIO_UPSTREAMS` | `proxy.allow_dynamic_stdio_upstreams` |
+| `VIRBIUS_ALLOWED_STDIO_COMMANDS` | `proxy.allowed_stdio_commands`（逗号分隔） |
+| `VIRBIUS_UPSTREAM_DENY_PRIVATE` | `proxy.upstream_deny_private` |
 | `VIRBIUS_SESSION_TTL_SECS` | `proxy.session_ttl_secs` |
 
 `VIRBIUS_UPSTREAMS` 示例：

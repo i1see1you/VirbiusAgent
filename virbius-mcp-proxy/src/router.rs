@@ -106,6 +106,20 @@ pub async fn route_request(
             }
             // Transparent forward for all other methods
             if is_notification {
+                // Cancellation aborts the matching in-flight request on
+                // transports that support it (Streamable HTTP), then is
+                // forwarded as a notification for transports that use the
+                // protocol-level cancel message.
+                if request.get("method").and_then(Value::as_str) == Some("notifications/cancelled")
+                {
+                    if let Some(request_id) = request
+                        .get("params")
+                        .and_then(|p| p.get("requestId"))
+                        .cloned()
+                    {
+                        upstream_mgr.cancel_request(&session_id, &request_id);
+                    }
+                }
                 if upstream_mgr.is_single_for(&session_id) {
                     match upstream_mgr.get_or_connect_single(&session_id).await {
                         Ok(upstream) => {

@@ -448,6 +448,49 @@ cargo test --test e2e_integration -- --nocapture
 
 ---
 
+### 3.4 上游传输：stdio、Streamable HTTP、旧版 SSE
+
+Proxy 可通过三种传输保护上游 MCP Server。按条目选择 `transport`；默认
+`auto` 会先探测 Streamable HTTP，失败再回退旧版 HTTP+SSE。
+
+**包装本地 stdio server（Claude Desktop 场景）：**
+
+```toml
+[proxy]
+listen = "stdio"          # 由 Claude Desktop 拉起 proxy
+
+[[proxy.upstreams]]
+name = "filesystem"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+```
+
+子进程仅获得 `env` 加上 `PATH`/`HOME`/`LANG`——**不继承**代理自身机密。无自动重启：
+子进程崩溃时在途请求报错，下次 initialize 时重新拉起。
+
+**连接 Streamable HTTP server（MCP 2025-06-18）：**
+
+```toml
+[[proxy.upstreams]]
+name = "remote"
+transport = "streamable-http"
+url = "https://mcp.example.com"
+http_path = "/mcp"
+timeout_ms = 60000
+```
+
+**安全提示：**
+
+- 解析到链路本地或云元数据地址的上游 URL 始终拒绝；设
+  `upstream_deny_private = true` 可同时阻断私网/环回。
+- `headers`（如 `Authorization`）只接受静态 TOML，控制台下发的会被拒。
+- 控制台下发的 stdio 上游默认禁用（`allow_dynamic_stdio_upstreams = false`）；
+  启用时还必须通过 `allowed_stdio_commands` 白名单。
+- 机密放 `env` 不要放 `args`（argv 对本机其他用户可见）。
+
+---
+
 ## 4. 运维控制台指南
 
 运维控制台是一个单页应用，地址为 [http://localhost:8080](http://localhost:8080)。它提供统一的界面来管理租户、规则、发布和监控。

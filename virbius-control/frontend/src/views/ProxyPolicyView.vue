@@ -6,14 +6,58 @@
     <div class="v-section">
       <h3>{{ t('proxy.upstreams') }}</h3>
       <el-table :data="form.upstreams" size="small" border>
-        <el-table-column :label="t('proxy.col-name')" width="160">
+        <el-table-column :label="t('proxy.col-name')" width="140">
           <template #default="{ row }"><el-input v-model="row.name" /></template>
         </el-table-column>
-        <el-table-column :label="t('proxy.col-url')">
-          <template #default="{ row }"><el-input v-model="row.url" /></template>
+        <el-table-column :label="t('proxy.col-transport')" width="170">
+          <template #default="{ row }">
+            <el-select v-model="row.transport">
+              <el-option value="auto" :label="t('proxy.transport-auto')" />
+              <el-option value="sse" :label="t('proxy.transport-sse')" />
+              <el-option value="streamable-http" :label="t('proxy.transport-http')" />
+              <el-option value="stdio" :label="t('proxy.transport-stdio')" />
+            </el-select>
+          </template>
         </el-table-column>
-        <el-table-column :label="t('proxy.col-sse')" width="140">
-          <template #default="{ row }"><el-input v-model="row.sse_path" /></template>
+        <el-table-column :label="t('proxy.col-url')" width="200">
+          <template #default="{ row }">
+            <el-input v-if="row.transport !== 'stdio'" v-model="row.url" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('proxy.col-http-path')" width="120">
+          <template #default="{ row }">
+            <el-input v-if="row.transport === 'streamable-http' || row.transport === 'auto'" v-model="row.http_path" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('proxy.col-sse')" width="120">
+          <template #default="{ row }">
+            <el-input v-if="row.transport === 'sse' || row.transport === 'auto'" v-model="row.sse_path" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('proxy.col-command')" width="150">
+          <template #default="{ row }">
+            <el-input v-if="row.transport === 'stdio'" v-model="row.command" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('proxy.col-args')" width="200">
+          <template #default="{ row }">
+            <el-input v-if="row.transport === 'stdio'" v-model="row.args_text" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('proxy.col-env')" width="200">
+          <template #default="{ row }">
+            <el-input v-if="row.transport === 'stdio'" v-model="row.env_text" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('proxy.col-cwd')" width="150">
+          <template #default="{ row }">
+            <el-input v-if="row.transport === 'stdio'" v-model="row.cwd" />
+          </template>
+        </el-table-column>
+        <el-table-column :label="t('proxy.col-timeout')" width="130">
+          <template #default="{ row }">
+            <el-input-number v-model="row.timeout_ms" :min="1000" :max="300000" :step="1000" controls-position="right" />
+          </template>
         </el-table-column>
         <el-table-column width="80">
           <template #default="{ $index }">
@@ -98,8 +142,36 @@ const session = useSessionStore();
 const saving = ref(false);
 const patternText = ref('');
 
+type UpstreamRow = {
+  name: string;
+  transport: string;
+  url: string;
+  sse_path: string;
+  http_path: string;
+  command: string;
+  args_text: string;
+  env_text: string;
+  cwd: string;
+  timeout_ms: number;
+};
+
+function emptyUpstream(): UpstreamRow {
+  return {
+    name: '',
+    transport: 'auto',
+    url: '',
+    sse_path: '/sse',
+    http_path: '/mcp',
+    command: '',
+    args_text: '',
+    env_text: '',
+    cwd: '',
+    timeout_ms: 30000
+  };
+}
+
 const form = reactive({
-  upstreams: [] as { name: string; url: string; sse_path: string }[],
+  upstreams: [] as UpstreamRow[],
   session_ttl_secs: 1800,
   fallback_policy: 'minimum_privilege',
   fast_path: { enabled: true, warmup_calls: 5, risk_threshold: 30 },
@@ -109,14 +181,46 @@ const form = reactive({
 });
 
 function addUpstream() {
-  form.upstreams.push({ name: '', url: '', sse_path: '/sse' });
+  form.upstreams.push(emptyUpstream());
+}
+
+function rowToUpstream(u: UpstreamRow) {
+  const base: Record<string, unknown> = {
+    name: u.name.trim(),
+    transport: u.transport,
+    timeout_ms: u.timeout_ms
+  };
+  if (u.transport === 'stdio') {
+    base.command = u.command.trim();
+    const args = u.args_text.split(/\s+/).map(s => s.trim()).filter(Boolean);
+    if (args.length) base.args = args;
+    const env: Record<string, string> = {};
+    u.env_text.split(',').map(s => s.trim()).filter(Boolean).forEach(pair => {
+      const i = pair.indexOf('=');
+      if (i > 0) env[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
+    });
+    if (Object.keys(env).length) base.env = env;
+    if (u.cwd.trim()) base.cwd = u.cwd.trim();
+  } else {
+    base.url = u.url.trim();
+    base.sse_path = u.sse_path.trim() || '/sse';
+    base.http_path = u.http_path.trim() || '/mcp';
+  }
+  return base;
 }
 
 function apply(data: any) {
   form.upstreams = (data.upstreams || []).map((u: any) => ({
     name: u.name || '',
+    transport: u.transport || 'auto',
     url: u.url || '',
-    sse_path: u.sse_path || '/sse'
+    sse_path: u.sse_path || '/sse',
+    http_path: u.http_path || '/mcp',
+    command: u.command || '',
+    args_text: (u.args || []).join(' '),
+    env_text: Object.entries(u.env || {}).map(([k, v]) => `${k}=${v}`).join(','),
+    cwd: u.cwd || '',
+    timeout_ms: u.timeout_ms ?? 30000
   }));
   form.session_ttl_secs = data.session_ttl_secs ?? 1800;
   form.fallback_policy = data.fallback_policy || 'minimum_privilege';
@@ -136,14 +240,18 @@ async function load() {
 }
 
 async function save() {
-  if (form.upstreams.some(u => !u.name.trim() || !u.url.trim())) {
-    feedback.log(t('proxy.upstream-required'), 'warn');
+  const invalid = form.upstreams.some(u =>
+    !u.name.trim() || (u.transport === 'stdio' ? !u.command.trim() : !u.url.trim())
+  );
+  if (invalid) {
+    feedback.log(t('proxy.upstream-target-required'), 'warn');
     return;
   }
   saving.value = true;
   try {
     const body = {
       ...form,
+      upstreams: form.upstreams.map(rowToUpstream),
       memory: {
         ...form.memory,
         tool_patterns: patternText.value.split(',').map(s => s.trim()).filter(Boolean)

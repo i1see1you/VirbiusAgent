@@ -395,7 +395,6 @@ free_port "$PROXY_PORT"
 info "starting real virbius-mcp-proxy on :$PROXY_PORT..."
 env VIRBIUS_TRANSPORT="tcp://127.0.0.1:$PROXY_PORT" \
     VIRBIUS_UPSTREAM_URL="http://127.0.0.1:$UPSTREAM_PORT" \
-    VIRBIUS_UPSTREAM_TRANSPORT="sse" \
     VIRBIUS_UPSTREAM_SSE_PATH="/sse" \
     VIRBIUS_LICENSE_FILE="$WORK/license.jwt" \
     VIRBIUS_LICENSE_PUBLIC_KEY="$WORK/license_pub.pem" \

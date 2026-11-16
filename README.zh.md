@@ -6,17 +6,28 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![PyPI](https://img.shields.io/pypi/dm/virbius-review-sdk?label=review-sdk%20downloads)](https://pypi.org/project/virbius-review-sdk/)
 [![HuggingFace](https://img.shields.io/badge/HuggingFace-VirbiusGuard-yellow)](https://huggingface.co/i1see1you/VirbiusGuard)
-[![Java](https://img.shields.io/badge/Java-17%2B-orange)](https://adoptium.net/)
-[![Rust](https://img.shields.io/badge/Rust-1.80%2B-orange)](https://www.rust-lang.org/)
-[![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8)](https://go.dev/)
 [![GitHub stars](https://img.shields.io/github/stars/i1see1you/VirbiusAgent?style=social)](https://github.com/i1see1you/VirbiusAgent/stargazers)
 [![GitHub forks](https://img.shields.io/github/forks/i1see1you/VirbiusAgent?style=social)](https://github.com/i1see1you/VirbiusAgent/network/members)
 
 English: [README.md](README.md)
 
+**[快速开始](#快速开始) · [基准测试](#基准测试) · [架构](#架构) · [示例](#示例) · [文档](#文档) · [设计边界](docs/LIMITATIONS.md) · [更新日志](CHANGELOG.md) · [发布](https://github.com/i1see1you/VirbiusAgent/releases) · [在线演示](https://www.virbius.cn/demo)**
+
 **VirbiusAgent** 是面向自托管 AI Agent 的开源运行时安全平台。它在四个独立层级——**端 → 管 → 核 → 云**——上拦截提示注入、MCP 工具滥用与越权逃逸，融合亚毫秒规则、eBPF/Falco 系统调用观测与 LLM 护栏。
 
 > **定位：** VirbiusAgent 保护的是*你自研的智能体*（服务端运行时安全），而非管控员工 AI 使用的终端侧 DLP。它为企业安全评审与审计提供高度可定制的策略框架；具体合规要求请按所在司法辖区映射。精准匹配业务场景的防护，需要既懂安全策略又懂业务的工程师来配置和优化。
+
+![VirbiusAgent 运营台实拍：告警列表两条真实拦截（提示注入 100 / 凭据访问 80）、决策 BOM 展开注入告警、审计完整性会话哈希链校验 3/3 通过](docs/images/ops-demo-zh.gif)
+
+### 问题所在
+
+你的 Agent 会调用工具、读取不可信内容并据此行动。是否安全取决于三个问题：
+
+- **这个动作被允许吗？** 拥有 `read_file` 与 `send_email` 的 Agent 不应能 `db_delete` 或外泄凭据。OAuth scope 只控制它能连到哪些服务，不控制连上之后做什么。
+- **一份被投毒的文档能把它带偏吗？** 间接提示注入把抓取的网页或工具返回值变成指令。[OWASP LLM01:2025](https://genai.owasp.org/llmrisk/llm01-prompt-injection/) 明确指出 prompt 层没有万无一失的防法；[AgentDojo](https://github.com/ethz-spylab/agentdojo) 正是对真实工具型 Agent 度量这一攻击类。
+- **你能证明发生了什么吗？** 审计需要每个决策的防篡改记录，而不是"模型自己说的"。
+
+Prompt 层安全是对一个随机系统的"请求"。VirbiusAgent 在工具调用周围加确定性的在线控制——预检、网关阻断、syscall 观测与终判——让被拦的动作是"被策略拦下"，而非"被劝住"。
 
 ### 硬证据速览
 
@@ -38,8 +49,6 @@ curl -s http://localhost:8080/api/v1/health    # 验证
 
 - **或引导式本地启动：** `bash scripts/run-local.sh` 然后 `bash scripts/smoke-test.sh`。详见 [快速开始](#快速开始)。
 
-![VirbiusAgent 运营台实拍：告警列表两条真实拦截（提示注入 100 / 凭据访问 80）、决策 BOM 展开注入告警、审计完整性会话哈希链校验 3/3 通过](docs/images/ops-demo-zh.gif)
-
 ## 核心能力
 
 | 能力 | 说明 |
@@ -58,6 +67,20 @@ curl -s http://localhost:8080/api/v1/health    # 验证
 | **审查 API + Python SDK** | 引擎 API 化的输入/输出审查 + 专用 Python SDK（`virbius-review-sdk`）：disposition、流式审查窗口、同步 + 异步 |
 | Falco 规则管理 | 运营台统一管理 eBPF 规则，支持灰度部署 |
 | **原生工具集成** | LangChain 回调观测（模式 A）+ 原生工具执法 SDK（模式 B）：工具清单、覆盖分级、警示 |
+
+## 框架与 Agent 支持
+
+| 框架 / Agent | 接入方式 | 模式 |
+|--------------|----------|------|
+| LangChain / LangGraph | `callbacks=[VirbiusAuditCallback(...)]` | A 观测 |
+| LangChain / LangGraph 原生工具 | `guard.langchain_tool(s)` | B 执法 |
+| OpenAI Agents SDK | `guard.openai_tool(s)` | B 执法 |
+| 任意 MCP client（stdio / SSE） | 在 Server 前置 `virbius-mcp-proxy` | B 执法（强隔离） |
+| 原生 Python / Node.js 工具 | `virbius-mcp-python` / `virbius-mcp-node` `govern()` | B 执法 |
+| 任意 OpenAI-compatible client（入口/出口审查） | `virbius-review-sdk` 对接引擎 | 审查（非工具执法） |
+| 第三方桌面/IDE Agent（Cursor、Claude Code、Continue） | VirbiusAgent 不拦截；仅 LLM 入口/出口审查可经配套 [VirbiusLLM](https://github.com/i1see1you/VirbiusLLM) | 范围外 |
+
+模式 A = 可见性 / 审计（advisory，不阻断）；模式 B = 执行前执法。详见 [NATIVE_TOOL_INTEGRATION.zh.md](NATIVE_TOOL_INTEGRATION.zh.md)。
 
 ## 架构
 
@@ -194,9 +217,32 @@ python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl
 
 数据集导出、字段映射与对抗切片见 [`scripts/benchmarks/README.md`](scripts/benchmarks/README.md)。
 
+## OWASP Agentic Top 10 覆盖
+
+对 [OWASP Top 10 for Agentic Applications 2026](https://genai.owasp.org/resource/owasp-top-10-for-agentic-applications-for-2026/) 的诚实覆盖：**2 项 Covered · 5 项 Partial · 3 项 Not covered**。映射基于 88 条 `ai-agent-incidents` 便利样本（计数为风险映射数，非独立事件数）；逐层明细见 [docs/sales/VirbiusAgent_客户应用场景举例.md](docs/sales/VirbiusAgent_客户应用场景举例.md)。
+
+| ASI | 风险 | 覆盖 | 我们的口径 |
+|-----|------|------|-----------|
+| ASI01 | Agent 目标劫持 | Partial | 阻断注入后的越权动作；不承诺"100% 注入检测" |
+| ASI02 | 工具滥用与利用 | Covered | allowlist + 在线阻断 + 破坏性动作审批 |
+| ASI03 | 身份与权限滥用 | Partial | token 校验 + syscall 观测；身份治理属客户 IAM |
+| ASI04 | Agentic 供应链 | Partial | 限制被投毒工具能做什么；不承诺"防止投毒" |
+| ASI05 | 意外代码执行 | Covered | Landlock/gVisor 沙箱 + syscall 级观测 |
+| ASI06 | 记忆与上下文投毒 | Partial | 写入脱敏 + 输出审查；溯源治理由客户实现 |
+| ASI07 | 不安全的 Agent 间通信 | Not covered | 明确范围外 |
+| ASI08 | 级联 Agent 失效 | Not covered | 明确范围外 |
+| ASI09 | 人-Agent 信任利用 | Not covered | 明确范围外 |
+| ASI10 | 失控 Agent | Partial | 可见性 + 门控 + 防篡改审计；不承诺"防止自主越权" |
+
 ## 快速开始
 
+**从小处起步：** 每一层都是可选的。先接一个 SDK（观测或执法）或代理，再随风险上升叠加管 / 核 / 云——多数团队第一天不需要四层全开。见[推荐层组合](#架构深读)。
+
+**60 秒免安装：** 打开[在线演示](https://www.virbius.cn/demo)——10 类安全标签 + Agent 攻击样例，浏览器直接用。已经在跑引擎？`pip install virbius-review-sdk` 即可对接它做输入/输出审查（[审查 SDK](virbius-review-sdk/README.md)）。两者都不需要 edge license 或 manifest——下方的执法（模式 B）才需要。
+
 ### 依赖
+
+用于构建与自托管（下方模式 B、本地启动、Docker）——在线演示无需这些。
 
 | 工具 | 版本 | 用途 |
 |------|------|------|
@@ -210,21 +256,33 @@ python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl
 | OpenSSL | 3.x（4.x 实验） | librdkafka（经 rdkafka-sys，见下方构建说明） |
 | MySQL | 8+ | 生产数据库（开发用 SQLite） |
 
-> **OpenSSL 选择（macOS/Linux）。** `openssl-sys` 自行探测 OpenSSL 根目录——
-> 在 macOS 上它优先选 Homebrew 的 `openssl@4` 而非 `@3`，且在 pkg-config 之前
-> 就返回；而 `rdkafka-sys` 用 `DEP_OPENSSL_ROOT` 传下来的根目录编译 librdkafka。
-> 因此导出 OpenSSL 的 `CFLAGS`/`LDFLAGS` 会造出“@3 头文件 + @4 库”的混用并
-> 在链接期报缺符号。`scripts/run-local.sh`（以及各构建脚本）统一 source
-> `scripts/lib/openssl.sh`，只解析一个根目录，导出 `OPENSSL_DIR` 以及由同一根
-> 目录派生的头文件/库路径与前置的 `$libdir/pkgconfig`。Linux multiarch 下库在
-> `lib/<triplet>`（如 `/usr/lib/x86_64-linux-gnu`），`openssl-sys` 设了
-> `OPENSSL_DIR` 便不再探测它——因此脚本还会导出指向真实库目录的
-> `OPENSSL_LIB_DIR`。librdkafka 的
-> configure 优先走 pkg-config 通道，且在 macOS 上会追加无版本的
-> `/opt/homebrew/opt/openssl` 别名（`openssl-sys` 不看它）；前置本树路径才能
-> 让三条通道同源。可用
-> `OPENSSL_DIR=/path` 覆盖，或用 `VIRBIUS_OPENSSL_MAJOR=3|4` 选择主版本
-> （默认 3；4 为实验支持）。
+> **OpenSSL 选择（macOS/Linux）。** 各构建脚本统一 source [`scripts/lib/openssl.sh`](scripts/lib/openssl.sh)，
+> 只解析一个 OpenSSL 树并由此派生全部 flag——切勿手设 `CFLAGS`/`LDFLAGS`/`PKG_CONFIG_PATH`。覆盖用
+> `OPENSSL_DIR=/path` 或 `VIRBIUS_OPENSSL_MAJOR=3|4`（默认 3；4 为实验支持）。完整原理见脚本注释；
+> crates.io `cargo install` 见 [virbius-mcp-proxy/README.md](virbius-mcp-proxy/README.md#build-prerequisites)。
+
+### 两行保护一个工具（模式 B，执法）
+
+```python
+import json
+import virbius_mcp_python as v
+
+v.configure_rules(json.dumps({
+    "offline_manifest_path": "./edge-manifest.json",  # 本地 edge 规则；无需网络
+    "cache_dir": "./.virbius-edge-cache",
+    "tenant_id": "acme", "app_id": "crm-agent",
+}))
+
+# read_file / db_delete 为你现有的工具函数
+safe_read = v.govern(read_file, name="read_file")   # 每次调用前置预检
+safe_read(path="/tmp/a")                            # 执行：在 license allowlist 内
+
+safe_delete = v.govern(db_delete, name="db_delete")
+safe_delete(id=1)                                   # 抛 VirbiusDenied：
+# The tool call was blocked by policy: tool 'db_delete' not in license allowlist.
+```
+
+模式 B 需要 edge license + manifest（`VIRBIUS_LICENSE_FILE`、`VIRBIUS_LICENSE_PUBLIC_KEY`、`VIRBIUS_APP_ID`）；用 [`scripts/mint_test_license.py`](scripts/mint_test_license.py) 生成测试 license。只观测不阻断是模式 A：在 LangChain `callbacks=[...]` 加一个 `VirbiusAuditCallback`（[virbius-integrate](virbius-integrate/README.md)）。完全免安装？用[在线演示](https://www.virbius.cn/demo)。完整可跑靶 Agent：[examples/oss-agent-target/](examples/oss-agent-target/)。
 
 ### 本地启动
 
@@ -300,6 +358,17 @@ cargo test --test e2e_integration -- --nocapture
 ```
 
 该测试套件覆盖完整的端层安全管线：License 验证 → 工具预检 → Prompt 网关 → MCP 执行 → STI 污点检测 → 审计链路追踪。
+
+## 示例
+
+| 示例 | 展示内容 | 运行 |
+|------|----------|------|
+| [在线演示](https://www.virbius.cn/demo) | 10 类安全判定 + Agent 攻击样本，免安装 | 浏览器 |
+| 端层 e2e（无需外部服务） | License → 预检 → Prompt 网关 → MCP → STI → 审计 | `cd virbius-core && cargo test --test e2e_integration` |
+| [LangChain 预检](examples/langchain_precheck.py) | 模式 B 对原生工具的放行 + 拒绝（需 license 夹具） | `python examples/langchain_precheck.py` |
+| [OSS 靶 Agent](examples/oss-agent-target/) | 同一 Agent 经 proxy 与 SDK 两种接入；拒绝文案 A/B | 见其 README |
+| [红队靶场](virbius-demo/) | OWASP LLM 实验 + 攻击样本 | 见 [virbius-demo/README.md](virbius-demo/README.md) |
+| [公开基准复现](scripts/benchmarks/) | VirbiusGuard 在 WildGuardTest / XSTest / … | `python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl` |
 
 ## 软件包
 
@@ -495,11 +564,10 @@ Agent 工具调用
 <details>
 <summary><b>端管云核规则选型</b></summary>
 
-四层规则在**执行位置、延迟和目标**上各有差异。选型原则：确定性规则前移，高延迟规则后置，观测层旁路。
+四层规则在**执行位置、延迟和目标**上各有差异（典型延迟见上方“层概览”表）。选型原则：确定性规则前移，高延迟规则后置，观测层旁路。
 
 | 维度 | 端层（Edge） | 管层（Gateway） | 核层（Kernel） | 云层（Cloud） |
 |------|-------------|----------------|---------------|--------------|
-| **延迟** | < 1ms | < 10ms | 旁路，不阻塞 | < 30ms（不含 LLM 推理） |
 | **执行位置** | MCP Proxy 进程内（Rust） | Higress WASM 插件 | Falco DaemonSet（eBPF，旁路） | virbius-engine（远端） |
 | **离线可用** | ✅ | ❌ | ✅ | ❌ |
 | **是否调用 LLM** | 否 | 否 | 否 | 是（Prompt L1） |
@@ -579,6 +647,7 @@ VirbiusAgent/
 | [PROXY_CONFIG.zh.md](PROXY_CONFIG.zh.md) | MCP 代理配置参考 |
 | [SSO_INTEGRATION.zh.md](SSO_INTEGRATION.zh.md) | 统一登录（OAuth2/OIDC）— auth-broker 方案（已定稿，尚未实现） |
 | [FAQ.zh.md](FAQ.zh.md) | 常见问题 — Agent 安全场景与产品答疑 |
+| [docs/LIMITATIONS.md](docs/LIMITATIONS.md)（英文） | 诚实的设计边界与分层防御建议 |
 | [CHANGELOG.md](CHANGELOG.md)（英文） | 版本历史 |
 
 > 语言说明：以上文档均提供中文版，点击链接即可查看；CHANGELOG 目前仅提供英文版。
@@ -589,7 +658,7 @@ VirbiusAgent/
 
 ## 安全报告
 
-参见 [SECURITY.md](SECURITY.md)。
+参见 [SECURITY.md](SECURITY.md) 了解漏洞上报；设计边界与分层防御建议见 [docs/LIMITATIONS.md](docs/LIMITATIONS.md)（英文）。
 
 ## 联系方式
 
@@ -601,4 +670,4 @@ VirbiusAgent/
 
 ## License
 
-MIT — Copyright (c) 2026 i1see1you
+MIT — Copyright (c) 2026 Virbius

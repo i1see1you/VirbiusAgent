@@ -43,4 +43,86 @@ class ProxyPolicyServiceTest {
         assertEquals("/sse", upstreams.get(0).get("sse_path"));
         assertEquals("http://mcp:9000", upstreams.get(0).get("url"));
     }
+
+    @Test
+    void keepsTransportAndPaths() {
+        Map<String, Object> policy = ProxyPolicyService.normalize(Map.of(
+                "upstreams", List.of(Map.of(
+                        "name", "remote",
+                        "transport", "streamable-http",
+                        "url", "http://mcp:9000",
+                        "http_path", "/mcp",
+                        "timeout_ms", 45000))));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> upstreams = (List<Map<String, Object>>) policy.get("upstreams");
+        assertEquals("streamable-http", upstreams.get(0).get("transport"));
+        assertEquals("/mcp", upstreams.get(0).get("http_path"));
+        assertEquals("/sse", upstreams.get(0).get("sse_path"));
+        assertEquals(45000, upstreams.get(0).get("timeout_ms"));
+    }
+
+    @Test
+    void defaultsTransportToAuto() {
+        Map<String, Object> policy = ProxyPolicyService.normalize(Map.of(
+                "upstreams", List.of(Map.of("name", "tools", "url", "http://mcp:9000"))));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> upstreams = (List<Map<String, Object>>) policy.get("upstreams");
+        assertEquals("auto", upstreams.get(0).get("transport"));
+    }
+
+    @Test
+    void stdioUpstreamRequiresCommandAndRejectsUrl() {
+        Map<String, Object> ok = ProxyPolicyService.normalize(Map.of(
+                "upstreams", List.of(Map.of(
+                        "name", "fs",
+                        "transport", "stdio",
+                        "command", "npx",
+                        "args", List.of("-y", "server-filesystem"),
+                        "env", Map.of("FS_ROOT", "/data")))));
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> upstreams = (List<Map<String, Object>>) ok.get("upstreams");
+        assertEquals("npx", upstreams.get(0).get("command"));
+        assertEquals(List.of("-y", "server-filesystem"), upstreams.get(0).get("args"));
+        assertEquals(Map.of("FS_ROOT", "/data"), upstreams.get(0).get("env"));
+
+        BusinessException noCommand = assertThrows(
+                BusinessException.class,
+                () -> ProxyPolicyService.normalize(Map.of(
+                        "upstreams", List.of(Map.of("name", "fs", "transport", "stdio")))));
+        assertEquals(400, noCommand.getCode());
+
+        BusinessException withUrl = assertThrows(
+                BusinessException.class,
+                () -> ProxyPolicyService.normalize(Map.of(
+                        "upstreams", List.of(Map.of(
+                                "name", "fs",
+                                "transport", "stdio",
+                                "command", "npx",
+                                "url", "http://mcp:9000")))));
+        assertEquals(400, withUrl.getCode());
+    }
+
+    @Test
+    void rejectsUpstreamHeadersFromConsole() {
+        BusinessException ex = assertThrows(
+                BusinessException.class,
+                () -> ProxyPolicyService.normalize(Map.of(
+                        "upstreams", List.of(Map.of(
+                                "name", "remote",
+                                "url", "http://mcp:9000",
+                                "headers", Map.of("Authorization", "Bearer x"))))));
+        assertEquals(400, ex.getCode());
+    }
+
+    @Test
+    void rejectsUnknownTransport() {
+        BusinessException ex = assertThrows(
+                BusinessException.class,
+                () -> ProxyPolicyService.normalize(Map.of(
+                        "upstreams", List.of(Map.of(
+                                "name", "remote",
+                                "transport", "websocket",
+                                "url", "http://mcp:9000")))));
+        assertEquals(400, ex.getCode());
+    }
 }

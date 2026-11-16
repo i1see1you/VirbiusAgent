@@ -453,6 +453,52 @@ MCP execution → STI taint detection → audit trace propagation.
 
 ---
 
+### 3.4 Upstream transports: stdio, Streamable HTTP, legacy SSE
+
+The proxy can protect upstream MCP servers over three transports. Pick per
+entry with `transport`; `auto` (default) probes Streamable HTTP first and falls
+back to legacy HTTP+SSE.
+
+**Wrap a local stdio server (the Claude Desktop scenario):**
+
+```toml
+[proxy]
+listen = "stdio"          # Claude Desktop spawns the proxy
+
+[[proxy.upstreams]]
+name = "filesystem"
+transport = "stdio"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/data"]
+```
+
+The child gets only `env` plus `PATH`/`HOME`/`LANG` — proxy secrets are never
+inherited. There is no auto-restart: a crashed child fails in-flight requests
+and is respawned on the next initialize.
+
+**Connect a Streamable HTTP server (MCP 2025-06-18):**
+
+```toml
+[[proxy.upstreams]]
+name = "remote"
+transport = "streamable-http"
+url = "https://mcp.example.com"
+http_path = "/mcp"
+timeout_ms = 60000
+```
+
+**Security notes:**
+
+- Upstream URLs resolving to link-local or cloud-metadata addresses are always
+  rejected; set `upstream_deny_private = true` to also block private/loopback.
+- `headers` (e.g. `Authorization`) are accepted from the static TOML only.
+- Control-pushed stdio upstreams are disabled by default
+  (`allow_dynamic_stdio_upstreams = false`); when enabled they must pass
+  `allowed_stdio_commands`.
+- Put secrets in `env`, not `args` (argv is visible to other local users).
+
+---
+
 ## 4. Ops Console Walkthrough
 
 The Ops Console is a single-page application at [http://localhost:8080](http://localhost:8080). It provides a unified interface for managing tenants, rules, rollouts, and monitoring.

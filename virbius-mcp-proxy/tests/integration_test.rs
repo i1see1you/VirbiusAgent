@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{sse::Event, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -31,7 +31,7 @@ use virbius_mcp_proxy::pipeline::SecurityPipeline;
 use virbius_mcp_proxy::router;
 use virbius_mcp_proxy::session::{Session, SessionManager};
 use virbius_mcp_proxy::trace_collector::{SharedTraceCollector, TraceBackend, TraceCollector};
-use virbius_mcp_proxy::upstream::UpstreamManager;
+use virbius_mcp_proxy::upstream::{UpstreamError, UpstreamManager};
 
 // ═══════════════════════════════════════════════════════════════
 //  Mock MCP Server (implements MCP SSE protocol)
@@ -190,8 +190,9 @@ async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
     let upstream_mgr = Arc::new(UpstreamManager::new(
         vec![UpstreamEntry {
             name: "default".to_string(),
-            url: upstream_url.to_string(),
+            url: Some(upstream_url.to_string()),
             sse_path: "/sse".to_string(),
+            ..Default::default()
         }],
         10,
     ));
@@ -745,13 +746,15 @@ async fn test_multi_upstream_no_conflict() {
         vec![
             UpstreamEntry {
                 name: "fs".to_string(),
-                url: url_a,
+                url: Some(url_a),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
             UpstreamEntry {
                 name: "gh".to_string(),
-                url: url_b,
+                url: Some(url_b),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
         ],
         10,
@@ -866,13 +869,15 @@ async fn test_multi_upstream_name_conflict() {
         vec![
             UpstreamEntry {
                 name: "fs".to_string(),
-                url: url_a,
+                url: Some(url_a),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
             UpstreamEntry {
                 name: "backup".to_string(),
-                url: url_b,
+                url: Some(url_b),
                 sse_path: "/sse".to_string(),
+                ..Default::default()
             },
         ],
         10,
@@ -1048,8 +1053,9 @@ async fn setup_proxy_fast_path(upstream_url: &str, pubkey: String) -> ProxyEnv {
     let upstream_mgr = Arc::new(UpstreamManager::new(
         vec![UpstreamEntry {
             name: "default".to_string(),
-            url: upstream_url.to_string(),
+            url: Some(upstream_url.to_string()),
             sse_path: "/sse".to_string(),
+            ..Default::default()
         }],
         10,
     ));
@@ -1272,4 +1278,565 @@ async fn arg_transform_search_restrict_prefix_mismatch_fails() {
     .unwrap();
     assert_eq!(resp["error"]["code"], -32013);
     assert!(mock.last_call_args.lock().unwrap().is_none());
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Mock MCP Server (Streamable HTTP)
+// ═══════════════════════════════════════════════════════════════
+
+#[derive(Clone)]
+struct MockStreamableState {
+    init_count: Arc<std::sync::atomic::AtomicUsize>,
+    initialized_notifications: Arc<std::sync::atomic::AtomicUsize>,
+    init_api_key: Arc<std::sync::Mutex<Option<String>>>,
+    require_api_key: Arc<std::sync::atomic::AtomicBool>,
+    /// Delay before a non-initialize reply (ms).
+    respond_after_ms: Arc<std::sync::atomic::AtomicU64>,
+    /// Reply with 202 and deliver the result on the GET SSE stream instead.
+    deliver_on_get: Arc<std::sync::atomic::AtomicBool>,
+    /// Session id → sender used by the mock GET stream.
+    get_stream_senders: Arc<DashMap<String, mpsc::Sender<Value>>>,
+    sse_mode: bool,
+    expire_next: Arc<std::sync::atomic::AtomicBool>,
+}
+
+async fn mock_streamable_post(
+    State(state): State<MockStreamableState>,
+    headers: HeaderMap,
+    Json(req): Json<Value>,
+) -> Response {
+    use std::sync::atomic::Ordering;
+    let method = req.get("method").and_then(Value::as_str).unwrap_or("");
+    let id = req.get("id").cloned().unwrap_or(Value::Null);
+
+    match method {
+        "initialize" => {
+            state.init_count.fetch_add(1, Ordering::SeqCst);
+            let api_key = headers
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string);
+            *state.init_api_key.lock().unwrap() = api_key.clone();
+            if state.require_api_key.load(Ordering::SeqCst) && api_key.as_deref() != Some("secret")
+            {
+                return StatusCode::UNAUTHORIZED.into_response();
+            }
+            let body = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {},
+                    "serverInfo": { "name": "mock-streamable", "version": "0.1.0" }
+                }
+            });
+            let headers = [
+                (
+                    axum::http::HeaderName::from_static("content-type"),
+                    "application/json".to_string(),
+                ),
+                (
+                    axum::http::HeaderName::from_static("mcp-session-id"),
+                    "sess-mock-1".to_string(),
+                ),
+            ];
+            (headers, Json(body)).into_response()
+        }
+        "notifications/initialized" => {
+            state
+                .initialized_notifications
+                .fetch_add(1, Ordering::SeqCst);
+            StatusCode::ACCEPTED.into_response()
+        }
+        _ => {
+            if state.expire_next.swap(false, Ordering::SeqCst) {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+            let body = json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "tools": [ { "name": "read_file", "description": "Read a file" } ]
+                }
+            });
+            let delay = state.respond_after_ms.load(Ordering::SeqCst);
+            if state.deliver_on_get.load(Ordering::SeqCst) {
+                let sid = headers
+                    .get("mcp-session-id")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_string);
+                let senders = state.get_stream_senders.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    // The GET stream may still be connecting when the reply is ready.
+                    for _ in 0..60 {
+                        if let Some(sid) = sid.as_deref() {
+                            if let Some(tx) = senders.get(sid) {
+                                let _ = tx.send(body).await;
+                                return;
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                });
+                return StatusCode::ACCEPTED.into_response();
+            }
+            if delay > 0 {
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+            }
+            if state.sse_mode {
+                let payload = format!(
+                    "event: message\ndata: {}\n\n",
+                    serde_json::to_string(&body).unwrap()
+                );
+                let headers = [(
+                    axum::http::HeaderName::from_static("content-type"),
+                    "text/event-stream".to_string(),
+                )];
+                (headers, payload).into_response()
+            } else {
+                Json(body).into_response()
+            }
+        }
+    }
+}
+
+async fn mock_streamable_get(
+    State(state): State<MockStreamableState>,
+    headers: HeaderMap,
+) -> Response {
+    let Some(sid) = headers
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+    else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let (tx, rx) = mpsc::channel::<Value>(64);
+    state.get_stream_senders.insert(sid, tx);
+    let stream = ReceiverStream::new(rx).map(|msg: Value| {
+        Ok::<_, std::io::Error>(
+            Event::default()
+                .event("message")
+                .data(serde_json::to_string(&msg).unwrap_or_default()),
+        )
+    });
+    axum::response::sse::Sse::new(stream).into_response()
+}
+
+struct MockStreamable {
+    url: String,
+    state: MockStreamableState,
+}
+
+async fn start_mock_streamable(sse_mode: bool) -> MockStreamable {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = MockStreamableState {
+        init_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        initialized_notifications: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        init_api_key: Arc::new(std::sync::Mutex::new(None)),
+        require_api_key: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        respond_after_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        deliver_on_get: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        get_stream_senders: Arc::new(DashMap::new()),
+        sse_mode,
+        expire_next: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+    let app = Router::new()
+        .route("/mcp", post(mock_streamable_post))
+        .route("/mcp", get(mock_streamable_get))
+        .with_state(state.clone());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    MockStreamable {
+        url: format!("http://{}", addr),
+        state,
+    }
+}
+
+fn streamable_entry(url: &str, transport: &str) -> UpstreamEntry {
+    UpstreamEntry {
+        name: "default".to_string(),
+        transport: transport.to_string(),
+        url: Some(url.to_string()),
+        http_path: "/mcp".to_string(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn test_streamable_upstream_json_response() {
+    let mock = start_mock_streamable(false).await;
+    let mgr = UpstreamManager::new(vec![streamable_entry(&mock.url, "streamable-http")], 5);
+    let handle = mgr.get_or_connect("s1", "default").await.unwrap();
+    assert_eq!(handle.transport(), "streamable-http");
+
+    let resp = handle
+        .forward(&json!({"jsonrpc":"2.0","id":7,"method":"tools/list"}))
+        .await
+        .unwrap();
+    assert_eq!(resp["id"], 7);
+    assert!(resp["result"]["tools"].is_array());
+    assert_eq!(
+        mock.state
+            .initialized_notifications
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[tokio::test]
+async fn test_streamable_initialize_sends_custom_headers() {
+    let mock = start_mock_streamable(false).await;
+    mock.state
+        .require_api_key
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let mut entry = streamable_entry(&mock.url, "streamable-http");
+    entry
+        .headers
+        .insert("x-api-key".to_string(), "secret".to_string());
+    let mgr = UpstreamManager::new(vec![entry], 5);
+
+    mgr.get_or_connect("s1", "default")
+        .await
+        .expect("initialize must carry configured custom headers");
+    assert_eq!(
+        mock.state.init_api_key.lock().unwrap().as_deref(),
+        Some("secret")
+    );
+}
+
+#[tokio::test]
+async fn test_streamable_long_request_not_capped_by_client_timeout() {
+    let mock = start_mock_streamable(false).await;
+    mock.state
+        .respond_after_ms
+        .store(1500, std::sync::atomic::Ordering::SeqCst);
+
+    let mut entry = streamable_entry(&mock.url, "streamable-http");
+    entry.timeout_ms = 10_000;
+    // The manager-wide client used to have a 1s total timeout, which also
+    // capped the response body. The per-entry timeout must be the limit.
+    let mgr = UpstreamManager::new(vec![entry], 1);
+
+    let handle = mgr.get_or_connect("s1", "default").await.unwrap();
+    let resp = handle
+        .forward(&json!({"jsonrpc":"2.0","id":7,"method":"tools/list"}))
+        .await
+        .unwrap();
+    assert_eq!(resp["id"], 7);
+}
+
+#[tokio::test]
+async fn test_streamable_get_stream_not_capped_by_client_timeout() {
+    let mock = start_mock_streamable(false).await;
+    mock.state
+        .deliver_on_get
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    mock.state
+        .respond_after_ms
+        .store(1500, std::sync::atomic::Ordering::SeqCst);
+
+    let mut entry = streamable_entry(&mock.url, "streamable-http");
+    entry.timeout_ms = 5_000;
+    let mgr = UpstreamManager::new(vec![entry], 1);
+
+    let handle = mgr.get_or_connect("s1", "default").await.unwrap();
+    let resp = handle
+        .forward(&json!({"jsonrpc":"2.0","id":8,"method":"tools/list"}))
+        .await
+        .unwrap();
+    assert_eq!(resp["id"], 8);
+}
+
+#[tokio::test]
+async fn test_streamable_upstream_sse_response() {
+    let mock = start_mock_streamable(true).await;
+    let mgr = UpstreamManager::new(vec![streamable_entry(&mock.url, "streamable-http")], 5);
+    let handle = mgr.get_or_connect("s1", "default").await.unwrap();
+    let resp = handle
+        .forward(&json!({"jsonrpc":"2.0","id":9,"method":"tools/list"}))
+        .await
+        .unwrap();
+    assert_eq!(resp["id"], 9);
+}
+
+#[tokio::test]
+async fn test_streamable_session_expiry_reinitializes() {
+    let mock = start_mock_streamable(false).await;
+    let mgr = UpstreamManager::new(vec![streamable_entry(&mock.url, "streamable-http")], 5);
+    let handle = mgr.get_or_connect("s1", "default").await.unwrap();
+
+    mock.state
+        .expire_next
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let resp = handle
+        .forward(&json!({"jsonrpc":"2.0","id":11,"method":"tools/list"}))
+        .await
+        .unwrap();
+    assert_eq!(resp["id"], 11);
+    // One initial handshake + one re-handshake after the 404.
+    assert_eq!(
+        mock.state
+            .init_count
+            .load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+}
+
+#[tokio::test]
+async fn test_streamable_concurrent_connect_is_single_flight() {
+    let mock = start_mock_streamable(false).await;
+    let mgr = Arc::new(UpstreamManager::new(
+        vec![streamable_entry(&mock.url, "streamable-http")],
+        5,
+    ));
+    let mut tasks = Vec::new();
+    for _ in 0..10 {
+        let mgr = mgr.clone();
+        tasks.push(tokio::spawn(async move {
+            mgr.get_or_connect("s1", "default")
+                .await
+                .map(|h| h.transport())
+        }));
+    }
+    for t in tasks {
+        assert_eq!(t.await.unwrap().unwrap(), "streamable-http");
+    }
+    assert_eq!(
+        mock.state
+            .init_count
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[tokio::test]
+async fn test_auto_transport_detects_streamable() {
+    let mock = start_mock_streamable(false).await;
+    let mgr = UpstreamManager::new(vec![streamable_entry(&mock.url, "auto")], 5);
+    let handle = mgr.get_or_connect("s1", "default").await.unwrap();
+    assert_eq!(handle.transport(), "streamable-http");
+    assert_eq!(mgr.detection_counts(), (0, 1));
+}
+
+#[tokio::test]
+async fn test_auto_transport_falls_back_to_legacy_sse() {
+    let url = start_mock_mcp().await;
+    let mgr = UpstreamManager::new(
+        vec![UpstreamEntry {
+            name: "default".to_string(),
+            transport: "auto".to_string(),
+            url: Some(url),
+            sse_path: "/sse".to_string(),
+            ..Default::default()
+        }],
+        5,
+    );
+    let handle = mgr.get_or_connect("s1", "default").await.unwrap();
+    assert_eq!(handle.transport(), "sse");
+    assert_eq!(mgr.detection_counts(), (1, 0));
+}
+
+#[tokio::test]
+async fn test_ssrf_guard_rejects_metadata_address() {
+    let mgr = UpstreamManager::new(
+        vec![streamable_entry(
+            "http://169.254.169.254",
+            "streamable-http",
+        )],
+        2,
+    );
+    let err = mgr.get_or_connect("s1", "default").await.err().unwrap();
+    assert!(matches!(
+        err,
+        virbius_mcp_proxy::upstream::UpstreamError::UrlRejected(_)
+    ));
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  stdio upstream (subprocess fixture)
+// ═══════════════════════════════════════════════════════════════
+
+fn python3_available() -> bool {
+    std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn stdio_entry(
+    env: std::collections::BTreeMap<String, String>,
+    cwd: Option<String>,
+) -> UpstreamEntry {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/echo_mcp_stdio.py"
+    );
+    UpstreamEntry {
+        name: "default".to_string(),
+        transport: "stdio".to_string(),
+        command: Some("python3".to_string()),
+        args: vec![fixture.to_string()],
+        env,
+        cwd,
+        timeout_ms: 3000,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn test_stdio_upstream_roundtrip_and_env_isolation() {
+    if !python3_available() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let mut env = std::collections::BTreeMap::new();
+    env.insert("FS_ROOT".to_string(), "/data".to_string());
+    let mgr = UpstreamManager::new(vec![stdio_entry(env, None)], 5);
+    let handle = mgr.get_or_connect("s1", "default").await.unwrap();
+    assert_eq!(handle.transport(), "stdio");
+
+    let listing = handle
+        .forward(&json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}))
+        .await
+        .unwrap();
+    assert_eq!(listing["result"]["tools"][0]["name"], "echo");
+
+    let call = handle
+        .forward(&json!({
+            "jsonrpc":"2.0","id":2,"method":"tools/call",
+            "params":{"name":"echo","arguments":{"path":"/tmp/x"}}
+        }))
+        .await
+        .unwrap();
+    assert_eq!(call["id"], 2);
+    assert_eq!(call["result"]["env"]["FS_ROOT"], "/data");
+    assert!(call["result"]["env"]["VIRBIUS_LICENSE_FILE"].is_null());
+    assert!(call["result"]["env"]["VIRBIUS_REDIS_URL"].is_null());
+}
+
+#[tokio::test]
+async fn test_stdio_child_crash_reconnects_on_next_use() {
+    if !python3_available() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let mgr = UpstreamManager::new(
+        vec![stdio_entry(std::collections::BTreeMap::new(), None)],
+        5,
+    );
+    let handle = mgr.get_or_connect("s1", "default").await.unwrap();
+    assert!(handle.is_connected());
+
+    // Ask the fixture to exit.
+    handle
+        .forward_notification(&json!({"jsonrpc":"2.0","method":"crash"}))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(!handle.is_connected());
+
+    // Next use spawns a fresh child and completes the handshake.
+    let handle2 = mgr.get_or_connect("s1", "default").await.unwrap();
+    assert!(handle2.is_connected());
+    let listing = handle2
+        .forward(&json!({"jsonrpc":"2.0","id":3,"method":"tools/list"}))
+        .await
+        .unwrap();
+    assert_eq!(listing["id"], 3);
+}
+
+#[tokio::test]
+async fn test_stdio_missing_cwd_is_reported() {
+    if !python3_available() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let mgr = UpstreamManager::new(
+        vec![stdio_entry(
+            std::collections::BTreeMap::new(),
+            Some("/nonexistent/virbius/dir".to_string()),
+        )],
+        5,
+    );
+    let err = mgr.get_or_connect("s1", "default").await.err().unwrap();
+    assert!(matches!(
+        err,
+        virbius_mcp_proxy::upstream::UpstreamError::Spawn(_)
+    ));
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  Legacy SSE endpoint origin guard (H1)
+// ═══════════════════════════════════════════════════════════════
+
+/// Start a legacy-SSE upstream that announces `endpoint_data` and then idles.
+///
+/// `None` announces an absolute, same-origin endpoint for the server itself.
+async fn start_sse_with_endpoint(endpoint_data: Option<String>) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let endpoint_data =
+        endpoint_data.unwrap_or_else(|| format!("http://{}/messages/?session_id=abc", addr));
+
+    let app = Router::new().route(
+        "/sse",
+        get(move || {
+            let endpoint_data = endpoint_data.clone();
+            async move {
+                let endpoints = futures_util::stream::once(async move {
+                    Ok::<_, std::io::Error>(Event::default().event("endpoint").data(endpoint_data))
+                });
+                let idle = futures_util::stream::pending::<Result<Event, std::io::Error>>();
+                axum::response::sse::Sse::new(endpoints.chain(idle)).into_response()
+            }
+        }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{}", addr)
+}
+
+fn legacy_sse_entry(url: &str) -> UpstreamEntry {
+    UpstreamEntry {
+        name: "default".to_string(),
+        transport: "sse".to_string(),
+        url: Some(url.to_string()),
+        sse_path: "/sse".to_string(),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn test_sse_cross_origin_endpoint_is_rejected() {
+    let upstream = start_sse_with_endpoint(Some("http://evil.example/messages".to_string())).await;
+    let mut entry = legacy_sse_entry(&upstream);
+    entry.timeout_ms = 1000;
+    let mgr = UpstreamManager::new(vec![entry], 1);
+
+    let err = mgr
+        .get_or_connect("s1", "default")
+        .await
+        .err()
+        .expect("cross-origin endpoint must fail closed");
+    assert!(matches!(err, UpstreamError::Timeout), "unexpected: {err}");
+}
+
+#[tokio::test]
+async fn test_sse_absolute_same_origin_endpoint_is_accepted() {
+    let upstream = start_sse_with_endpoint(None).await;
+    let mgr = UpstreamManager::new(vec![legacy_sse_entry(&upstream)], 2);
+
+    let handle = mgr
+        .get_or_connect("s1", "default")
+        .await
+        .expect("absolute same-origin endpoint should be accepted");
+    assert_eq!(handle.transport(), "sse");
+    assert_eq!(handle.url(), upstream);
 }
