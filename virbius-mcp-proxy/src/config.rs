@@ -531,7 +531,7 @@ fn default_fail_closed() -> bool {
     true
 }
 fn default_fail_open() -> bool {
-    true
+    false
 }
 fn default_engine_timeout() -> u64 {
     3000
@@ -689,6 +689,16 @@ impl ProxyConfig {
         }
         if let Ok(v) = std::env::var("VIRBIUS_AUTH_CONTROL_URL") {
             cfg.auth.control_base_url = v;
+        } else if cfg.auth.control_base_url.is_empty() {
+            // Engine auth rejects a bare /v1/evaluate. The demo sets
+            // VIRBIUS_CONTROL_URL for licenses but not a second auth URL, and
+            // the proxy then calls the engine with no token and fail-opens.
+            if let Ok(v) = std::env::var("VIRBIUS_CONTROL_URL") {
+                let v = v.trim().to_string();
+                if !v.is_empty() {
+                    cfg.auth.control_base_url = v;
+                }
+            }
         }
         if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_ENABLED") {
             cfg.delegated.enabled = v == "1" || v.eq_ignore_ascii_case("true");
@@ -1081,7 +1091,7 @@ mod tests {
         assert_eq!(cfg.security.fast_path.warmup_calls, 5);
         assert_eq!(cfg.security.fast_path.risk_threshold, 30);
         assert!(cfg.security.failover.high_risk_fail_closed);
-        assert!(cfg.security.failover.low_risk_fail_open);
+        assert!(!cfg.security.failover.low_risk_fail_open);
         assert_eq!(cfg.security.failover.engine_timeout_ms, 3000);
     }
 
