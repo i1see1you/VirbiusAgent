@@ -247,6 +247,7 @@ services:
       VIRBIUS_TRANSPORT: tcp://0.0.0.0:9090
       VIRBIUS_UPSTREAM_URL: ${VIRBIUS_UPSTREAM_URL:-}
       VIRBIUS_CONTROL_URL: http://virbius-control:8080
+      VIRBIUS_AUTH_CONTROL_URL: http://virbius-control:8080
       VIRBIUS_ENGINE_URL: http://virbius-engine:8082
       VIRBIUS_REDIS_URL: redis://redis:6379
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
