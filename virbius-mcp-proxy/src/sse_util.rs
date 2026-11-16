@@ -76,10 +76,7 @@ impl SseParser {
             self.pending_cr = false;
         }
 
-        loop {
-            let Some(pos) = self.buffer.iter().position(|&b| b == b'\n' || b == b'\r') else {
-                break;
-            };
+        while let Some(pos) = self.buffer.iter().position(|&b| b == b'\n' || b == b'\r') {
             let is_cr = self.buffer[pos] == b'\r';
             let cr_at_end = is_cr && pos + 1 == self.buffer.len();
 
@@ -122,10 +119,8 @@ impl SseParser {
         match field {
             "event" => self.event_type = value.to_string(),
             "data" => self.data_lines.push(value.to_string()),
-            "id" => {
-                if !value.contains('\0') {
-                    self.last_event_id = Some(value.to_string());
-                }
+            "id" if !value.contains('\0') => {
+                self.last_event_id = Some(value.to_string());
             }
             // `retry:` and unknown fields are ignored.
             _ => {}
