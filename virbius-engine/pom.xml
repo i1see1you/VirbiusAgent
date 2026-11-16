@@ -28,7 +28,7 @@
     <dependency>
       <groupId>org.apache.pdfbox</groupId>
       <artifactId>pdfbox</artifactId>
-      <version>3.0.3</version>
+      <version>3.0.8</version>
     </dependency>
     <!-- P1 multimodal: DOCX/DOC text extraction -->
     <dependency>
@@ -45,7 +45,7 @@
     <dependency>
       <groupId>com.github.ben-manes.caffeine</groupId>
       <artifactId>caffeine</artifactId>
-      <version>3.1.8</version>
+      <version>3.3.1</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -62,7 +62,7 @@
     <dependency>
       <groupId>redis.clients</groupId>
       <artifactId>jedis</artifactId>
-      <version>5.1.2</version>
+      <version>5.2.0</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.kafka</groupId>
