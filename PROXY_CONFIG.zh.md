@@ -203,13 +203,13 @@ export VIRBIUS_UPSTREAMS='[{"name":"fs","url":"http://localhost:8001","sse_path"
 | `VIRBIUS_LICENSE_PUBLIC_KEY` | `security.license_public_key` |
 | `VIRBIUS_LICENSE_FILE` | `security.license_file` |
 | `VIRBIUS_FALLBACK_POLICY` | `security.fallback_policy` |
-| `VIRBIUS_AUTH_CONTROL_URL` | `auth.control_base_url`（evaluate-token 换取） |
+| `VIRBIUS_AUTH_CONTROL_URL` | `auth.control_base_url`（evaluate-token 换取）。未设置时先取配置文件里的值，再回退到 `VIRBIUS_CONTROL_URL`——引擎拒绝裸 `/v1/evaluate`，auth 地址为空意味着拿不到 token，旧行为会 fail-open。 |
 
 ### 单一基地址（可选，opt-in）
 
 | 环境变量 | 作用 |
 |----------|------|
-| `VIRBIUS_BASE_URL` | 一个变量推导三个端点：`control_base_url` 与 `auth.control_base_url` = 该地址本身；`engine_url` = 同主机 `:8082`。仅替换仍是内置默认值的项——显式设置的上面的变量或配置文件里的值**总是优先**。适合单机部署把环境变量数量从 3 个减到 1 个。 |
+| `VIRBIUS_BASE_URL` | 一个变量推导三个端点：`control_base_url` 与 `auth.control_base_url` = 该地址本身；`engine_url` = 同主机 `:8082`。仅替换仍是内置默认值的项——显式设置的上面的变量或配置文件里的值**总是优先**；又因为 `VIRBIUS_CONTROL_URL` 现在也会喂给 `auth.control_base_url`，两者同时设置时 auth 取 `VIRBIUS_CONTROL_URL`。适合单机部署把环境变量数量从 3 个减到 1 个。 |
 
 ### 审计
 
@@ -604,7 +604,7 @@ audit/trace 后端、**fallback license 摘要与验签结果**、最近 50 条�
 | `license expired` | license 过期 | 运营台重签 + `enroll --revoke` |
 | `-32001 license_invalid` | 上面任一 license 类失败 | 看具体 reason 文本 |
 | `-32004 not_in_allowlist` | 工具不在 license 白名单 | 运营台把工具加入 allowed_tools 重签，或让 Agent 只用白名单工具 |
-| engine 401 `missing_token` | 引擎要求 evaluate token，而 proxy 未配置换取端点 | 设 `VIRBIUS_AUTH_CONTROL_URL`，或用 `VIRBIUS_BASE_URL` 一并推导 |
+| engine 401 `missing_token` | 引擎要求 evaluate token，而 proxy 未配置换取端点 | 设 `VIRBIUS_AUTH_CONTROL_URL`，或用 `VIRBIUS_BASE_URL` 一并推导；都没有时回退到 `VIRBIUS_CONTROL_URL` |
 | `-32603 Upstream MCP server error (…)` | 上游 MCP Server 不可达/失败 | `doctor` 看 upstream 探测；检查 upstream_url/sse_path |
 
 ### stdio 模式（无 HTTP 面）

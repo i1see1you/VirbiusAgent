@@ -68,6 +68,8 @@ spec:
               value: "8000"
             - name: VIRBIUS_CONTROL_URL
               value: http://{{ include "virbius.fullname" . }}-control:8080
+            - name: VIRBIUS_AUTH_CONTROL_URL
+              value: http://{{ include "virbius.fullname" . }}-control:8080
             - name: VIRBIUS_ENGINE_URL
               value: http://{{ include "virbius.fullname" . }}-engine:8082
             - name: VIRBIUS_REDIS_URL

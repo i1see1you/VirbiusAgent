@@ -23,6 +23,16 @@ class ProxyPolicyServiceTest {
     }
 
     @Test
+    void failoverDefaultsFailClosedWithTenSecondTimeout() {
+        Map<String, Object> policy = ProxyPolicyService.normalize(Map.of());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> failover = (Map<String, Object>) policy.get("failover");
+        assertEquals(true, failover.get("high_risk_fail_closed"));
+        assertEquals(false, failover.get("low_risk_fail_open"));
+        assertEquals(10000, failover.get("engine_timeout_ms"));
+    }
+
+    @Test
     void rejectsUnknownFallback() {
         BusinessException ex = assertThrows(
                 BusinessException.class,

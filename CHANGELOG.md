@@ -55,6 +55,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   subscriber could load Control-pushed upstreams. The implicit fallback is now
   skipped with a warning; an explicitly configured entry using a disabled
   transport still fails fast.
+- **The proxy no longer fail-opens when the engine cannot be reached.** Engine
+  auth rejects a bare `/v1/evaluate`; when no evaluate token could be exchanged
+  the call returned 401 and low-risk tools were allowed. `VIRBIUS_AUTH_CONTROL_URL`
+  now falls back to `VIRBIUS_CONTROL_URL` (explicit auth URL and config-file
+  values still win), and `failover.low_risk_fail_open` defaults to `false`, so an
+  unreachable engine denies instead of allowing. Deployments relying on the old
+  allow-on-error behaviour must opt back in explicitly.
+- **Policy defaults: `engine_timeout_ms` is 10s (was 3s).** The proxy default,
+  the Control normalizer and the policy form now agree, so saving a policy no
+  longer silently re-imposes a 3s cap that a cold `/v1/evaluate` exceeds; the
+  proxy then recorded "engine unavailable" and dropped the rule from the
+  decision chain. `auth.timeout_ms` (token exchange) is 10s as well.
+- **Existing databases get `tb_audit_events(_archive).tool_name`.** `V37` adds
+  the column when it is missing and no-ops otherwise, and the SQLite dev path
+  evolves the same tables, so decision-chain reads and the retention job's
+  archive INSERT work on baselines created before the column was folded into V1.
+- **The demo no longer stalls the proxy on its stderr pipe.** `proxy_client.py`
+  drains stderr on a background thread and keeps the tail for the exit message,
+  instead of reading it only after the process dies and letting a full pipe
+  block the decision chain.
 
 ### Changed
 - **Breaking: upstream entry schema.** `url` is now optional and paired with

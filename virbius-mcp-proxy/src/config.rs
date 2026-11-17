@@ -588,6 +588,27 @@ impl Default for AuditSection {
     }
 }
 
+/// Engine auth rejects a bare `/v1/evaluate`. `VIRBIUS_AUTH_CONTROL_URL` wins,
+/// a config-file value wins next, and only then does `VIRBIUS_CONTROL_URL` stand
+/// in for it: the demo and compose set that one for licenses but no second auth
+/// URL, and the proxy then called the engine with no token and fail-opened.
+fn resolve_auth_control_url(
+    explicit: Option<String>,
+    configured: &str,
+    control: Option<String>,
+) -> String {
+    if let Some(v) = explicit {
+        return v;
+    }
+    if !configured.is_empty() {
+        return configured.to_string();
+    }
+    control
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_default()
+}
+
 impl ProxyConfig {
     /// Load from TOML file if it exists, then apply environment variable overrides.
     pub fn load() -> Self {
@@ -690,19 +711,11 @@ impl ProxyConfig {
         if let Ok(v) = std::env::var("VIRBIUS_POLICY_REDIS_URL") {
             cfg.policy.redis_url = v;
         }
-        if let Ok(v) = std::env::var("VIRBIUS_AUTH_CONTROL_URL") {
-            cfg.auth.control_base_url = v;
-        } else if cfg.auth.control_base_url.is_empty() {
-            // Engine auth rejects a bare /v1/evaluate. The demo sets
-            // VIRBIUS_CONTROL_URL for licenses but not a second auth URL, and
-            // the proxy then calls the engine with no token and fail-opens.
-            if let Ok(v) = std::env::var("VIRBIUS_CONTROL_URL") {
-                let v = v.trim().to_string();
-                if !v.is_empty() {
-                    cfg.auth.control_base_url = v;
-                }
-            }
-        }
+        cfg.auth.control_base_url = resolve_auth_control_url(
+            std::env::var("VIRBIUS_AUTH_CONTROL_URL").ok(),
+            &cfg.auth.control_base_url,
+            std::env::var("VIRBIUS_CONTROL_URL").ok(),
+        );
         if let Ok(v) = std::env::var("VIRBIUS_DELEGATED_ENABLED") {
             cfg.delegated.enabled = v == "1" || v.eq_ignore_ascii_case("true");
         }
@@ -810,7 +823,8 @@ impl ProxyConfig {
     ///
     ///   - `security.control_base_url` = the base itself
     ///   - `auth.control_base_url`     = the base itself (enables evaluate-token
-    ///     exchange — otherwise a separate `VIRBIUS_AUTH_CONTROL_URL`)
+    ///     exchange — otherwise `VIRBIUS_AUTH_CONTROL_URL`, then
+    ///     `VIRBIUS_CONTROL_URL`)
     ///   - `security.engine_url`       = `{scheme}://{host}:8082`
     ///
     /// Purely additive defaults: an explicit `VIRBIUS_CONTROL_URL`,
@@ -1070,6 +1084,42 @@ mod tests {
         ProxyConfig::apply_base_url(&mut cfg);
         assert_eq!(cfg.security.control_base_url, default_control_url());
         assert!(cfg.auth.control_base_url.is_empty());
+    }
+
+    #[test]
+    fn auth_control_url_falls_back_to_control_url() {
+        // Unset auth URL and no config-file value: the control URL stands in.
+        assert_eq!(
+            resolve_auth_control_url(None, "", Some("http://control:8080".to_string())),
+            "http://control:8080"
+        );
+        // Whitespace is trimmed, and a blank control URL derives nothing.
+        assert_eq!(
+            resolve_auth_control_url(None, "", Some("  http://control:8080  ".to_string())),
+            "http://control:8080"
+        );
+        assert_eq!(
+            resolve_auth_control_url(None, "", Some("   ".to_string())),
+            ""
+        );
+        assert_eq!(resolve_auth_control_url(None, "", None), "");
+    }
+
+    #[test]
+    fn explicit_auth_control_url_wins_over_control_url() {
+        assert_eq!(
+            resolve_auth_control_url(
+                Some("http://auth:1".to_string()),
+                "",
+                Some("http://control:2".to_string())
+            ),
+            "http://auth:1"
+        );
+        // A config-file value beats the fallback too.
+        assert_eq!(
+            resolve_auth_control_url(None, "http://file:3", Some("http://control:2".to_string())),
+            "http://file:3"
+        );
     }
 
     #[test]

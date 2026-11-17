@@ -211,13 +211,13 @@ export VIRBIUS_UPSTREAMS='[{"name":"fs","url":"http://localhost:8001","sse_path"
 | `VIRBIUS_LICENSE_PUBLIC_KEY` | `security.license_public_key` |
 | `VIRBIUS_LICENSE_FILE` | `security.license_file` |
 | `VIRBIUS_FALLBACK_POLICY` | `security.fallback_policy` |
-| `VIRBIUS_AUTH_CONTROL_URL` | `auth.control_base_url` (evaluate-token exchange) |
+| `VIRBIUS_AUTH_CONTROL_URL` | `auth.control_base_url` (evaluate-token exchange). When unset, a config-file value wins, then `VIRBIUS_CONTROL_URL` is used as the fallback — the engine rejects a bare `/v1/evaluate`, so an empty auth URL used to mean no token and a fail-open. |
 
 #### Single base URL (opt-in)
 
 | Environment Variable | Maps To |
 |---------------------|---------|
-| `VIRBIUS_BASE_URL` | Derives three endpoints from one value: `control_base_url` and `auth.control_base_url` become the base itself, `engine_url` becomes the same host on `:8082`. Only values still at their built-in defaults are replaced — explicit variables above or config-file values always win. Cuts the env-var count to one for single-host deployments. |
+| `VIRBIUS_BASE_URL` | Derives three endpoints from one value: `control_base_url` and `auth.control_base_url` become the base itself, `engine_url` becomes the same host on `:8082`. Only values still at their built-in defaults are replaced — explicit variables above or config-file values always win, and since `VIRBIUS_CONTROL_URL` also feeds `auth.control_base_url`, setting both keeps auth on `VIRBIUS_CONTROL_URL`. Cuts the env-var count to one for single-host deployments. |
 
 ### Audit
 
@@ -621,7 +621,7 @@ asking "what did the proxy just decide and why" — no Kafka grepping required.
 | `license expired` | The license has expired | Reissue in the console, then `enroll --revoke` |
 | `-32001 license_invalid` | Any of the license failures above | Read the specific reason text |
 | `-32004 not_in_allowlist` | Tool is not in the license allowlist | Add the tool to allowed_tools and reissue, or restrict the agent to allowlisted tools |
-| engine 401 `missing_token` | The engine requires an evaluate token but the proxy has no exchange endpoint configured | Set `VIRBIUS_AUTH_CONTROL_URL`, or let `VIRBIUS_BASE_URL` derive it |
+| engine 401 `missing_token` | The engine requires an evaluate token but the proxy has no exchange endpoint configured | Set `VIRBIUS_AUTH_CONTROL_URL`, or let `VIRBIUS_BASE_URL` derive it; `VIRBIUS_CONTROL_URL` is used as the last fallback |
 | `-32603 Upstream MCP server error (…)` | The upstream MCP server is unreachable/failed | See the upstream probe in `doctor`; check upstream_url / sse_path |
 
 ### stdio mode (no HTTP surface)
