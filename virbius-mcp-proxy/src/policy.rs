@@ -118,7 +118,7 @@ async fn run_subscriber(
         // an idle wait, not a dead connection: dropping the task here restarts
         // the subscriber and, on the demo's piped stderr, eventually stalls
         // the proxy before it can record a decision.
-        let reply = match conn
+        let reply: redis::streams::StreamReadReply = match conn
             .xread_options(
                 &[STREAM_KEY],
                 &[last_id.as_str()],
@@ -260,7 +260,7 @@ fn tenant_from_key(key: &str) -> Option<&str> {
 
 fn is_xread_block_timeout(err: &redis::RedisError) -> bool {
     let text = err.to_string().to_ascii_lowercase();
-    text == "timed out" || text.contains("response was nil")
+    text.contains("timed out") || text.contains("response was nil")
 }
 
 fn redis_string(v: &redis::Value) -> Option<String> {
@@ -297,12 +297,9 @@ mod tests {
 
     #[test]
     fn xread_block_timeout_is_not_a_subscriber_failure() {
-        let err = redis::RedisError::from((redis::ErrorKind::IoError, "timed out"));
+        let err = redis::RedisError::from((redis::ErrorKind::Io, "timed out"));
         assert!(is_xread_block_timeout(&err));
-        let broken = redis::RedisError::from((
-            redis::ErrorKind::IoError,
-            "connection refused",
-        ));
+        let broken = redis::RedisError::from((redis::ErrorKind::Io, "connection refused"));
         assert!(!is_xread_block_timeout(&broken));
     }
 
