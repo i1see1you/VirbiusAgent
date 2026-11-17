@@ -114,7 +114,11 @@ async fn run_subscriber(
     load_existing(&mut conn, registry, gates).await;
     let mut last_id = "$".to_string();
     loop {
-        let reply: redis::streams::StreamReadReply = conn
+        // XREAD BLOCK expires with "timed out" when nobody published. That is
+        // an idle wait, not a dead connection: dropping the task here restarts
+        // the subscriber and, on the demo's piped stderr, eventually stalls
+        // the proxy before it can record a decision.
+        let reply = match conn
             .xread_options(
                 &[STREAM_KEY],
                 &[last_id.as_str()],
@@ -122,7 +126,12 @@ async fn run_subscriber(
                     .block(5000)
                     .count(16),
             )
-            .await?;
+            .await
+        {
+            Ok(reply) => reply,
+            Err(e) if is_xread_block_timeout(&e) => continue,
+            Err(e) => return Err(e),
+        };
         for key in reply.keys {
             for id in key.ids {
                 last_id = id.id.clone();
@@ -249,6 +258,11 @@ fn tenant_from_key(key: &str) -> Option<&str> {
         .strip_suffix(SNAPSHOT_SUFFIX)
 }
 
+fn is_xread_block_timeout(err: &redis::RedisError) -> bool {
+    let text = err.to_string().to_ascii_lowercase();
+    text == "timed out" || text.contains("response was nil")
+}
+
 fn redis_string(v: &redis::Value) -> Option<String> {
     match v {
         redis::Value::BulkString(b) => String::from_utf8(b.clone()).ok(),
@@ -279,6 +293,17 @@ mod tests {
         assert!(!policy.fast_path.enabled);
         assert!(policy.memory.enabled);
         assert_eq!(policy.memory.tool_patterns, vec!["memory_".to_string()]);
+    }
+
+    #[test]
+    fn xread_block_timeout_is_not_a_subscriber_failure() {
+        let err = redis::RedisError::from((redis::ErrorKind::IoError, "timed out"));
+        assert!(is_xread_block_timeout(&err));
+        let broken = redis::RedisError::from((
+            redis::ErrorKind::IoError,
+            "connection refused",
+        ));
+        assert!(!is_xread_block_timeout(&broken));
     }
 
     #[test]

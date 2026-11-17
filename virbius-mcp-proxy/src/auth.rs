@@ -29,7 +29,7 @@ impl Default for AuthConfig {
         Self {
             control_base_url: String::new(),
             exchange_path: "/api/v1/auth/evaluate-token".to_string(),
-            timeout: Duration::from_millis(3000),
+            timeout: Duration::from_millis(10_000),
             refresh_margin_percent: 50,
         }
     }

@@ -48,7 +48,7 @@ fn default_auth_exchange_path() -> String {
     "/api/v1/auth/evaluate-token".to_string()
 }
 fn default_auth_timeout_ms() -> u64 {
-    3000
+    10_000
 }
 fn default_auth_refresh_margin() -> u64 {
     50
@@ -534,7 +534,10 @@ fn default_fail_open() -> bool {
     false
 }
 fn default_engine_timeout() -> u64 {
-    3000
+    // A cold /v1/evaluate on the bank lab is often slower than 3s. The demo
+    // proxy used to fail-closed at this default before Redis policy arrived,
+    // so the decision chain recorded "engine unavailable" instead of the rule.
+    20_000
 }
 
 impl Default for FailoverConfig {
@@ -1092,7 +1095,7 @@ mod tests {
         assert_eq!(cfg.security.fast_path.risk_threshold, 30);
         assert!(cfg.security.failover.high_risk_fail_closed);
         assert!(!cfg.security.failover.low_risk_fail_open);
-        assert_eq!(cfg.security.failover.engine_timeout_ms, 3000);
+        assert_eq!(cfg.security.failover.engine_timeout_ms, 20_000);
     }
 
     #[test]

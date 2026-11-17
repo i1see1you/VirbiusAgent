@@ -70,6 +70,8 @@ spec:
               value: http://{{ include "virbius.fullname" . }}-control:8080
             - name: VIRBIUS_ENGINE_URL
               value: http://{{ include "virbius.fullname" . }}-engine:8082
+            - name: VIRBIUS_REDIS_URL
+              value: {{ include "virbius.redisUrl" . | quote }}
             - name: VIRBIUS_SSE_BIND
               value: "0.0.0.0"
             - name: VIRBIUS_MCP_PROXY_BIN

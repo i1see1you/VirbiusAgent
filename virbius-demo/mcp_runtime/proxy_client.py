@@ -8,9 +8,11 @@ import logging
 import os
 import re
 import subprocess
+import threading
 import uuid
 import urllib.parse
 import urllib.request
+from collections import deque
 
 from mcp_runtime.labs import Lab, get as get_lab
 from modules import settings
@@ -239,8 +241,24 @@ class McpProxyClient:
             bufsize=1,
             env=env,
         )
+        self._stderr_tail = deque(maxlen=40)
+        threading.Thread(target=self._drain_stderr, daemon=True).start()
         self._counter = 0
         self._initialize(meta)
+
+    def _drain_stderr(self) -> None:
+        stream = self.proc.stderr
+        if stream is None:
+            return
+        try:
+            for line in stream:
+                text = line.rstrip()
+                if not text:
+                    continue
+                self._stderr_tail.append(text)
+                log.info("mcp-proxy: %s", text)
+        except Exception:
+            return
 
     def _next_id(self) -> int:
         self._counter += 1
@@ -258,7 +276,7 @@ class McpProxyClient:
         while True:
             line = self.proc.stdout.readline()
             if not line:
-                stderr = (self.proc.stderr.read() or "").strip() or "no output"
+                stderr = " | ".join(self._stderr_tail) or "no output"
                 raise RuntimeError("mcp-proxy exited: " + stderr)
             s = line.strip()
             if s.startswith("{") and s.endswith("}"):
