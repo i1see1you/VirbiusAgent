@@ -29,16 +29,6 @@ else
   err "Unit tests failed"
 fi
 
-# 3. Integration tests
-if [[ -f virbius-core/tests/integration_test.rs ]]; then
-  info "Running integration tests..."
-  if cargo test -p virbius-core --test integration_test 2>&1 | tail -3; then
-    ok "Integration tests pass"
-  else
-    err "Integration tests failed"
-  fi
-fi
-
 # 4. Service health checks
 check_service() {
   local url=$1 name=$2

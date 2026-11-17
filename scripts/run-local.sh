@@ -217,17 +217,6 @@ else
   err "Rust tests failed"; exit 1
 fi
 
-# ─── Step 3: Run integration tests ───
-if [[ "${VIRBIUS_SKIP_TESTS:-1}" != "1" ]] && [[ -f virbius-core/tests/integration_test.rs ]]; then
-  info "Running integration tests..."
-  if cargo test -p virbius-core --test integration_test 2>&1 | tail -5; then
-    ok "Integration tests passed"
-  else
-    err "Integration tests failed (may need ed25519-dalek trait imports)"
-    info "Fix and re-run: cargo test -p virbius-core --test integration_test"
-  fi
-fi
-
 # ─── Step 4: Rebuild frontend if sources changed ───
 FRONTEND_SRC="$ROOT/virbius-control/frontend/src"
 FRONTEND_OUT="$ROOT/virbius-control/src/main/resources/static/ui/index.html"

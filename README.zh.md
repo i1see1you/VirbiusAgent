@@ -306,13 +306,17 @@ mvn clean install -DskipTests
 # 3. 构建 Rust 模块
 cargo build --release -p virbius-core -p virbius-mcp-proxy
 
-# 4. 启动控制面（SQLite 内存模式，自动建表）
+# 4. 启动控制面（文件型 SQLite，位于 ./data，自动建表）
+#    每个 profile 都必须设置 VIRBIUS_LICENSE_MASTER_KEY（≥32 字符）。
+export VIRBIUS_LICENSE_MASTER_KEY="$(openssl rand -hex 32)"
 cd virbius-control
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 # 5. 验证
 curl -s http://localhost:8080/api/v1/health
 ```
+
+> 重启请沿用同一个 key（换新 key 无法解密既有数据）。`scripts/run-local.sh` 会自动生成并持久化到 data/.license-master-key。
 
 ### Docker (Compose)
 
@@ -365,10 +369,10 @@ cargo test --test e2e_integration -- --nocapture
 |------|----------|------|
 | [在线演示](https://www.virbius.cn/demo) | 10 类安全判定 + Agent 攻击样本，免安装 | 浏览器 |
 | 端层 e2e（无需外部服务） | License → 预检 → Prompt 网关 → MCP → STI → 审计 | `cd virbius-core && cargo test --test e2e_integration` |
-| [LangChain 预检](examples/langchain_precheck.py) | 模式 B 对原生工具的放行 + 拒绝（需 license 夹具） | `python examples/langchain_precheck.py` |
+| [LangChain 预检](examples/langchain_precheck.py) | 模式 B 对原生工具的放行 + 拒绝（需先构建 `virbius-mcp-python`，见[其 README](virbius-mcp-python/README.md)） | `python3 examples/langchain_precheck.py` |
 | [OSS 靶 Agent](examples/oss-agent-target/) | 同一 Agent 经 proxy 与 SDK 两种接入；拒绝文案 A/B | 见其 README |
 | [红队靶场](virbius-demo/) | OWASP LLM 实验 + 攻击样本 | 见 [virbius-demo/README.md](virbius-demo/README.md) |
-| [公开基准复现](scripts/benchmarks/) | VirbiusGuard 在 WildGuardTest / XSTest / … | `python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl` |
+| [公开基准复现](scripts/benchmarks/) | VirbiusGuard 在 WildGuardTest / XSTest / … | `python3 scripts/benchmarks/virbiusguard_eval.py --self-check`（完整集：先导出数据 + `pip install torch transformers`，见 [benchmarks/README](scripts/benchmarks/README.md)） |
 
 ## 软件包
 

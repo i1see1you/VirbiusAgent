@@ -310,13 +310,17 @@ mvn clean install -DskipTests
 # 3. Build Rust modules
 cargo build --release -p virbius-core -p virbius-mcp-proxy
 
-# 4. Start control plane (SQLite in-memory, auto schema)
+# 4. Start control plane (file-based SQLite under ./data, auto schema)
+#    VIRBIUS_LICENSE_MASTER_KEY is required in every profile (>= 32 chars).
+export VIRBIUS_LICENSE_MASTER_KEY="$(openssl rand -hex 32)"
 cd virbius-control
 mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 # 5. Verify
 curl -s http://localhost:8080/api/v1/health
 ```
+
+> Reuse the same key across restarts (a fresh key can't decrypt existing rows). `scripts/run-local.sh` generates and persists it automatically.
 
 ### Docker (Compose)
 
@@ -371,10 +375,10 @@ detection → audit trace propagation.
 |---------|---------------|-----|
 | [Live demo](https://www.virbius.cn/demo) | 10 safety categories + agent-attack samples, no install | browser |
 | Edge e2e (no external services) | License → precheck → Prompt Gateway → MCP → STI → audit | `cd virbius-core && cargo test --test e2e_integration` |
-| [LangChain precheck](examples/langchain_precheck.py) | Mode B allow + deny on native tools (needs license fixtures) | `python examples/langchain_precheck.py` |
+| [LangChain precheck](examples/langchain_precheck.py) | Mode B allow + deny on native tools (needs built `virbius-mcp-python` — see [its README](virbius-mcp-python/README.md)) | `python3 examples/langchain_precheck.py` |
 | [OSS agent target](examples/oss-agent-target/) | Same agent via proxy vs SDK; error-wording A/B | see its README |
 | [Red-team playground](virbius-demo/) | OWASP LLM lab + attack samples | see [virbius-demo/README.md](virbius-demo/README.md) |
-| [Public benchmark repro](scripts/benchmarks/) | VirbiusGuard on WildGuardTest / XSTest / … | `python3 scripts/benchmarks/virbiusguard_eval.py --data wildguardtest.jsonl` |
+| [Public benchmark repro](scripts/benchmarks/) | VirbiusGuard on WildGuardTest / XSTest / … | `python3 scripts/benchmarks/virbiusguard_eval.py --self-check` (full sets: export data + `pip install torch transformers`, see [benchmarks/README](scripts/benchmarks/README.md)) |
 
 ## Packages
 
