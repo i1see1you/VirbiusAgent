@@ -112,7 +112,7 @@ public class ProxyPolicyService {
         Map<String, Object> failOut = new LinkedHashMap<>();
         failOut.put("high_risk_fail_closed", bool(fail.get("high_risk_fail_closed"), true));
         failOut.put("low_risk_fail_open", bool(fail.get("low_risk_fail_open"), false));
-        failOut.put("engine_timeout_ms", bound(fail.get("engine_timeout_ms"), 3000, 100, 60000, "failover.engine_timeout_ms"));
+        failOut.put("engine_timeout_ms", bound(fail.get("engine_timeout_ms"), 10000, 100, 60000, "failover.engine_timeout_ms"));
         out.put("failover", failOut);
 
         Map<String, Object> review = map(raw.get("output_review"));

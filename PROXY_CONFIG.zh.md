@@ -118,8 +118,8 @@ Proxy 启动时按以下顺序查找配置文件，找到第一个即加载：
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `high_risk_fail_closed` | bool | `true` | 高风险工具 Engine 不可用时拒绝 |
-| `low_risk_fail_open` | bool | `true` | 低风险工具 Engine 不可用时放行 |
-| `engine_timeout_ms` | u64 | `3000` | Engine 调用超时（毫秒） |
+| `low_risk_fail_open` | bool | `false` | 低风险工具 Engine 不可用时拒绝 |
+| `engine_timeout_ms` | u64 | `10000` | Engine 调用超时（毫秒） |
 
 **`[security.output_review]` — 工具输出安全审查：**
 
@@ -269,8 +269,8 @@ risk_threshold = 30
 
 [security.failover]
 high_risk_fail_closed = true
-low_risk_fail_open = true
-engine_timeout_ms = 3000
+low_risk_fail_open = false
+engine_timeout_ms = 10000
 
 [security.output_review]
 enabled = true
@@ -361,8 +361,8 @@ risk_threshold = 30
 
 [security.failover]
 high_risk_fail_closed = true
-low_risk_fail_open = true
-engine_timeout_ms = 3000
+low_risk_fail_open = false
+engine_timeout_ms = 10000
 
 [security.output_review]
 enabled = true

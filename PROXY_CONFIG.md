@@ -126,8 +126,8 @@ is shared across clients of the same tenant.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `high_risk_fail_closed` | bool | `true` | Deny high-risk tools when Engine is unavailable |
-| `low_risk_fail_open` | bool | `true` | Allow low-risk tools when Engine is unavailable |
-| `engine_timeout_ms` | u64 | `3000` | Engine call timeout in milliseconds |
+| `low_risk_fail_open` | bool | `false` | Deny low-risk tools when Engine is unavailable |
+| `engine_timeout_ms` | u64 | `10000` | Engine call timeout in milliseconds |
 
 **`[security.output_review]` — Tool Output Safety Review:**
 
@@ -278,8 +278,8 @@ risk_threshold = 30
 
 [security.failover]
 high_risk_fail_closed = true
-low_risk_fail_open = true
-engine_timeout_ms = 3000
+low_risk_fail_open = false
+engine_timeout_ms = 10000
 
 [security.output_review]
 enabled = true
@@ -370,8 +370,8 @@ risk_threshold = 30
 
 [security.failover]
 high_risk_fail_closed = true
-low_risk_fail_open = true
-engine_timeout_ms = 3000
+low_risk_fail_open = false
+engine_timeout_ms = 10000
 
 [security.output_review]
 enabled = true

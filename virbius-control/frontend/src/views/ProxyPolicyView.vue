@@ -175,7 +175,7 @@ const form = reactive({
   session_ttl_secs: 1800,
   fallback_policy: 'minimum_privilege',
   fast_path: { enabled: true, warmup_calls: 5, risk_threshold: 30 },
-  failover: { high_risk_fail_closed: true, low_risk_fail_open: false, engine_timeout_ms: 3000 },
+  failover: { high_risk_fail_closed: true, low_risk_fail_open: false, engine_timeout_ms: 10000 },
   output_review: { enabled: true, min_text_length: 512, min_risk_score: 50, fail_open: true },
   memory: { enabled: false, max_entry_size: 4096 }
 });

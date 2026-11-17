@@ -557,8 +557,8 @@ risk_threshold = 30
 
 [security.failover]
 high_risk_fail_closed = true        # Deny when engine unavailable for high-risk tools
-low_risk_fail_open = true           # Allow + audit when engine unavailable for low-risk tools
-engine_timeout_ms = 3000
+low_risk_fail_open = false           # Deny + audit when engine unavailable for low-risk tools
+engine_timeout_ms = 10000
 
 [audit]
 redis_url = "redis://127.0.0.1:6379"
