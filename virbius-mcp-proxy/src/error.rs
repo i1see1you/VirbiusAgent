@@ -18,6 +18,12 @@ pub enum VirbiusErrorCode {
     ArgTransformFailed = -32013,
     DelegatedEgressDenied = -32014,
     DelegatedLocalExecDisabled = -32015,
+    LocalExecNotGranted = -32016,
+    LocalExecNodeDisabled = -32017,
+    SandboxUnavailable = -32018,
+    LocalExecBusy = -32019,
+    SessionIdentityMismatch = -32020,
+    CodeTooLarge = -32021,
 }
 
 impl VirbiusErrorCode {
@@ -38,6 +44,12 @@ impl VirbiusErrorCode {
             Self::ArgTransformFailed => "arg_transform_failed",
             Self::DelegatedEgressDenied => "delegated_egress_denied",
             Self::DelegatedLocalExecDisabled => "local_exec_disabled",
+            Self::LocalExecNotGranted => "local_exec_not_granted",
+            Self::LocalExecNodeDisabled => "local_exec_node_disabled",
+            Self::SandboxUnavailable => "sandbox_unavailable",
+            Self::LocalExecBusy => "local_exec_busy",
+            Self::SessionIdentityMismatch => "session_identity_mismatch",
+            Self::CodeTooLarge => "code_too_large",
         }
     }
 
@@ -54,9 +66,13 @@ impl VirbiusErrorCode {
             | Self::MemoryWriteBlocked
             | Self::ArgTransformFailed
             | Self::DelegatedEgressDenied
-            | Self::DelegatedLocalExecDisabled => 403,
-            Self::SchemaViolation => 400,
-            Self::RateExceeded => 429,
+            | Self::DelegatedLocalExecDisabled
+            | Self::LocalExecNotGranted
+            | Self::LocalExecNodeDisabled
+            | Self::SessionIdentityMismatch => 403,
+            Self::SchemaViolation | Self::CodeTooLarge => 400,
+            Self::RateExceeded | Self::LocalExecBusy => 429,
+            Self::SandboxUnavailable => 503,
         }
     }
 
@@ -87,9 +103,10 @@ impl VirbiusErrorCode {
             Self::LicenseInvalid | Self::LicenseRequired => "The agent credential was rejected",
             Self::RateExceeded | Self::RiskThreshold => "The tool call was not executed",
             Self::ChallengeRequired => "Approval is required before this tool call runs",
-            Self::SchemaViolation | Self::ArgTransformFailed => {
+            Self::SchemaViolation | Self::ArgTransformFailed | Self::CodeTooLarge => {
                 "The tool call could not be executed"
             }
+            Self::SandboxUnavailable | Self::LocalExecBusy => "The tool call could not be executed",
             _ => "The tool call was blocked by policy",
         };
         format!("{lead}: {d}.")

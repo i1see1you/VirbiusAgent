@@ -125,9 +125,11 @@ check "$(printf '%s' "$LIST_OUT" | jget 'print("1" if d.get("tools")==["read_doc
 check "$(printf '%s' "$LIST_OUT" | jget 'print("1" if "danger_exec" not in (d.get("tools") or []) else "0")')" \
       "non-allowlisted tool (danger_exec) is NOT visible to the agent"
 
-# ── operator surface: GET /status (config summary + license + decisions) ────
-info "E2E: proxy operator surface GET /status"
-STATUS="$(curl -s --max-time 5 "http://127.0.0.1:$PROXY_PORT/status")"
+# ── operator surface: GET /status on the ADMIN listener (not the client port) ──
+# The full view (license summary, upstream/engine URLs, recent decisions) lives
+# only on admin.listen; the client port no longer serves /status.
+info "E2E: proxy operator surface GET /status (admin listener)"
+STATUS="$(curl -s --max-time 5 "http://127.0.0.1:19400/status")"
 check "$(printf '%s' "$STATUS" | jget 'print("1" if d.get("version") else "0")')" \
       "/status reports the proxy version"
 check "$(printf '%s' "$STATUS" | jget 'print("1" if d.get("fallback_license",{}).get("verified",{}).get("ok") is True else "0")')" \

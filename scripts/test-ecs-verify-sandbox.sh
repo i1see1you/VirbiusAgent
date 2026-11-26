@@ -16,8 +16,9 @@ LICENSE_DIR="${LICENSE_DIR:-/etc/virbius}"
 PROXY_PORT="${PROXY_PORT:-9090}"
 CONTAINER_NAME="virbius-sandbox-test"
 
-red()   { echo -e "\033[31m$*\033[0m"; }
-green() { echo -e "\033[32m$*\033[0m"; }
+red()    { echo -e "\033[31m$*\033[0m"; }
+green()  { echo -e "\033[32m$*\033[0m"; }
+yellow() { echo -e "\033[33m$*\033[0m"; }
 cyan()  { echo -e "\033[36m$*\033[0m"; }
 bold()  { echo -e "\033[1m$*\033[0m"; }
 step()  { bold "\n▸ $*"; }
@@ -56,6 +57,10 @@ JWT
 
 green "  license.pub.pem → $LICENSE_DIR/license.pub.pem"
 green "  license.jwt     → $LICENSE_DIR/license.jwt"
+yellow "  NOTE: this fixture license is wildcard (allowed_tools=[]); a wildcard"
+yellow "        license does NOT grant virbius__* local execution. Local probes"
+yellow "        will be skipped unless you provide a canonical-granting license"
+yellow "        (allowed_tools incl. virbius__shell) in $LICENSE_DIR."
 
 # ────────────────────────────────────────────────────────────────
 # 2. Build proxy image
@@ -111,7 +116,7 @@ docker run -d --name "$CONTAINER_NAME" \
   -v "$EDGE_SYNC_DIR/edge/default:/app/data/edge/default:ro" \
   -e VIRBIUS_TRANSPORT="tcp://0.0.0.0:$PROXY_PORT" \
   -e VIRBIUS_UPSTREAM_URL="" \
-  -e VIRBIUS_ALLOW_UNSANDBOXED=true \
+  -e VIRBIUS_LOCAL_EXEC_MODE=gvisor \
   -e VIRBIUS_RUNSC_PATH=/opt/virbius/bin/runsc \
   -e VIRBIUS_GVISOR_ROOTFS=/opt/virbius/rootfs \
   -e VIRBIUS_GVISOR_STATE_ROOT=/tmp/virbius-gvisor-state \

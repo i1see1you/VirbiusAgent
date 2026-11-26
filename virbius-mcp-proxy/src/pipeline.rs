@@ -768,7 +768,7 @@ impl SecurityPipeline {
     }
 
     /// Emit an audit event for a tool call decision.
-    async fn audit_tool_call(
+    pub(crate) async fn audit_tool_call(
         &self,
         session: &Session,
         tool_name: &str,

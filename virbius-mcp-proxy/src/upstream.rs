@@ -390,11 +390,13 @@ pub struct UpstreamManager {
     detected_streamable: std::sync::atomic::AtomicU64,
     /// (session_id, upstream_name) → connected handle
     connections: DashMap<(String, String), UpstreamHandle>,
-    /// displayed_tool_name → (upstream_name, original_tool_name)
+    /// (session_id, displayed_tool_name) → (upstream_name, original_tool_name)
     ///
-    /// Populated during `tools/list` merge. Used by `tools/call` to route
-    /// to the correct upstream and strip any prefix before forwarding.
-    tool_routes: DashMap<String, (String, String)>,
+    /// Populated during a session's `tools/list` merge. Used by that
+    /// session's `tools/call` to route to the correct upstream and strip any
+    /// prefix before forwarding. Session-scoped: one session's tools/list
+    /// never clears or rewrites another session's routes.
+    tool_routes: DashMap<(String, String), (String, String)>,
 }
 
 impl UpstreamManager {
@@ -730,12 +732,13 @@ impl UpstreamManager {
     /// and original name.
     pub fn register_tool_route(
         &self,
+        session_id: &str,
         displayed_name: &str,
         upstream_name: &str,
         original_name: &str,
     ) {
         self.tool_routes.insert(
-            displayed_name.to_string(),
+            (session_id.to_string(), displayed_name.to_string()),
             (upstream_name.to_string(), original_name.to_string()),
         );
     }
@@ -759,12 +762,15 @@ impl UpstreamManager {
         if entries.len() == 1 {
             return Some((entries[0].name.clone(), displayed_name.to_string()));
         }
-        self.tool_routes.get(displayed_name).map(|r| r.clone())
+        self.tool_routes
+            .get(&(session_id.to_string(), displayed_name.to_string()))
+            .map(|r| r.clone())
     }
 
-    /// Clear all tool routes (e.g., before re-fetching tools/list).
-    pub fn clear_tool_routes(&self) {
-        self.tool_routes.clear();
+    /// Clear the tool routes of one session (e.g., before re-fetching its
+    /// tools/list). Other sessions' routes are untouched.
+    pub fn clear_tool_routes(&self, session_id: &str) {
+        self.tool_routes.retain(|(sid, _), _| sid != session_id);
     }
 
     /// Remove all upstream connections for a session.
@@ -789,6 +795,7 @@ impl UpstreamManager {
             );
         }
         self.connect_locks.retain(|key, _| key.0 != session_id);
+        self.clear_tool_routes(session_id);
     }
 
     /// Abort an in-flight request after a downstream `notifications/cancelled`.
@@ -1126,30 +1133,37 @@ mod tests {
         let mgr = UpstreamManager::new(entries, 30);
         assert!(!mgr.is_single_upstream());
 
-        // Register routes
-        mgr.register_tool_route("read_file", "fs", "read_file");
-        mgr.register_tool_route("gh__read_file", "gh", "read_file");
-        mgr.register_tool_route("create_issue", "gh", "create_issue");
+        // Register routes for session s1
+        mgr.register_tool_route("s1", "read_file", "fs", "read_file");
+        mgr.register_tool_route("s1", "gh__read_file", "gh", "read_file");
+        mgr.register_tool_route("s1", "create_issue", "gh", "create_issue");
 
         // Route lookups
-        let r1 = mgr.route_tool("read_file").unwrap();
+        let r1 = mgr.route_tool_for("s1", "read_file").unwrap();
         assert_eq!(r1.0, "fs");
         assert_eq!(r1.1, "read_file");
 
-        let r2 = mgr.route_tool("gh__read_file").unwrap();
+        let r2 = mgr.route_tool_for("s1", "gh__read_file").unwrap();
         assert_eq!(r2.0, "gh");
         assert_eq!(r2.1, "read_file");
 
-        let r3 = mgr.route_tool("create_issue").unwrap();
+        let r3 = mgr.route_tool_for("s1", "create_issue").unwrap();
         assert_eq!(r3.0, "gh");
         assert_eq!(r3.1, "create_issue");
 
         // Unknown tool
-        assert!(mgr.route_tool("unknown").is_none());
+        assert!(mgr.route_tool_for("s1", "unknown").is_none());
 
-        // Clear routes
-        mgr.clear_tool_routes();
-        assert!(mgr.route_tool("read_file").is_none());
+        // Session-scoped: another session does not see s1's routes.
+        assert!(mgr.route_tool_for("s2", "read_file").is_none());
+        mgr.register_tool_route("s2", "read_file", "fs", "read_file");
+
+        // Clearing s1 leaves s2 untouched.
+        mgr.clear_tool_routes("s1");
+        assert!(mgr.route_tool_for("s1", "read_file").is_none());
+        assert!(mgr.route_tool_for("s2", "read_file").is_some());
+        mgr.clear_tool_routes("s2");
+        assert!(mgr.route_tool_for("s2", "read_file").is_none());
     }
 
     #[test]

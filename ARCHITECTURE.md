@@ -236,45 +236,53 @@ Build a secure and trusted Agent OS, providing syscall-level isolation and obser
 | Phase | Action | Latency |
 |------|------|------|
 | **Precheck** | Parameter validation, tool allowlist, JSON Schema validation, local rule matching | <0.5ms |
-| **Execution** | P0: in-process execution / Landlock + gVisor sandbox | P0: <0.1ms / Landlock: ~2ms / gVisor: 1-5s cold, ~50ms hot |
+| **Execution** | Local tools (`virbius__*`): gVisor only. Upstream tools: forwarded to the upstream MCP server | gVisor: 1-5s cold, ~50ms warm-pool hit |
 
 **Key constraint**: No tool logic is executed during the precheck phase. Only after final judgment returns allow does execution begin.
 
-### 2.2 Layered Isolation Strategy (P0 -> P2 Progressive)
+### 2.2 Local Execution Model (current)
+
+Only tools in the **reserved local namespace** are executed by the proxy itself:
 
 ```
 ToolCallRequest { name, args }
   |
-  +-- sandbox_type = "none" (P0)
-  |    in-process execution (precheck only, no isolation)
-  |    Applicable to: all tools (P0 phase does not distinguish sandbox types)
-  |    Latency: cold <0.1ms / hot <0.1ms
-  |    Security: HTTP layer blocking + session risk accumulation + Falco observation
+  +-- name = "virbius__shell" | "virbius__python" | "virbius__node"
+  |    gVisor (runsc) container, one per execution, no network
+  |    Requirements (all must hold, otherwise the call is refused):
+  |      1. node config   local_exec.mode = "gvisor"
+  |      2. license       allowed_tools lists the canonical name explicitly
+  |                       (a wildcard / empty allowlist never grants local exec)
+  |      3. tool policy   absent, or sandbox_type = "gvisor"
+  |                       (explicit "none"/"landlock" is refused, not downgraded)
+  |    Result _meta: { sandbox_used, degraded, truncated, limit_reason, exit_code, limits }
   |
-  +-- sandbox_type = "subprocess" (P2)
-  |    posix_spawn + Landlock + drop caps
-  |    Applicable to: read_file, write_file, curl (allowlist targets)
-  |    Latency: cold ~2ms / hot ~1ms
+  +-- any other name
+  |    Forwarded to the upstream MCP server. `sandbox_type` in the manifest is
+  |    IGNORED for upstream tools (they run in the upstream's own trust domain;
+  |    `none`/`landlock` there does not disable the tool).
   |
-  +-- sandbox_type = "gvisor"
-  |    gVisor runsc container (warm pool)
-  |    Applicable to: execute_python, shell, any untrusted code
-  |    Latency: cold 1-5s / hot ~50ms (warm pool hit)
-  |    Status: ✅ Verified on Linux host
-  |
-  +-- deny
-        Directly rejected, not executed
+  +-- legacy bare names ("shell", "execute_python", "exec_code", "exec_cmd", ...)
+       NOT local tools anymore. They route to the upstream like any other name.
+       The proxy may add a migration hint to the error ("use virbius__shell").
 ```
 
-> **P0 Security Model**: No syscall-level isolation. Security relies on:
-> 1. HTTP layer blocking (Edge Proxy allow/deny or Gateway Higress allow/deny + engine final judgment, depending on deployment mode)
-> 2. Parameter schema validation (path allowlist, etc.)
-> 3. Session risk accumulation (Falco detects anomalies -> risk score increases -> subsequent requests blocked)
-> 4. High-risk tools (execute_python, shell) require mandatory manual approval or disablement in P0 phase
+**Removed**: `sandbox_type=none` unsandboxed execution and Landlock execution.
+There is no degraded/unsandboxed fallback: without gVisor the call fails with
+`sandbox_unavailable`. Non-Linux hosts cannot execute local code.
 
-### 2.3 P2: Landlock + drop caps Subprocess (Linux)
+> **Security model**: the local executor is gVisor-only and fail-closed.
+> Upstream tools are not sandboxed by the proxy; they rely on the upstream's
+> own isolation plus the proxy's precheck/engine policy. High-risk names
+> (including the legacy local names and `exec_cmd`) remain HIGH_RISK under the
+> no-license fallback policy.
 
-> **P2 implementation, P0 does not involve.** The following is a long-term design reference.
+### 2.3 Landlock + drop caps Subprocess (NOT implemented)
+
+> **Status: NOT implemented.** Local execution is gVisor-only. The proxy refuses
+> `sandbox_type=landlock` for local tools (`sandbox_unavailable`) rather than
+> running a known-incomplete Landlock implementation. This section is retained
+> as a design reference only.
 
 **Design decision**: P2 subprocess sandbox uses Landlock + drop caps, not seccomp-notify.
 

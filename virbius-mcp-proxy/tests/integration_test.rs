@@ -185,6 +185,10 @@ struct ProxyEnv {
 }
 
 async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
+    setup_proxy_with_fallback(upstream_url, FallbackPolicy::MinimumPrivilege).await
+}
+
+async fn setup_proxy_with_fallback(upstream_url: &str, fallback: FallbackPolicy) -> ProxyEnv {
     let session_mgr = Arc::new(SessionManager::new());
 
     let upstream_mgr = Arc::new(UpstreamManager::new(
@@ -203,7 +207,7 @@ async fn setup_proxy(upstream_url: &str) -> ProxyEnv {
         "http://127.0.0.1:59999", // Non-existent engine (triggers failover)
         FastPathConfig::default(),
         FailoverConfig::default(),
-        FallbackPolicy::MinimumPrivilege,
+        fallback,
         audit,
         OutputReviewConfig::default(),
     ));
@@ -301,8 +305,8 @@ async fn test_initialize_tools_list_and_call() {
     let tools = resp["result"]["tools"].as_array().unwrap();
     assert_eq!(
         tools.len(),
-        8,
-        "4 upstream tools + 4 local exec (execute_python deduped)"
+        4,
+        "4 upstream tools; local tools are not advertised without an explicit canonical license grant"
     );
 
     // 3. tools/call — "search" is not high-risk, allowed by fallback policy
@@ -562,6 +566,129 @@ async fn test_proxy_capabilities_injected() {
         caps.get("fastPath").is_some(),
         "virbiusProxy.fastPath should be injected"
     );
+    // Local-exec contract skeleton (P1): clients key off these fields.
+    let le = &caps["localExec"];
+    assert_eq!(le["namespace"], "virbius");
+    assert_eq!(le["canonical"][0], "virbius__shell");
+    assert_eq!(le["sandbox"][0], "gvisor");
+    assert!(le["grant"].is_string(), "grant rule must be advertised");
+}
+
+/// Regression: an upstream tool whose name collides with a LEGACY local name
+/// is no longer hijacked — the bare name is forwarded upstream, and only the
+/// canonical `virbius__*` name can reach the local executor (and even then it
+/// must pass the license hard gate).
+#[tokio::test]
+async fn legacy_name_is_never_hijacked_by_local_exec() {
+    let _lock = SUITE_LOCK.lock().await;
+    let _manifest = install_offline_manifest(&json!({
+        "tenant_id": "default",
+        "app_id": "test-app",
+        "tool_policies": [{
+            "tool_name": "execute_python",
+            "risk_class": "high",
+            "sandbox_type": "none",
+            "timeout_ms": 5000,
+            "fast_path": true
+        }]
+    }));
+    // The mock upstream advertises `execute_python`, a legacy local-exec name.
+    let mock = start_mock_mcp_capture().await;
+    // License grants the BARE legacy name only — enough to forward it upstream.
+    let (pub_pem, jwt) = sign_license("test-app", &["execute_python"]);
+    let env = setup_proxy_fast_path(&mock.url, pub_pem).await;
+    let sid = "itest-legacy-hijack";
+
+    let _ = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "_meta": { "session_id": sid, "app_id": "test-app", "license_jwt": jwt } }
+        }),
+        sid,
+    )
+    .await;
+    let _ = route(
+        &env,
+        &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+        sid,
+    )
+    .await;
+
+    // 1. Bare legacy name: forwarded to the upstream (granted for forwarding).
+    let resp = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+            "params": { "name": "execute_python", "arguments": { "code": "print(1)" } }
+        }),
+        sid,
+    )
+    .await
+    .unwrap();
+    assert!(
+        mock.last_call_args.lock().unwrap().is_some(),
+        "legacy 'execute_python' must be forwarded upstream, not executed locally: {resp}"
+    );
+
+    // 2. Canonical name with no canonical grant: hard gate rejects, never
+    //    forwarded (the bare grant must not imply the canonical grant).
+    *mock.last_call_args.lock().unwrap() = None;
+    let resp = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0", "id": 4, "method": "tools/call",
+            "params": { "name": "virbius__python", "arguments": { "code": "print(1)" } }
+        }),
+        sid,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        resp["error"]["code"], -32016,
+        "bare grant must not authorize the canonical local tool: {resp}"
+    );
+    assert!(
+        mock.last_call_args.lock().unwrap().is_none(),
+        "canonical local tool must never be forwarded upstream"
+    );
+}
+
+/// Regression (P1c): one transport cannot be re-bound to a different logical
+/// session (closes the "switch license on one connection" hole).
+#[tokio::test]
+async fn session_identity_switch_on_same_transport_is_rejected() {
+    let _lock = SUITE_LOCK.lock().await;
+    let upstream_url = start_mock_mcp().await;
+    let env = setup_proxy(&upstream_url).await;
+    let transport = "itest-identity-transport";
+
+    let first = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "_meta": { "session_id": "itest-identity-a", "app_id": "app-a" } }
+        }),
+        transport,
+    )
+    .await
+    .unwrap();
+    assert!(first.get("result").is_some(), "first initialize: {first}");
+
+    let second = route(
+        &env,
+        &json!({
+            "jsonrpc": "2.0", "id": 2, "method": "initialize",
+            "params": { "_meta": { "session_id": "itest-identity-b", "app_id": "app-b" } }
+        }),
+        transport,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        second["error"]["code"], -32020,
+        "re-binding one transport to another logical session must be rejected: {second}"
+    );
 }
 
 /// Test multiple concurrent sessions with independent upstream connections
@@ -812,8 +939,8 @@ async fn test_multi_upstream_no_conflict() {
     let tools = resp["result"]["tools"].as_array().unwrap();
     assert_eq!(
         tools.len(),
-        9,
-        "should have 9 merged tools (4 upstream + 5 local exec)"
+        4,
+        "4 merged upstream tools (no local tools without a canonical grant)"
     );
 
     // No conflicts — no prefixing
@@ -926,8 +1053,8 @@ async fn test_multi_upstream_name_conflict() {
     let tools = resp["result"]["tools"].as_array().unwrap();
     assert_eq!(
         tools.len(),
-        9,
-        "should have 9 tools (4 upstream + 5 local exec)"
+        4,
+        "4 merged upstream tools (no local tools without a canonical grant)"
     );
 
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -1146,9 +1273,20 @@ async fn arg_transform_search_restrict_clamped_before_upstream() {
     assert_eq!(forwarded["query"], "q");
 }
 
-/// High-risk local `shell`: license + fast_path skip engine; Apply still rewrites command then exec.
+/// Local-exec authorization matrix (P1d): the hard gate is independent of
+/// the pipeline's allowlist logic.
+///
+/// - canonical grant   → passes the gate, then fails closed at the sandbox
+///   (`sandbox_unavailable`: no runsc in the unit-test env) and is never
+///   forwarded upstream
+/// - bare legacy grant → `local_exec_not_granted` (a bare name never grants
+///   local execution)
+/// - wildcard license  → `local_exec_not_granted`
+/// - no license        → `local_exec_not_granted` (the hard gate is fallback-
+///   independent: no license means no explicit canonical grant, so an
+///   `audit_only` fallback cannot authorize local code execution)
 #[tokio::test]
-async fn arg_transform_shell_full_flow_clamps_then_executes() {
+async fn local_exec_gate_matrix() {
     let _lock = SUITE_LOCK.lock().await;
     let _manifest = install_offline_manifest(&json!({
         "tenant_id": "default",
@@ -1158,71 +1296,167 @@ async fn arg_transform_shell_full_flow_clamps_then_executes() {
             "risk_class": "high",
             "sandbox_type": "none",
             "timeout_ms": 5000,
-            "fast_path": true,
-            "arg_transforms": {
-                "phase": "pre_tool_call",
-                "mutations": [{
-                    "path": "$.command",
-                    "op": "restrict",
-                    "to": ["echo ARG_XFORM_OK"],
-                    "on_violation": "clamp"
-                }]
-            }
+            "fast_path": true
         }]
     }));
-    let (pub_pem, jwt) = sign_license("test-app", &["shell"]);
-    let mock = start_mock_mcp_capture().await;
-    let env = setup_proxy_fast_path(&mock.url, pub_pem).await;
-    let sid = "itest-at-shell";
-    let init = route(
-        &env,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": { "_meta": { "session_id": sid, "app_id": "test-app", "license_jwt": jwt } }
-        }),
-        sid,
-    )
-    .await
-    .unwrap();
-    assert!(init.get("result").is_some(), "initialize: {init}");
+    // Opt this test process into gvisor mode so the gate path is observable
+    // on any OS. Execution itself still fails closed without runsc.
+    virbius_mcp_proxy::router::init_local_exec_settings(
+        virbius_mcp_proxy::router::LocalExecSettings {
+            mode: virbius_mcp_proxy::router::LocalExecMode::Gvisor,
+            code_bytes: 64 * 1024,
+            concurrency: 8,
+        },
+    );
 
-    let resp = route(
-        &env,
-        &json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": {
-                "name": "shell",
-                "arguments": { "command": "echo SHOULD_NOT_APPEAR" }
-            }
-        }),
-        sid,
-    )
-    .await
-    .unwrap();
-    assert!(
-        resp.get("result").is_some(),
-        "shell allow+apply+exec: {resp}"
-    );
-    let text = resp["result"]["content"][0]["text"].as_str().unwrap_or("");
-    assert!(
-        text.contains("ARG_XFORM_OK"),
-        "rewritten command should run, got {text:?} resp={resp}"
-    );
-    assert!(
-        !text.contains("SHOULD_NOT_APPEAR"),
-        "original command must not run: {text:?}"
-    );
+    async fn init_and_call(env: &ProxyEnv, sid: &str, jwt: Option<&str>) -> Value {
+        let mut meta = json!({ "session_id": sid, "app_id": "test-app" });
+        if let Some(jwt) = jwt {
+            meta["license_jwt"] = json!(jwt);
+        }
+        let _ = route(
+            env,
+            &json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": { "_meta": meta }
+            }),
+            sid,
+        )
+        .await;
+        route(
+            env,
+            &json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": { "name": "virbius__shell", "arguments": { "command": "echo hi" } }
+            }),
+            sid,
+        )
+        .await
+        .unwrap()
+    }
+
+    let mock = start_mock_mcp_capture().await;
+
+    // Audit-truth helper: entries in the global recent-decisions ring for one
+    // session (unique trace_id), immune to parallel-test interference.
+    fn ring_for(trace_id: &str) -> Vec<(String, String)> {
+        virbius_mcp_proxy::audit::recent_decisions()
+            .into_iter()
+            .filter(|d| d.trace_id == trace_id)
+            .map(|d| {
+                (
+                    d.effective_action.clone(),
+                    d.reason_code.clone().unwrap_or_default(),
+                )
+            })
+            .collect()
+    }
+
+    // A. Canonical grant: passes the hard gate, then fails closed (no runsc).
+    let (pub_a, jwt_a) = sign_license("test-app", &["virbius__shell"]);
+    let env_a = setup_proxy_fast_path(&mock.url, pub_a).await;
+    let resp = init_and_call(&env_a, "itest-gate-canonical", Some(&jwt_a)).await;
     assert_eq!(
-        resp["result"]["_meta"]["arg_transform"]["applied"][0]["op"],
-        "restrict"
+        resp["error"]["code"], -32018,
+        "canonical grant should reach the sandbox and fail closed there: {resp}"
     );
     assert!(
         mock.last_call_args.lock().unwrap().is_none(),
-        "local shell must not be forwarded upstream"
+        "local exec must never be forwarded upstream"
+    );
+
+    // B. Bare legacy grant alone: hard gate rejects.
+    let (pub_b, jwt_b) = sign_license("test-app", &["shell"]);
+    let env_b = setup_proxy_fast_path(&mock.url, pub_b).await;
+    let resp = init_and_call(&env_b, "itest-gate-bare", Some(&jwt_b)).await;
+    assert_eq!(
+        resp["error"]["code"], -32016,
+        "bare legacy grant must not authorize local execution: {resp}"
+    );
+
+    // C. Wildcard license (empty allowed_tools): hard gate rejects.
+    let (pub_c, jwt_c) = sign_license("test-app", &[]);
+    let env_c = setup_proxy_fast_path(&mock.url, pub_c).await;
+    let resp = init_and_call(&env_c, "itest-gate-wildcard", Some(&jwt_c)).await;
+    assert_eq!(
+        resp["error"]["code"], -32016,
+        "wildcard license must not grant local execution: {resp}"
+    );
+
+    // Audit truthfulness (B + C): a hard-gate rejection must leave exactly
+    // one block row — never an allow row — and must not count the rejected
+    // call toward the session's tool_call_count (fast-path warmup).
+    for (env, sid) in [(&env_b, "itest-gate-bare"), (&env_c, "itest-gate-wildcard")] {
+        let session = env.session_mgr.get(sid).unwrap();
+        let trace_id = session.trace_id.clone();
+        let entries = ring_for(&trace_id);
+        assert!(
+            entries.iter().all(|(a, _)| a == "block"),
+            "hard-gate rejection must not leave an allow audit row: {entries:?}"
+        );
+        assert!(
+            entries.iter().any(|(_, r)| r == "local_exec_not_granted"),
+            "hard-gate rejection must be audited as local_exec_not_granted: {entries:?}"
+        );
+        assert_eq!(
+            session.tool_call_count, 0,
+            "a rejected call must not increment tool_call_count"
+        );
+    }
+
+    // D. No license at all: the hard gate rejects independently of the
+    // pipeline's fallback policy.
+    let env_d = setup_proxy(&mock.url).await;
+    let resp = init_and_call(&env_d, "itest-gate-nolicense", None).await;
+    assert_eq!(
+        resp["error"]["code"], -32016,
+        "no license must be denied as local_exec_not_granted: {resp}"
+    );
+    let session = env_d.session_mgr.get("itest-gate-nolicense").unwrap();
+    let entries = ring_for(&session.trace_id);
+    assert!(
+        entries
+            .iter()
+            .any(|(a, r)| a == "block" && r == "local_exec_not_granted"),
+        "no-license denial must be a hard-gate block: {entries:?}"
+    );
+    assert_eq!(
+        session.tool_call_count, 0,
+        "a rejected call must not increment tool_call_count"
+    );
+
+    // E. No license + audit_only fallback: an audit-only policy must NOT
+    // authorize local code execution. The hard gate fires before the pipeline
+    // can turn this into allow("audit_only").
+    let env_e = setup_proxy_with_fallback(&mock.url, FallbackPolicy::AuditOnly).await;
+    let resp = init_and_call(&env_e, "itest-gate-nolicense-audit-only", None).await;
+    assert_eq!(
+        resp["error"]["code"], -32016,
+        "audit_only without a license must not grant local execution: {resp}"
+    );
+    let session = env_e
+        .session_mgr
+        .get("itest-gate-nolicense-audit-only")
+        .unwrap();
+    let entries = ring_for(&session.trace_id);
+    assert!(
+        entries.iter().all(|(a, _)| a == "block"),
+        "audit_only local-exec rejection must never leave an allow audit row: {entries:?}"
+    );
+    assert!(
+        entries
+            .iter()
+            .any(|(a, r)| a == "block" && r == "local_exec_not_granted"),
+        "audit_only local-exec rejection must be a hard-gate block: {entries:?}"
+    );
+    assert_eq!(
+        session.tool_call_count, 0,
+        "a rejected call must not increment tool_call_count"
+    );
+
+    assert!(
+        mock.last_call_args.lock().unwrap().is_none(),
+        "no local-exec attempt may reach the upstream"
     );
 }
 
@@ -1278,6 +1512,31 @@ async fn arg_transform_search_restrict_prefix_mismatch_fails() {
     .unwrap();
     assert_eq!(resp["error"]["code"], -32013);
     assert!(mock.last_call_args.lock().unwrap().is_none());
+
+    // Audit truthfulness: the pipeline allow verdict is followed by a block
+    // row for the failed pre_tool_call transform, so the trail ends on the
+    // actual outcome instead of a dangling "allow".
+    let session = env.session_mgr.get(sid).unwrap();
+    let entries: Vec<(String, String)> = virbius_mcp_proxy::audit::recent_decisions()
+        .into_iter()
+        .filter(|d| d.trace_id == session.trace_id)
+        .map(|d| (d.effective_action, d.reason_code.unwrap_or_default()))
+        .collect();
+    assert!(
+        entries
+            .iter()
+            .any(|(a, r)| a == "block" && r == "arg_transform_failed"),
+        "transform failure must be audited as block/arg_transform_failed: {entries:?}"
+    );
+    assert_eq!(
+        entries.last().map(|(a, _)| a.as_str()),
+        Some("block"),
+        "audit trail must end on the blocking outcome: {entries:?}"
+    );
+    assert_eq!(
+        session.tool_call_count, 0,
+        "a call that failed its transform must not increment tool_call_count"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════

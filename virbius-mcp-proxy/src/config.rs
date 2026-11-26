@@ -27,6 +27,188 @@ pub struct ProxyConfig {
     /// is set; the proxy exchanges the license for a short-lived token.
     #[serde(default)]
     pub auth: AuthSection,
+    /// Local code execution (node-level; fail-closed by default).
+    #[serde(default)]
+    pub local_exec: LocalExecSection,
+    /// Client-facing HTTP behaviour.
+    #[serde(default)]
+    pub http: HttpSection,
+    /// Operator surface (separate listener; never on the client port).
+    #[serde(default)]
+    pub admin: AdminSection,
+}
+
+/// Local code execution configuration (node-level, root-owned config).
+///
+/// `mode`:
+/// - `"disabled"` (default) — local execution is refused everywhere
+/// - `"gvisor"` — local execution runs in gVisor containers
+///
+/// There is no unsandboxed mode and no Landlock mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalExecSection {
+    #[serde(default = "default_local_exec_mode")]
+    pub mode: String,
+    /// Maximum accepted code/command payload in bytes.
+    #[serde(default = "default_code_bytes")]
+    pub code_bytes: usize,
+    /// Maximum concurrent local executions on this node (reject above).
+    #[serde(default = "default_concurrency_global")]
+    pub concurrency_global: usize,
+}
+
+fn default_local_exec_mode() -> String {
+    "disabled".to_string()
+}
+fn default_code_bytes() -> usize {
+    64 * 1024
+}
+fn default_concurrency_global() -> usize {
+    8
+}
+
+impl Default for LocalExecSection {
+    fn default() -> Self {
+        Self {
+            mode: default_local_exec_mode(),
+            code_bytes: default_code_bytes(),
+            concurrency_global: default_concurrency_global(),
+        }
+    }
+}
+
+/// Client-facing HTTP behaviour.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HttpSection {
+    /// Stateless `POST /` JSON-RPC endpoint. Default false: it bypasses the
+    /// SSE session/identity binding, so it stays off unless a deployment
+    /// explicitly opts in.
+    #[serde(default)]
+    pub simple_post_enabled: bool,
+    /// Maximum JSON-RPC request body in bytes (DoS baseline).
+    #[serde(default = "default_body_limit_bytes")]
+    pub body_limit_bytes: usize,
+}
+
+fn default_body_limit_bytes() -> usize {
+    1024 * 1024
+}
+
+impl Default for HttpSection {
+    fn default() -> Self {
+        Self {
+            simple_post_enabled: false,
+            body_limit_bytes: default_body_limit_bytes(),
+        }
+    }
+}
+
+/// Operator surface configuration. The full `GET /status` view (license
+/// summary, upstream/engine/control URLs, recent decisions) lives ONLY on
+/// this listener, which defaults to loopback and can require a bearer token.
+///
+/// This release is **loopback-only** (fail-closed at config load): a
+/// non-loopback `listen` refuses to start. Remote operators reach the
+/// surface with `docker exec`, `kubectl port-forward` or an SSH tunnel —
+/// none of which require a network-reachable bind.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AdminSection {
+    /// Listen address, e.g. `127.0.0.1:19400` or `localhost:19400`.
+    /// Empty = admin surface disabled. Non-loopback addresses are rejected
+    /// at startup in this release.
+    #[serde(default = "default_admin_listen")]
+    pub listen: String,
+    /// Path to a file holding the admin bearer token. Empty = no token
+    /// required (loopback-only bind). A file that exists but is EMPTY is a
+    /// configuration error (the operator asked for auth and silently got
+    /// none), so it fails fast.
+    #[serde(default)]
+    pub token_file: String,
+}
+
+fn default_admin_listen() -> String {
+    "127.0.0.1:19400".to_string()
+}
+
+impl Default for AdminSection {
+    fn default() -> Self {
+        Self {
+            listen: default_admin_listen(),
+            token_file: String::new(),
+        }
+    }
+}
+
+impl AdminSection {
+    /// Loopback-only bind check (this release's policy), mirroring the
+    /// delegated plane's `validate_bind`: prefixes stripped, IPv6 brackets
+    /// stripped, hostnames resolved, unresolvable hosts fail closed.
+    pub fn validate_loopback_only(&self) -> Result<(), String> {
+        if self.listen.is_empty() {
+            return Ok(());
+        }
+        let addr = self
+            .listen
+            .strip_prefix("tcp://")
+            .or_else(|| self.listen.strip_prefix("http://"))
+            .unwrap_or(&self.listen);
+        let host_raw = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(addr);
+        let host = host_raw.trim_start_matches('[').trim_end_matches(']');
+        let ips: Vec<std::net::IpAddr> = if host.is_empty() {
+            return Err(format!(
+                "admin.listen '{}': missing host (this release allows loopback binds only, e.g. 127.0.0.1:19400)",
+                self.listen
+            ));
+        } else if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+            vec![ip]
+        } else {
+            use std::net::ToSocketAddrs;
+            (host, 0u16)
+                .to_socket_addrs()
+                .map(|it| it.map(|a| a.ip()).collect())
+                .unwrap_or_default()
+        };
+        if ips.is_empty() {
+            return Err(format!(
+                "admin.listen '{}': cannot resolve bind host (fail-closed)",
+                self.listen
+            ));
+        }
+        if ips.iter().any(|ip| !ip.is_loopback()) {
+            return Err(format!(
+                "admin.listen '{}' resolves to a non-loopback address — this release binds the admin surface to loopback only (use docker exec / kubectl port-forward / SSH for remote access; a network bind arrives with an explicit allow_external flag in a later release)",
+                self.listen
+            ));
+        }
+        Ok(())
+    }
+
+    /// Read the admin bearer token. Empty `token_file` = no token (Ok("")).
+    /// Unreadable file or a file with only whitespace = configuration error
+    /// (fail-closed): the operator asked for auth and must not silently get
+    /// none.
+    pub fn read_token(&self) -> Result<String, String> {
+        if self.token_file.is_empty() {
+            return Ok(String::new());
+        }
+        match std::fs::read_to_string(&self.token_file) {
+            Ok(raw) => {
+                let token = raw.trim().to_string();
+                if token.is_empty() {
+                    Err(format!(
+                        "admin.token_file '{}' exists but is empty — refusing to start with auth silently disabled",
+                        self.token_file
+                    ))
+                } else {
+                    Ok(token)
+                }
+            }
+            Err(e) => Err(format!(
+                "admin.token_file '{}' unreadable: {e}",
+                self.token_file
+            )),
+        }
+    }
 }
 
 /// Evaluate-token auth configuration (P0-min).
@@ -226,6 +408,11 @@ impl UpstreamEntry {
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
             return Err("upstream name must not be empty".to_string());
+        }
+        if self.name.trim() == "virbius" {
+            return Err(
+                "upstream name 'virbius' is reserved for the local-exec namespace".to_string(),
+            );
         }
         if !UPSTREAM_TRANSPORTS.contains(&self.transport.as_str()) {
             return Err(format!(
@@ -650,6 +837,35 @@ impl ProxyConfig {
         if let Ok(v) = std::env::var("VIRBIUS_FALLBACK_POLICY") {
             cfg.security.fallback_policy = v;
         }
+        // Local execution (node-level, fail-closed by default).
+        if let Ok(v) = std::env::var("VIRBIUS_LOCAL_EXEC_MODE") {
+            cfg.local_exec.mode = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_LOCAL_EXEC_CODE_BYTES") {
+            if let Ok(n) = v.parse::<usize>() {
+                cfg.local_exec.code_bytes = n;
+            }
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_LOCAL_EXEC_CONCURRENCY") {
+            if let Ok(n) = v.parse::<usize>() {
+                cfg.local_exec.concurrency_global = n;
+            }
+        }
+        // Client HTTP + admin surface.
+        if let Ok(v) = std::env::var("VIRBIUS_HTTP_SIMPLE_POST_ENABLED") {
+            cfg.http.simple_post_enabled = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_HTTP_BODY_LIMIT_BYTES") {
+            if let Ok(n) = v.parse::<usize>() {
+                cfg.http.body_limit_bytes = n;
+            }
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_ADMIN_LISTEN") {
+            cfg.admin.listen = v;
+        }
+        if let Ok(v) = std::env::var("VIRBIUS_ADMIN_TOKEN_FILE") {
+            cfg.admin.token_file = v;
+        }
         if let Ok(v) = std::env::var("VIRBIUS_REDIS_URL") {
             cfg.audit.redis_url = v;
         }
@@ -753,6 +969,15 @@ impl ProxyConfig {
         // Explicit entries are an operator decision: a disabled transport or an
         // invalid entry must fail fast, never be silently ignored.
         if let Err(e) = cfg.validate_explicit_upstreams() {
+            eprintln!("error: {e}");
+            std::process::exit(2);
+        }
+
+        // Admin surface: loopback-only in this release. A non-loopback bind
+        // is a security-relevant misconfiguration (the full /status view has
+        // no auth without a token), so it refuses to start instead of
+        // silently exposing the operator surface to the network.
+        if let Err(e) = cfg.admin.validate_loopback_only() {
             eprintln!("error: {e}");
             std::process::exit(2);
         }
@@ -950,6 +1175,10 @@ pub const HIGH_RISK_TOOLS: &[&str] = &[
     "execute_python",
     "execute_code",
     "execute_node",
+    // `exec_cmd` is a legacy local-exec name (egress::LOCAL_EXEC_TOOLS in
+    // older versions). It must stay HIGH_RISK so a wildcard-less license is
+    // still required to forward a same-named upstream tool.
+    "exec_cmd",
     "read_file",
     "write_file",
     "delete_file",
@@ -1419,5 +1648,104 @@ mod tests {
         assert!(!cfg.trace.enabled);
         assert!(cfg.memory.enabled);
         assert_eq!(cfg.memory.max_entry_size, 8192);
+    }
+
+    fn admin(listen: &str) -> AdminSection {
+        AdminSection {
+            listen: listen.to_string(),
+            token_file: String::new(),
+        }
+    }
+
+    #[test]
+    fn admin_loopback_only_accepts_loopback_binds() {
+        for ok in [
+            "",
+            "127.0.0.1:19400",
+            "localhost:19400",
+            "[::1]:19400",
+            "::1:19400",
+            "tcp://127.0.0.1:19400",
+        ] {
+            assert!(
+                admin(ok).validate_loopback_only().is_ok(),
+                "loopback bind '{ok}' must be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn admin_loopback_only_rejects_external_binds() {
+        for bad in [
+            "0.0.0.0:19400",
+            "192.168.1.8:19400",
+            "10.0.0.1:19400",
+            "[::]:19400",
+            ":19400",
+            "tcp://0.0.0.0:19400",
+        ] {
+            let err = admin(bad)
+                .validate_loopback_only()
+                .err()
+                .unwrap_or_default();
+            assert!(
+                err.contains("non-loopback") || err.contains("missing host"),
+                "external bind '{bad}' must be rejected, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn admin_loopback_only_fails_closed_on_unresolvable_host() {
+        let err = admin("no-such-host.invalid:19400")
+            .validate_loopback_only()
+            .err()
+            .unwrap_or_default();
+        assert!(err.contains("cannot resolve"), "got: {err}");
+    }
+
+    #[test]
+    fn admin_token_empty_path_is_ok_empty() {
+        assert_eq!(admin("").read_token().unwrap(), "");
+    }
+
+    #[test]
+    fn admin_token_rejects_empty_file() {
+        let path = std::env::temp_dir().join(format!(
+            "virbius-admin-empty-{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        std::fs::write(&path, "   \n  ").unwrap();
+        let sec = AdminSection {
+            listen: "127.0.0.1:19400".into(),
+            token_file: path.to_string_lossy().to_string(),
+        };
+        let err = sec.read_token().err().unwrap_or_default();
+        std::fs::remove_file(&path).ok();
+        assert!(err.contains("empty"), "got: {err}");
+    }
+
+    #[test]
+    fn admin_token_reads_and_trims() {
+        let path = std::env::temp_dir().join(format!(
+            "virbius-admin-token-{}-{:x}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        std::fs::write(&path, "  s3cr3t  \n").unwrap();
+        let sec = AdminSection {
+            listen: "127.0.0.1:19400".into(),
+            token_file: path.to_string_lossy().to_string(),
+        };
+        let token = sec.read_token().unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(token, "s3cr3t");
     }
 }

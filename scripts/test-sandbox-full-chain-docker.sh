@@ -13,8 +13,14 @@
 #            empty gvisor_config {} does not impersonate compiled defaults;
 #            populated gvisor_config is applied to the process singleton
 #            (log: runsc path from the rule body);
-#            local-exec sleep returns sandbox_exec_timeout inside the wall
-#            (no unbounded SSE hang)
+#            local exec fails closed when runsc is absent
+#   Phase 4  ops-console API only (no SQLite/Redis reads):
+#            issue/read licenses, publish fallback_policy=audit_only, then
+#            prove no/wildcard license is still denied by the canonical-grant
+#            gate while an explicit grant passes the gate
+#   Phase 5  bounded stdin write + concurrency guard: a test-only runsc stub
+#            blocks on stdin; second concurrent call gets local_exec_busy and
+#            the blocked call returns sandbox_exec_timeout inside the wall
 #
 # Usage:
 #   ./scripts/test-sandbox-full-chain-docker.sh
@@ -65,6 +71,11 @@ command -v jq >/dev/null || err "jq not found"
 command -v python3 >/dev/null || err "python3 not found"
 docker info >/dev/null 2>&1 || err "docker daemon not running"
 
+# Licenses are issued through the control (ops-console) API below — no local
+# key material and no DB/Redis access. Only the public key is materialized as
+# a file so the proxy can verify API-issued JWTs.
+LICENSE_DIR="$(mktemp -d)"
+
 APP_VER=$(grep -m1 '<version>' "$ROOT/pom.xml" | sed 's/.*<version>\(.*\)<\/version>.*/\1/')
 export APP_VER
 JAR="$ROOT/virbius-control/target/virbius-control-${APP_VER}.jar"
@@ -94,8 +105,41 @@ for i in $(seq 1 60); do
 done
 ok "control healthy ($BASE)"
 
-CTL=$("${COMPOSE[@]}" ps -q control)
-[[ -n "$CTL" ]] || err "control container id missing"
+# ─── licenses via ops-console API (user flow) ──────────────────────────────
+# All license state is created/read/revoked through the control HTTP API.
+# Nothing here opens SQLite or Redis directly.
+issue_license() {
+  local tools_json=$1 app=$2 label=$3 resp jwt lic
+  resp=$(api POST "/api/v1/admin/tenants/$TENANT/licenses/issue" \
+    "$(jq -n --arg app "$app" --arg name "sbx-e2e-$label" --argjson tools "$tools_json" \
+      '{app_id:$app,agent_name:$name,allowed_tools:$tools,risk_quota:100,tool_rate_limit:100,expiry_seconds:3600,description:"sandbox full-chain e2e"}')" \
+    ) || return 1
+  jwt=$(echo "$resp" | jq -r '.data.jwt // empty')
+  lic=$(echo "$resp" | jq -r '.data.license_id // empty')
+  [[ -n "$jwt" && -n "$lic" ]] || return 1
+  printf '%s %s' "$jwt" "$lic"
+}
+
+read CANON_JWT CANON_LIC_ID < <(issue_license '["virbius__shell","virbius__python"]' test1 canonical) \
+  || err "could not issue canonical-grant license via API"
+read WILDCARD_JWT WILDCARD_LIC_ID < <(issue_license '[]' test1-wild wildcard) \
+  || err "could not issue wildcard license via API"
+[[ -n "$CANON_JWT" && -n "$WILDCARD_JWT" ]] || err "empty license JWT from API"
+ok "canonical + wildcard licenses issued via ops-console API"
+
+# Issuing a license generates the tenant signing key; the public half is then
+# available through the API for the proxy to verify JWTs presented by agents.
+api GET "/api/v1/admin/tenants/$TENANT/licenses/public-key" \
+  | python3 -c 'import json,sys; open("'"$LICENSE_DIR"'/license.pub.pem","w").write(json.load(sys.stdin)["data"]["public_key_pem"])' \
+  || err "could not read license public key via API"
+[[ -s "$LICENSE_DIR/license.pub.pem" ]] || err "control returned empty license public key"
+ok "license public key read via ops-console API"
+
+LIC_LIST=$(api GET "/api/v1/admin/tenants/$TENANT/licenses/list")
+echo "$LIC_LIST" | jq -e --arg id "$CANON_LIC_ID" \
+  '.data[] | select(.license_id == $id or .licenseId == $id)' >/dev/null \
+  || err "canonical license not visible in /licenses/list"
+ok "issued license visible via /licenses/list"
 
 # ─── helpers ────────────────────────────────────────────────────────────────
 api() {
@@ -138,7 +182,9 @@ rollback_active() {
 }
 
 read_canary_manifest() {
-  docker exec "$CTL" cat "/data/edge/$TENANT/$APP/edge-manifest-canary.json" 2>/dev/null || echo ""
+  # Edge delivery is the ops-console API surface for the compiled manifest;
+  # no direct reads of the control container's data volume.
+  curl -s "$BASE/api/v1/edge/tenants/$TENANT/apps/$APP/manifest?pool=canary" || echo ""
 }
 
 assert_json() {
@@ -333,18 +379,20 @@ fi
 ok "proxy image $PROXY_IMAGE"
 
 start_proxy() {
-  local manifest_dir=$1
+  local manifest_dir=$1; shift
+  local -a extra=("$@")
   docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
   docker run -d --name "$PROXY_NAME" \
+    --network "${PROJECT}_default" \
     -p 19090:9090 \
     -v "$manifest_dir:/app/data/edge/default:ro" \
-    -v "$ROOT/$COMPOSE_DIR/license/license.pub.pem:/etc/virbius/license.pub.pem:ro" \
-    -v "$ROOT/$COMPOSE_DIR/license/license.jwt:/etc/virbius/license.jwt:ro" \
+    -v "$LICENSE_DIR/license.pub.pem:/etc/virbius/license.pub.pem:ro" \
     -e VIRBIUS_TRANSPORT="tcp://0.0.0.0:9090" \
     -e VIRBIUS_UPSTREAM_URL="" \
-    -e VIRBIUS_ALLOW_UNSANDBOXED=true \
+    -e VIRBIUS_LOCAL_EXEC_MODE="gvisor" \
+    -e VIRBIUS_REDIS_URL="redis://redis:6379" \
     -e VIRBIUS_LICENSE_PUBLIC_KEY=/etc/virbius/license.pub.pem \
-    -e VIRBIUS_LICENSE_FILE=/etc/virbius/license.jwt \
+    "${extra[@]}" \
     -e HTTP_PROXY="" -e HTTPS_PROXY="" -e http_proxy="" -e https_proxy="" \
     "$PROXY_IMAGE" >/dev/null
   local i
@@ -419,45 +467,33 @@ EP=$(mcp_read 20)
 SID=$(echo "$EP" | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
 [[ -n "$SID" ]] || { mcp_close "$TMP"; docker logs "$PROXY_NAME" | tail -20; err "SSE session_id missing: $EP"; }
 ok "MCP session $SID"
-mcp_post "$SID" 1 initialize '{"_meta":{"app_id":"test1"}}'
+mcp_post "$SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" \
+  '{_meta:{app_id:"test1",tenant_id:"docker-sbx-e2e",license_jwt:$jwt}}')"
 INIT=$(mcp_wait_id 1 20)
 echo "$INIT" | jq -e '.result.serverInfo' >/dev/null || { mcp_close "$TMP"; err "initialize failed: $INIT"; }
 ok "MCP initialize"
 
 mcp_post "$SID" 2 tools/list '{}'
 LIST=$(mcp_wait_id 2 20)
-echo "$LIST" | jq -e '.result.tools[] | select(.name=="execute_python")' >/dev/null \
-  || { mcp_close "$TMP"; err "execute_python missing from tools/list"; }
-ok "local execute_python injected"
+echo "$LIST" | jq -e '.result.tools[] | select(.name=="virbius__python")' >/dev/null \
+  || { mcp_close "$TMP"; err "virbius__python missing from tools/list"; }
+ok "local virbius__python advertised (license grant)"
 
-# timeout_ms=3000 + WALL_SLACK 2s → JSON-RPC well before 20s
-info "3c. execute_python sleep 30 must return sandbox_exec_timeout (wall), not hang"
-START=$SECONDS
-mcp_post "$SID" 10 tools/call \
-  '{"name":"execute_python","arguments":{"code":"import time; time.sleep(30)"}}'
-TO=$(mcp_wait_id 10 20)
-ELAPSED=$((SECONDS - START))
-MSG=$(echo "$TO" | jq -r '.error.message // .result.content[0].text // empty' 2>/dev/null || echo "")
-if echo "$MSG" | grep -qi "sandbox_exec_timeout\|timeout"; then
-  ok "sleep returned timeout in ${ELAPSED}s (wall; message=${MSG:0:80})"
+info "3c. empty gvisor_config: local exec must fail closed (sandbox_unavailable)"
+mcp_post "$SID" 10 tools/call '{"name":"virbius__shell","arguments":{"command":"echo gvisor-empty"}}'
+EMPTY_EXEC=$(mcp_wait_id 10 20)
+ESBOX=$(echo "$EMPTY_EXEC" | jq -r '.result._meta.sandbox_used // empty')
+EERR=$(echo "$EMPTY_EXEC" | jq -r '.error.message // empty')
+if [[ -n "$ESBOX" ]]; then
+  mcp_close "$TMP"
+  err "empty gvisor_config must NOT execute local code (sandbox_used=$ESBOX): $EMPTY_EXEC"
+fi
+if echo "$EERR" | grep -qi "sandbox_unavailable"; then
+  ok "empty gvisor_config: sandbox_unavailable (fail-closed, not unsandboxed)"
 else
   mcp_close "$TMP"
-  err "expected sandbox_exec_timeout within ~20s, elapsed=${ELAPSED}s got=${TO:0:240}"
+  err "expected sandbox_unavailable with empty gvisor_config, got: $EMPTY_EXEC"
 fi
-if (( ELAPSED > 18 )); then
-  err "wall took ${ELAPSED}s — still hanging (want << 20s for timeout_ms=3000)"
-fi
-
-mcp_post "$SID" 11 tools/call '{"name":"exec_cmd","arguments":{"command":"echo gvisor-empty"}}'
-EMPTY_EXEC=$(mcp_wait_id 11 25)
-META_MEM=$(echo "$EMPTY_EXEC" | jq -r '.result._meta.gvisor_memory_limit_bytes // empty')
-SBOX=$(echo "$EMPTY_EXEC" | jq -r '.result._meta.sandbox_used // empty')
-DEG=$(echo "$EMPTY_EXEC" | jq -r '.result._meta.degraded // empty')
-if [[ -n "$META_MEM" ]]; then
-  mcp_close "$TMP"
-  err "empty gvisor_config must not expose gvisor_memory_limit_bytes=$META_MEM (Default impersonation)"
-fi
-ok "empty gvisor_config: no delivered limits in _meta (sandbox_used=$SBOX degraded=$DEG)"
 mcp_close "$TMP"
 
 info "3d. restart proxy with populated gvisor_config — singleton apply from rule body"
@@ -476,20 +512,151 @@ mcp_session "$TMP"
 EP=$(mcp_read 20)
 SID=$(echo "$EP" | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
 [[ -n "$SID" ]] || { mcp_close "$TMP"; err "SSE session_id missing after restart"; }
-mcp_post "$SID" 1 initialize '{"_meta":{"app_id":"test1"}}'
+mcp_post "$SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" \
+  '{_meta:{app_id:"test1",tenant_id:"docker-sbx-e2e",license_jwt:$jwt}}')"
 mcp_wait_id 1 20 >/dev/null
-mcp_post "$SID" 12 tools/call '{"name":"exec_cmd","arguments":{"command":"echo gvisor-populated"}}'
+mcp_post "$SID" 12 tools/call '{"name":"virbius__shell","arguments":{"command":"echo gvisor-populated"}}'
 POP=$(mcp_wait_id 12 25)
-POP_MEM=$(echo "$POP" | jq -r '.result._meta.gvisor_memory_limit_bytes // empty')
-if [[ "$POP_MEM" == "$GVISOR_MEM" ]]; then
-  ok "exec _meta.gvisor_memory_limit_bytes=$POP_MEM (rule body reached runtime)"
+PBOX=$(echo "$POP" | jq -r '.result._meta.sandbox_used // empty')
+PERR=$(echo "$POP" | jq -r '.error.message // empty')
+if [[ -n "$PBOX" ]]; then
+  # Only possible when the configured runsc path actually exists.
+  ok "exec ran with sandbox_used=$PBOX (rule body reached runtime)"
+elif echo "$PERR" | grep -qi "sandbox_unavailable"; then
+  # The fixture runsc path is intentionally absent: apply is proven by the
+  # log assertions above, and the call must fail closed, not degrade.
+  ok "populated config with missing runsc: sandbox_unavailable (fail-closed)"
 else
-  # runsc missing → degrade; apply was already proven via logs.
-  ok "exec degraded without runsc (_meta mem='$POP_MEM'); apply already logged from rule body"
+  mcp_close "$TMP"
+  err "unexpected populated-config result: $POP"
 fi
 mcp_close "$TMP"
 rm -rf "$TMP"
 docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
+
+# ─── Phase 4: authorization gate with audit_only, driven by ops-console API ──
+# Real user flow: operator publishes fallback_policy=audit_only; an agent that
+# presents no license (or only a wildcard license) must still be refused local
+# code execution. The gate must fire before the pipeline can record an allow.
+info "4a. publish fallback_policy=audit_only through the ops-console API"
+api PUT "/api/v1/admin/tenants/$TENANT/proxy-policy" \
+  "$(jq -n '{session_ttl_secs:3600,fallback_policy:"audit_only"}')" >/dev/null
+PP=$(api GET "/api/v1/admin/tenants/$TENANT/proxy-policy")
+assert_json "$PP" "d.get('data',{}).get('fallback_policy')" "audit_only" \
+  "proxy-policy fallback_policy via API"
+ok "audit_only fallback published and read back via API"
+
+TMP=$(mktemp -d /tmp/sbx-gate.XXXXXX)
+start_proxy "$ROOT/$COMPOSE_DIR/populated" || err "proxy failed to start (audit_only gate)"
+sleep 2
+
+gate_probe() {
+  local label=$1 jwt=$2 app=$3 want_code=$4 want_reason=$5
+  local d="$TMP/gate-$label" sid init resp got reason sbox
+  mkdir -p "$d"
+  mcp_session "$d"
+  sid=$(mcp_read 20 | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
+  [[ -n "$sid" ]] || { mcp_close "$d"; err "SSE session_id missing for $label"; }
+  mcp_post "$sid" 1 initialize "$(jq -n --arg jwt "$jwt" --arg t "$TENANT" --arg a "$app" \
+    '{_meta:{app_id:$a,tenant_id:$t} + (if $jwt=="" then {} else {license_jwt:$jwt} end)}')"
+  init=$(mcp_wait_id 1 20)
+  echo "$init" | jq -e '.result.serverInfo' >/dev/null \
+    || { mcp_close "$d"; err "initialize failed for $label: $init"; }
+  mcp_post "$sid" 2 tools/call '{"name":"virbius__shell","arguments":{"command":"echo gate"}}'
+  resp=$(mcp_wait_id 2 25)
+  mcp_close "$d"
+  got=$(echo "$resp" | jq -r '.error.code // empty')
+  reason=$(echo "$resp" | jq -r '.error.data.reason_code // empty')
+  sbox=$(echo "$resp" | jq -r '.result._meta.sandbox_used // empty')
+  [[ -z "$sbox" ]] || err "$label must not execute local code (sandbox_used=$sbox): $resp"
+  if [[ "$got" == "$want_code" ]] && [[ "$reason" == "$want_reason" ]]; then
+    ok "$label -> $got / $want_reason (audited as block, no allow)"
+  else
+    err "$label: got $got / $reason, want $want_code / $want_reason: $resp"
+  fi
+}
+
+info "4b. no license + audit_only must be denied by the canonical-grant gate"
+gate_probe "no-license" "" "test1" "-32016" "local_exec_not_granted"
+
+info "4c. wildcard license (empty allowed_tools) must also be denied"
+gate_probe "wildcard" "$WILDCARD_JWT" "test1-wild" "-32016" "local_exec_not_granted"
+
+info "4d. explicit canonical grant passes the gate (fails closed at absent runsc)"
+gate_probe "canonical" "$CANON_JWT" "test1" "-32018" "sandbox_unavailable"
+
+info "4e. operator restores minimum_privilege through the API"
+api PUT "/api/v1/admin/tenants/$TENANT/proxy-policy" \
+  '{"session_ttl_secs":1800,"fallback_policy":"minimum_privilege"}' >/dev/null
+PP=$(api GET "/api/v1/admin/tenants/$TENANT/proxy-policy")
+assert_json "$PP" "d.get('data',{}).get('fallback_policy')" "minimum_privilege" \
+  "proxy-policy restored via API"
+docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
+
+# ─── Phase 5: bounded stdin write + concurrency guard under blocking exec ──
+# A stand-in runsc accepts the OCI run but never reads the payload stream, so
+# a large script fills the pipe and the stdin write would block forever without
+# the new deadline. The fake lives only in this test harness.
+info "5a. install test-only runsc stub that never drains stdin"
+FAKE_RUNSC_DIR=$(mktemp -d /tmp/sbx-runsc.XXXXXX)
+cat > "$FAKE_RUNSC_DIR/runsc" <<'EOF'
+#!/bin/sh
+case " $* " in
+  *" run "*) exec sleep 60 ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$FAKE_RUNSC_DIR/runsc"
+ok "runsc stub ready (run -> sleep 60, delete -> exit 0)"
+
+info "5b. proxy with concurrency=1 and a blocking gVisor container"
+start_proxy "$ROOT/$COMPOSE_DIR/populated" \
+  -v "$FAKE_RUNSC_DIR:/fake-runsc:ro" \
+  -e VIRBIUS_RUNSC_PATH=/fake-runsc/runsc \
+  -e VIRBIUS_GVISOR_ROOTFS=/tmp/virbius-rootfs \
+  -e VIRBIUS_LOCAL_EXEC_CONCURRENCY=1 \
+  -e VIRBIUS_LOCAL_EXEC_CODE_BYTES=200000 \
+  || err "proxy failed to start (concurrency probe)"
+sleep 2
+
+TMP=$(mktemp -d /tmp/sbx-concurrency.XXXXXX)
+mcp_session "$TMP"
+SID=$(mcp_read 20 | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
+[[ -n "$SID" ]] || { mcp_close "$TMP"; err "SSE session_id missing for concurrency probe"; }
+mcp_post "$SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" --arg t "$TENANT" \
+  '{_meta:{app_id:"test1",tenant_id:$t,license_jwt:$jwt}}')"
+mcp_wait_id 1 20 >/dev/null
+
+BIG_CODE=$(python3 -c 'print("x" * 150000)')
+BIG_PARAM=$(jq -n --arg c "$BIG_CODE" '{name:"virbius__shell",arguments:{command:$c}}')
+mcp_post "$SID" 20 tools/call "$BIG_PARAM"
+mcp_post "$SID" 21 tools/call "$BIG_PARAM"
+R20=$(mcp_wait_id 20 40)
+R21=$(mcp_wait_id 21 40)
+mcp_close "$TMP"
+
+BUSY=false
+TIMEOUT=false
+for r in "$R20" "$R21"; do
+  c=$(echo "$r" | jq -r '.error.code // empty')
+  m=$(echo "$r" | jq -r '.error.message // empty')
+  s=$(echo "$r" | jq -r '.result._meta.sandbox_used // empty')
+  [[ -z "$s" ]] || err "blocking exec must not report sandbox_used: $r"
+  if [[ "$c" == "-32019" ]]; then BUSY=true; fi
+  if [[ "$c" == "-32603" ]] && echo "$m" | grep -qi "sandbox_exec_timeout"; then TIMEOUT=true; fi
+done
+if $BUSY; then ok "second concurrent call rejected with local_exec_busy (-32019)"; else err "missing local_exec_busy: $R20 / $R21"; fi
+if $TIMEOUT; then ok "blocked exec returned bounded sandbox_exec_timeout (stdin write deadline)"; else err "missing bounded stdin timeout: $R20 / $R21"; fi
+
+docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
+rm -rf "$FAKE_RUNSC_DIR"
+
+info "5c. revoke API-issued licenses through the ops-console API"
+api POST "/api/v1/admin/tenants/$TENANT/licenses/$CANON_LIC_ID/revoke" \
+  '{"reason":"sandbox e2e cleanup"}' >/dev/null
+api POST "/api/v1/admin/tenants/$TENANT/licenses/$WILDCARD_LIC_ID/revoke" \
+  '{"reason":"sandbox e2e cleanup"}' >/dev/null
+ok "licenses revoked via API"
 
 echo ""
 echo -e "${GREEN}============================================================${NC}"
@@ -500,6 +667,11 @@ echo "  [x] canary/full writes gVisor rule body (mem/min_warm/exec_timeout/runsc
 echo "  [x] dry_run→full hard-banned"
 echo "  [x] empty {} does not impersonate Default pool limits"
 echo "  [x] populated gvisor_config applied to process singleton"
-echo "  [x] MCP local-exec wall returns sandbox_exec_timeout (no hang)"
+echo "  [x] licenses issued/read/revoked via ops-console API (no DB/Redis reads)"
+echo "  [x] manifest assertions read from edge-delivery API (no container FS reads)"
+echo "  [x] audit_only + no/wildcard license -> local_exec_not_granted (-32016)"
+echo "  [x] canonical grant passes the gate and fails closed at sandbox"
+echo "  [x] concurrency=1 holds slot during blocking exec (local_exec_busy)"
+echo "  [x] stdin write bounded -> sandbox_exec_timeout (no unbounded hang)"
 echo "Cleanup: ./scripts/test-sandbox-full-chain-docker.sh --cleanup"
 exit 0

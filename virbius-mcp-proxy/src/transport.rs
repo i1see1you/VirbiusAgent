@@ -163,19 +163,66 @@ pub struct AppState {
     pub status: Arc<StatusInfo>,
 }
 
-/// Create the axum router with all routes.
-pub fn create_router(state: AppState) -> Router {
-    Router::new()
+/// Create the axum router with the client-facing routes.
+///
+/// `GET /status` is deliberately NOT here (it moved to the admin listener:
+/// the full view contains license claims, upstream/engine/control URLs and
+/// recent decisions, none of which a client should see). `POST /` is only
+/// registered when `simple_post_enabled` — the stateless endpoint bypasses
+/// the SSE session/identity binding.
+pub fn create_router(state: AppState, simple_post_enabled: bool, body_limit: usize) -> Router {
+    let mut router = Router::new()
         // Health check endpoint (for Docker HEALTHCHECK and orchestration)
         .route("/health", get(handle_health))
-        // Operator surface: config summary + fallback license + recent decisions
-        .route("/status", get(handle_status))
         // MCP SSE protocol
         .route("/sse", get(handle_sse))
-        .route("/messages/", post(handle_post_message))
-        // Simple HTTP POST (for non-SSE clients and testing)
-        .route("/", post(handle_simple_post))
+        .route("/messages/", post(handle_post_message));
+    if simple_post_enabled {
+        router = router.route("/", post(handle_simple_post));
+    }
+    router
+        .layer(axum::extract::DefaultBodyLimit::max(body_limit))
         .with_state(state)
+}
+
+/// Create the admin router: operator surface on a separate listener.
+/// Serves the FULL /status (the view removed from the client port).
+/// When `token` is non-empty, requests must carry
+/// `Authorization: Bearer <token>`.
+pub fn create_admin_router(state: AppState, token: String) -> Router {
+    let mut router = Router::new()
+        .route("/health", get(handle_health))
+        .route("/status", get(handle_status))
+        .with_state(state);
+    if !token.is_empty() {
+        let expected = token;
+        router = router.layer(axum::middleware::from_fn(
+            move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+                let expected = expected.clone();
+                async move {
+                    let ok = req
+                        .headers()
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .map(|v| v == expected || v == format!("Bearer {expected}"))
+                        .unwrap_or(false);
+                    if ok {
+                        Ok(next.run(req).await)
+                    } else {
+                        Err(axum::http::StatusCode::UNAUTHORIZED)
+                    }
+                }
+            },
+        ));
+    }
+    router
+}
+
+/// Bind and serve the admin listener.
+pub async fn serve_admin(addr: String, state: AppState, token: String) -> std::io::Result<()> {
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    tracing::info!("admin listener on {}", addr);
+    axum::serve(listener, create_admin_router(state, token)).await
 }
 
 /// GET /health — Health check endpoint.

@@ -193,6 +193,30 @@ async fn main() {
     // Transport connection ID -> logical session ID mapping
     let conn_to_session: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
 
+    // Node-level local-exec settings (P1d): mode / payload / concurrency.
+    // First-wins OnceLock; tests initialize their own process-local value.
+    virbius_mcp_proxy::router::init_local_exec_settings(
+        virbius_mcp_proxy::router::LocalExecSettings {
+            mode: match cfg.local_exec.mode.as_str() {
+                "gvisor" => virbius_mcp_proxy::router::LocalExecMode::Gvisor,
+                "disabled" => virbius_mcp_proxy::router::LocalExecMode::Disabled,
+                other => {
+                    error!(
+                        "unknown local_exec.mode '{}' (expected 'disabled' or 'gvisor'); refusing to start",
+                        other
+                    );
+                    std::process::exit(2);
+                }
+            },
+            code_bytes: cfg.local_exec.code_bytes,
+            concurrency: cfg.local_exec.concurrency_global,
+        },
+    );
+    info!(
+        "local exec: mode={} code_bytes={} concurrency={}",
+        cfg.local_exec.mode, cfg.local_exec.code_bytes, cfg.local_exec.concurrency_global
+    );
+
     // Start transport
     let listen = cfg.proxy.listen.clone();
     // Config snapshot for GET /status (operator surface): built here where the
@@ -245,6 +269,28 @@ async fn main() {
             .strip_prefix("tcp://")
             .or_else(|| listen.strip_prefix("http://"))
             .unwrap_or("0.0.0.0:9090");
+        // Admin bearer token: optional on loopback (the only allowed bind in
+        // this release); a configured-but-empty token file fails fast.
+        let admin_token = match cfg.admin.read_token() {
+            Ok(t) => t,
+            Err(e) => {
+                error!("{e}");
+                std::process::exit(2);
+            }
+        };
+        if cfg.admin.listen.is_empty() {
+            info!("admin surface disabled (admin.listen is empty)");
+        } else {
+            info!(
+                "admin surface on {} (bind: loopback-only; auth: {})",
+                cfg.admin.listen,
+                if admin_token.is_empty() {
+                    "no token"
+                } else {
+                    "bearer token required"
+                }
+            );
+        }
         run_sse(
             addr,
             session_mgr,
@@ -257,6 +303,10 @@ async fn main() {
             trace_collector,
             conn_to_session,
             status_info,
+            cfg.http.simple_post_enabled,
+            cfg.http.body_limit_bytes,
+            cfg.admin.listen.clone(),
+            admin_token,
         )
         .await;
     } else {
@@ -341,10 +391,14 @@ async fn run_stdio(
 
 /// Run in SSE/HTTP transport mode (axum-based).
 ///
-/// Exposes three routes:
+/// Client-facing routes:
 /// - `GET /sse` — MCP SSE server endpoint
 /// - `POST /messages/?session_id=xxx` — MCP SSE message endpoint
-/// - `POST /` — Simple HTTP JSON-RPC endpoint
+/// - `POST /` — only when explicitly enabled (`http.simple_post_enabled`;
+///   the stateless endpoint bypasses SSE session/identity binding)
+///
+/// `GET /status` no longer lives here: the full operator view moved to the
+/// admin listener (`admin.listen`).
 ///
 /// Also starts a background task that cleans up expired sessions every 60 seconds.
 #[allow(clippy::too_many_arguments)]
@@ -360,6 +414,10 @@ async fn run_sse(
     trace_collector: Arc<TraceCollector>,
     conn_to_session: Arc<DashMap<String, String>>,
     status: Arc<virbius_mcp_proxy::transport::StatusInfo>,
+    http_simple_post_enabled: bool,
+    http_body_limit_bytes: usize,
+    admin_listen: String,
+    admin_token: String,
 ) {
     info!("SSE/HTTP transport mode on {}", addr);
 
@@ -398,7 +456,22 @@ async fn run_sse(
         status,
     };
 
-    let app = transport::create_router(state);
+    // Admin surface (P1b): full /status on a separate, token-protected
+    // listener. Disabled when `admin.listen` is empty.
+    if !admin_listen.is_empty() {
+        let admin_state = state.clone();
+        let admin_addr = admin_listen.clone();
+        let token = admin_token.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                virbius_mcp_proxy::transport::serve_admin(admin_addr, admin_state, token).await
+            {
+                error!("admin listener failed: {e}");
+            }
+        });
+    }
+
+    let app = transport::create_router(state, http_simple_post_enabled, http_body_limit_bytes);
 
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(l) => l,

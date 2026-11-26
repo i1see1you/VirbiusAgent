@@ -109,6 +109,9 @@ docs/memory/
 # Evaluation module — split to i1see1you/VirbiusEvaluation
 virbius-evaluation/
 
+# Discovery module — split to i1see1you/VirbiusDiscovery
+virbius-discovery/
+
 # maturin editable-install artifacts (built into the mixed python-source tree)
 virbius-mcp-python/python/virbius_mcp_python/*.so
 # napi-rs native binaries (built locally / in CI, not committed)
@@ -117,6 +120,11 @@ virbius-mcp-node/*.node
 .env.evaluation
 docker-compose.evaluation.yml
 data/evaluation-license/
+
+# virbius-discovery 一键安装生成的本地文件
+.env.discovery
+docker-compose.discovery.yml
+data/discovery-license/
 
 # AI-assistant skills are local tooling, not product source.
 # Removed from the index on 2026-11-14; local copies are kept.

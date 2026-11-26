@@ -22,19 +22,34 @@ const MAX_REDIRECTS: usize = 5;
 /// Tools that trigger egress proxy behavior.
 const EGRESS_TOOLS: &[&str] = &["curl", "http_request", "fetch", "web_search", "http_get"];
 
-/// Local code-execution tools executed by the proxy itself in a sandbox
-/// (none/landlock/gvisor). These are never forwarded to an upstream.
+/// Local code-execution tools executed by the proxy itself in a gVisor
+/// sandbox. These are never forwarded to an upstream.
 ///
-/// Each entry: (tool_name, language, code_arg).
+/// Canonical namespace: `virbius__<name>` (the `virbius` pseudo-upstream is
+/// reserved — config loading rejects any upstream with that name, so the
+/// namespace can never collide with a real upstream tool).
+///
+/// Each entry: (canonical_name, language, code_arg).
 pub const LOCAL_EXEC_TOOLS: &[(&str, &str, &str)] = &[
-    ("shell", "shell", "command"),
-    ("execute_python", "python", "code"),
-    ("execute_code", "python", "code"),
-    ("execute_node", "node", "code"),
-    ("exec_cmd", "shell", "command"),
+    ("virbius__shell", "shell", "command"),
+    ("virbius__python", "python", "code"),
+    ("virbius__node", "node", "code"),
 ];
 
-/// If `tool_name` is a local code-execution tool, returns `(language, code_arg)`.
+/// Legacy bare names that used to be local-exec tools. They no longer
+/// execute locally — a call with one of these names is routed to the upstream
+/// like any other tool. Kept only to emit migration hints and to keep the
+/// `exec_cmd` HIGH_RISK entry meaningful for upstream forwarding.
+pub const LEGACY_LOCAL_NAMES: &[&str] = &[
+    "shell",
+    "execute_python",
+    "execute_code",
+    "execute_node",
+    "exec_cmd",
+];
+
+/// If `tool_name` is a local code-execution tool (exact canonical match),
+/// returns `(language, code_arg)`.
 pub fn local_exec_info(tool_name: &str) -> Option<(&'static str, &'static str)> {
     LOCAL_EXEC_TOOLS
         .iter()
@@ -42,19 +57,28 @@ pub fn local_exec_info(tool_name: &str) -> Option<(&'static str, &'static str)> 
         .map(|(_, lang, arg)| (*lang, *arg))
 }
 
+/// True if `tool_name` is one of the legacy bare local-exec names.
+pub fn is_legacy_local_name(tool_name: &str) -> bool {
+    LEGACY_LOCAL_NAMES.contains(&tool_name)
+}
+
 /// Synthesized tool descriptors for local code-execution tools, injected into
-/// `tools/list` so agents can discover and call them.
-pub fn local_exec_tool_descriptors() -> Vec<Value> {
+/// `tools/list` so agents can discover and call them. Only the tools the
+/// session's license explicitly grants are injected (wildcard licenses never
+/// imply local execution).
+pub fn local_exec_tool_descriptors(granted: &[String]) -> Vec<Value> {
     LOCAL_EXEC_TOOLS
         .iter()
+        .filter(|(name, _, _)| granted.iter().any(|g| g == name))
         .map(|&(name, _lang, code_arg)| {
             let desc = match name {
-                "shell" => "Execute a shell command (sandboxed locally by virbius proxy)",
-                "execute_python" | "execute_code" => {
-                    "Execute Python code (sandboxed locally by virbius proxy)"
+                "virbius__shell" => {
+                    "Execute a shell command (sandboxed in gVisor by the virbius proxy)"
                 }
-                "execute_node" => "Execute Node.js code (sandboxed locally by virbius proxy)",
-                _ => "Execute code (sandboxed locally by virbius proxy)",
+                "virbius__python" => {
+                    "Execute Python code (sandboxed in gVisor by the virbius proxy)"
+                }
+                _ => "Execute Node.js code (sandboxed in gVisor by the virbius proxy)",
             };
             serde_json::json!({
                 "name": name,

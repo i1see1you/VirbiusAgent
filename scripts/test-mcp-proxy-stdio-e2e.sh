@@ -9,9 +9,9 @@
 # Checks:
 #   * initialize / tools/list / tools/call work over stdio
 #   * allowlisted tool -> ok; non-allowlisted tool -> not_in_allowlist
-#   * the `virbius/status` JSON-RPC method returns the license summary + recent
-#     decisions (stdio has no HTTP GET /status, so the operator surface rides
-#     the same wire)
+#   * the `virbius/status` JSON-RPC method returns a TRIMMED runtime snapshot
+#     (version / local_exec mode / session count) and must NOT leak license
+#     claims or recent decisions (an agent can call this method over stdio)
 #   * upstream=stdio: the proxy spawns a local MCP child and proxies a call
 #   * the emitted audit events still carry the canonical field names (Kafka)
 #     and land in control (decision-bom via the ops API)
@@ -167,10 +167,12 @@ check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if d.get("allow",{}).get("r
       "stdio: allowlisted tool (read_doc) returned a result"
 check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if d.get("block",{}).get("error",{}).get("code")==-32004 and "allowlist" in str(d.get("block",{}).get("error",{}).get("message","")) else "0")')" \
       "stdio: non-allowlisted tool denied (-32004, message names the allowlist)"
-check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if d.get("status",{}).get("result",{}).get("fallback_license",{}).get("verified",{}).get("ok") is True else "0")')" \
-      "stdio: virbius/status verifies the fallback license"
-check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if isinstance(d.get("status",{}).get("result",{}).get("recent_decisions"),list) and len(d.get("status",{}).get("result",{}).get("recent_decisions"))>=1 else "0")')" \
-      "stdio: virbius/status exposes recent decisions"
+check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if d.get("status",{}).get("result",{}).get("version") else "0")')" \
+      "stdio: virbius/status reports the proxy version"
+check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if d.get("status",{}).get("result",{}).get("local_exec",{}).get("mode") in ("disabled","gvisor") else "0")')" \
+      "stdio: virbius/status reports the local_exec mode"
+check "$(printf '%s' "$CLIENT_OUT" | jget 'print("1" if "fallback_license" not in d.get("status",{}).get("result",{}) and "recent_decisions" not in d.get("status",{}).get("result",{}) else "0")')" \
+      "stdio: virbius/status must NOT leak license claims or recent decisions"
 
 # ── audit wiring still holds in stdio mode (Kafka wire + control ingest) ────
 info "E2E: stdio mode still audits (Kafka wire + control ingest)"

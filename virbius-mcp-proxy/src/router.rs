@@ -23,6 +23,86 @@ use virbius_core::{
 /// Only applied when the same tool name exists on multiple upstreams.
 const TOOL_PREFIX_SEP: &str = "__";
 
+// ── Node-level local-exec settings (P1d) ────────────────────────────────────
+//
+// Local code execution is gvisor-only and fail-closed: without an explicit
+// node `local_exec.mode = "gvisor"` it is disabled, and no unsandboxed /
+// Landlock fallback exists. Initialized once at startup from config; tests
+// call `init_local_exec_settings` to opt in.
+
+/// Local execution mode. `Disabled` is the safe default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalExecMode {
+    Disabled,
+    Gvisor,
+}
+
+impl LocalExecMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Gvisor => "gvisor",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalExecSettings {
+    pub mode: LocalExecMode,
+    /// Maximum accepted code/command payload (bytes).
+    pub code_bytes: usize,
+    /// Maximum concurrent local executions on this node (reject above).
+    pub concurrency: usize,
+}
+
+impl Default for LocalExecSettings {
+    fn default() -> Self {
+        Self {
+            mode: LocalExecMode::Disabled,
+            code_bytes: 64 * 1024,
+            concurrency: 8,
+        }
+    }
+}
+
+static LOCAL_EXEC_SETTINGS: std::sync::OnceLock<LocalExecSettings> = std::sync::OnceLock::new();
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+static LOCAL_EXEC_INFLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Initialize node-level local-exec settings from config. Called once at
+/// startup; later calls are ignored (first wins, matching OnceLock).
+pub fn init_local_exec_settings(settings: LocalExecSettings) {
+    let _ = LOCAL_EXEC_SETTINGS.set(settings);
+}
+
+fn local_exec_settings() -> LocalExecSettings {
+    LOCAL_EXEC_SETTINGS.get().cloned().unwrap_or_default()
+}
+
+/// Rejection-based in-flight guard: local exec rejects overload instead of
+/// queueing unboundedly (per-tenant fair queues arrive with P3).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+struct InflightGuard;
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl InflightGuard {
+    fn acquire(max: usize) -> Option<Self> {
+        let cur = LOCAL_EXEC_INFLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if cur >= max {
+            LOCAL_EXEC_INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            return None;
+        }
+        Some(Self)
+    }
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        LOCAL_EXEC_INFLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// Process a single JSON-RPC request and return a response.
 ///
 /// `transport_session_id` identifies the transport connection (SSE channel, stdio).
@@ -93,16 +173,12 @@ pub async fn route_request(
             .await
         }
         _ => {
-            // stdio has no HTTP surface, so expose the same runtime snapshot as
-            // GET /status over JSON-RPC. Deliberately a local, namespaced method
-            // (never forwarded upstream).
+            // stdio has no HTTP surface, so expose a TRIMMED runtime snapshot
+            // over JSON-RPC (operator diagnostics only). License claims and
+            // the recent-decisions ring are served by the admin listener, not
+            // here: an agent (LLM) can call this method over stdio too.
             if method == "virbius/status" {
-                return Some(virbius_status_response(
-                    &id,
-                    session_mgr,
-                    public_key_pem,
-                    fallback_license_jwt,
-                ));
+                return Some(virbius_status_response(&id, session_mgr));
             }
             // Transparent forward for all other methods
             if is_notification {
@@ -187,42 +263,21 @@ pub async fn route_request(
 /// state (risk_score, tool_call_count, trace_id, step_seq) is preserved.
 #[allow(clippy::too_many_arguments)]
 /// Build the `virbius/status` JSON-RPC response (stdio has no HTTP surface).
-/// Mirrors the operator-visible parts of `GET /status` that don't need HTTP
-/// config: the fallback license summary + the recent-decisions ring.
-fn virbius_status_response(
-    id: &Value,
-    session_mgr: &SessionManager,
-    public_key_pem: &str,
-    fallback_license_jwt: &str,
-) -> Value {
-    let license = if fallback_license_jwt.is_empty() {
-        Value::Null
-    } else if let Some(claims) = crate::session::extract_claims_from_jwt(fallback_license_jwt) {
-        let app_id = claims.get("app_id").and_then(|v| v.as_str()).unwrap_or("");
-        let verified =
-            match virbius_core::License::verify(fallback_license_jwt, public_key_pem, app_id) {
-                Ok(_) => serde_json::json!({"ok": true}),
-                Err(e) => serde_json::json!({"ok": false, "error": e.to_string()}),
-            };
-        serde_json::json!({
-            "decoded": true,
-            "app_id": app_id,
-            "tenant_id": claims.get("tenant_id").and_then(|v| v.as_str()),
-            "allowed_tools": claims.get("allowed_tools").cloned().unwrap_or(serde_json::json!([])),
-            "expires_at": claims.get("exp").and_then(|v| v.as_i64()).unwrap_or(0),
-            "verified": verified,
-        })
-    } else {
-        serde_json::json!({"decoded": false, "error": "malformed JWT"})
-    };
+/// Trimmed operator snapshot: version, session count, local-exec mode. No
+/// license claims and no recent decisions — those belong to the admin
+/// listener, not to a channel any agent can speak on.
+fn virbius_status_response(id: &Value, session_mgr: &SessionManager) -> Value {
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,
         "result": {
             "version": env!("CARGO_PKG_VERSION"),
             "sessions_active": session_mgr.len(),
-            "fallback_license": license,
-            "recent_decisions": crate::audit::recent_decisions(),
+            "local_exec": {
+                "mode": local_exec_settings().mode.as_str(),
+                "canonical": ["virbius__shell", "virbius__python", "virbius__node"],
+                "sandbox": "gvisor"
+            },
         }
     })
 }
@@ -256,6 +311,40 @@ pub(crate) async fn handle_initialize(
     }
 
     let logical_sid = session.session_id.clone();
+
+    // Session identity binding (P1c): once a transport is bound to a logical
+    // session, a second initialize on the SAME transport may only re-confirm
+    // that session — switching logical sessions (and thus identity/license)
+    // on one connection is rejected.
+    if let Some(existing) = conn_to_session.get(transport_session_id) {
+        let bound_sid = existing.value().clone();
+        if bound_sid != logical_sid {
+            return Some(jsonrpc_error_simple(
+                VirbiusErrorCode::SessionIdentityMismatch,
+                id.clone(),
+                "",
+                &session.trace_id,
+                0,
+                Some(&format!(
+                    "this connection is already bound to session '{}'; initializing a different session_id on the same connection is not allowed",
+                    bound_sid
+                )),
+            ));
+        }
+    }
+    // Reconnect: the original session's identity (app/tenant) must match.
+    if let Some(old) = session_mgr.get(&logical_sid) {
+        if old.app_id != session.app_id || old.tenant_id != session.tenant_id {
+            return Some(jsonrpc_error_simple(
+                VirbiusErrorCode::SessionIdentityMismatch,
+                id.clone(),
+                "",
+                &session.trace_id,
+                0,
+                Some("reconnect requires the same app_id/tenant identity as the original session"),
+            ));
+        }
+    }
 
     // Reconnect: preserve accumulated state from the previous connection
     let is_reconnect = session_mgr.get(&logical_sid).is_some();
@@ -476,7 +565,9 @@ async fn handle_tools_list(
         });
 
         match upstream.forward(&forward_req).await {
-            Ok(resp) => filter_tools_list(inject_local_tools(resp), &session),
+            Ok(resp) => {
+                filter_tools_list(inject_local_tools(resp, &session.allowed_tools), &session)
+            }
             Err(e) => Some(upstream_rpc_error(id, "upstream tools/list failed", &e)),
         }
     } else {
@@ -532,8 +623,8 @@ async fn handle_tools_list(
         }
 
         // Merge tools from all upstreams, prefix conflicting names,
-        // and register routes in upstream_mgr.
-        let merged_tools = merge_tools_from_upstreams(tools_by_upstream, upstream_mgr);
+        // and register this session's routes in upstream_mgr.
+        let merged_tools = merge_tools_from_upstreams(session_id, tools_by_upstream, upstream_mgr);
 
         let merged = serde_json::json!({
             "jsonrpc": "2.0",
@@ -543,14 +634,21 @@ async fn handle_tools_list(
             }
         });
 
-        filter_tools_list(inject_local_tools(merged), &session)
+        filter_tools_list(inject_local_tools(merged, &session.allowed_tools), &session)
     }
 }
 
 /// Merge tools from multiple upstreams, prefixing conflicting names.
 ///
-/// Returns the merged tool list and registers routes in `upstream_mgr`.
+/// Routes are registered under the SESSION's key and only this session's
+/// previous routes are cleared — one session's tools/list never rewrites
+/// another session's routing table.
+///
+/// Reserved namespace: upstream tools whose original name starts with
+/// `virbius__` are ALWAYS prefixed with the upstream name so they can never
+/// be confused with local-exec canonical tools.
 fn merge_tools_from_upstreams(
+    session_id: &str,
     tools_by_upstream: Vec<(String, Vec<Value>)>,
     upstream_mgr: &UpstreamManager,
 ) -> Vec<Value> {
@@ -558,7 +656,7 @@ fn merge_tools_from_upstreams(
 
     // Count occurrences of each original tool name across upstreams
     let mut name_counts: HashMap<String, u32> = HashMap::new();
-    for (upstream_name, tools) in &tools_by_upstream {
+    for (_upstream_name, tools) in &tools_by_upstream {
         // Use a set to count each name only once per upstream
         let mut seen_in_this_upstream = std::collections::HashSet::new();
         for tool in tools {
@@ -571,13 +669,13 @@ fn merge_tools_from_upstreams(
                 *name_counts.entry(name).or_insert(0) += 1;
             }
         }
-        let _ = upstream_name; // suppress unused warning
     }
 
-    // Clear old routes
-    upstream_mgr.clear_tool_routes();
+    // Clear this session's old routes only (other sessions unaffected).
+    upstream_mgr.clear_tool_routes(session_id);
 
     let mut merged: Vec<Value> = Vec::new();
+    let mut registered: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (upstream_name, tools) in tools_by_upstream {
         for tool in tools {
@@ -591,15 +689,33 @@ fn merge_tools_from_upstreams(
                 continue;
             }
 
+            // Reserved local-exec namespace: force the upstream prefix even
+            // without a cross-upstream conflict.
+            let reserved = original_name.starts_with("virbius__");
             let has_conflict = name_counts.get(&original_name).copied().unwrap_or(0) > 1;
-            let displayed_name = if has_conflict {
+            let displayed_name = if reserved || has_conflict {
                 format!("{}{}{}", upstream_name, TOOL_PREFIX_SEP, original_name)
             } else {
                 original_name.clone()
             };
 
+            // Skip a displayed name that is already taken for this session
+            // (two upstreams both forcing a prefix, pathological case).
+            if !registered.insert(displayed_name.clone()) {
+                warn!(
+                    "tools/list: duplicate displayed name '{}' from upstream '{}' skipped",
+                    displayed_name, upstream_name
+                );
+                continue;
+            }
+
             // Register route: displayed_name → (upstream_name, original_name)
-            upstream_mgr.register_tool_route(&displayed_name, &upstream_name, &original_name);
+            upstream_mgr.register_tool_route(
+                session_id,
+                &displayed_name,
+                &upstream_name,
+                &original_name,
+            );
 
             // Clone tool and update its name
             let mut tool = tool;
@@ -733,57 +849,60 @@ async fn handle_tools_call(
         ));
     }
 
-    // Detect local code-execution tools (shell, execute_python, etc.).
-    // These are executed by the proxy itself in a sandbox and never
-    // forwarded to an upstream → skip route resolution.
+    // Detect local code-execution tools by their CANONICAL names
+    // (`virbius__shell`, `virbius__python`, `virbius__node`). These are
+    // executed by the proxy itself in a gVisor sandbox and never forwarded
+    // to an upstream. Legacy bare names (`shell`, ...) are NOT local tools
+    // anymore — they route to the upstream like any other tool.
     let local_exec = crate::egress::local_exec_info(displayed_tool_name);
 
+    // `policy_tool_name` is the name the pipeline and all post-processing
+    // run under: the legacy LOGICAL name for local-exec calls (engine rules,
+    // tool policies, transforms, trace and audit stay keyed by the legacy
+    // names), the original upstream tool name otherwise. The canonical wire
+    // name is only used by the hard gate and the executor.
     let (upstream_name, original_tool_name) = if local_exec.is_some() {
-        ("__local__".to_string(), displayed_tool_name.to_string())
+        let logical = virbius_core::license::logical_for_canonical(displayed_tool_name)
+            .unwrap_or(displayed_tool_name);
+        ("__local__".to_string(), logical.to_string())
     } else {
         // Resolve tool route: determine upstream_name and original_tool_name.
         // In single-upstream mode, route_tool always returns the sole upstream.
         match upstream_mgr.route_tool_for(session_id, displayed_tool_name) {
-            Some(route) => route,
+            Some(route) => (route.0, route.1),
             None => {
-                // Tool not in routes. In multi-upstream mode, this means tools/list
-                // wasn't called or the tool doesn't exist. Try to use the displayed
-                // name as-is and pick the first upstream as best-effort.
+                // Tool not in this session's routes.
                 if upstream_mgr.is_single_for(session_id) {
-                    (
-                        upstream_mgr.names_for(session_id)[0].to_string(),
-                        displayed_tool_name.to_string(),
-                    )
+                    // Single upstream has no routing ambiguity: pass through.
+                    let names = upstream_mgr.names_for(session_id);
+                    (names[0].to_string(), displayed_tool_name.to_string())
+                } else if crate::egress::is_legacy_local_name(displayed_tool_name) {
+                    // Legacy bare local-exec name with no session inventory
+                    // (or no upstream owns it): give the migration hint
+                    // instead of a generic unknown-tool error.
+                    let canonical =
+                        virbius_core::license::canonical_for_logical(displayed_tool_name)
+                            .map(|c| c.to_string())
+                            .unwrap_or_else(|| "virbius__*".to_string());
+                    return Some(jsonrpc_error(
+                        -32602,
+                        id,
+                        &format!(
+                            "unknown tool '{}' — legacy local-exec names no longer execute locally; use '{}' (requires an explicit license grant) or call tools/list first",
+                            displayed_tool_name, canonical
+                        ),
+                    ));
                 } else {
-                    // Try stripping a prefix in case the route wasn't registered
-                    let stripped = strip_tool_prefix(displayed_tool_name);
-                    if stripped != displayed_tool_name {
-                        // Has a prefix — try to find the upstream by the prefix
-                        let prefix_end = displayed_tool_name.find(TOOL_PREFIX_SEP).unwrap_or(0);
-                        let possible_upstream = &displayed_tool_name[..prefix_end];
-                        let names = upstream_mgr.names_for(session_id);
-                        if names.iter().any(|n| n == possible_upstream) {
-                            (possible_upstream.to_string(), stripped.to_string())
-                        } else {
-                            return Some(jsonrpc_error(
-                                -32602,
-                                id,
-                                &format!(
-                                    "unknown tool '{}' — call tools/list first to discover available tools",
-                                    displayed_tool_name
-                                ),
-                            ));
-                        }
-                    } else {
-                        return Some(jsonrpc_error(
-                            -32602,
-                            id,
-                            &format!(
-                                "unknown tool '{}' — call tools/list first to discover available tools",
-                                displayed_tool_name
-                            ),
-                        ));
-                    }
+                    // Multi-upstream with no session inventory: fail closed.
+                    // No string-prefix guessing — call tools/list first.
+                    return Some(jsonrpc_error(
+                        -32602,
+                        id,
+                        &format!(
+                            "unknown tool '{}' — call tools/list first to discover available tools",
+                            displayed_tool_name
+                        ),
+                    ));
                 }
             }
         }
@@ -875,6 +994,49 @@ async fn handle_tools_call(
     let step_seq = session.next_step_seq();
     let trace_start = std::time::Instant::now();
 
+    // ── Local-exec hard gate (P1d), BEFORE the pipeline ──
+    //
+    // Local-exec authorization is a pure canonical-grant fact, independent of
+    // any License or fallback policy: it runs before the pipeline so a
+    // rejection never reaches the pipeline's allow audit/trace. An audit-only
+    // fallback must never imply authorization to execute local code; only an
+    // explicit grant of the canonical tool name does, and that grant can only
+    // come from a License. No license means no grant, so the gate still fires.
+    if local_exec.is_some()
+        && !session
+            .allowed_tools
+            .iter()
+            .any(|t| t == displayed_tool_name)
+    {
+        let reason = VirbiusErrorCode::LocalExecNotGranted.message();
+        pipeline
+            .audit_tool_call(&session, &original_tool_name, "block", None, Some(reason))
+            .await;
+        session_mgr.update(session_id.to_string(), session.clone());
+        let tc_event = TraceEvent::tool_call(
+            &session,
+            &tool_call_step_id,
+            parent_step_id.as_deref(),
+            step_seq,
+            &original_tool_name,
+            &args,
+            Some(&upstream_name),
+        )
+        .with_decision("block", None, Some(reason), None);
+        trace_collector.record(tc_event).await;
+        return Some(jsonrpc_error_simple(
+            VirbiusErrorCode::LocalExecNotGranted,
+            id.clone(),
+            displayed_tool_name,
+            &session.trace_id,
+            session.session_risk_score,
+            Some(&format!(
+                "local execution requires allowed_tools to list '{}' explicitly (wildcard licenses do not grant local execution)",
+                displayed_tool_name
+            )),
+        ));
+    }
+
     // Run security pipeline with the ORIGINAL tool name (before any prefix stripping).
     // The License allowed_tools contains original names, not prefixed ones.
     let result = pipeline
@@ -893,6 +1055,27 @@ async fn handle_tools_call(
                     rewritten.note
                 }
                 Err(detail) => {
+                    // The pipeline already recorded its allow verdict; the
+                    // pre_tool_call transform then failed. Record the actual
+                    // outcome (block) so the audit trail and trace do not end
+                    // on an "allow" for a call that was never forwarded or
+                    // executed.
+                    let reason = VirbiusErrorCode::ArgTransformFailed.message();
+                    pipeline
+                        .audit_tool_call(&session, &original_tool_name, "block", None, Some(reason))
+                        .await;
+                    session_mgr.update(session_id.to_string(), session.clone());
+                    let tc_event = TraceEvent::tool_call(
+                        &session,
+                        &tool_call_step_id,
+                        parent_step_id.as_deref(),
+                        step_seq,
+                        &original_tool_name,
+                        &args,
+                        Some(&upstream_name),
+                    )
+                    .with_decision("block", None, Some(reason), None);
+                    trace_collector.record(tc_event).await;
                     return Some(jsonrpc_error_simple(
                         VirbiusErrorCode::ArgTransformFailed,
                         id.clone(),
@@ -931,9 +1114,10 @@ async fn handle_tools_call(
             trace_collector.record(tc_event).await;
 
             // Local code-execution tools: execute in sandbox with full post-processing.
+            // (Authorization already passed the hard gate before the pipeline.)
             if let Some((lang, code_arg)) = local_exec {
                 let mut resp =
-                    execute_in_sandbox(id, &original_tool_name, &args, lang, code_arg).await;
+                    execute_in_sandbox(id, displayed_tool_name, &args, lang, code_arg).await;
                 // ── Output PII masking ──
                 mask_pii_in_response(&mut resp, &original_tool_name, &session.session_id);
                 // ── Trust boundary tagging (high/network risk only) ──
@@ -1272,6 +1456,14 @@ fn inject_proxy_capabilities(mut resp: Value) -> Value {
                     "engineEvaluate": true,
                     "fastPath": true,
                     "multiUpstream": true,
+                    // Contract skeleton (stable from P1; clients key off these
+                    // fields, values must not be renamed):
+                    "localExec": {
+                        "namespace": "virbius",
+                        "canonical": ["virbius__shell", "virbius__python", "virbius__node"],
+                        "sandbox": ["gvisor"],
+                        "grant": "license allowed_tools must list the canonical name explicitly; wildcard does not grant local execution"
+                    }
                 }),
             );
         }
@@ -1907,11 +2099,16 @@ async fn intercept_memory_read(
     }
 }
 
-/// Inject synthesized local code-execution tool descriptors (`shell`,
-/// `execute_python`, `execute_code`, `execute_node`) into a `tools/list`
+/// Inject synthesized local code-execution tool descriptors
+/// (`virbius__shell`, `virbius__python`, `virbius__node`) into a `tools/list`
 /// response, so agents can discover and call them.
-fn inject_local_tools(mut resp: Value) -> Value {
-    let new_tools = crate::egress::local_exec_tool_descriptors();
+///
+/// Only tools the session's license EXPLICITLY grants are injected: a
+/// wildcard license (empty `allowed_tools`) never implies local execution,
+/// and an unlisted canonical tool is not advertised (list and call share one
+/// authorization rule, so the model is never shown tools it cannot call).
+fn inject_local_tools(mut resp: Value, granted: &[String]) -> Value {
+    let new_tools = crate::egress::local_exec_tool_descriptors(granted);
     if new_tools.is_empty() {
         return resp;
     }
@@ -1934,7 +2131,11 @@ fn inject_local_tools(mut resp: Value) -> Value {
 /// Execute a local code-execution tool in the configured sandbox.
 ///
 /// Run sandbox work on a blocking thread, but always return when `wall` elapses.
-/// Does not abort the blocking closure; inner waits must also be bounded.
+/// Does not abort the blocking closure: on timeout the task is detached, so any
+/// resource guard captured by `work` remains held until the real work ends
+/// (callers must move the guard into `work`, not keep it in the async frame).
+/// Inner waits must also be bounded so the detached task terminates on its own.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 async fn await_sandbox_wall<F>(
     work: F,
     wall: std::time::Duration,
@@ -1949,10 +2150,11 @@ where
     }
 }
 
-/// On Linux: reads the tool's `sandbox_type` from the edge manifest, extracts
-/// the code argument, and delegates to [`virbius_core::sandbox::execute`] or
-/// [`virbius_core::sandbox::run_unsandboxed`] depending on the isolated mode
-/// (none/landlock/gvisor).  Degradation is reported via `_meta`.
+/// On Linux: extract the code argument and run it in gVisor. There is no
+/// unsandboxed and no Landlock path — a local tool whose policy asks for
+/// `none`/`landlock`, or a node without a usable gVisor pool, is refused
+/// (`sandbox_unavailable` / `local_exec_node_disabled`). The `_meta` contract
+/// is attached to successful results.
 #[cfg(target_os = "linux")]
 async fn execute_in_sandbox(
     id: &Value,
@@ -1964,8 +2166,7 @@ async fn execute_in_sandbox(
     use std::time::Duration;
     use virbius_core::manifest;
     use virbius_core::sandbox::{
-        execute, mcp_wall, run_unsandboxed, ExecutionRequest, GvisorPool, LandlockRules, Language,
-        SandboxType,
+        execute, mcp_wall, ExecutionRequest, GvisorPool, LandlockRules, Language, SandboxType,
     };
 
     // D-I (v2.5-min): while the delegated credential plane is enabled,
@@ -1998,136 +2199,145 @@ async fn execute_in_sandbox(
         }
     };
 
-    // 2. Tool policy (sandbox_type / timeout from edge manifest)
-    let policy = manifest::tool_policy(tool_name);
+    // 2. Node-level settings: mode (default disabled), payload size, in-flight cap.
+    let settings = local_exec_settings();
+    if settings.mode != LocalExecMode::Gvisor {
+        warn!(
+            "local exec '{}' denied: local_exec.mode is disabled on this node",
+            tool_name
+        );
+        return crate::error::jsonrpc_error_simple(
+            crate::error::VirbiusErrorCode::LocalExecNodeDisabled,
+            id.clone(),
+            tool_name,
+            "",
+            0,
+            Some("local execution is disabled on this node (local_exec.mode)"),
+        );
+    }
+    if code.len() > settings.code_bytes {
+        return crate::error::jsonrpc_error_simple(
+            crate::error::VirbiusErrorCode::CodeTooLarge,
+            id.clone(),
+            tool_name,
+            "",
+            0,
+            Some(&format!(
+                "code payload is {} bytes; the limit is {}",
+                code.len(),
+                settings.code_bytes
+            )),
+        );
+    }
+    let inflight = match InflightGuard::acquire(settings.concurrency) {
+        Some(guard) => guard,
+        None => {
+            return crate::error::jsonrpc_error_simple(
+                crate::error::VirbiusErrorCode::LocalExecBusy,
+                id.clone(),
+                tool_name,
+                "",
+                0,
+                Some("too many concurrent local executions on this node"),
+            );
+        }
+    };
+
+    // 3. Tool policy (looked up by the LOGICAL name for continuity).
+    //    v4 semantics for local tools:
+    //      no policy              → node mode decides (gvisor here)
+    //      policy sandbox=gvisor  → gvisor
+    //      policy none/landlock   → refuse (explicit unsupported intent)
+    let policy_name = virbius_core::license::logical_for_canonical(tool_name).unwrap_or(tool_name);
+    let policy = manifest::tool_policy(policy_name);
     let sandbox_type_str = policy
         .as_ref()
         .map(|p| p.sandbox_type.clone())
         .unwrap_or_default();
-    let sandbox_type = if sandbox_type_str.is_empty() {
-        SandboxType::None
-    } else {
-        SandboxType::parse(&sandbox_type_str)
-    };
+    if !sandbox_type_str.is_empty() && sandbox_type_str != "gvisor" {
+        warn!(
+            "local exec '{}' denied: tool policy requests sandbox_type='{}'",
+            tool_name, sandbox_type_str
+        );
+        return crate::error::jsonrpc_error_simple(
+            crate::error::VirbiusErrorCode::SandboxUnavailable,
+            id.clone(),
+            tool_name,
+            "",
+            0,
+            Some(&format!(
+                "tool policy requests sandbox_type='{}' which is not executable (only gvisor is supported)",
+                sandbox_type_str
+            )),
+        );
+    }
     let timeout_ms = policy
         .as_ref()
         .map(|p| p.timeout_ms)
         .filter(|&t| t > 0)
         .unwrap_or(30_000);
 
-    // 3. Language from whitelist string
+    // 4. Language from whitelist string
     let lang_enum = Language::parse(lang).unwrap_or(Language::Shell);
 
-    // 4. Dispatch
-    let exec_result: Result<virbius_core::sandbox::ExecutionResult, String> = match sandbox_type {
-        SandboxType::None => {
-            let allow = std::env::var("VIRBIUS_ALLOW_UNSANDBOXED")
-                .map(|v| v != "false" && v != "0")
-                .unwrap_or(true);
-            if !allow {
-                warn!("local exec '{}' denied: unsandboxed disabled", tool_name);
-                return jsonrpc_error(
-                    -32603,
-                    id,
-                    "unsandboxed_local_exec_not_allowed (set VIRBIUS_ALLOW_UNSANDBOXED=true)",
-                );
-            }
-            match await_sandbox_wall(
-                move || run_unsandboxed(lang_enum, &code, timeout_ms),
-                mcp_wall(Duration::ZERO, Duration::from_millis(timeout_ms)),
-            )
-            .await
-            {
-                Ok(inner) => inner,
-                Err(e) => {
-                    warn!("local exec '{}' unsandboxed wall: {}", tool_name, e);
-                    return jsonrpc_error(-32603, id, &e);
-                }
-            }
-        }
-        SandboxType::Landlock => {
-            let interpreter = lang_enum.interpreter().to_string();
-            let flag = match lang_enum {
-                Language::Node => "-e",
-                _ => "-c",
-            };
-            // Profile must be delivered (canary/full) in this Edge package.
-            // Missing profile is unpaired registry intent — do not apply an
-            // empty deny-all ruleset.
-            let Some(ll) = manifest::landlock_profile(tool_name) else {
-                warn!(
-                    "local exec '{}' denied: landlock profile not delivered",
-                    tool_name
-                );
-                return jsonrpc_error(-32603, id, "sandbox_unavailable");
-            };
-            let landlock_rules = LandlockRules {
-                read_paths: ll.read_paths.clone(),
-                write_paths: ll.write_paths.clone(),
-                exec_paths: ll.exec_paths.clone(),
-                ..LandlockRules::default()
-            };
-            let req = ExecutionRequest {
-                sandbox_type: SandboxType::Landlock,
-                program: interpreter,
-                args: vec![flag.to_string(), code],
-                landlock_rules,
-                timeout: Duration::from_millis(timeout_ms),
-                gvisor_config: None,
-                gvisor_language: None,
-            };
-            match await_sandbox_wall(
-                move || execute(req),
-                mcp_wall(Duration::ZERO, Duration::from_millis(timeout_ms)),
-            )
-            .await
-            {
-                Ok(inner) => inner,
-                Err(e) => {
-                    warn!("local exec '{}' landlock wall: {}", tool_name, e);
-                    return jsonrpc_error(-32603, id, &e);
-                }
-            }
-        }
-        SandboxType::Gvisor => {
-            GvisorPool::apply_from_manifest_if_needed();
-            if !GvisorPool::global().is_available() {
-                warn!(
-                    "local exec '{}' denied: gVisor pool not delivered or runsc missing",
-                    tool_name
-                );
-                return jsonrpc_error(-32603, id, "sandbox_unavailable");
-            }
-            let req = ExecutionRequest {
-                sandbox_type: SandboxType::Gvisor,
-                program: code,
-                args: vec![],
-                landlock_rules: LandlockRules::default(),
-                timeout: Duration::from_millis(timeout_ms),
-                gvisor_config: None,
-                gvisor_language: Some(lang_enum),
-            };
-            let limits = GvisorPool::global().delivered_limits();
-            let acquire = limits
-                .as_ref()
-                .map(|c| c.acquire_timeout)
-                .unwrap_or(Duration::from_secs(10));
-            let exec = limits
-                .as_ref()
-                .map(|c| timeout_ms.min(c.exec_timeout.as_millis() as u64))
-                .unwrap_or(timeout_ms);
-            let wall = mcp_wall(acquire, Duration::from_millis(exec));
-            match await_sandbox_wall(move || execute(req), wall).await {
-                Ok(inner) => inner,
-                Err(e) => {
-                    warn!("local exec '{}' gvisor wall: {}", tool_name, e);
-                    return jsonrpc_error(-32603, id, &e);
-                }
-            }
-        }
+    // 5. gVisor only — there is NO unsandboxed and NO Landlock fallback.
+    GvisorPool::apply_from_manifest_if_needed();
+    if !GvisorPool::global().is_available() {
+        warn!(
+            "local exec '{}' denied: gVisor pool not delivered or runsc missing",
+            tool_name
+        );
+        return crate::error::jsonrpc_error_simple(
+            crate::error::VirbiusErrorCode::SandboxUnavailable,
+            id.clone(),
+            tool_name,
+            "",
+            0,
+            Some("gVisor is not available on this node (runsc missing or gvisor_config not delivered)"),
+        );
+    }
+    let req = ExecutionRequest {
+        sandbox_type: SandboxType::Gvisor,
+        program: code,
+        args: vec![],
+        landlock_rules: LandlockRules::default(),
+        timeout: Duration::from_millis(timeout_ms),
+        gvisor_config: None,
+        gvisor_language: Some(lang_enum),
     };
+    let limits = GvisorPool::global().delivered_limits();
+    let acquire = limits
+        .as_ref()
+        .map(|c| c.acquire_timeout)
+        .unwrap_or(Duration::from_secs(10));
+    let exec = limits
+        .as_ref()
+        .map(|c| timeout_ms.min(c.exec_timeout.as_millis() as u64))
+        .unwrap_or(timeout_ms);
+    let wall = mcp_wall(acquire, Duration::from_millis(exec));
+    // The guard travels with the blocking closure: an outer wall timeout
+    // detaches the task but must not release the concurrency slot while the
+    // sandbox work is still running.
+    let exec_result: Result<virbius_core::sandbox::ExecutionResult, String> =
+        match await_sandbox_wall(
+            move || {
+                let _inflight = inflight;
+                execute(req)
+            },
+            wall,
+        )
+        .await
+        {
+            Ok(inner) => inner,
+            Err(e) => {
+                warn!("local exec '{}' gvisor wall: {}", tool_name, e);
+                return jsonrpc_error(-32603, id, &e);
+            }
+        };
 
-    // 5. Shape MCP response; include degradation metadata in _meta
+    // 6. Shape MCP response; the `_meta` contract is frozen here
+    //    (`truncated` / `limit_reason` are wired to real values by P2's
+    //    output cap; the fields exist from day one so clients never churn).
     match exec_result {
         Ok(r) => {
             let is_error = r.exit_code != 0;
@@ -2141,7 +2351,14 @@ async fn execute_in_sandbox(
             let mut meta = serde_json::json!({
                 "sandbox_configured": sandbox_type_str,
                 "sandbox_used": r.sandbox_used.as_str(),
-                "degraded": r.degraded
+                "degraded": r.degraded,
+                "truncated": r.truncated,
+                "limit_reason": if r.truncated { serde_json::json!("output_limit") } else { serde_json::Value::Null },
+                "exit_code": r.exit_code,
+                "limits": {
+                    "codeBytes": settings.code_bytes,
+                    "wallMs": timeout_ms,
+                },
             });
             if r.degraded {
                 if let Some(note) = &r.degrade_note {
@@ -2176,128 +2393,44 @@ async fn execute_in_sandbox(
     }
 }
 
-/// Non-Linux: unsandboxed execution only (no landlock/gvisor on macOS/Windows).
+/// Non-Linux: fail closed — local code execution requires gVisor (Linux).
 #[cfg(not(target_os = "linux"))]
 async fn execute_in_sandbox(
     id: &Value,
     tool_name: &str,
-    args: &Value,
-    lang: &str,
-    code_arg: &str,
+    _args: &Value,
+    _lang: &str,
+    _code_arg: &str,
 ) -> Value {
-    use virbius_core::manifest;
-    use virbius_core::sandbox::{mcp_wall, run_unsandboxed, Language};
-
-    // D-I (v2.5-min): while the delegated credential plane is enabled,
-    // local-exec tools are denied outright regardless of sandbox config.
-    if !crate::delegated::local_exec_allowed() {
+    // Non-Linux hosts never execute local code: there is no unsandboxed
+    // fallback (that path reported `sandbox_used=none, degraded=false`,
+    // which was a lie). Fail closed with a clear reason instead.
+    let settings = local_exec_settings();
+    if settings.mode != LocalExecMode::Gvisor {
+        warn!(
+            "local exec '{}' denied: local_exec.mode is disabled on this node",
+            tool_name
+        );
         return crate::error::jsonrpc_error_simple(
-            crate::error::VirbiusErrorCode::DelegatedLocalExecDisabled,
+            crate::error::VirbiusErrorCode::LocalExecNodeDisabled,
             id.clone(),
             tool_name,
             "",
             0,
-            Some(
-                "local tool execution is disabled while the delegated credential plane is enabled",
-            ),
+            Some("local execution is disabled on this node (local_exec.mode)"),
         );
     }
 
-    let code = match args.get(code_arg).and_then(|v| v.as_str()) {
-        Some(c) => c.to_string(),
-        None => {
-            return jsonrpc_error(
-                -32602,
-                id,
-                &format!(
-                    "missing '{}' argument for local exec tool '{}'",
-                    code_arg, tool_name
-                ),
-            );
-        }
-    };
-
-    let allow = std::env::var("VIRBIUS_ALLOW_UNSANDBOXED")
-        .map(|v| v != "false" && v != "0")
-        .unwrap_or(true);
-    if !allow {
-        warn!("local exec '{}' denied: unsandboxed disabled", tool_name);
-        return jsonrpc_error(
-            -32603,
-            id,
-            "unsandboxed_local_exec_not_allowed (set VIRBIUS_ALLOW_UNSANDBOXED=true)",
-        );
-    }
-
-    let lang_enum = Language::parse(lang).unwrap_or(Language::Shell);
-    let timeout_ms = manifest::tool_policy(tool_name)
-        .as_ref()
-        .map(|p| p.timeout_ms)
-        .filter(|&t| t > 0)
-        .unwrap_or(30_000);
-
-    let exec_result = match await_sandbox_wall(
-        move || run_unsandboxed(lang_enum, &code, timeout_ms),
-        mcp_wall(
-            std::time::Duration::ZERO,
-            std::time::Duration::from_millis(timeout_ms),
+    crate::error::jsonrpc_error_simple(
+        crate::error::VirbiusErrorCode::SandboxUnavailable,
+        id.clone(),
+        tool_name,
+        "",
+        0,
+        Some(
+            "local execution requires Linux + gVisor (runsc); this host cannot sandbox local code",
         ),
     )
-    .await
-    {
-        Ok(inner) => inner,
-        Err(e) => {
-            warn!("local exec '{}' unsandboxed wall: {}", tool_name, e);
-            return jsonrpc_error(-32603, id, &e);
-        }
-    };
-
-    match exec_result {
-        Ok(r) => {
-            let is_error = r.exit_code != 0;
-            let output = if r.stderr.is_empty() {
-                r.stdout.trim().to_string()
-            } else {
-                format!("{}\n{}", r.stdout.trim(), r.stderr.trim())
-                    .trim()
-                    .to_string()
-            };
-            if r.degraded {
-                let meta = serde_json::json!({
-                    "sandbox_used": r.sandbox_used.as_str(),
-                    "degraded": true,
-                    "degrade_note": r.degrade_note
-                });
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{"type": "text", "text": output}],
-                        "isError": is_error,
-                        "_meta": meta
-                    }
-                })
-            } else {
-                let meta = serde_json::json!({
-                    "sandbox_used": r.sandbox_used.as_str(),
-                    "degraded": false
-                });
-                serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{"type": "text", "text": output}],
-                        "isError": is_error,
-                        "_meta": meta
-                    }
-                })
-            }
-        }
-        Err(e) => {
-            warn!("local exec '{}' sandbox failed: {}", tool_name, e);
-            jsonrpc_error(-32603, id, &format!("sandbox exec failed: {}", e))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -2432,6 +2565,7 @@ mod tests {
                     degraded: false,
                     degrade_note: None,
                     landlock_applied: false,
+                    truncated: false,
                 })
             },
             Duration::from_millis(80),
@@ -2589,5 +2723,41 @@ mod tests {
         assert_eq!(content[0]["text"], "redacted");
         assert_eq!(content[1]["text"], "redacted");
         assert_eq!(content[2]["data"], "AAA");
+    }
+
+    #[tokio::test]
+    async fn inflight_guard_outlives_outer_wall_timeout() {
+        use std::sync::atomic::Ordering;
+        use std::time::Duration;
+
+        let before = LOCAL_EXEC_INFLIGHT.load(Ordering::SeqCst);
+        let guard = InflightGuard::acquire(usize::MAX).expect("guard must be acquired");
+        assert_eq!(LOCAL_EXEC_INFLIGHT.load(Ordering::SeqCst), before + 1);
+
+        // The outer wall fires long before the blocking work finishes. The
+        // guard is captured by the closure, so the slot stays occupied while
+        // the detached task is still running.
+        let res = await_sandbox_wall(
+            move || {
+                let _inflight = guard;
+                std::thread::sleep(Duration::from_millis(300));
+                Err("work finished".to_string())
+            },
+            Duration::from_millis(50),
+        )
+        .await;
+        assert!(matches!(res, Err(e) if e == "sandbox_exec_timeout"));
+        assert_eq!(
+            LOCAL_EXEC_INFLIGHT.load(Ordering::SeqCst),
+            before + 1,
+            "concurrency slot must not be released while blocking work runs"
+        );
+
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(
+            LOCAL_EXEC_INFLIGHT.load(Ordering::SeqCst),
+            before,
+            "slot must be released once the detached work really ends"
+        );
     }
 }

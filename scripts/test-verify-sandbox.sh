@@ -1,6 +1,6 @@
 #!/bin/bash
 # ────────────────────────────────────────────────────────────────
-# Verify local code-exec sandbox (shell/execute_python/execute_code/execute_node)
+# Verify local code-exec sandbox (virbius__shell/virbius__python/virbius__node, gVisor-only)
 # Run inside the ECS proxy container or from host with docker exec:
 #   docker exec <container> bash /path/to/verify-sandbox.sh
 # ────────────────────────────────────────────────────────────────
@@ -97,15 +97,11 @@ else
     _fail "cannot reach $PROXY_URL"
 fi
 
-echo -n "  ALLOW_UNSANDBOXED = "
-ALLOW_UNSANDBOXED="${VIRBIUS_ALLOW_UNSANDBOXED:-}"
-if [ -z "$ALLOW_UNSANDBOXED" ]; then ALLOW_UNSANDBOXED="(unset → default true)"; fi
-echo "$ALLOW_UNSANDBOXED"
-
-echo -n "  DEGRADE_MODE = "
-DEGRADE_MODE="${VIRBIUS_SANDBOX_DEGRADE_MODE:-}"
-if [ -z "$DEGRADE_MODE" ]; then DEGRADE_MODE="(unset → default report)"; fi
-echo "$DEGRADE_MODE"
+echo -n "  LOCAL_EXEC_MODE = "
+LOCAL_EXEC_MODE="${VIRBIUS_LOCAL_EXEC_MODE:-}"
+if [ -z "$LOCAL_EXEC_MODE" ]; then LOCAL_EXEC_MODE="(unset → default disabled)"; fi
+echo "$LOCAL_EXEC_MODE"
+echo "  (there is no unsandboxed or Landlock path; local exec is gVisor-only)"
 
 RUNSC=$(which runsc 2>/dev/null || echo "NOT FOUND")
 echo "  runsc        = $RUNSC"
@@ -159,20 +155,20 @@ RESP=$(echo "$RESP_RAW" | jq -c . 2>/dev/null || echo '{}')
 
 TOOLS=$(echo "$RESP" | jq -r '.result.tools[]?.name' 2>/dev/null || echo "")
 
-for t in shell execute_python execute_code execute_node; do
-    echo -n "  $t ... "
-    if echo "$TOOLS" | grep -qx "$t"; then
-        green "present"
-    else
-        _fail "missing in tools/list"
-    fi
-done
+LOCAL_TOOLS=$(echo "$TOOLS" | grep -E '^virbius__' || true)
+if [ -z "$LOCAL_TOOLS" ]; then
+    _pass "no virbius__* tools advertised (license does not grant local execution)"
+else
+    for t in $LOCAL_TOOLS; do
+        echo -n "  $t ... "; green "present"
+    done
+fi
 
 echo
 
-# ── 4. sandbox execution tests ─────────────────────────────────
+# ── 4. sandbox execution tests (canonical tools only) ──────────
 
-bold "4. Sandbox execution"
+bold "4. Sandbox execution (gVisor only, fail-closed)"
 echo
 
 test_exec() {
@@ -187,7 +183,6 @@ test_exec() {
     RESULT=$(echo "$RESP" | jq -c '.result' 2>/dev/null || echo '{}')
     IS_ERROR=$(echo "$RESULT" | jq -r '.isError' 2>/dev/null || echo '')
     TEXT=$(echo "$RESULT" | jq -r '.content[0].text' 2>/dev/null || echo '')
-    # Also check JSON-RPC error response (e.g. timeout)
     ERR_MSG=$(echo "$RESP" | jq -r '.error.message // empty' 2>/dev/null || echo '')
     if [ -n "$ERR_MSG" ]; then
         TEXT="$ERR_MSG"
@@ -197,59 +192,41 @@ test_exec() {
     SBOX_USED=$(echo "$RESULT" | jq -r '._meta.sandbox_used // empty' 2>/dev/null || echo '')
 
     case "$expect" in
-        "ok")
-            if [ "$IS_ERROR" != "true" ]; then _pass "$label -> exit ok"; else _fail "$label -> isError=true: $TEXT"; fi
+        "gvisor")
+            if [ "$SBOX_USED" = "gvisor" ] && [ "$IS_ERROR" != "true" ]; then
+                _pass "$label -> gVisor (sandbox_used=gvisor)"
+            elif echo "$TEXT $ERR_MSG" | grep -qi "sandbox_unavailable\|local_exec_node_disabled\|local_exec_not_granted"; then
+                _pass "$label -> fail-closed: ${TEXT:-$ERR_MSG}"
+            else
+                _fail "$label -> sandbox_used=$SBOX_USED: $TEXT"
+            fi
             ;;
         "fail"|"deny")
-            if echo "$TEXT" | grep -qi "fail\|denied\|deny\|unavailable\|not allowed\|timed out\|timeout"; then _pass "$label -> denied: $TEXT"; else _fail "$label -> expected deny but got: $TEXT"; fi
+            if echo "$TEXT" | grep -qi "fail\|denied\|deny\|unavailable\|not allowed\|timed out\|timeout"; then
+                _pass "$label -> denied: $TEXT"
+            else
+                _fail "$label -> expected deny but got: $TEXT"
+            fi
             ;;
     esac
     echo "     sandbox_used=$SBOX_USED degraded=$DEGRADED text=\"${TEXT:0:80}\""
 }
 
-# ── 4a. shell with sandbox_type=none (default) ──
-echo "  --- shell (none, hostname) ---"
-test_exec "shell hostname" shell command "hostname" "ok"
+if echo "$LOCAL_TOOLS" | grep -qx "virbius__shell"; then
+    echo "  --- virbius__shell (echo) ---"
+    test_exec "shell echo" virbius__shell command "echo gvisor-sandbox-ok" "gvisor"
+    echo "  --- virbius__shell (timeout wall: sleep 40) ---"
+    test_exec "shell timeout" virbius__shell command "sleep 40" "fail"
+fi
 
-echo "  --- shell (none, timeout wall: sleep 40, expect sandbox_exec_timeout) ---"
-# timeout_ms default 30s + 2s slack; must return, not hang until SSE 70s.
-test_exec "shell timeout" shell command "sleep 40" "fail"
+if echo "$LOCAL_TOOLS" | grep -qx "virbius__python"; then
+    echo "  --- virbius__python (print) ---"
+    test_exec "python print" virbius__python code "print('hello sandbox')" "gvisor"
+fi
 
-# ── 4b. execute_python (none) ──
-echo "  --- execute_python (none, print) ---"
-test_exec "python print" execute_python code "print('hello sandbox')" "ok"
-
-# ── 4c. execute_code (none) ──
-echo "  --- execute_code (none) ---"
-test_exec "execute_code print" execute_code code "print('from execute_code')" "ok"
-
-# ── 4d. execute_node (none) ──
-echo "  --- execute_node (none) ---"
-test_exec "node console" execute_node code "console.log('node sandbox ok')" "ok"
-
-# ── 4e. exec_cmd (gvisor, when declared in manifest) ──
-echo "  --- exec_cmd (gvisor) ---"
-if echo "$TOOLS" | grep -qx "exec_cmd"; then
-    post 15 "tools/call" '{"name":"exec_cmd","arguments":{"command":"echo gvisor-sandbox-ok && hostname"}}'
-    RESP=$(sse_wait_rpc 15 50)
-    RESULT=$(echo "$RESP" | jq -c '.result' 2>/dev/null || echo '{}')
-    TEXT=$(echo "$RESULT" | jq -r '.content[0].text' 2>/dev/null || echo '')
-    ERR_MSG=$(echo "$RESP" | jq -r '.error.message // empty' 2>/dev/null || echo '')
-    SBOX_USED=$(echo "$RESULT" | jq -r '._meta.sandbox_used // empty' 2>/dev/null || echo '')
-    DEGRADED=$(echo "$RESULT" | jq -r '._meta.degraded // empty' 2>/dev/null || echo '')
-    if [ "$SBOX_USED" = "gvisor" ] && [ "$DEGRADED" != "true" ]; then
-        _pass "exec_cmd ran inside gVisor (sandbox_used=gvisor): $TEXT"
-    elif echo "$ERR_MSG $TEXT $RESP" | grep -qi "sandbox_exec_timeout"; then
-        _pass "exec_cmd returned sandbox_exec_timeout within MCP wall (no hang): ${ERR_MSG:-$TEXT}"
-    elif [ -n "$ERR_MSG" ]; then
-        _fail "exec_cmd error: $ERR_MSG"
-    elif [ -z "$RESP" ]; then
-        _fail "exec_cmd SSE hung past wall (no JSON-RPC within 50s)"
-    else
-        _fail "exec_cmd sandbox_used=$SBOX_USED degraded=$DEGRADED (expected gvisor or wall timeout): $TEXT"
-    fi
-else
-    _pass "exec_cmd not in tools/list (skip gVisor probe)"
+if echo "$LOCAL_TOOLS" | grep -qx "virbius__node"; then
+    echo "  --- virbius__node (console.log) ---"
+    test_exec "node console" virbius__node code "console.log('node sandbox ok')" "gvisor"
 fi
 
 echo

@@ -1157,7 +1157,94 @@ Callers apply the disposal verbatim: `reject` → replace with a refusal text, `
 - **Engine verification chain**: signature (trust anchor = config-baked control platform key + Redis `virbius:engine:issuers` enrichment, multi-`kid`) → `aud/exp` → revocation (`agent_aid`/`jti`; instant channel + boot/periodic full reconciliation) → verified subject injection.
 - **Claims precedence**: token `tenant_id/app_id` win; a request-body conflict → `403 subject_mismatch`. Service tokens (`sub=service:*`, tenant-less, per-purpose; wildcard tools only when cross-tenant) are the exception — the request's tenant is trusted and audited as `on_behalf_of`.
 - **Capability enforcement**: only `role=tool_call` checks `tool_name ∈ scope.allowed_tools` (else `403 capability_denied`); `role=input/output` are exempt; `license_risk_quota` is clamped to the token scope.
-- **Empty allowlist**: an empty `scope.allowed_tools` (and an empty License `allowed_tools`) means **no tool restriction** (wildcard) in virbius-core, the engine and the MCP proxy. Control persists the list as a comma-separated column, so an empty list must round-trip as empty (never `[""]`); the issuer normalizes (trim/dedupe) entries.
+- **Empty allowlist**: an empty `scope.allowed_tools` (and an empty License `allowed_tools`) means **no tool restriction** (wildcard) in virbius-core, the engine and the MCP proxy — **except local execution**: the wildcard never grants the local `virbius__*` tools (see "Local Code Execution" below). Control persists the list as a comma-separated column, so an empty list must round-trip as empty (never `[""]`); the issuer normalizes (trim/dedupe) entries.
 - **Failure posture**: missing/invalid/expired/`sid`-mismatch/revoked → **`401` (fail-closed)**; the SDK raises `ReviewError` on 401/403 unless `auth_fail_open=True`. Same spirit as the 429 policy: an auth/throttle failure must never forward unreviewed content.
 - **Audit**: events gain `agent_aid/app_id/subject_source(token|service_token|reported)/token_iss`, and `agent_aid` is folded into the audit hash chain — "which agent did this" becomes verifiable rather than self-reported.
 - **Rate limiting**: `per-agent-per-min` (verified `agent_aid`) as a backstop above the unchanged per-session quota; pre-auth per-IP quota covers 401 traffic.
+
+---
+
+## Local Code Execution (v1: single-tenant, gVisor-only)
+
+The proxy executes code itself only for the **reserved local namespace**:
+
+| Tool | Argument | Engine |
+|---|---|---|
+| `virbius__shell` | `command` | gVisor (`runsc`), one container per execution |
+| `virbius__python` | `code` | gVisor |
+| `virbius__node` | `code` | gVisor |
+
+**Authorization (all must hold, otherwise the call is refused):**
+1. Node config `local_exec.mode = "gvisor"`.
+2. The License `allowed_tools` lists the canonical name **explicitly**. An empty
+   allowlist (wildcard) never grants local execution; it only relaxes upstream
+   tool restrictions.
+3. The tool policy (if one exists for the logical name) is absent or
+   `sandbox_type = "gvisor"`. Explicit `none` / `landlock` for a local tool is
+   refused (`sandbox_unavailable`) — never downgraded.
+
+**No fallback**: there is no unsandboxed and no Landlock execution path.
+Non-Linux hosts return `sandbox_unavailable`. Removing gVisor makes local
+execution unavailable rather than unsafe.
+
+**Policy continuity**: the pipeline, engine, tool policies, arg transforms, trace
+and audit keep using the legacy LOGICAL names — `virbius__shell` → `shell`,
+`virbius__python` → `execute_python`, `virbius__node` → `execute_node` — so
+existing rules and dashboards continue to match after the rename.
+
+**Legacy bare names** (`shell`, `execute_python`, `execute_code`, `execute_node`,
+`exec_cmd`) no longer execute locally. They are forwarded to the upstream like
+any other tool name; when a multi-upstream lookup fails the error carries a
+migration hint.
+
+**Routing**: routes are per session (a session's `tools/list` never rewrites
+another session's routes). Single-upstream mode passes unknown non-local names
+through; multi-upstream mode requires that session's `tools/list` first and
+returns `unknown_tool` otherwise (no string-prefix guessing). Upstream tools
+whose original name starts with `virbius__` always get the `{upstream}__` prefix.
+
+**Result `_meta`** on local success:
+```json
+{ "sandbox_used": "gvisor", "degraded": false, "truncated": false,
+  "limit_reason": null, "exit_code": 0,
+  "limits": { "codeBytes": 65536, "wallMs": 30000 } }
+```
+`truncated`/`limit_reason` are part of the frozen contract; the output cap is
+enforced per stream (1 MiB) and the reader keeps draining after the cap so the
+child never deadlocks.
+
+**Stable error reasons**: `local_exec_not_granted` (-32016),
+`local_exec_node_disabled` (-32017), `sandbox_unavailable` (-32018),
+`local_exec_busy` (-32019), `session_identity_mismatch` (-32020),
+`code_too_large` (-32021), plus the existing `high_risk_without_license`,
+`not_in_allowlist`.
+
+**Audit truthfulness**: the local-exec hard gate runs BEFORE the security
+pipeline and requires an explicit grant of the canonical tool name regardless
+of License or fallback policy. A hard-gate rejection is audited as `block` /
+`local_exec_not_granted` and traced with a block decision — it never produces
+an `allow` row and never increments the session's `tool_call_count`
+(fast-path warmup). A failed `pre_tool_call` arg-transform after an allow
+verdict appends a `block` / `arg_transform_failed` row, so the trail never ends
+on an allow for a call that was not executed. No License means no grant, so an
+`audit_only` fallback can never authorize local code execution: the gate still
+fires and returns `local_exec_not_granted` (-32016). The pipeline's fallback
+policy (`high_risk_without_license` under `minimum_privilege`) therefore only
+applies to non-local tools.
+
+**Transport and operator surface**:
+- Client transport remains SSE (`GET /sse`, `POST /messages/?session_id=`).
+- `POST /` (stateless JSON-RPC) is disabled by default
+  (`http.simple_post_enabled=false`).
+- `GET /status` is served **only** by the admin listener (`admin.listen`,
+  default `127.0.0.1:19400`, optional bearer token). The client port no longer
+  serves it. This release binds the admin surface to **loopback only**
+  (fail-closed at config load): a non-loopback `listen`, or a configured
+  `token_file` that is empty, refuses to start. Remote operators reach it via
+  `docker exec` / `kubectl port-forward` / SSH, not a network bind.
+- `virbius/status` over JSON-RPC returns a trimmed snapshot (version /
+  `local_exec.mode` / `sessions_active`) and never license claims or recent
+  decisions.
+- One transport is bound to one logical session: a second `initialize` with a
+  different `_meta.session_id` on the same connection is rejected
+  (`session_identity_mismatch`). Reconnect must use the same identity.

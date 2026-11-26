@@ -28,8 +28,8 @@
 //! ```
 
 use crate::sandbox::wait::{
-    abort_child, detach_reap, kill_and_wait_brief, recv_buf_timeout, run_command_timed, wait_until,
-    REAP_BUDGET, REAP_STEP,
+    abort_child, detach_reap, kill_and_wait_brief, run_command_timed, wait_until, REAP_BUDGET,
+    REAP_STEP,
 };
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -215,6 +215,44 @@ pub struct GvisorExecResult {
     pub elapsed: Duration,
     /// Whether a warm container was reused (true) or a cold start occurred (false).
     pub warm_hit: bool,
+    /// Whether stdout/stderr was truncated at `MAX_OUTPUT_BYTES`.
+    pub truncated: bool,
+}
+
+/// Per-stream output cap. Beyond this the reader keeps draining (so the child
+/// never deadlocks on a full pipe) but stops buffering, and the result is
+/// flagged `truncated` for the tool-result `_meta`.
+pub const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
+
+/// Read at most `cap` bytes into memory; discard the rest while continuing to
+/// drain. Returns `(bytes, truncated)`.
+fn read_capped<R: Read>(mut r: R, cap: usize) -> (Vec<u8>, bool) {
+    let mut out: Vec<u8> = Vec::with_capacity(cap.min(64 * 1024));
+    let mut truncated = false;
+    let mut buf = [0u8; 8192];
+    loop {
+        match r.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if out.len() < cap {
+                    let take = (cap - out.len()).min(n);
+                    out.extend_from_slice(&buf[..take]);
+                    if take < n {
+                        truncated = true;
+                    }
+                } else {
+                    truncated = true;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        }
+    }
+    (out, truncated)
+}
+
+fn recv_capped(rx: std::sync::mpsc::Receiver<(Vec<u8>, bool)>, cap: Duration) -> (Vec<u8>, bool) {
+    rx.recv_timeout(cap).unwrap_or_default()
 }
 
 /// The gVisor container pool.
@@ -405,23 +443,39 @@ impl GvisorPool {
 
         let mut container = self.acquire_warm(language, &config)?;
         let start = Instant::now();
+        let write_deadline = start + timeout;
 
-        // Write the payload to stdin, then close (EOF).
+        // Write the payload to stdin, then close (EOF). The write shares the
+        // call's exec budget: a container that stops draining stdin must not
+        // pin this blocking thread past the deadline.
         let write_res = match container.stdin.take() {
-            Some(mut stdin) => {
-                let r = stdin.write_all(code.as_bytes());
-                drop(stdin); // close even on error → EOF
-                r
-            }
+            Some(stdin) => Self::write_stdin_with_deadline(stdin, code, write_deadline),
             None => Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "stdin unavailable",
             )),
         };
         if let Err(e) = write_res {
-            eprintln!("virbius-gvisor: warm container write failed ({e}), cold retry");
+            let timed_out = e.kind() == std::io::ErrorKind::TimedOut;
+            eprintln!(
+                "virbius-gvisor: warm container write failed ({e}){}",
+                if timed_out { "" } else { ", cold retry" }
+            );
+            // Killing the child closes the pipe and unblocks the writer thread
+            // even when the write itself timed out.
             let reaped = kill_and_wait_brief(&mut container.child);
             Self::delete_container_with(&config, &container.id);
+            let _ = std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&container.id));
+            if timed_out {
+                if reaped.is_none() {
+                    detach_reap(container.child);
+                }
+                self.spawn_warm_async(language, config, generation);
+                return Err(format!(
+                    "sandbox_exec_timeout after {}ms (stdin write)",
+                    timeout.as_millis()
+                ));
+            }
             if reaped.is_none()
                 && wait_until(&mut container.child, Instant::now() + REAP_STEP).is_none()
             {
@@ -437,7 +491,7 @@ impl GvisorPool {
                 child: c.child,
                 warm_hit: false,
             })?;
-            let mut stdin = match container.stdin.take() {
+            let stdin = match container.stdin.take() {
                 Some(s) => s,
                 None => {
                     Self::delete_container_with(&config, &container.id);
@@ -445,13 +499,22 @@ impl GvisorPool {
                     return Err("stdin unavailable".into());
                 }
             };
-            if let Err(e) = stdin.write_all(code.as_bytes()) {
-                drop(stdin);
-                Self::delete_container_with(&config, &container.id);
+            if let Err(e) = Self::write_stdin_with_deadline(stdin, code, write_deadline) {
+                let timed_out = e.kind() == std::io::ErrorKind::TimedOut;
                 abort_child(container.child);
-                return Err(format!("write stdin failed: {e}"));
+                Self::delete_container_with(&config, &container.id);
+                let _ =
+                    std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&container.id));
+                self.spawn_warm_async(language, config, generation);
+                return Err(if timed_out {
+                    format!(
+                        "sandbox_exec_timeout after {}ms (stdin write)",
+                        timeout.as_millis()
+                    )
+                } else {
+                    format!("write stdin failed: {e}")
+                });
             }
-            drop(stdin); // EOF
         }
 
         // Drain stdout/stderr on separate threads: a child emitting more than
@@ -476,16 +539,10 @@ impl GvisorPool {
         let (out_tx, out_rx) = std::sync::mpsc::channel();
         let (err_tx, err_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut out = stdout;
-            out.read_to_end(&mut buf).ok();
-            let _ = out_tx.send(buf);
+            let _ = out_tx.send(read_capped(stdout, MAX_OUTPUT_BYTES));
         });
         std::thread::spawn(move || {
-            let mut buf = Vec::new();
-            let mut err = stderr;
-            err.read_to_end(&mut buf).ok();
-            let _ = err_tx.send(buf);
+            let _ = err_tx.send(read_capped(stderr, MAX_OUTPUT_BYTES));
         });
 
         let timed_out = loop {
@@ -505,16 +562,16 @@ impl GvisorPool {
 
         if let Err(()) = timed_out {
             let msg = Self::reap_after_exec_timeout(child, &config, &container.id, timeout);
-            let _ = recv_buf_timeout(out_rx, REAP_STEP);
-            let _ = recv_buf_timeout(err_rx, REAP_STEP);
+            let _ = recv_capped(out_rx, REAP_STEP);
+            let _ = recv_capped(err_rx, REAP_STEP);
             let _ = std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&container.id));
             self.spawn_warm_async(language, config, generation);
             return Err(msg);
         }
         let status = timed_out.unwrap();
 
-        let stdout_buf = recv_buf_timeout(out_rx, REAP_BUDGET);
-        let stderr_buf = recv_buf_timeout(err_rx, REAP_BUDGET);
+        let (stdout_buf, stdout_truncated) = recv_capped(out_rx, REAP_BUDGET);
+        let (stderr_buf, stderr_truncated) = recv_capped(err_rx, REAP_BUDGET);
 
         Self::delete_container_with(&config, &container.id);
         let _ = std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&container.id));
@@ -530,7 +587,37 @@ impl GvisorPool {
             exit_code: status.code().unwrap_or(-1),
             elapsed,
             warm_hit,
+            truncated: stdout_truncated || stderr_truncated,
         })
+    }
+
+    /// Write `code` to stdin and close it (EOF), never blocking past
+    /// `deadline`. A container that stops draining stdin can block `write_all`
+    /// forever; on timeout the caller must kill the child, which closes the
+    /// pipe and lets the writer thread exit.
+    fn write_stdin_with_deadline(
+        mut stdin: std::process::ChildStdin,
+        code: &str,
+        deadline: Instant,
+    ) -> std::io::Result<()> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let payload = code.as_bytes().to_vec();
+        std::thread::spawn(move || {
+            let r = stdin.write_all(&payload);
+            drop(stdin); // close even on error → EOF
+            let _ = tx.send(r);
+        });
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(r) => r,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "stdin write timed out",
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "stdin writer terminated",
+            )),
+        }
     }
 
     fn reap_after_exec_timeout(
@@ -644,12 +731,6 @@ impl GvisorPool {
     fn oci_config_json(config: &GvisorPoolConfig, language: Language) -> String {
         let mem_limit = config.memory_limit_bytes;
         let cpu_quota = config.cpu_quota;
-        let _network_str = if config.network_disabled {
-            "none"
-        } else {
-            "bridge"
-        };
-
         serde_json::json!({
             "ociVersion": "1.0.2",
             "process": {
@@ -823,17 +904,36 @@ struct AcquiredContainer {
 
 /// Generate a short UUID-like string for container IDs.
 fn uuid_v4_short() -> String {
-    use std::time::SystemTime;
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    format!("{:x}", now)
+    // CSPRNG-backed fragment (uuid v4 uses the OS RNG). The old nanosecond
+    // hex was predictable; container ids must not be guessable.
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    id[..16].to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_read_capped_truncates_and_drains() {
+        let data = vec![b'x'; 100];
+        let (buf, truncated) = read_capped(&data[..], 4);
+        assert_eq!(buf.len(), 4);
+        assert!(truncated, "oversized stream must be flagged truncated");
+
+        let data = b"hello";
+        let (buf, truncated) = read_capped(&data[..], 10);
+        assert_eq!(buf, b"hello");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn test_container_id_is_not_predictable() {
+        let a = uuid_v4_short();
+        let b = uuid_v4_short();
+        assert_ne!(a, b, "container id fragments must not repeat");
+        assert_eq!(a.len(), 16);
+    }
 
     #[test]
     fn test_language_from_str() {
