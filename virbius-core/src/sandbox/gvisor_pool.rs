@@ -916,7 +916,7 @@ mod tests {
 
     #[test]
     fn test_read_capped_truncates_and_drains() {
-        let data = vec![b'x'; 100];
+        let data = [b'x'; 100];
         let (buf, truncated) = read_capped(&data[..], 4);
         assert_eq!(buf.len(), 4);
         assert!(truncated, "oversized stream must be flagged truncated");

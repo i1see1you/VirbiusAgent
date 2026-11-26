@@ -54,9 +54,9 @@ They never traverse the proxy; use M0 to contain them.
    <container> curl http://127.0.0.1:19400/status`, `kubectl port-forward`,
    or an SSH tunnel — none of which expose the surface to the network.
 
-Optional tool policy (per logical name) for timeout/schema/fast-path:
+Optional tool policy (per canonical name) for timeout/schema/fast-path:
 ```json
-{ "tool_name": "shell", "sandbox_type": "gvisor", "timeout_ms": 30000 }
+{ "tool_name": "virbius__shell", "sandbox_type": "gvisor", "timeout_ms": 30000 }
 ```
 `none` / `landlock` on a **local** tool is refused (`sandbox_unavailable`), not
 downgraded. Omitting the policy is fine (node mode decides).
@@ -137,12 +137,9 @@ async with MCPServerSse(params={"url": "http://127.0.0.1:9090/sse"}) as mcp:
 
 - Tool names are **only** advertised when the license grants them. Ungranted
   canonical tools are not listed (list and call share one authorization rule).
-- Legacy bare names (`shell`, `execute_python`, `execute_code`, `execute_node`,
-  `exec_cmd`) **no longer execute locally**. They forward to the upstream; a
-  multi-upstream unknown-name error includes a migration hint.
-- Policy/engine/audit keep using the legacy **logical** names
-  (`virbius__python` → `execute_python`), so existing rules and dashboards keep
-  working.
+- Policy/engine/tool-policy/audit all use the **canonical** name. There is no
+  legacy-name alias: bare names such as `shell` or `execute_python` are ordinary
+  upstream tool names and are never executed locally.
 
 Local result `_meta`:
 ```json

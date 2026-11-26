@@ -38,7 +38,8 @@ public class ChainPatternDetector {
     private static final Set<String> WRITE_TOOLS =
             Set.of("write_file", "delete_file", "rm", "mv", "cp", "truncate", "edit_file", "db_write");
     private static final Set<String> EXEC_TOOLS =
-            Set.of("exec_cmd", "shell", "bash", "sh", "execute_python", "run_command", "subprocess");
+            Set.of("virbius__shell", "virbius__python", "virbius__node",
+                    "exec_cmd", "shell", "bash", "sh", "execute_python", "run_command", "subprocess");
     private static final Set<String> NET_TOOLS =
             Set.of("curl", "http_get", "http_post", "fetch", "webhook_call", "wget", "request");
     private static final List<String> SENSITIVE_PREFIXES =

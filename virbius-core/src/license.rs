@@ -128,20 +128,7 @@ impl License {
         if self.claims.allowed_tools.is_empty() {
             return true;
         }
-        if self.claims.allowed_tools.iter().any(|t| t == tool_name) {
-            return true;
-        }
-        // Policy continuity: a license that explicitly grants the canonical
-        // local-exec tool (e.g. `virbius__shell`) also authorizes its legacy
-        // logical name (`shell`) so engine rules, audit and HIGH_RISK
-        // matching keep working. The reverse does NOT hold: a bare legacy
-        // name never implies the canonical grant (local execution always
-        // requires the explicit canonical name, enforced by the proxy's
-        // local-exec hard gate, not by this method).
-        match canonical_for_logical(tool_name) {
-            Some(canonical) => self.claims.allowed_tools.iter().any(|t| t == canonical),
-            None => false,
-        }
+        self.claims.allowed_tools.iter().any(|t| t == tool_name)
     }
 
     pub fn remaining_quota(&self, current_risk: u32) -> u32 {
@@ -160,30 +147,6 @@ fn decode_b64url(input: &str) -> Result<Vec<u8>, ()> {
     base64::engine::general_purpose::STANDARD
         .decode(&s)
         .map_err(|_| ())
-}
-
-/// Canonical local-exec tool name for a legacy logical name. Used for
-/// policy continuity: licenses may grant canonical names while rules, audit
-/// and HIGH_RISK matching keep using the legacy logical names.
-pub fn canonical_for_logical(tool_name: &str) -> Option<&'static str> {
-    match tool_name {
-        "shell" | "exec_cmd" => Some("virbius__shell"),
-        "execute_python" | "execute_code" => Some("virbius__python"),
-        "execute_node" => Some("virbius__node"),
-        _ => None,
-    }
-}
-
-/// Legacy logical name for a canonical local-exec tool name. The proxy calls
-/// the security pipeline with the logical name so existing engine rules,
-/// tool policies and audit trails are unchanged by the rename.
-pub fn logical_for_canonical(tool_name: &str) -> Option<&'static str> {
-    match tool_name {
-        "virbius__shell" => Some("shell"),
-        "virbius__python" => Some("execute_python"),
-        "virbius__node" => Some("execute_node"),
-        _ => None,
-    }
 }
 
 pub fn revoke(app_id: &str) {

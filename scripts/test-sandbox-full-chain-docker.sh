@@ -37,14 +37,19 @@ ok()   { echo -e "${GREEN}[PASS]${NC} $*"; }
 warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 err()  { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
 
+RUN_ID="$(date +%s)-$$"
 TENANT="docker-sbx-e2e"
 APP="sbx-e2e"
+CANON_APP="sbx-canon-$RUN_ID"
+WILD_APP="sbx-wild-$RUN_ID"
+BARE_APP="sbx-bare-$RUN_ID"
 BASE="http://127.0.0.1:18080"
 PROXY_URL="http://127.0.0.1:19090"
 PROJECT="virbius-sandbox-e2e"
 COMPOSE_DIR="scripts/sandbox-full-chain"
 MARKER="/tmp/virbius-e2e-sbx-docker/*"
 GVISOR_RUNSC="/e2e-gvisor-runsc"
+FAILOVER_JSON='{"low_risk_fail_open":true,"high_risk_fail_closed":false,"engine_timeout_ms":1000}'
 GVISOR_MEM=67108864
 LL_ID="e2e_sbx_ll_docker"
 GV_ID="e2e_sbx_gv_docker"
@@ -105,42 +110,6 @@ for i in $(seq 1 60); do
 done
 ok "control healthy ($BASE)"
 
-# ─── licenses via ops-console API (user flow) ──────────────────────────────
-# All license state is created/read/revoked through the control HTTP API.
-# Nothing here opens SQLite or Redis directly.
-issue_license() {
-  local tools_json=$1 app=$2 label=$3 resp jwt lic
-  resp=$(api POST "/api/v1/admin/tenants/$TENANT/licenses/issue" \
-    "$(jq -n --arg app "$app" --arg name "sbx-e2e-$label" --argjson tools "$tools_json" \
-      '{app_id:$app,agent_name:$name,allowed_tools:$tools,risk_quota:100,tool_rate_limit:100,expiry_seconds:3600,description:"sandbox full-chain e2e"}')" \
-    ) || return 1
-  jwt=$(echo "$resp" | jq -r '.data.jwt // empty')
-  lic=$(echo "$resp" | jq -r '.data.license_id // empty')
-  [[ -n "$jwt" && -n "$lic" ]] || return 1
-  printf '%s %s' "$jwt" "$lic"
-}
-
-read CANON_JWT CANON_LIC_ID < <(issue_license '["virbius__shell","virbius__python"]' test1 canonical) \
-  || err "could not issue canonical-grant license via API"
-read WILDCARD_JWT WILDCARD_LIC_ID < <(issue_license '[]' test1-wild wildcard) \
-  || err "could not issue wildcard license via API"
-[[ -n "$CANON_JWT" && -n "$WILDCARD_JWT" ]] || err "empty license JWT from API"
-ok "canonical + wildcard licenses issued via ops-console API"
-
-# Issuing a license generates the tenant signing key; the public half is then
-# available through the API for the proxy to verify JWTs presented by agents.
-api GET "/api/v1/admin/tenants/$TENANT/licenses/public-key" \
-  | python3 -c 'import json,sys; open("'"$LICENSE_DIR"'/license.pub.pem","w").write(json.load(sys.stdin)["data"]["public_key_pem"])' \
-  || err "could not read license public key via API"
-[[ -s "$LICENSE_DIR/license.pub.pem" ]] || err "control returned empty license public key"
-ok "license public key read via ops-console API"
-
-LIC_LIST=$(api GET "/api/v1/admin/tenants/$TENANT/licenses/list")
-echo "$LIC_LIST" | jq -e --arg id "$CANON_LIC_ID" \
-  '.data[] | select(.license_id == $id or .licenseId == $id)' >/dev/null \
-  || err "canonical license not visible in /licenses/list"
-ok "issued license visible via /licenses/list"
-
 # ─── helpers ────────────────────────────────────────────────────────────────
 api() {
   local method=$1 path=$2 body=${3:-} resp http_code payload
@@ -170,6 +139,45 @@ api_raw() {
   fi
   echo "$resp"
 }
+
+# ─── licenses via ops-console API (user flow) ──────────────────────────────
+# All license state is created/read/revoked through the control HTTP API.
+# Nothing here opens SQLite or Redis directly.
+issue_license() {
+  local tools_json=$1 app=$2 label=$3 resp jwt lic
+  resp=$(api POST "/api/v1/admin/tenants/$TENANT/licenses/issue" \
+    "$(jq -n --arg app "$app" --arg name "sbx-e2e-$label" --argjson tools "$tools_json" \
+      '{app_id:$app,agent_name:$name,allowed_tools:$tools,risk_quota:100,tool_rate_limit:100,expiry_seconds:3600,description:"sandbox full-chain e2e"}')" \
+    ) || return 1
+  jwt=$(echo "$resp" | jq -r '.data.jwt // empty')
+  lic=$(echo "$resp" | jq -r '.data.license_id // empty')
+  [[ -n "$jwt" && -n "$lic" ]] || return 1
+  printf '%s %s\n' "$jwt" "$lic"
+}
+
+read CANON_JWT CANON_LIC_ID < <(issue_license '["virbius__shell","virbius__python"]' "$CANON_APP" canonical) \
+  || err "could not issue canonical-grant license via API"
+read WILDCARD_JWT WILDCARD_LIC_ID < <(issue_license '[]' "$WILD_APP" wildcard) \
+  || err "could not issue wildcard license via API"
+read BARE_JWT BARE_LIC_ID < <(issue_license '["shell"]' "$BARE_APP" bare) \
+  || err "could not issue bare-name-grant license via API"
+[[ -n "$CANON_JWT" && -n "$WILDCARD_JWT" && -n "$BARE_JWT" ]] \
+  || err "empty license JWT from API"
+ok "canonical + wildcard + bare-grant licenses issued via ops-console API"
+
+# Issuing a license generates the tenant signing key; the public half is then
+# available through the API for the proxy to verify JWTs presented by agents.
+api GET "/api/v1/admin/tenants/$TENANT/licenses/public-key" \
+  | python3 -c 'import json,sys; open("'"$LICENSE_DIR"'/license.pub.pem","w").write(json.load(sys.stdin)["data"]["public_key_pem"])' \
+  || err "could not read license public key via API"
+[[ -s "$LICENSE_DIR/license.pub.pem" ]] || err "control returned empty license public key"
+ok "license public key read via ops-console API"
+
+LIC_LIST=$(api GET "/api/v1/admin/tenants/$TENANT/licenses/list")
+echo "$LIC_LIST" | jq -e --arg id "$CANON_LIC_ID" \
+  '.data[] | select(.license_id == $id or .licenseId == $id)' >/dev/null \
+  || err "canonical license not visible in /licenses/list"
+ok "issued license visible via /licenses/list"
 
 rollback_active() {
   local d
@@ -343,6 +351,27 @@ assert_json "$MF" "int(d.get('gvisor_config',{}).get('exec_timeout_ms') or 0)" "
 api POST "/api/v1/admin/tenants/$TENANT/deploy-rollout/$DID/rollback" \
   '{"note":"e2e done with canary assertions"}' >/dev/null || true
 
+api PUT "/api/v1/admin/tenants/$TENANT/proxy-policy" \
+  "$(jq -n --argjson fo "$FAILOVER_JSON" \
+    '{session_ttl_secs:1800,fallback_policy:"minimum_privilege",failover:$fo}')" >/dev/null
+
+info "2f. control-plane API: legacy bare-name compat is gone"
+TOOLS_JSON=$(api GET "/api/v1/admin/tenants/default/tools")
+echo "$TOOLS_JSON" | jq -e \
+  '([.data[] | select(.tool_name == "virbius__shell")] | length) == 1' >/dev/null \
+  || err "default tool registry must contain virbius__shell: $TOOLS_JSON"
+echo "$TOOLS_JSON" | jq -e \
+  '([.data[] | select(.tool_name == "exec_cmd")] | length) == 0' >/dev/null \
+  || err "default tool registry must not contain legacy exec_cmd: $TOOLS_JSON"
+ok "tool registry (via API): canonical present, exec_cmd absent"
+
+CHAIN_RULE=$(api GET "/api/v1/admin/tenants/default/rules/chain-write-exec")
+echo "$CHAIN_RULE" | jq -e '.data.body | contains("virbius__shell")' >/dev/null \
+  || err "chain-write-exec rule must match virbius__shell: $CHAIN_RULE"
+echo "$CHAIN_RULE" | jq -e '.data.body | contains("virbius__python")' >/dev/null \
+  || err "chain-write-exec rule must match virbius__python: $CHAIN_RULE"
+ok "default chain rule (via API) matches canonical local-exec names"
+
 # ─── Phase 3: MCP proxy runtime ─────────────────────────────────────────────
 if [[ "${SKIP_PROXY:-}" == "1" ]]; then
   warn "SKIP_PROXY=1 — skip MCP wall / singleton apply"
@@ -380,7 +409,6 @@ ok "proxy image $PROXY_IMAGE"
 
 start_proxy() {
   local manifest_dir=$1; shift
-  local -a extra=("$@")
   docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
   docker run -d --name "$PROXY_NAME" \
     --network "${PROJECT}_default" \
@@ -392,7 +420,7 @@ start_proxy() {
     -e VIRBIUS_LOCAL_EXEC_MODE="gvisor" \
     -e VIRBIUS_REDIS_URL="redis://redis:6379" \
     -e VIRBIUS_LICENSE_PUBLIC_KEY=/etc/virbius/license.pub.pem \
-    "${extra[@]}" \
+    "$@" \
     -e HTTP_PROXY="" -e HTTPS_PROXY="" -e http_proxy="" -e https_proxy="" \
     "$PROXY_IMAGE" >/dev/null
   local i
@@ -467,8 +495,8 @@ EP=$(mcp_read 20)
 SID=$(echo "$EP" | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
 [[ -n "$SID" ]] || { mcp_close "$TMP"; docker logs "$PROXY_NAME" | tail -20; err "SSE session_id missing: $EP"; }
 ok "MCP session $SID"
-mcp_post "$SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" \
-  '{_meta:{app_id:"test1",tenant_id:"docker-sbx-e2e",license_jwt:$jwt}}')"
+mcp_post "$SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" --arg a "$CANON_APP" \
+  '{_meta:{app_id:$a,tenant_id:"docker-sbx-e2e",license_jwt:$jwt}}')"
 INIT=$(mcp_wait_id 1 20)
 echo "$INIT" | jq -e '.result.serverInfo' >/dev/null || { mcp_close "$TMP"; err "initialize failed: $INIT"; }
 ok "MCP initialize"
@@ -483,7 +511,7 @@ info "3c. empty gvisor_config: local exec must fail closed (sandbox_unavailable)
 mcp_post "$SID" 10 tools/call '{"name":"virbius__shell","arguments":{"command":"echo gvisor-empty"}}'
 EMPTY_EXEC=$(mcp_wait_id 10 20)
 ESBOX=$(echo "$EMPTY_EXEC" | jq -r '.result._meta.sandbox_used // empty')
-EERR=$(echo "$EMPTY_EXEC" | jq -r '.error.message // empty')
+EERR=$(echo "$EMPTY_EXEC" | jq -r '.error.data.reason_code // .error.message // empty')
 if [[ -n "$ESBOX" ]]; then
   mcp_close "$TMP"
   err "empty gvisor_config must NOT execute local code (sandbox_used=$ESBOX): $EMPTY_EXEC"
@@ -512,13 +540,13 @@ mcp_session "$TMP"
 EP=$(mcp_read 20)
 SID=$(echo "$EP" | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
 [[ -n "$SID" ]] || { mcp_close "$TMP"; err "SSE session_id missing after restart"; }
-mcp_post "$SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" \
-  '{_meta:{app_id:"test1",tenant_id:"docker-sbx-e2e",license_jwt:$jwt}}')"
+mcp_post "$SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" --arg a "$CANON_APP" \
+  '{_meta:{app_id:$a,tenant_id:"docker-sbx-e2e",license_jwt:$jwt}}')"
 mcp_wait_id 1 20 >/dev/null
 mcp_post "$SID" 12 tools/call '{"name":"virbius__shell","arguments":{"command":"echo gvisor-populated"}}'
 POP=$(mcp_wait_id 12 25)
 PBOX=$(echo "$POP" | jq -r '.result._meta.sandbox_used // empty')
-PERR=$(echo "$POP" | jq -r '.error.message // empty')
+PERR=$(echo "$POP" | jq -r '.error.data.reason_code // .error.message // empty')
 if [[ -n "$PBOX" ]]; then
   # Only possible when the configured runsc path actually exists.
   ok "exec ran with sandbox_used=$PBOX (rule body reached runtime)"
@@ -540,7 +568,8 @@ docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
 # code execution. The gate must fire before the pipeline can record an allow.
 info "4a. publish fallback_policy=audit_only through the ops-console API"
 api PUT "/api/v1/admin/tenants/$TENANT/proxy-policy" \
-  "$(jq -n '{session_ttl_secs:3600,fallback_policy:"audit_only"}')" >/dev/null
+  "$(jq -n --argjson fo "$FAILOVER_JSON" \
+    '{session_ttl_secs:3600,fallback_policy:"audit_only",failover:$fo}')" >/dev/null
 PP=$(api GET "/api/v1/admin/tenants/$TENANT/proxy-policy")
 assert_json "$PP" "d.get('data',{}).get('fallback_policy')" "audit_only" \
   "proxy-policy fallback_policy via API"
@@ -577,17 +606,41 @@ gate_probe() {
 }
 
 info "4b. no license + audit_only must be denied by the canonical-grant gate"
-gate_probe "no-license" "" "test1" "-32016" "local_exec_not_granted"
+gate_probe "no-license" "" "$CANON_APP" "-32016" "local_exec_not_granted"
 
 info "4c. wildcard license (empty allowed_tools) must also be denied"
-gate_probe "wildcard" "$WILDCARD_JWT" "test1-wild" "-32016" "local_exec_not_granted"
+gate_probe "wildcard" "$WILDCARD_JWT" "$WILD_APP" "-32016" "local_exec_not_granted"
+
+info "4c2. bare-name grant must not authorize canonical local exec"
+gate_probe "bare-grant" "$BARE_JWT" "$BARE_APP" "-32016" "local_exec_not_granted"
 
 info "4d. explicit canonical grant passes the gate (fails closed at absent runsc)"
-gate_probe "canonical" "$CANON_JWT" "test1" "-32018" "sandbox_unavailable"
+gate_probe "canonical" "$CANON_JWT" "$CANON_APP" "-32018" "sandbox_unavailable"
+
+info "4d2. bare tool name is an ordinary upstream tool (no migration hint)"
+BARE_NAME_DIR="$TMP/gate-bare-name"
+mkdir -p "$BARE_NAME_DIR"
+mcp_session "$BARE_NAME_DIR"
+BARE_SID=$(mcp_read 20 | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
+[[ -n "$BARE_SID" ]] || { mcp_close "$BARE_NAME_DIR"; err "SSE session_id missing for bare-name probe"; }
+mcp_post "$BARE_SID" 1 initialize '{"_meta":{"app_id":"test1","tenant_id":"docker-sbx-e2e"}}'
+mcp_wait_id 1 20 >/dev/null
+mcp_post "$BARE_SID" 3 tools/call '{"name":"shell","arguments":{"command":"echo bare"}}'
+BARE_RESP=$(mcp_wait_id 3 20)
+mcp_close "$BARE_NAME_DIR"
+BARE_CODE=$(echo "$BARE_RESP" | jq -r '.error.code // empty')
+BARE_MSG=$(echo "$BARE_RESP" | jq -r '.error.message // empty')
+[[ "$BARE_CODE" == "-32602" ]] \
+  || err "bare 'shell' should be an ordinary unknown upstream tool: $BARE_RESP"
+if echo "$BARE_MSG" | grep -qiE 'legacy|migration|no longer execute locally'; then
+  err "bare-name call must not carry a legacy migration hint: $BARE_MSG"
+fi
+ok "bare 'shell' -> unknown upstream tool (-32602) with no migration hint"
 
 info "4e. operator restores minimum_privilege through the API"
 api PUT "/api/v1/admin/tenants/$TENANT/proxy-policy" \
-  '{"session_ttl_secs":1800,"fallback_policy":"minimum_privilege"}' >/dev/null
+  "$(jq -n --argjson fo "$FAILOVER_JSON" \
+    '{session_ttl_secs:1800,fallback_policy:"minimum_privilege",failover:$fo}')" >/dev/null
 PP=$(api GET "/api/v1/admin/tenants/$TENANT/proxy-policy")
 assert_json "$PP" "d.get('data',{}).get('fallback_policy')" "minimum_privilege" \
   "proxy-policy restored via API"
@@ -623,16 +676,25 @@ TMP=$(mktemp -d /tmp/sbx-concurrency.XXXXXX)
 mcp_session "$TMP"
 SID=$(mcp_read 20 | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
 [[ -n "$SID" ]] || { mcp_close "$TMP"; err "SSE session_id missing for concurrency probe"; }
-mcp_post "$SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" --arg t "$TENANT" \
-  '{_meta:{app_id:"test1",tenant_id:$t,license_jwt:$jwt}}')"
+mcp_post "$SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" --arg t "$TENANT" --arg a "$CANON_APP" \
+  '{_meta:{app_id:$a,tenant_id:$t,license_jwt:$jwt}}')"
 mcp_wait_id 1 20 >/dev/null
 
 BIG_CODE=$(python3 -c 'print("x" * 150000)')
 BIG_PARAM=$(jq -n --arg c "$BIG_CODE" '{name:"virbius__shell",arguments:{command:$c}}')
 mcp_post "$SID" 20 tools/call "$BIG_PARAM"
 mcp_post "$SID" 21 tools/call "$BIG_PARAM"
-R20=$(mcp_wait_id 20 40)
-R21=$(mcp_wait_id 21 40)
+R20=""; R21=""
+COLLECT_DEADLINE=$((SECONDS + 60))
+while [[ -z "$R20" || -z "$R21" ]] && (( SECONDS < COLLECT_DEADLINE )); do
+  RAW=$(mcp_read 10)
+  [[ -z "$RAW" ]] && continue
+  RID=$(echo "$RAW" | jq -r '.id // empty')
+  case "$RID" in
+    20) [[ -n "$R20" ]] || R20="$RAW" ;;
+    21) [[ -n "$R21" ]] || R21="$RAW" ;;
+  esac
+done
 mcp_close "$TMP"
 
 BUSY=false
@@ -656,6 +718,8 @@ api POST "/api/v1/admin/tenants/$TENANT/licenses/$CANON_LIC_ID/revoke" \
   '{"reason":"sandbox e2e cleanup"}' >/dev/null
 api POST "/api/v1/admin/tenants/$TENANT/licenses/$WILDCARD_LIC_ID/revoke" \
   '{"reason":"sandbox e2e cleanup"}' >/dev/null
+api POST "/api/v1/admin/tenants/$TENANT/licenses/$BARE_LIC_ID/revoke" \
+  '{"reason":"sandbox e2e cleanup"}' >/dev/null
 ok "licenses revoked via API"
 
 echo ""
@@ -669,8 +733,10 @@ echo "  [x] empty {} does not impersonate Default pool limits"
 echo "  [x] populated gvisor_config applied to process singleton"
 echo "  [x] licenses issued/read/revoked via ops-console API (no DB/Redis reads)"
 echo "  [x] manifest assertions read from edge-delivery API (no container FS reads)"
-echo "  [x] audit_only + no/wildcard license -> local_exec_not_granted (-32016)"
+echo "  [x] audit_only + no/wildcard/bare-grant license -> local_exec_not_granted (-32016)"
 echo "  [x] canonical grant passes the gate and fails closed at sandbox"
+echo "  [x] bare 'shell' is an ordinary upstream tool; no migration hint"
+echo "  [x] tool registry + default chain rule (via API) use canonical names"
 echo "  [x] concurrency=1 holds slot during blocking exec (local_exec_busy)"
 echo "  [x] stdin write bounded -> sandbox_exec_timeout (no unbounded hang)"
 echo "Cleanup: ./scripts/test-sandbox-full-chain-docker.sh --cleanup"

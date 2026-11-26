@@ -36,18 +36,6 @@ pub const LOCAL_EXEC_TOOLS: &[(&str, &str, &str)] = &[
     ("virbius__node", "node", "code"),
 ];
 
-/// Legacy bare names that used to be local-exec tools. They no longer
-/// execute locally — a call with one of these names is routed to the upstream
-/// like any other tool. Kept only to emit migration hints and to keep the
-/// `exec_cmd` HIGH_RISK entry meaningful for upstream forwarding.
-pub const LEGACY_LOCAL_NAMES: &[&str] = &[
-    "shell",
-    "execute_python",
-    "execute_code",
-    "execute_node",
-    "exec_cmd",
-];
-
 /// If `tool_name` is a local code-execution tool (exact canonical match),
 /// returns `(language, code_arg)`.
 pub fn local_exec_info(tool_name: &str) -> Option<(&'static str, &'static str)> {
@@ -55,11 +43,6 @@ pub fn local_exec_info(tool_name: &str) -> Option<(&'static str, &'static str)> 
         .iter()
         .find(|(name, _, _)| *name == tool_name)
         .map(|(_, lang, arg)| (*lang, *arg))
-}
-
-/// True if `tool_name` is one of the legacy bare local-exec names.
-pub fn is_legacy_local_name(tool_name: &str) -> bool {
-    LEGACY_LOCAL_NAMES.contains(&tool_name)
 }
 
 /// Synthesized tool descriptors for local code-execution tools, injected into

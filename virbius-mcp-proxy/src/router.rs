@@ -852,19 +852,14 @@ async fn handle_tools_call(
     // Detect local code-execution tools by their CANONICAL names
     // (`virbius__shell`, `virbius__python`, `virbius__node`). These are
     // executed by the proxy itself in a gVisor sandbox and never forwarded
-    // to an upstream. Legacy bare names (`shell`, ...) are NOT local tools
-    // anymore — they route to the upstream like any other tool.
+    // to an upstream. Any other name (including `shell`) is an ordinary
+    // upstream tool name.
     let local_exec = crate::egress::local_exec_info(displayed_tool_name);
 
-    // `policy_tool_name` is the name the pipeline and all post-processing
-    // run under: the legacy LOGICAL name for local-exec calls (engine rules,
-    // tool policies, transforms, trace and audit stay keyed by the legacy
-    // names), the original upstream tool name otherwise. The canonical wire
-    // name is only used by the hard gate and the executor.
+    // The canonical name is the policy identity for local exec: engine
+    // rules, tool policies, transforms, trace and audit all key on it.
     let (upstream_name, original_tool_name) = if local_exec.is_some() {
-        let logical = virbius_core::license::logical_for_canonical(displayed_tool_name)
-            .unwrap_or(displayed_tool_name);
-        ("__local__".to_string(), logical.to_string())
+        ("__local__".to_string(), displayed_tool_name.to_string())
     } else {
         // Resolve tool route: determine upstream_name and original_tool_name.
         // In single-upstream mode, route_tool always returns the sole upstream.
@@ -876,22 +871,6 @@ async fn handle_tools_call(
                     // Single upstream has no routing ambiguity: pass through.
                     let names = upstream_mgr.names_for(session_id);
                     (names[0].to_string(), displayed_tool_name.to_string())
-                } else if crate::egress::is_legacy_local_name(displayed_tool_name) {
-                    // Legacy bare local-exec name with no session inventory
-                    // (or no upstream owns it): give the migration hint
-                    // instead of a generic unknown-tool error.
-                    let canonical =
-                        virbius_core::license::canonical_for_logical(displayed_tool_name)
-                            .map(|c| c.to_string())
-                            .unwrap_or_else(|| "virbius__*".to_string());
-                    return Some(jsonrpc_error(
-                        -32602,
-                        id,
-                        &format!(
-                            "unknown tool '{}' — legacy local-exec names no longer execute locally; use '{}' (requires an explicit license grant) or call tools/list first",
-                            displayed_tool_name, canonical
-                        ),
-                    ));
                 } else {
                     // Multi-upstream with no session inventory: fail closed.
                     // No string-prefix guessing — call tools/list first.
@@ -2243,13 +2222,12 @@ async fn execute_in_sandbox(
         }
     };
 
-    // 3. Tool policy (looked up by the LOGICAL name for continuity).
+    // 3. Tool policy (keyed by the canonical local-exec name).
     //    v4 semantics for local tools:
     //      no policy              → node mode decides (gvisor here)
     //      policy sandbox=gvisor  → gvisor
     //      policy none/landlock   → refuse (explicit unsupported intent)
-    let policy_name = virbius_core::license::logical_for_canonical(tool_name).unwrap_or(tool_name);
-    let policy = manifest::tool_policy(policy_name);
+    let policy = manifest::tool_policy(tool_name);
     let sandbox_type_str = policy
         .as_ref()
         .map(|p| p.sandbox_type.clone())

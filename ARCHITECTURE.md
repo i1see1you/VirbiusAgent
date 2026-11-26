@@ -258,13 +258,10 @@ ToolCallRequest { name, args }
   |    Result _meta: { sandbox_used, degraded, truncated, limit_reason, exit_code, limits }
   |
   +-- any other name
-  |    Forwarded to the upstream MCP server. `sandbox_type` in the manifest is
-  |    IGNORED for upstream tools (they run in the upstream's own trust domain;
-  |    `none`/`landlock` there does not disable the tool).
-  |
-  +-- legacy bare names ("shell", "execute_python", "exec_code", "exec_cmd", ...)
-       NOT local tools anymore. They route to the upstream like any other name.
-       The proxy may add a migration hint to the error ("use virbius__shell").
+       Forwarded to the upstream MCP server. `sandbox_type` in the manifest is
+       IGNORED for upstream tools (they run in the upstream's own trust domain;
+       `none`/`landlock` there does not disable the tool). Bare names such as
+       `shell` or `execute_python` are just ordinary upstream tool names.
 ```
 
 **Removed**: `sandbox_type=none` unsandboxed execution and Landlock execution.
@@ -273,9 +270,9 @@ There is no degraded/unsandboxed fallback: without gVisor the call fails with
 
 > **Security model**: the local executor is gVisor-only and fail-closed.
 > Upstream tools are not sandboxed by the proxy; they rely on the upstream's
-> own isolation plus the proxy's precheck/engine policy. High-risk names
-> (including the legacy local names and `exec_cmd`) remain HIGH_RISK under the
-> no-license fallback policy.
+> own isolation plus the proxy's precheck/engine policy. Local exec uses its
+> canonical `virbius__*` name for policy and audit; bare `shell`-style names are
+> plain upstream tool names.
 
 ### 2.3 Landlock + drop caps Subprocess (NOT implemented)
 

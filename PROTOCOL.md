@@ -223,7 +223,7 @@ The Agent passes identity information in the `_meta` field of the `initialize` r
 >
 > | Fallback Mode | Behavior | Applicable Scenario | Config Default |
 > |--------------|---------|-----------|------|
-> | `minimum_privilege` | Only allow low-risk read-only tools (search/calculator/format), block high-risk tools (shell/execute_python/read_file/curl), DLP + schema validation still active, rate_limit reduced to 10/min, risk_quota reduced to 30 | **Default**, trial + gradual onboarding | **Default** |
+> | `minimum_privilege` | Only allow low-risk read-only tools (search/calculator/format), block generic high-risk tools (read_file/curl/delete_file/sql_query), DLP + schema validation still active, rate_limit reduced to 10/min, risk_quota reduced to 30 | **Default**, trial + gradual onboarding | **Default** |
 > | `default_deny` | Block all tool calls, only return `license_required` error | Production environment requiring License | Should be set to this value for production deployment |
 > | `audit_only` | Only audit, no blocking (original design, deprecated — requires explicit enabling) | Internal debugging only, **prohibited in production** | Requires explicit configuration |
 >
@@ -261,7 +261,6 @@ The Agent passes identity information in the `_meta` field of the `initialize` r
 > }
 >
 > const HIGH_RISK_TOOLS: &[&str] = &[
->     "shell", "execute_python", "execute_code",
 >     "read_file", "write_file", "delete_file",
 >     "curl", "http_request", "fetch",
 >     "read_secret", "write_secret",
@@ -1179,7 +1178,7 @@ The proxy executes code itself only for the **reserved local namespace**:
 2. The License `allowed_tools` lists the canonical name **explicitly**. An empty
    allowlist (wildcard) never grants local execution; it only relaxes upstream
    tool restrictions.
-3. The tool policy (if one exists for the logical name) is absent or
+3. The tool policy (if one exists for the canonical name) is absent or
    `sandbox_type = "gvisor"`. Explicit `none` / `landlock` for a local tool is
    refused (`sandbox_unavailable`) — never downgraded.
 
@@ -1187,15 +1186,14 @@ The proxy executes code itself only for the **reserved local namespace**:
 Non-Linux hosts return `sandbox_unavailable`. Removing gVisor makes local
 execution unavailable rather than unsafe.
 
-**Policy continuity**: the pipeline, engine, tool policies, arg transforms, trace
-and audit keep using the legacy LOGICAL names — `virbius__shell` → `shell`,
-`virbius__python` → `execute_python`, `virbius__node` → `execute_node` — so
-existing rules and dashboards continue to match after the rename.
+**Policy identity**: local exec is evaluated under its canonical name. The
+pipeline, engine, tool policies, arg transforms, trace and audit all use
+`virbius__shell` / `virbius__python` / `virbius__node`; there is no legacy-name
+normalization or migration alias.
 
-**Legacy bare names** (`shell`, `execute_python`, `execute_code`, `execute_node`,
-`exec_cmd`) no longer execute locally. They are forwarded to the upstream like
-any other tool name; when a multi-upstream lookup fails the error carries a
-migration hint.
+**Bare names** such as `shell`, `execute_python`, `execute_code`,
+`execute_node` and `exec_cmd` are ordinary upstream tool names. They are neither
+local tools nor special-cased by the proxy.
 
 **Routing**: routes are per session (a session's `tools/list` never rewrites
 another session's routes). Single-upstream mode passes unknown non-local names

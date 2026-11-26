@@ -59,6 +59,14 @@ class ChainPatternDetectorTest {
     }
 
     @Test
+    void writeThenCanonicalLocalExecFires() {
+        List<Map<String, Object>> h = history(List.of(
+                call("write_file", "{\"path\":\"/tmp/x.sh\"}", true)));
+        List<SignalDto> signals = detector.detect(h, "virbius__shell", "{\"command\":\"sh /tmp/x.sh\"}");
+        assertTrue(signals.stream().anyMatch(s -> "chain-write-exec".equals(s.ruleId())));
+    }
+
+    @Test
     void privilegeEscalationFiresOnReadWriteExec() {
         List<Map<String, Object>> h = history(List.of(
                 call("read_file", "{\"path\":\"/tmp/a\"}", true),

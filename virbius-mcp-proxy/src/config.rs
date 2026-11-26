@@ -1170,15 +1170,10 @@ pub enum FallbackPolicy {
 }
 
 /// High-risk tools that are always blocked without a License.
+///
+/// Local exec (`virbius__*`) is gated separately by the canonical-grant
+/// check, so only generic upstream tool names live here.
 pub const HIGH_RISK_TOOLS: &[&str] = &[
-    "shell",
-    "execute_python",
-    "execute_code",
-    "execute_node",
-    // `exec_cmd` is a legacy local-exec name (egress::LOCAL_EXEC_TOOLS in
-    // older versions). It must stay HIGH_RISK so a wildcard-less license is
-    // still required to forward a same-named upstream tool.
-    "exec_cmd",
     "read_file",
     "write_file",
     "delete_file",
@@ -1505,8 +1500,7 @@ mod tests {
     }
 
     #[test]
-    fn test_high_risk_tools_contains_shell() {
-        assert!(HIGH_RISK_TOOLS.contains(&"shell"));
+    fn test_high_risk_tools_contains_generic_high_risk() {
         assert!(HIGH_RISK_TOOLS.contains(&"curl"));
         assert!(HIGH_RISK_TOOLS.contains(&"read_file"));
         assert!(HIGH_RISK_TOOLS.contains(&"delete_file"));
@@ -1515,6 +1509,8 @@ mod tests {
 
     #[test]
     fn test_high_risk_tools_not_contains_low_risk() {
+        assert!(!HIGH_RISK_TOOLS.contains(&"shell"));
+        assert!(!HIGH_RISK_TOOLS.contains(&"execute_python"));
         assert!(!HIGH_RISK_TOOLS.contains(&"read_file_info"));
         assert!(!HIGH_RISK_TOOLS.contains(&"list_files"));
         assert!(!HIGH_RISK_TOOLS.contains(&"search"));

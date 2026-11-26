@@ -6,19 +6,19 @@
   "dlp_rules": [],
   "tool_policies": [
     {
-      "tool_name": "execute_python",
+      "tool_name": "virbius__python",
       "risk_class": "high",
       "sandbox_type": "none",
       "timeout_ms": 3000,
-      "fast_path": false
+      "fast_path": true
     },
     {
-      "tool_name": "exec_cmd",
+      "tool_name": "virbius__shell",
       "risk_class": "high",
       "sandbox_type": "none",
       "sandbox_intent": "gvisor",
       "timeout_ms": 5000,
-      "fast_path": false
+      "fast_path": true
     }
   ],
   "landlock_profiles": [],

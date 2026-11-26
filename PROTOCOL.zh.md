@@ -223,7 +223,7 @@ Agent 在 `initialize` 请求的 `_meta` 字段中传递身份信息：
 >
 > | 回退模式 | 行为 | 适用场景 | 配置默认值 |
 > |--------------|---------|-----------|------|
-> | `minimum_privilege` | 仅允许低风险只读工具（搜索/计算器/格式化），阻止高风险工具（shell/execute_python/read_file/curl），DLP + schema 校验仍然生效，rate_limit 降至 10/min，risk_quota 降至 30 | **默认**，试用 + 逐步接入 | **默认** |
+> | `minimum_privilege` | 仅允许低风险只读工具（搜索/计算器/格式化），阻止通用高风险工具（read_file/curl/delete_file/sql_query），DLP + schema 校验仍然生效，rate_limit 降至 10/min，risk_quota 降至 30 | **默认**，试用 + 逐步接入 | **默认** |
 > | `default_deny` | 阻止所有工具调用，仅返回 `license_required` 错误 | 需要 License 的生产环境 | 生产部署应设置为该值 |
 > | `audit_only` | 仅审计，不阻断（原始设计，已弃用——需要显式启用） | 仅内部调试，**禁止用于生产** | 需要显式配置 |
 >
@@ -261,7 +261,6 @@ Agent 在 `initialize` 请求的 `_meta` 字段中传递身份信息：
 > }
 >
 > const HIGH_RISK_TOOLS: &[&str] = &[
->     "shell", "execute_python", "execute_code",
 >     "read_file", "write_file", "delete_file",
 >     "curl", "http_request", "fetch",
 >     "read_secret", "write_secret",
@@ -696,7 +695,7 @@ sample_rate = 1.0                   # Audit sample rate
 3. 仅 https+443；剥 Agent `Authorization`/同名头/inbound framing 头（Host/Content-Length/Transfer-Encoding/Connection/Keep-Alive/Proxy-*/TE/Trailer/Upgrade）；钉 `Accept-Encoding: identity`；注入恰一个 `header_name: prefix+value`（自持 HeaderMap 断言 `get_all==1`）。
 4. 不跟跳（专用 no-follow client）：3xx 仅返回 `{status, location}`（location 经清洗，body 丢弃）；**非 2xx 一律 deny、不读 body**。
 5. 统一 finalize：整体缓冲 ≤4MiB（超限 deny）；`Content-Encoding` 缺省放行、存在须逐值 `identity`；body 首两字节 `1f 8b` 拒；**清洗**（`prefix+value`/`value` 及其 percent/base64/base64url **字面量**变体 → `[REDACTED]`；仅字面替换、不解析/不改写 body，二进制响应不受损）在字节成型点执行一次，其后一切 sink（工具回传/错误/日志/trace/engine）只消费清洗后缓冲。若原始 body 含该凭证 → 告警 `hit_credential_echo`（仍返回清洗后缓冲）。
-6. **D-I**：开关开 ⇒ `LOCAL_EXEC_TOOLS`（shell/execute_python/execute_code/execute_node/exec_cmd）一律 deny（共享守卫置于两个 `execute_in_sandbox` cfg 变体顶部，与沙箱配置无关）。
+6. **D-I**：开关开 ⇒ `LOCAL_EXEC_TOOLS`（virbius__shell/virbius__python/virbius__node）一律 deny（共享守卫置于两个 `execute_in_sandbox` cfg 变体顶部，与沙箱配置无关）。
 7. 状态机：cold=面不生效（可用性 fail-open，密钥面 fail-closed）；连续超 TTL（默认 300s）未成功读取 → 清库→cold+告警；重启=cold。
 
 **Control 接口**（`/api/v1/admin/tenants/{tenantId}/delegated-credentials`，admin 鉴权，tenant 写入统一小写归一）：`GET` 列表（永不含 value）/`POST` 新建/`PUT /{handle}` 全量重录（AAD 绑全字段）/`POST /{handle}/revoke` 吊销/`DELETE /{handle}` 删除/`POST /kek/reveal` 一次性输出租户 KEK（审计）。写路径请求域脱敏：值注册先于校验（原始/base64/urlencode 三形态），异常 Advice 零回显。写入校验与 proxy 镜像：host 规范形（小写 ASCII、单标签允许、拒 IP 形态/Unicode）、header_name 拒绝清单（hop-by-hop/framing/`Content-*`/`Accept-Encoding`）、value ≥16B、`prefix+value` ≤4096B、**控制字符（0x00–0x1F、0x7F）拒**（与 proxy `HeaderValue::try_from` 对齐；obs-text ≥0x80 允许——避免创建成功却注入失败的运行时落差）。

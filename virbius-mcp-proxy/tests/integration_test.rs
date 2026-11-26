@@ -592,9 +592,9 @@ async fn legacy_name_is_never_hijacked_by_local_exec() {
             "fast_path": true
         }]
     }));
-    // The mock upstream advertises `execute_python`, a legacy local-exec name.
+    // The mock upstream advertises `execute_python`, an ordinary upstream tool name.
     let mock = start_mock_mcp_capture().await;
-    // License grants the BARE legacy name only — enough to forward it upstream.
+    // License grants the bare name only — enough to forward it upstream.
     let (pub_pem, jwt) = sign_license("test-app", &["execute_python"]);
     let env = setup_proxy_fast_path(&mock.url, pub_pem).await;
     let sid = "itest-legacy-hijack";
@@ -615,7 +615,7 @@ async fn legacy_name_is_never_hijacked_by_local_exec() {
     )
     .await;
 
-    // 1. Bare legacy name: forwarded to the upstream (granted for forwarding).
+    // 1. Bare name: forwarded to the upstream (granted for forwarding).
     let resp = route(
         &env,
         &json!({
@@ -628,7 +628,7 @@ async fn legacy_name_is_never_hijacked_by_local_exec() {
     .unwrap();
     assert!(
         mock.last_call_args.lock().unwrap().is_some(),
-        "legacy 'execute_python' must be forwarded upstream, not executed locally: {resp}"
+        "bare 'execute_python' must be forwarded upstream, not executed locally: {resp}"
     );
 
     // 2. Canonical name with no canonical grant: hard gate rejects, never
@@ -1279,7 +1279,7 @@ async fn arg_transform_search_restrict_clamped_before_upstream() {
 /// - canonical grant   → passes the gate, then fails closed at the sandbox
 ///   (`sandbox_unavailable`: no runsc in the unit-test env) and is never
 ///   forwarded upstream
-/// - bare legacy grant → `local_exec_not_granted` (a bare name never grants
+/// - bare-name grant   → `local_exec_not_granted` (a bare name never grants
 ///   local execution)
 /// - wildcard license  → `local_exec_not_granted`
 /// - no license        → `local_exec_not_granted` (the hard gate is fallback-
@@ -1292,7 +1292,7 @@ async fn local_exec_gate_matrix() {
         "tenant_id": "default",
         "app_id": "test-app",
         "tool_policies": [{
-            "tool_name": "shell",
+            "tool_name": "virbius__shell",
             "risk_class": "high",
             "sandbox_type": "none",
             "timeout_ms": 5000,
@@ -1365,13 +1365,13 @@ async fn local_exec_gate_matrix() {
         "local exec must never be forwarded upstream"
     );
 
-    // B. Bare legacy grant alone: hard gate rejects.
+    // B. Bare-name grant alone: hard gate rejects.
     let (pub_b, jwt_b) = sign_license("test-app", &["shell"]);
     let env_b = setup_proxy_fast_path(&mock.url, pub_b).await;
     let resp = init_and_call(&env_b, "itest-gate-bare", Some(&jwt_b)).await;
     assert_eq!(
         resp["error"]["code"], -32016,
-        "bare legacy grant must not authorize local execution: {resp}"
+        "bare-name grant must not authorize local execution: {resp}"
     );
 
     // C. Wildcard license (empty allowed_tools): hard gate rejects.

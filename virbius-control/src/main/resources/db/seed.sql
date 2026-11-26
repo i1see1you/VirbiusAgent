@@ -545,11 +545,11 @@ FROM (SELECT 1) AS _one
 WHERE NOT EXISTS (SELECT 1 FROM tb_tool_registry WHERE tenant_id = 'default' AND tool_name = 'read_file');
 
 INSERT INTO tb_tool_registry (tenant_id, tool_name, risk_class, sandbox_type, timeout_ms, fast_path, allowed_args_schema, description)
-SELECT 'default', 'exec_cmd', 'high', 'gvisor', 30000, 0,
+SELECT 'default', 'virbius__shell', 'high', 'gvisor', 30000, 0,
     '{"runsc_path":"/usr/local/bin/runsc","rootfs_path":"/opt/virbius/rootfs","min_warm":2,"max_idle":5,"memory_limit_bytes":268435456,"cpu_quota":1.0,"network_disabled":true,"exec_timeout_ms":30000}',
     'Execute command in gVisor sandbox with warm pool'
 FROM (SELECT 1) AS _one
-WHERE NOT EXISTS (SELECT 1 FROM tb_tool_registry WHERE tenant_id = 'default' AND tool_name = 'exec_cmd');
+WHERE NOT EXISTS (SELECT 1 FROM tb_tool_registry WHERE tenant_id = 'default' AND tool_name = 'virbius__shell');
 
 INSERT INTO tb_tool_registry (tenant_id, tool_name, risk_class, sandbox_type, timeout_ms, fast_path, allowed_args_schema, description)
 SELECT 'default', 'curl', 'network', 'none', 15000, 0,
@@ -710,7 +710,7 @@ SELECT 'default', 'chain-write-exec', 1, 'system-builtin', 'cloud', 'groovy',
     // 维护: virbius default rules 2026-10-22
     // 回溯最近 6 步会话历史 + 本次调用，识别 写→执行 两步链
     def writeTools = ["write_file", "delete_file", "rm", "mv", "cp", "truncate", "edit_file", "db_write"]
-    def execTools = ["exec_cmd", "shell", "bash", "sh", "execute_python", "run_command", "subprocess"]
+    def execTools = ["virbius__shell", "virbius__python", "virbius__node", "exec_cmd", "shell", "bash", "sh", "execute_python", "run_command", "subprocess"]
     def seq = []
     def h = ctx.sessionHistory(6)
     for (int i = h.size() - 1; i >= 0; i--) {
@@ -754,7 +754,7 @@ SELECT 'default', 'chain-priv-esc', 1, 'system-builtin', 'cloud', 'groovy',
     // 回溯最近 8 步会话历史 + 本次调用
     def readTools = ["read_file", "cat", "read", "get_file", "download", "list_dir"]
     def writeTools = ["write_file", "delete_file", "rm", "mv", "cp", "truncate", "edit_file", "db_write"]
-    def execTools = ["exec_cmd", "shell", "bash", "sh", "execute_python", "run_command", "subprocess"]
+    def execTools = ["virbius__shell", "virbius__python", "virbius__node", "exec_cmd", "shell", "bash", "sh", "execute_python", "run_command", "subprocess"]
     def seq = []
     def h = ctx.sessionHistory(8)
     for (int i = h.size() - 1; i >= 0; i--) {

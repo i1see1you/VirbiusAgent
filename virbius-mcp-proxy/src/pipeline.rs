@@ -1236,7 +1236,7 @@ mod tests {
         let pipeline = make_pipeline(FallbackPolicy::MinimumPrivilege);
         let session = make_session();
         let result = pipeline
-            .apply_fallback(&session, "shell", &serde_json::json!({}))
+            .apply_fallback(&session, "delete_file", &serde_json::json!({}))
             .await;
         assert!(matches!(result, PipelineResult::Deny { .. }));
         if let PipelineResult::Deny { code, .. } = result {
@@ -1262,7 +1262,7 @@ mod tests {
         let pipeline = make_pipeline(FallbackPolicy::AuditOnly);
         let session = make_session();
         let result = pipeline
-            .apply_fallback(&session, "shell", &serde_json::json!({}))
+            .apply_fallback(&session, "delete_file", &serde_json::json!({}))
             .await;
         assert!(matches!(result, PipelineResult::Allow { .. }));
     }
