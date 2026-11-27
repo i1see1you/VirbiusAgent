@@ -2,11 +2,11 @@ fullnameOverride: virbius
 
 global:
   imageRegistry: "hb.grainmind.cn/library"
-  # Pin the release tag (the release pipeline publishes `${github.ref_name}` = `v1.0.3`;
+  # Pin the release tag (the release pipeline publishes `${github.ref_name}` = `v1.1.0`;
   # keep this in sync with the example file and k8s-deploy.sh). Do not ship `latest`:
   # Kubernetes forces imagePullPolicy=Always for it, so a rescheduled pod silently
   # pulls a newer image and the API contract can change under a running install.
-  imageTag: "v1.0.3"
+  imageTag: "v1.1.0"
   imagePullSecrets: []
   waitImage: hb.grainmind.cn/library/busybox:1.36
 
@@ -172,6 +172,27 @@ proxy:
       memory: 128Mi
     limits:
       memory: 256Mi
+  # Optional gVisor local code execution (virbius__shell/python/node).
+  # Off by default. Local execution requires the proxy to run privileged
+  # (runsc needs namespaces/mounts and writable cgroups); enabling it renders
+  # securityContext.privileged=true and hostPath mounts for the node's runsc +
+  # gvisor-bin + a prepared read-only rootfs.
+  # Standard Kubernetes has no per-Pod cgroup namespace, so cgroup-backed
+  # hard limits are NOT supported here: enforceCgroups must stay false and
+  # results honestly report gvisor_limits_enforced=false (read-only rootfs,
+  # tmpfs caps and RLIMIT_NOFILE/NPROC still apply).
+  localExec:
+    enabled: false
+    runscHostPath: /usr/local/bin/runsc
+    gvisorBinHostPath: /usr/local/bin/gvisor-bin
+    rootfsHostPath: /opt/virbius/rootfs
+    stateHostPath: /var/lib/virbius/gvisor
+    stateRoot: /var/lib/virbius/gvisor
+    # Edge manifest dir (contains edge-manifest.json carrying gvisor_config).
+    # Optional; put control's published manifest on the node or the pool stays
+    # unavailable and local exec fails closed.
+    manifestHostPath: ""
+    enforceCgroups: false
 
 demo:
   replicaCount: 1

@@ -1,6 +1,6 @@
 {
   "name": "virbius-mcp-node",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "VirbiusAgent edge enforcement primitives for Node.js (napi-rs binding of virbius-core): tool precheck, License verification, DLP and Prompt Gateway.",
   "main": "index.js",
   "types": "index.d.ts",

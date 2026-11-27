@@ -2,9 +2,9 @@
 
 [English](README.md)
 
-适用版本：**v1.0.3**。
+适用版本：**v1.1.0**。
 本手册只部署 VirbiusAgent 自身组件；**MySQL / Kafka / Redis / vLLM 由客户统一环境提供**。
-随离线包 `virbius-onprem-v1.0.3.tar.gz` 分发（即 `deploy/onprem/` 目录）。
+随离线包 `virbius-onprem-v1.1.0.tar.gz` 分发（即 `deploy/onprem/` 目录）。
 默认按**三机**编写；**单机**（全部组件同机、客户 infra 外置）见 §0.1、§1.2 与 §5.1。
 
 ---
@@ -36,7 +36,7 @@ control/auth 启动时会检查 `@@character_set_database`；不是 `utf8mb4` �
 
 **我方提前准备**（有网机器）：
 
-1. 离线包：`./deploy/scripts/offline-bundle.sh --tag v1.0.3`（单机走客户 vLLM 时**不要加 `--with-ollama`**），拷贝 `dist/offline/` 三个产物。
+1. 离线包：`./deploy/scripts/offline-bundle.sh --tag v1.1.0`（单机走客户 vLLM 时**不要加 `--with-ollama`**），拷贝 `dist/offline/` 三个产物。
 2. vLLM 权重：按 §4 选项B 下载 7 个 safetensors 文件交给客户，并**提前约好**加载方式与 `--served-model-name`（`.env` 的 `VIRBIUS_PROMPT_LLM_MODEL` 必须与之一致）。
 3. 许可：确认 `license.lic` 的签发/上传方式（首次登录运营台后在 Licenses 页签发并下载）。
 
@@ -64,7 +64,7 @@ control/auth 启动时会检查 `@@character_set_database`；不是 `utf8mb4` �
 | B（`NODE_B`） | 决策面 | `virbius-engine`（8082），可 `--scale` 多副本；模型选项A时 + Ollama（11434） | 8082 | 8C16G；选项A加 8G 内存（模型常驻） |
 | C（`NODE_C`） | 接入面 | `virbius-mcp-proxy`（9090） | 9090（MCP 客户端入口） | 2C4G |
 
-副本策略（v1.0.3 能力边界）：
+副本策略（v1.1.0 能力边界）：
 
 - **engine 可多副本**：横向扩容请加主机，每台一个 engine（本 compose 固定发布 8082，单机 `--scale` 会端口冲突）。每个副本的 `VIRBIUS_INSTANCE_ID` 必须唯一（compose 容器 hostname 天然唯一；手动 `docker run` 需显式设置）。多于一个 engine 时前置 LB，control 与 proxy 的 `VIRBIUS_ENGINE_URL` 指向 LB。
 - **control / auth / proxy 单副本**：auth 的 JWT 签名密钥落在本机卷（扩副本会互踢登录）；control 多副本需共享 NFS（K8s 路径见 DEPLOYMENT.md §8.5，裸机本期不做）；proxy 是 MCP 客户端的单 TCP 入口。
@@ -113,11 +113,11 @@ A/B/C 三个角色合并到一台机器：使用**同一份 `.env`**，三个 co
 **构建侧**（我方有网机器，仓库根目录）：
 
 ```bash
-./deploy/scripts/offline-bundle.sh --tag v1.0.3 --with-ollama
+./deploy/scripts/offline-bundle.sh --tag v1.1.0 --with-ollama
 # 产物 dist/offline/：
-#   virbius-images-v1.0.3.tar.gz   engine/control/auth/mcp-proxy (+ollama)
-#   virbius-onprem-v1.0.3.tar.gz   本目录全部资产 + .env 样例
-#   SHA256SUMS-v1.0.3.txt
+#   virbius-images-v1.1.0.tar.gz   engine/control/auth/mcp-proxy (+ollama)
+#   virbius-onprem-v1.1.0.tar.gz   本目录全部资产 + .env 样例
+#   SHA256SUMS-v1.1.0.txt
 ```
 
 > **镜像架构必须匹配客户服务器**：`docker build` 默认跟随构建机架构（Apple Silicon 上为 arm64）。客户是 x86_64 服务器时必须加 `--platform linux/amd64`（或在 x86_64 构建机执行），否则现场 `docker load` 后容器会 `exec format error`。当前离线包可用 `docker image inspect <image> --format '{{.Architecture}}'` 核对。
@@ -125,10 +125,10 @@ A/B/C 三个角色合并到一台机器：使用**同一份 `.env`**，三个 co
 **现场侧**（三台机器各执行一次，或按角色只 load 所需镜像）：
 
 ```bash
-sha256sum -c SHA256SUMS-v1.0.3.txt          # 先校验
-gunzip -c virbius-images-v1.0.3.tar.gz | docker load
-tar -xzf virbius-onprem-v1.0.3.tar.gz       # 得到 onprem/ 目录
-docker images | grep v1.0.3                 # 确认 5 个镜像就位
+sha256sum -c SHA256SUMS-v1.1.0.txt          # 先校验
+gunzip -c virbius-images-v1.1.0.tar.gz | docker load
+tar -xzf virbius-onprem-v1.1.0.tar.gz       # 得到 onprem/ 目录
+docker images | grep v1.1.0                 # 确认 5 个镜像就位
 ```
 
 ## 4. 提示词审查模型（二选一）
@@ -242,6 +242,61 @@ docker exec onprem-virbius-mcp-proxy-1 virbius-mcp-proxy doctor
 curl -s http://localhost:9090/status | head -c 400
 ```
 
+### 5.3 本地代码执行（可选，gVisor）
+
+> **硬性要求：要开启沙箱，proxy 容器必须 `privileged: true`。** 非 privileged 容器无法创建 runsc sandbox（缺 CAP_SYS_ADMIN、seccomp 杀 sentry、`/sys/fs/cgroup` 只读），本地执行会 **fail-closed（`sandbox_unavailable`）**，不会降级为非沙箱。`node-c-proxy.local-exec.yml` 已内置该配置。
+
+`virbius__shell` / `virbius__python` / `virbius__node` 默认**关闭**（`node-c-proxy.yml` 不含任何本地执行配置，叠加 overlay 才开启）。启用前确认 C 机满足：
+
+1. **安装 runsc**（节点级受信任计算基，不烘进镜像）。官方 release 现在只提供压缩包：
+   ```bash
+   ARCH=$(uname -m)   # x86_64 或 aarch64
+   mkdir -p /tmp/gvisor && cd /tmp/gvisor
+   curl -fsSL -o gvisor.tar.bz2 \
+     "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}/gvisor.tar.bz2"
+   tar -xjf gvisor.tar.bz2
+   install -m 0755 runsc /usr/local/bin/runsc
+   cp -a gvisor-bin /usr/local/bin/gvisor-bin
+   runsc --version
+   ```
+   `runsc` 从**自身所在目录**查找 `gvisor-bin/gvisor_sentry`，两者必须在同一目录。
+2. **准备只读 rootfs**：沙箱内**无网络、无持久 workspace**，运行时无法 pip/npm，必须预装解释器与库。最省事是用同版本 proxy 镜像的根文件系统（已含 python3/nodejs）：
+   ```bash
+   mkdir -p /opt/virbius/rootfs
+   docker create --name vroot hb.grainmind.cn/library/virbius-mcp-proxy:v1.1.0
+   docker export vroot | tar -x -C /opt/virbius/rootfs
+   docker rm vroot && chmod -R a+rX /opt/virbius/rootfs
+   ```
+   更小权限面可自建 debian/alpine 基座预装（见 `INTEGRATION.md` §2 第 5 条）。
+3. **放入 edge manifest（承载 `gvisor_config`）**：本地执行池的限额与开关来自 control 下发的 `gvisor_config`；**没有 manifest 时本地执行恒为 `sandbox_unavailable`**（overlay 只负责让容器能跑 runsc）。在 A 机把已发布的 manifest 拷到 C 机：
+   ```bash
+   # A 机：从 control-data 卷导出（<app_id> 用 license 的 app_id，如 mcp-demo）
+   docker run --rm -v virbius-onprem-a_control-data:/data alpine \
+     cat /data/edge/default/<app_id>/edge-manifest.json > edge-manifest.json
+   # 拷到 C 机：
+   mkdir -p /opt/virbius/edge
+   cp edge-manifest.json /opt/virbius/edge/edge-manifest.json
+   ```
+   前提：运营台已创建 `runtime=gvisor` 的 sandbox 规则并晋升到 **full**（`dry_run` 不进 manifest，`gvisor_config` 为空 `{}`）。proxy **启动时读取一次** manifest；之后每次改 sandbox 规则并重新 publish，都要重拷 manifest 并重启 proxy。
+4. **用 overlay 启动 C 机**（`privileged` + `cgroup: host` + 挂载 runsc/rootfs/state/manifest）：
+   ```bash
+   mkdir -p /var/lib/virbius/gvisor
+   docker compose --env-file .env \
+     -f node-c-proxy.yml -f node-c-proxy.local-exec.yml up -d
+   ```
+   `.env` 可按需覆盖 `PROXY_RUNSC_HOST_PATH` / `PROXY_GVISOR_BIN_HOST_PATH` / `PROXY_ROOTFS_HOST_PATH` / `PROXY_STATE_HOST_PATH` / `PROXY_EDGE_MANIFEST_DIR` / `PROXY_GVISOR_ENFORCE_CGROUPS`（见 `.env.example`）。
+
+**为什么必须 `privileged` + `cgroup: host`**：
+
+- 即使默认 `--ignore-cgroups`，runsc 仍要创建 user/pid/mount namespace 并 fork gofer（`/proc/self/exe`）；普通容器直接 `operation not permitted`，故本地执行**必须 `privileged`**。
+- 默认私有 cgroup namespace 会在写 `cgroup.subtree_control` 时 `device or resource busy`；`cgroup: host` 让 runsc 能建 cgroup，`PROXY_GVISOR_ENFORCE_CGROUPS=1` 时 memory/cpu/pids 才**真正强制**（实测 128MB 限额下分配 ~200MB 被 OOM，exit 137）。
+
+**限额诚实性**：默认 `enforce=0`，结果 `_meta.gvisor_limits_enforced=false`（只读 rootfs、tmpfs 上限、RLIMIT_NOFILE/NPROC 仍生效）；`=1` 且 C 机 cgroup v2 可委派时才如实上报 `true`。C 机无法强制时本地执行 fail-closed（`sandbox_unavailable`），**不会**降级为非沙箱。验收方法见 `INTEGRATION.md` §8（`m1-doctor.py --call-shell`，期望 `sandbox_used=gvisor`）。
+
+**回退**：去掉 `-f node-c-proxy.local-exec.yml` 重启即关闭本地执行，不影响 MCP 上游工具代理。
+
+> K8s 路径：Helm 侧用 `proxy.localExec.enabled=true`（见 `values.example.yaml`）。注意 K8s 无 per-Pod cgroupns 字段，**cgroup 硬限额在 K8s 上暂不支持**，`enforce_cgroups` 应保持 `false`；其余只读 rootfs / tmpfs / rlimits 同样生效。
+
 ## 6. TLS（生产必做）
 
 - **运营台/管理 API（A 机）**：前置 nginx 终结 HTTPS，客户内网 CA 签发证书：
@@ -320,7 +375,7 @@ kafka:  { enabled: false, bootstrapServers: "<客户Kafka>:9092" }
 redis:  { enabled: false, url: "redis://:<密码>@<客户Redis>:6379" }
 ollama: { enabled: false }            # 模型选项B；选项A仍可用集群内 Ollama
 engine: { promptLlm: { baseUrl: "http://<客户vLLM>:8000", model: virbiusguard } }
-global: { imageRegistry: <现场可写的镜像仓库或 load 后的 registry>, imageTag: v1.0.3 }
+global: { imageRegistry: <现场可写的镜像仓库或 load 后的 registry>, imageTag: v1.1.0 }
 ```
 
 三机放置用 `nodeSelector`/亲和性把 control/auth、engine、mcp-proxy 分别钉到三台节点；engine/control 多副本时 chart 已自带软性主机分散（`maxSkew: 1`、`ScheduleAnyway`）；端口矩阵、TLS、验收与本手册相同。离线镜像包在 K8s 路径同样适用：`docker load` 到各节点后把 `imageRegistry` 指向本地 tag 即可。

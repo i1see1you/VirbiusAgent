@@ -1,6 +1,6 @@
 [project]
 name = "virbius-integrate"
-version = "1.0.3"
+version = "1.1.0"
 description = "VirbiusAgent native-tool integration: observe, audit, inventory (advisory grade)."
 readme = "README.md"
 requires-python = ">=3.10"

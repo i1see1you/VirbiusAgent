@@ -5,11 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.1.0] - 2026-11-27
 
 ### Changed
 - **BREAKING (behavior): sandbox local-exec rootfs is now read-only, with per-execution tmpfs scratch.** The gVisor OCI spec for `virbius__shell/python/node` sets `root.readonly=true`, mounts an isolated tmpfs at `/workspace` (`scratch_bytes`, default 64 MiB) and `/tmp` (`tmp_bytes`, default 16 MiB), pins `cwd/HOME=/workspace` and `TMPDIR=/tmp`. Files written to the previous shared writable rootfs no longer persist across executions — this is the fix for cross-execution residue. Release notes must call this out; no compatibility for pre-existing on-rootfs files.
-- **Honest resource-limit reporting: `gvisor_limits_enforced` in result `_meta` and `virbius/status`.** `runsc` keeps starting with `--ignore-cgroups` by default (rootless / no-cgroup hosts keep working), so OCI memory/cpu/pids are then NOT enforced and callers/operators now see `limits_enforced=false` instead of a configured-but-ignored limit. Opt into real cgroup enforcement with `VIRBIUS_GVISOR_ENFORCE_CGROUPS=1` (or `"enforce_cgroups": true` in the delivered gVisor rule body) — then `--ignore-cgroups` is dropped and OCI `memory`/`cpu`/`pids` are applied; a host that cannot apply them fails closed at pool availability.
+- **Honest resource-limit reporting: `gvisor_limits_enforced` in result `_meta` and `virbius/status`.** `runsc` keeps starting with `--ignore-cgroups` by default (rootless / no-cgroup hosts keep working), so OCI memory/cpu/pids are then NOT enforced and callers/operators now see `limits_enforced=false` instead of a configured-but-ignored limit. Opt into real cgroup enforcement with `VIRBIUS_GVISOR_ENFORCE_CGROUPS=1` (or `"enforce_cgroups": true` in the delivered gVisor rule body) — then `--ignore-cgroups` is dropped and OCI `memory`/`cpu`/`pids` are applied; a host that cannot apply them fails closed at pool availability. In a container the proxy **must run `privileged`** to run the sandbox at all (runsc needs namespaces/mounts; non-privileged `/sys/fs/cgroup` is read-only); real cgroup enforcement additionally requires the host cgroup namespace (`--cgroupns=host`).
 
 ### Added
 - **Process rlimits + pids in the sandbox OCI spec**: `RLIMIT_NOFILE` (`nofile_limit`, default 512) and `RLIMIT_NPROC` (`nproc_limit`, default 128) apply without cgroups; `linux.resources.pids.limit` (`pids_limit`, default 128) applies when cgroups are enforced. New gVisor rule-body fields `scratch_bytes`/`tmp_bytes`/`pids_limit`/`nofile_limit`/`nproc_limit`/`enforce_cgroups` are delivered by Control with safe defaults; all validated by runc-level spikes (readonly rootfs, tmpfs size ENOSPC, OOM kill at `-m`, fork failure under pids limit).
@@ -299,7 +299,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - MCP proxy protocol specification (PROTOCOL.md).
 - Seven-dimensional Agent security risk assessment framework.
 
-[Unreleased]: https://github.com/i1see1you/VirbiusAgent/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/i1see1you/VirbiusAgent/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/i1see1you/VirbiusAgent/compare/v1.0.3...v1.1.0
+[1.0.3]: https://github.com/i1see1you/VirbiusAgent/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/i1see1you/VirbiusAgent/compare/v1.0.1...v1.0.2
 [1.0.0]: https://github.com/i1see1you/VirbiusAgent/compare/v0.2.0...v1.0.0
 [0.2.0]: https://github.com/i1see1you/VirbiusAgent/compare/v0.1.0...v0.2.0

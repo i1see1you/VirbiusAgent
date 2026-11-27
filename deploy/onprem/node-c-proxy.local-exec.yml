@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Optional overlay for Host C — enable gVisor local code execution
+# (virbius__shell / virbius__python / virbius__node).
+#
+# Default node-c-proxy.yml is safe-by-default: local execution is DISABLED.
+# Only use this overlay on a Host C that has gVisor runsc installed and a
+# prepared read-only sandbox rootfs.
+#
+# Usage (single host or three-host C):
+#   docker compose --env-file .env \
+#     -f node-c-proxy.yml -f node-c-proxy.local-exec.yml up -d
+#
+# Requirements (see README §5.3):
+#   - runsc + its gvisor-bin/ sidecars on the host (not baked into the image)
+#   - a prepared read-only rootfs with the interpreters you grant
+#   - the proxy container runs privileged (runsc needs to create namespaces,
+#     mount and fork the gofer); `cgroup: host` lets runsc manage cgroups so
+#     `enforce_cgroups=true` can actually enforce memory/cpu/pids.
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  virbius-mcp-proxy:
+    # runsc creates user/pid/mount namespaces and forks /proc/self/exe (gofer);
+    # default Docker seccomp + no CAP_SYS_ADMIN blocks this even with
+    # --ignore-cgroups. Privileged is required for any real sandbox execution.
+    privileged: true
+    # Private cgroup namespace has processes at its root, so cgroup v2 refuses
+    # the subtree_control write ("device or resource busy"). Join the host
+    # cgroup namespace so runsc can create/enforce its per-sandbox cgroups.
+    cgroup: host
+    environment:
+      VIRBIUS_LOCAL_EXEC_MODE: gvisor
+      # In-container paths (fixed; host paths are the volume sources below).
+      VIRBIUS_RUNSC_PATH: /opt/virbius/bin/runsc
+      VIRBIUS_GVISOR_ROOTFS: /opt/virbius/rootfs
+      VIRBIUS_GVISOR_STATE_ROOT: /var/lib/virbius/gvisor
+      # 0 = honest rootless default (limits_enforced=false); set 1 for real
+      # memory/cpu/pids enforcement (requires cgroup: host).
+      VIRBIUS_GVISOR_ENFORCE_CGROUPS: ${PROXY_GVISOR_ENFORCE_CGROUPS:-0}
+    volumes:
+      # Host runsc binary + its sibling gvisor-bin/ sidecar directory.
+      - ${PROXY_RUNSC_HOST_PATH:-/usr/local/bin/runsc}:/opt/virbius/bin/runsc:ro
+      - ${PROXY_GVISOR_BIN_HOST_PATH:-/usr/local/bin/gvisor-bin}:/opt/virbius/bin/gvisor-bin:ro
+      # Prepared read-only sandbox rootfs (interpreter + stdlib only).
+      - ${PROXY_ROOTFS_HOST_PATH:-/opt/virbius/rootfs}:/opt/virbius/rootfs:ro
+      # Persistent runsc state so the startup reconciler can sweep containers
+      # left by a previous proxy instance.
+      - ${PROXY_STATE_HOST_PATH:-/var/lib/virbius/gvisor}:/var/lib/virbius/gvisor
+      # Edge manifest dir from control — edge-manifest.json carries gvisor_config.
+      # Without it the pool receives no delivered config and local exec stays
+      # unavailable (sandbox_unavailable). Copy the published manifest from
+      # Host A's control-data volume; see README §5.3. Read once at startup.
+      - ${PROXY_EDGE_MANIFEST_DIR:-/opt/virbius/edge}:/app/data/edge/default:ro

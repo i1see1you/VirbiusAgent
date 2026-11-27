@@ -30,6 +30,12 @@ They never traverse the proxy; use M0 to contain them.
 
 1. **Linux host with gVisor** (`runsc`) installed; local execution is
    gVisor-only and fail-closed. Non-Linux hosts refuse local execution.
+   **If the proxy runs in a container, that container MUST be `privileged`
+   when local execution is enabled.** runsc creates the sandbox's
+   user/pid/mount/net namespaces and its minimal chroot root (CAP_SYS_ADMIN),
+   sets up the gofer, and — for cgroup limits — writes the cgroup tree; an
+   unprivileged container fails closed (`sandbox_unavailable`) instead of
+   degrading to unsandboxed execution.
 2. Proxy node config enables it:
    ```toml
    [local_exec]
@@ -53,6 +59,19 @@ They never traverse the proxy; use M0 to contain them.
    public binds exit at startup. Remote operators use `docker exec
    <container> curl http://127.0.0.1:19400/status`, `kubectl port-forward`,
    or an SSH tunnel — none of which expose the surface to the network.
+5. **Rootfs contents define what sandboxed code can do.** The sandbox rootfs
+   (default `/opt/virbius/rootfs`) is the entire runtime available to code:
+   this release has **no network** inside the sandbox and **no persistent
+   workspace**, so execution-time package installs (`pip`, `npm`, …) are not
+   possible. Bake interpreters and required libraries into the rootfs image
+   (or a read-only layer mounted into it) and record the inventory in your
+   deployment notes. Supported execution profile: **preinstalled runtime +
+   stdlib only**.
+6. **Verify on a real Linux+runsc host before production**: the read-only
+   rootfs, per-execution tmpfs (`/workspace`, `/tmp`), pids limit and
+   `RLIMIT_NOFILE/NPROC` OCI fields must be accepted by the installed runsc
+   version. A missing/incompatible runsc fails closed
+   (`sandbox_unavailable`) — it does not degrade to unsandboxed execution.
 
 Optional tool policy (per canonical name) for timeout/schema/fast-path:
 ```json
@@ -69,7 +88,11 @@ real cgroup enforcement with `VIRBIUS_GVISOR_ENFORCE_CGROUPS=1` (or
 `"enforce_cgroups": true` in the gVisor rule body); a host that cannot apply
 cgroups then fails closed at pool availability. Process rlimits
 (RLIMIT_NOFILE/RLIMIT_NPROC) and the read-only-rootfs + per-execution tmpfs
-scratch apply either way.
+scratch apply either way. In a container, real cgroup enforcement additionally
+needs the proxy to be `privileged` (a non-privileged container mounts
+`/sys/fs/cgroup` read-only) **and** to share the host cgroup namespace
+(`--cgroupns=host` / Compose `cgroup: host`); without both, `enforce_cgroups`
+fails closed.
 
 ---
 
@@ -228,6 +251,9 @@ Stable error reasons: `local_exec_not_granted`, `local_exec_node_disabled`,
 
 - Single tenant; no shared-proxy multi-tenancy, no `Authorization` header auth.
 - No revocation streaming; license valid until `exp`.
+- Sandboxed code cannot install packages or reach the network, and `/workspace`
+  scratch is discarded after each execution; only the rootfs's preinstalled
+  runtime and stdlib are available (see §2 item 5).
 - No `tools/list_changed` refresh (multi-upstream inventories can go stale).
 - No per-tenant fair queue; only a global in-flight cap.
 - No M0 deployment package and no M2 toolkit.
@@ -253,3 +279,12 @@ python3 scripts/m1-doctor.py --url http://127.0.0.1:9090 \
 
 The doctor is an out-of-band operator tool; it is **not** a model-callable tool.
 `--call-shell` requires a license that grants `virbius__shell`.
+
+Automated release gate (real runsc, no control/engine needed): run
+`./scripts/test-gvisor-gate.sh` (add `ENFORCE=1` for the cgroup OOM variant).
+It starts the proxy `privileged` with `--cgroupns=host`, mounts real
+`runsc` + a prepared rootfs + the license fixture under `scripts/gvisor-gate/`,
+and asserts `sandbox_used=gvisor`, read-only rootfs, per-exec tmpfs, rlimits,
+and honest `gvisor_limits_enforced`. CI runs it via
+`.github/workflows/gvisor-gate.yml` (manual dispatch, `v*` tags, or the
+`gvisor-gate` PR label).

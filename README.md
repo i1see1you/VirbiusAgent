@@ -392,7 +392,7 @@ Published from the same `v*` tags as GitHub Releases:
 | PyPI | `virbius-integrate` | `pip install virbius-integrate` |
 | PyPI | `virbius-mcp-python` | `pip install virbius-mcp-python` |
 | npm | `virbius-mcp-node` | `npm install virbius-mcp-node` |
-| GHCR | `virbius-control` · `virbius-engine` · `virbius-auth` · `virbius-mcp-proxy` | `docker pull ghcr.io/i1see1you/virbius-control:v1.0.3` |
+| GHCR | `virbius-control` · `virbius-engine` · `virbius-auth` · `virbius-mcp-proxy` | `docker pull ghcr.io/i1see1you/virbius-control:v1.1.0` |
 
 ## Deployment Architecture
 

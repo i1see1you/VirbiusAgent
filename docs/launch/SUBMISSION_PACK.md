@@ -31,12 +31,12 @@ ebpf falco dlp zero-trust ai-safety security-tools
 
 ## 1. Registry 发包
 
-> 当前仓库版本 `1.0.3`。以下命令在仓库根目录执行；token 只放在环境变量里，不要写进仓库。
+> 当前仓库版本 `1.1.0`。以下命令在仓库根目录执行；token 只放在环境变量里，不要写进仓库。
 
 ### 1.1 crates.io（virbius-core、virbius-mcp-proxy）
 
 已补齐 `repository` / `homepage` / `readme` / `keywords` / `categories`；`virbius-mcp-proxy` 对
-`virbius-core` 的 path 依赖已加 `version = "1.0.3"`。本地 dry-run 已通过 core，proxy 需等 core
+`virbius-core` 的 path 依赖已加 `version = "1.1.0"`。本地 dry-run 已通过 core，proxy 需等 core
 上架后才能通过校验（这是 crates.io 的正常顺序约束）。
 
 ```bash
@@ -121,9 +121,9 @@ ghcr.io/i1see1you/virbius-mcp-proxy
 发布后验证：
 
 ```bash
-docker pull ghcr.io/i1see1you/virbius-control:v1.0.3
-docker pull ghcr.io/i1see1you/virbius-engine:v1.0.3
-docker pull ghcr.io/i1see1you/virbius-mcp-proxy:v1.0.3
+docker pull ghcr.io/i1see1you/virbius-control:v1.1.0
+docker pull ghcr.io/i1see1you/virbius-engine:v1.1.0
+docker pull ghcr.io/i1see1you/virbius-mcp-proxy:v1.1.0
 ```
 
 > 现有 `release.yml` 仍会推送一个 `ghcr.io/i1see1you/virbiusagent` 镜像（Dockerfile 默认

@@ -1,7 +1,7 @@
 # VirbiusAgent On-Prem Three-Host Deployment Runbook (offline; K8s optional)
 
-Version: **v1.0.3**.
-This runbook deploys only VirbiusAgent components; **MySQL / Kafka / Redis / vLLM are provided by the customer's shared platform**. It ships inside the offline bundle `virbius-onprem-v1.0.3.tar.gz` (the `deploy/onprem/` directory). 中文现场版见 [README.zh.md](README.zh.md).
+Version: **v1.1.0**.
+This runbook deploys only VirbiusAgent components; **MySQL / Kafka / Redis / vLLM are provided by the customer's shared platform**. It ships inside the offline bundle `virbius-onprem-v1.1.0.tar.gz` (the `deploy/onprem/` directory). 中文现场版见 [README.zh.md](README.zh.md).
 
 ---
 
@@ -37,10 +37,10 @@ control/auth verify `@@character_set_database` before Flyway runs and refuse to 
 | B (`NODE_B`) | Decision plane | `virbius-engine` (8082), scalable; + Ollama (11434) for model option A | 8082 | 8C16G (+8 GB RAM for option A) |
 | C (`NODE_C`) | Edge ingress | `virbius-mcp-proxy` (9090) | 9090 (MCP client entry) | 2C4G |
 
-Replica policy (v1.0.3 capability boundaries):
+Replica policy (v1.1.0 capability boundaries):
 
 - **engine can be multi-replica**: scale out by adding hosts — one engine per host (this compose file publishes a fixed 8082, so `--scale` on a single host collides). Each replica needs a unique `VIRBIUS_INSTANCE_ID`; compose container hostnames are already unique, and with bare `docker run` set it explicitly. With more than one engine, front them with an LB and point `VIRBIUS_ENGINE_URL` / the proxy at the LB.
-- **control / auth / proxy stay single-replica**: auth's JWT signing key lives on a local volume (scaling it would invalidate logins); multi-replica control requires shared NFS (K8s path, DEPLOYMENT.md §8.5 — not covered for bare metal in v1.0.3); the proxy is the single TCP entry for MCP clients.
+- **control / auth / proxy stay single-replica**: auth's JWT signing key lives on a local volume (scaling it would invalidate logins); multi-replica control requires shared NFS (K8s path, DEPLOYMENT.md §8.5 — not covered for bare metal in v1.1.0); the proxy is the single TCP entry for MCP clients.
 
 ## 2. Network & firewall matrix
 
@@ -67,11 +67,11 @@ East-west component traffic is plaintext by default and relies on customer netwo
 **Build side** (our machine with network, repo root):
 
 ```bash
-./deploy/scripts/offline-bundle.sh --tag v1.0.3 --with-ollama
+./deploy/scripts/offline-bundle.sh --tag v1.1.0 --with-ollama
 # outputs dist/offline/:
-#   virbius-images-v1.0.3.tar.gz   engine/control/auth/mcp-proxy (+ollama)
-#   virbius-onprem-v1.0.3.tar.gz   all assets in this directory + .env sample
-#   SHA256SUMS-v1.0.3.txt
+#   virbius-images-v1.1.0.tar.gz   engine/control/auth/mcp-proxy (+ollama)
+#   virbius-onprem-v1.1.0.tar.gz   all assets in this directory + .env sample
+#   SHA256SUMS-v1.1.0.txt
 ```
 
 > **Image architecture must match the customer hosts**: `docker build` defaults to the build host's architecture (arm64 on Apple Silicon). For x86_64 servers add `--platform linux/amd64` (or build on an x86_64 host), otherwise `docker load` succeeds but containers fail with `exec format error`. Check the bundle with `docker image inspect <image> --format '{{.Architecture}}'`.
@@ -79,10 +79,10 @@ East-west component traffic is plaintext by default and relies on customer netwo
 **On site** (on every host, or load only the images that host needs):
 
 ```bash
-sha256sum -c SHA256SUMS-v1.0.3.txt          # verify first
-gunzip -c virbius-images-v1.0.3.tar.gz | docker load
-tar -xzf virbius-onprem-v1.0.3.tar.gz       # yields onprem/
-docker images | grep v1.0.3                 # 5 images present
+sha256sum -c SHA256SUMS-v1.1.0.txt          # verify first
+gunzip -c virbius-images-v1.1.0.tar.gz | docker load
+tar -xzf virbius-onprem-v1.1.0.tar.gz       # yields onprem/
+docker images | grep v1.1.0                 # 5 images present
 ```
 
 ## 4. Prompt-review model (pick one)
@@ -156,6 +156,61 @@ docker exec onprem-ollama-1 ollama list       # option A: i1see1you/virbiusguard
 docker compose --env-file .env -f node-c-proxy.yml up -d
 ```
 
+### 5.3 Local code execution (optional, gVisor)
+
+> **Hard requirement: to enable the sandbox the proxy container MUST be `privileged: true`.** An unprivileged container cannot create a runsc sandbox (no CAP_SYS_ADMIN; seccomp kills the sentry; `/sys/fs/cgroup` is read-only), so local execution fails closed (`sandbox_unavailable`) instead of degrading to unsandboxed. `node-c-proxy.local-exec.yml` already sets this.
+
+`virbius__shell` / `virbius__python` / `virbius__node` are **off by default** (`node-c-proxy.yml` carries no local-exec config; the overlay enables it). On Host C:
+
+1. **Install runsc** (node-level trusted compute base; not baked into the image). Releases are now tarballs:
+   ```bash
+   ARCH=$(uname -m)   # x86_64 or aarch64
+   mkdir -p /tmp/gvisor && cd /tmp/gvisor
+   curl -fsSL -o gvisor.tar.bz2 \
+     "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}/gvisor.tar.bz2"
+   tar -xjf gvisor.tar.bz2
+   install -m 0755 runsc /usr/local/bin/runsc
+   cp -a gvisor-bin /usr/local/bin/gvisor-bin
+   runsc --version
+   ```
+   runsc looks for `gvisor-bin/gvisor_sentry` **next to its own binary**, so keep them together.
+2. **Prepare a read-only rootfs**: the sandbox has **no network and no persistent workspace**, so no pip/npm at runtime — preinstall interpreters. Quickest is exporting the matching proxy image rootfs (already has python3/nodejs):
+   ```bash
+   mkdir -p /opt/virbius/rootfs
+   docker create --name vroot hb.grainmind.cn/library/virbius-mcp-proxy:v1.1.0
+   docker export vroot | tar -x -C /opt/virbius/rootfs
+   docker rm vroot && chmod -R a+rX /opt/virbius/rootfs
+   ```
+   A smaller, least-privilege rootfs built from debian/alpine also works (`INTEGRATION.md` §2 item 5).
+3. **Provide the edge manifest (carries `gvisor_config`)**: the pool's limits and on/off switch come from the `gvisor_config` control delivers. **Without the manifest, local execution is always `sandbox_unavailable`** — the overlay only lets the container run runsc. Copy the published manifest from Host A to Host C:
+   ```bash
+   # Host A: export from the control-data volume (<app_id> = the license app_id, e.g. mcp-demo)
+   docker run --rm -v virbius-onprem-a_control-data:/data alpine \
+     cat /data/edge/default/<app_id>/edge-manifest.json > edge-manifest.json
+   # On Host C:
+   mkdir -p /opt/virbius/edge
+   cp edge-manifest.json /opt/virbius/edge/edge-manifest.json
+   ```
+   Prerequisite: create a `runtime=gvisor` sandbox rule in the console and promote it to **full** (`dry_run` is not written into the manifest; `gvisor_config` stays `{}`). The proxy reads the manifest **once at startup**; after each sandbox-rule publish, re-copy it and restart the proxy.
+4. **Start Host C with the overlay** (`privileged` + `cgroup: host` + runsc/rootfs/state/manifest mounts):
+   ```bash
+   mkdir -p /var/lib/virbius/gvisor
+   docker compose --env-file .env \
+     -f node-c-proxy.yml -f node-c-proxy.local-exec.yml up -d
+   ```
+   Optional `.env` overrides: `PROXY_RUNSC_HOST_PATH`, `PROXY_GVISOR_BIN_HOST_PATH`, `PROXY_ROOTFS_HOST_PATH`, `PROXY_STATE_HOST_PATH`, `PROXY_EDGE_MANIFEST_DIR`, `PROXY_GVISOR_ENFORCE_CGROUPS`.
+
+**Why `privileged` + `cgroup: host`**:
+
+- Even with the default `--ignore-cgroups`, runsc creates user/pid/mount namespaces and forks the gofer (`/proc/self/exe`); a normal container fails with `operation not permitted`, so local exec **requires `privileged`**.
+- A private cgroup namespace makes `cgroup.subtree_control` fail with `device or resource busy`; `cgroup: host` lets runsc create cgroups, so `PROXY_GVISOR_ENFORCE_CGROUPS=1` actually enforces memory/cpu/pids (verified: ~200MB alloc against a 128MB limit is OOM-killed, exit 137).
+
+**Limit honesty**: default `enforce=0` reports `_meta.gvisor_limits_enforced=false` (read-only rootfs, tmpfs caps and RLIMIT_NOFILE/NPROC still apply); `=1` reports `true` only when the host can apply cgroups. If it cannot, execution fails closed (`sandbox_unavailable`) — never unsandboxed. Verify with `INTEGRATION.md` §8 (`m1-doctor.py --call-shell`, expect `sandbox_used=gvisor`).
+
+**Rollback**: drop `-f node-c-proxy.local-exec.yml` and restart; upstream tool proxying is unaffected.
+
+> K8s: use `proxy.localExec.enabled=true` in the Helm values. Standard K8s exposes no per-Pod cgroup namespace, so **cgroup hard limits are not supported on K8s** — keep `enforce_cgroups=false`; read-only rootfs / tmpfs / rlimits still apply.
+
 ## 6. TLS (mandatory for production)
 
 - **Console / admin API (host A)**: terminate HTTPS with nginx in front, certificates from the customer's internal CA:
@@ -226,7 +281,7 @@ kafka:  { enabled: false, bootstrapServers: "<customer-kafka>:9092" }
 redis:  { enabled: false, url: "redis://:<password>@<customer-redis>:6379" }
 ollama: { enabled: false }            # model option B; option A can still use the in-cluster Ollama
 engine: { promptLlm: { baseUrl: "http://<customer-vllm>:8000", model: virbiusguard } }
-global: { imageRegistry: <registry reachable on site>, imageTag: v1.0.3 }
+global: { imageRegistry: <registry reachable on site>, imageTag: v1.1.0 }
 ```
 
 Pin control/auth, engine, and mcp-proxy onto the three nodes with `nodeSelector`/affinity; the chart already applies a soft hostname spread for engine/control replicas (`maxSkew: 1`, `ScheduleAnyway`). The port matrix, TLS, and the acceptance checklist are identical to this runbook. The offline image bundle also works on K8s: `docker load` on each node (or import into the customer's registry) and set `imageRegistry` accordingly.

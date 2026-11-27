@@ -41,6 +41,10 @@ spec:
           ports:
             - name: http
               containerPort: 9090
+          {{- if .Values.proxy.localExec.enabled }}
+          securityContext:
+            privileged: true
+          {{- end }}
           env:
             - name: VIRBIUS_TRANSPORT
               value: tcp://0.0.0.0:9090
@@ -56,6 +60,18 @@ spec:
               value: {{ .Values.proxy.upstreamUrl | quote }}
             - name: VIRBIUS_LOG_DIR
               value: /var/log/virbius
+            {{- if .Values.proxy.localExec.enabled }}
+            - name: VIRBIUS_LOCAL_EXEC_MODE
+              value: gvisor
+            - name: VIRBIUS_RUNSC_PATH
+              value: /opt/virbius/bin/runsc
+            - name: VIRBIUS_GVISOR_ROOTFS
+              value: /opt/virbius/rootfs
+            - name: VIRBIUS_GVISOR_STATE_ROOT
+              value: {{ .Values.proxy.localExec.stateRoot | quote }}
+            - name: VIRBIUS_GVISOR_ENFORCE_CGROUPS
+              value: {{ ternary "1" "0" .Values.proxy.localExec.enforceCgroups | quote }}
+            {{- end }}
           readinessProbe:
             httpGet:
               path: /health
@@ -75,6 +91,48 @@ spec:
           volumeMounts:
             - name: logs
               mountPath: /var/log/virbius
+            {{- if .Values.proxy.localExec.enabled }}
+            - name: gvisor-runsc
+              mountPath: /opt/virbius/bin/runsc
+              readOnly: true
+            - name: gvisor-bin
+              mountPath: /opt/virbius/bin/gvisor-bin
+              readOnly: true
+            - name: gvisor-rootfs
+              mountPath: /opt/virbius/rootfs
+              readOnly: true
+            - name: gvisor-state
+              mountPath: {{ .Values.proxy.localExec.stateRoot | quote }}
+            {{- if .Values.proxy.localExec.manifestHostPath }}
+            - name: gvisor-manifest
+              mountPath: /app/data/edge/default
+              readOnly: true
+            {{- end }}
+            {{- end }}
       volumes:
         - name: logs
           emptyDir: {}
+        {{- if .Values.proxy.localExec.enabled }}
+        - name: gvisor-runsc
+          hostPath:
+            path: {{ .Values.proxy.localExec.runscHostPath | quote }}
+            type: File
+        - name: gvisor-bin
+          hostPath:
+            path: {{ .Values.proxy.localExec.gvisorBinHostPath | quote }}
+            type: Directory
+        - name: gvisor-rootfs
+          hostPath:
+            path: {{ .Values.proxy.localExec.rootfsHostPath | quote }}
+            type: Directory
+        - name: gvisor-state
+          hostPath:
+            path: {{ .Values.proxy.localExec.stateHostPath | quote }}
+            type: DirectoryOrCreate
+        {{- if .Values.proxy.localExec.manifestHostPath }}
+        - name: gvisor-manifest
+          hostPath:
+            path: {{ .Values.proxy.localExec.manifestHostPath | quote }}
+            type: Directory
+        {{- end }}
+        {{- end }}

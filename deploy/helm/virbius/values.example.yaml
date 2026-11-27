@@ -2,14 +2,14 @@
 #   cp deploy/helm/virbius/values.example.yaml deploy/helm/virbius/values-prod.yaml
 #
 # Then:
-#   ./deploy/scripts/k8s-deploy.sh --registry registry.example.com/virbius --tag v1.0.3 \
+#   ./deploy/scripts/k8s-deploy.sh --registry registry.example.com/virbius --tag v1.1.0 \
 #     --values deploy/helm/virbius/values-prod.yaml
 
 fullnameOverride: virbius
 
 global:
   imageRegistry: registry.example.com/virbius
-  imageTag: v1.0.3
+  imageTag: v1.1.0
   imagePullSecrets:
     - name: registry-pull-secret
 
@@ -47,6 +47,26 @@ control:
     size: 5Gi
     accessMode: ReadWriteOnce   # set ReadWriteMany + storageClass for multi-replica
     storageClass: ""
+
+proxy:
+  # Optional gVisor local code execution (virbius__shell/python/node).
+  # Off by default. Local execution requires the proxy to run privileged
+  # (runsc needs namespaces/mounts and writable cgroups); enabling it renders
+  # securityContext.privileged=true plus hostPath mounts. Enable only on nodes
+  # that have runsc + gvisor-bin installed and a prepared read-only rootfs. Standard K8s has no per-Pod cgroup namespace, so keep
+  # enforceCgroups=false (cgroup hard limits unsupported; limits stay honest).
+  localExec:
+    enabled: false
+    runscHostPath: /usr/local/bin/runsc
+    gvisorBinHostPath: /usr/local/bin/gvisor-bin
+    rootfsHostPath: /opt/virbius/rootfs
+    stateHostPath: /var/lib/virbius/gvisor
+    stateRoot: /var/lib/virbius/gvisor
+    # Optional: directory on the node containing the published edge manifest
+    # (edge-manifest.json, carries gvisor_config). Without it the pool stays
+    # unavailable and local exec fails closed.
+    manifestHostPath: ""
+    enforceCgroups: false
 
 mysql:
   enabled: true

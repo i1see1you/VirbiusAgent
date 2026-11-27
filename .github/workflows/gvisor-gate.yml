@@ -1,0 +1,73 @@
+name: gVisor local-exec gate
+
+# Closes the v1.1.0 "verify on a real Linux + runsc host" gate with a REAL
+# runsc (no stub): proxy -> runsc -> _meta, privileged + host cgroup namespace.
+# Runs the proxy-only gate (no control/engine/redis) using the pre-signed
+# license fixture under scripts/gvisor-gate/.
+#
+# Triggers:
+#   - manual (workflow_dispatch)
+#   - release tags v*
+#   - PRs labeled "gvisor-gate" (keeps normal PRs fast)
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gvisor-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.label.name == 'gvisor-gate'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
+          docker system prune -af || true
+
+      - name: Install gVisor runsc
+        run: |
+          set -euo pipefail
+          ARCH=x86_64
+          BASE="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
+          curl -fsSL -o /tmp/gvisor.tar.bz2 "${BASE}/gvisor.tar.bz2"
+          curl -fsSL -o /tmp/gvisor.tar.bz2.sha512 "${BASE}/gvisor.tar.bz2.sha512"
+          ( cd /tmp && sha512sum -c gvisor.tar.bz2.sha512 )
+          tar -xjf /tmp/gvisor.tar.bz2 -C /tmp
+          sudo install -m 0755 /tmp/runsc /usr/local/bin/runsc
+          sudo cp -a /tmp/gvisor-bin /usr/local/bin/gvisor-bin
+          runsc --version
+          docker info --format 'runtime={{.DefaultRuntime}} cgroup={{.CgroupVersion}} driver={{.CgroupDriver}}'
+
+      - name: Gate — default (rootless-compatible, limits_enforced=false)
+        env:
+          BUILD: "1"
+        run: ./scripts/test-gvisor-gate.sh
+
+      - name: Gate — enforce cgroups (memory OOM, limits_enforced=true)
+        env:
+          ENFORCE: "1"
+        run: ./scripts/test-gvisor-gate.sh
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          docker ps -a || true
+          docker images || true
+          for c in $(docker ps -aq); do
+            echo "==== logs $c ===="; docker logs "$c" 2>&1 | tail -80 || true
+          done
