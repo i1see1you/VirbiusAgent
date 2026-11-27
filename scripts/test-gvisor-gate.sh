@@ -116,7 +116,7 @@ else
   docker rm "$CR" >/dev/null
   chmod -R a+rX "$WORK/rootfs"
   ROOTFS_MOUNT="$WORK/rootfs"
-  ok "rootfs ready ($(ls "$WORK/rootfs" | wc -l | tr -d ' ') entries)"
+  ok "rootfs ready ($(find "$WORK/rootfs" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ') entries)"
 fi
 
 # ── 3. license + manifest + config ─────────────────────────────────────────

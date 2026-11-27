@@ -32,7 +32,6 @@ err()  { echo -e "${RED}[FAIL]${NC} $*"; exit 1; }
 TENANT="docker-m2-e2e"
 BASE="http://127.0.0.1:18080"
 PROXY_URL="http://127.0.0.1:19090"
-MITM_URL="http://127.0.0.1:19091"
 PROJECT="virbius-m2-native-e2e"
 COMPOSE_DIR="scripts/sandbox-full-chain"
 PROXY_NAME="virbius-m2-e2e-proxy"
