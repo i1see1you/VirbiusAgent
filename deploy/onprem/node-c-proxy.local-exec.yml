@@ -36,6 +36,13 @@ services:
       # 0 = honest rootless default (limits_enforced=false); set 1 for real
       # memory/cpu/pids enforcement (requires cgroup: host).
       VIRBIUS_GVISOR_ENFORCE_CGROUPS: ${PROXY_GVISOR_ENFORCE_CGROUPS:-0}
+      # Optional automatic edge-manifest refresh. Empty = use the mounted
+      # manifest dir below and re-read it every interval. Set all three to pull
+      # from Control over REST instead of copying the file by hand.
+      VIRBIUS_CONTROL_BASE_URL: ${PROXY_EDGE_CONTROL_BASE_URL:-}
+      VIRBIUS_APP_ID: ${PROXY_EDGE_APP_ID:-}
+      VIRBIUS_EDGE_API_KEY: ${PROXY_EDGE_API_KEY:-}
+      VIRBIUS_EDGE_SYNC_INTERVAL_SECS: ${PROXY_EDGE_SYNC_INTERVAL_SECS:-30}
     volumes:
       # Host runsc binary + its sibling gvisor-bin/ sidecar directory.
       - ${PROXY_RUNSC_HOST_PATH:-/usr/local/bin/runsc}:/opt/virbius/bin/runsc:ro

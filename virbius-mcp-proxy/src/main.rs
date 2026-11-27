@@ -93,10 +93,14 @@ async fn main() {
     // Load fallback License JWT from file (if configured)
     let fallback_license_jwt = load_license_jwt(&cfg.security.license_file);
 
-    // Initialize virbius-core (bootstrap manifest sync)
-    if let Err(e) = virbius_core::bootstrap::bootstrap(&EdgeInitConfig::resolve()) {
+    // Initialize virbius-core from the environment: remote pull when
+    // VIRBIUS_CONTROL_BASE_URL / VIRBIUS_APP_ID / VIRBIUS_EDGE_API_KEY are set,
+    // otherwise the offline/mounted manifest at the default cache path.
+    let edge_cfg = EdgeInitConfig::from_env();
+    if let Err(e) = virbius_core::bootstrap::bootstrap(&edge_cfg) {
         info!("virbius-core bootstrap (non-fatal): {e}");
     }
+    spawn_edge_sync(edge_cfg);
 
     let policies = Arc::new(PolicyRegistry::empty());
 
@@ -489,6 +493,38 @@ async fn run_sse(
 }
 
 /// Load the Ed25519 public key PEM for License verification.
+/// Periodically re-sync the edge manifest + gVisor config (remote pull when
+/// configured, else the mounted/offline manifest file). `GvisorPool::apply`
+/// is idempotent for unchanged config, so this only reconfigures on change.
+///
+/// Interval: `VIRBIUS_EDGE_SYNC_INTERVAL_SECS` (default 30; 0 disables).
+/// Skipped entirely when no remote source is configured and no manifest file
+/// exists (avoids log spam on nodes with no edge rules).
+fn spawn_edge_sync(cfg: EdgeInitConfig) {
+    let secs = std::env::var("VIRBIUS_EDGE_SYNC_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30);
+    if secs == 0 {
+        info!("edge sync: periodic refresh disabled (VIRBIUS_EDGE_SYNC_INTERVAL_SECS=0)");
+        return;
+    }
+    if !(cfg.remote_sync_enabled() || cfg.manifest_path().is_file()) {
+        info!("edge sync: no remote config and no manifest file; periodic refresh off");
+        return;
+    }
+    info!("edge sync: periodic refresh every {secs}s");
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(secs)).await;
+            if !(cfg.remote_sync_enabled() || cfg.manifest_path().is_file()) {
+                continue;
+            }
+            let _ = tokio::task::spawn_blocking(virbius_core::bootstrap::reload_synced).await;
+        }
+    });
+}
+
 fn load_public_key(path: &str) -> String {
     if path.is_empty() {
         info!("no license_public_key configured, License verification will use empty key");

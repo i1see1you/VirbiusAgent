@@ -191,7 +191,9 @@ docker compose --env-file .env -f node-c-proxy.yml up -d
    mkdir -p /opt/virbius/edge
    cp edge-manifest.json /opt/virbius/edge/edge-manifest.json
    ```
-   Prerequisite: create a `runtime=gvisor` sandbox rule in the console and promote it to **full** (`dry_run` is not written into the manifest; `gvisor_config` stays `{}`). The proxy reads the manifest **once at startup**; after each sandbox-rule publish, re-copy it and restart the proxy.
+   Prerequisite: create a `runtime=gvisor` sandbox rule in the console and promote it to **full** (`dry_run` is not written into the manifest; `gvisor_config` stays `{}`).
+   The proxy reads the manifest at startup and then **re-reads it every `VIRBIUS_EDGE_SYNC_INTERVAL_SECS`** (default 30s); a newly copied manifest takes effect within one interval, no restart needed (restart still works).
+   To pull automatically instead of copying the file, set `PROXY_EDGE_CONTROL_BASE_URL`, `PROXY_EDGE_APP_ID` and `PROXY_EDGE_API_KEY` in `.env` (the overlay maps them to `VIRBIUS_*`).
 4. **Start Host C with the overlay** (`privileged` + `cgroup: host` + runsc/rootfs/state/manifest mounts):
    ```bash
    mkdir -p /var/lib/virbius/gvisor

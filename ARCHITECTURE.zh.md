@@ -1924,7 +1924,7 @@ gVisor 规则为全局池配置。按 `rule_id` 取第一条 `canary` 或 `full`
 }
 ```
 
-MCP 在 Edge manifest 加载和 `virbius_reload` 时把该对象套到进程内 gVisor 热池（`GvisorPool::apply_from_manifest`）。空的 `gvisor_config: {}` 表示没有交付规则：清空gVisor 热池并标为不可用（**不会**回退到编译期默认限额）。`memory_limit_bytes` / `cpu_quota` / `network_disabled` / `min_warm` / `max_idle` / `exec_timeout_ms` 来自规则；`runsc_path` / `rootfs_path` / `state_root` 在设置了 `VIRBIUS_RUNSC_PATH`、`VIRBIUS_GVISOR_ROOTFS`、`VIRBIUS_GVISOR_STATE_ROOT` 时由环境变量覆盖。限额变化会回收空闲 warm 容器；进行中的 `execute` 仍用已拿到的容器。工具登记的 `timeout_ms` 限制单次调用，且不超过池的 `exec_timeout`。本地执行的 MCP 会话硬墙为 **acquire + exec + 2s**（gVisor 缺省 42s）；拆卸不再无限 `wait()`，超时返回 JSON-RPC `sandbox_exec_timeout`。
+MCP 在启动时、以及其后的周期 edge 刷新时把该对象套到进程内 gVisor 热池（`GvisorPool::apply_from_manifest`）：设置了 `VIRBIUS_CONTROL_BASE_URL`/`VIRBIUS_APP_ID`/`VIRBIUS_EDGE_API_KEY` 时远程拉取，否则重读挂载/离线的 manifest；周期由 `VIRBIUS_EDGE_SYNC_INTERVAL_SECS`（默认 30s，0 关闭）控制。`virbius_reload` 是给嵌入 virbius-core 的宿主应用用的等价 C ABI；独立 proxy 依靠该周期与重启刷新。空的 `gvisor_config: {}` 表示没有交付规则：清空gVisor 热池并标为不可用（**不会**回退到编译期默认限额）。`memory_limit_bytes` / `cpu_quota` / `network_disabled` / `min_warm` / `max_idle` / `exec_timeout_ms` 来自规则；`runsc_path` / `rootfs_path` / `state_root` 在设置了 `VIRBIUS_RUNSC_PATH`、`VIRBIUS_GVISOR_ROOTFS`、`VIRBIUS_GVISOR_STATE_ROOT` 时由环境变量覆盖。限额变化会回收空闲 warm 容器；进行中的 `execute` 仍用已拿到的容器。工具登记的 `timeout_ms` 限制单次调用，且不超过池的 `exec_timeout`。本地执行的 MCP 会话硬墙为 **acquire + exec + 2s**（gVisor 缺省 42s）；拆卸不再无限 `wait()`，超时返回 JSON-RPC `sandbox_exec_timeout`。
 
 #### 4.9.4 下发链路
 

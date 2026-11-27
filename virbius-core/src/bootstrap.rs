@@ -16,7 +16,11 @@ pub fn bootstrap(cfg: &EdgeInitConfig) -> Result<(), VirbiusError> {
     Ok(())
 }
 
-pub(crate) fn reload_synced() {
+/// Re-run the edge sync + manifest reload + gVisor apply.
+///
+/// Public so the standalone proxy can poll it: `GvisorPool::apply` is a no-op
+/// for unchanged config, so periodic refreshes only reconfigure on change.
+pub fn reload_synced() {
     if let Err(e) = crate::sync::sync_if_configured() {
         eprintln!("virbius-core: edge sync: {e}");
     }

@@ -277,7 +277,9 @@ curl -s http://localhost:9090/status | head -c 400
    mkdir -p /opt/virbius/edge
    cp edge-manifest.json /opt/virbius/edge/edge-manifest.json
    ```
-   前提：运营台已创建 `runtime=gvisor` 的 sandbox 规则并晋升到 **full**（`dry_run` 不进 manifest，`gvisor_config` 为空 `{}`）。proxy **启动时读取一次** manifest；之后每次改 sandbox 规则并重新 publish，都要重拷 manifest 并重启 proxy。
+   前提：运营台已创建 `runtime=gvisor` 的 sandbox 规则并晋升到 **full**（`dry_run` 不进 manifest，`gvisor_config` 为空 `{}`）。
+   proxy 启动时读取 manifest，并按 `VIRBIUS_EDGE_SYNC_INTERVAL_SECS`（默认 30s）**周期重读**；拷入新 manifest 后最多等一个周期即自动生效，无需重启（重启亦可）。
+   也可改成**自动远程拉取**：在 `.env` 设置 `PROXY_EDGE_CONTROL_BASE_URL`、`PROXY_EDGE_APP_ID`、`PROXY_EDGE_API_KEY`（overlay 会映射到 `VIRBIUS_*`），就无需手工拷贝。
 4. **用 overlay 启动 C 机**（`privileged` + `cgroup: host` + 挂载 runsc/rootfs/state/manifest）：
    ```bash
    mkdir -p /var/lib/virbius/gvisor

@@ -73,6 +73,15 @@ They never traverse the proxy; use M0 to contain them.
    version. A missing/incompatible runsc fails closed
    (`sandbox_unavailable`) — it does not degrade to unsandboxed execution.
 
+**Edge manifest refresh**: the proxy loads the edge manifest (which carries
+`gvisor_config`) at startup and then re-reads it every
+`VIRBIUS_EDGE_SYNC_INTERVAL_SECS` (default 30s; `0` disables). With
+`VIRBIUS_CONTROL_BASE_URL` + `VIRBIUS_APP_ID` + `VIRBIUS_EDGE_API_KEY` set it
+pulls from Control over REST; otherwise it re-reads the mounted/offline
+manifest file. `GvisorPool::apply` is a no-op when the config is unchanged, so
+refreshes only reconfigure on a real change. (`virbius_reload` is the
+equivalent C ABI for host apps embedding virbius-core.)
+
 Optional tool policy (per canonical name) for timeout/schema/fast-path:
 ```json
 { "tool_name": "virbius__shell", "sandbox_type": "gvisor", "timeout_ms": 30000 }
