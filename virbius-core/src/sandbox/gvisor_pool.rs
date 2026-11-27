@@ -1150,8 +1150,12 @@ mod tests {
         // Process env/cwd pinned to the scratch layout.
         assert_eq!(parsed["process"]["cwd"], "/workspace");
         let env = parsed["process"]["env"].as_array().unwrap();
-        assert!(env.iter().any(|e| e.as_str().unwrap_or("") == "HOME=/workspace"));
-        assert!(env.iter().any(|e| e.as_str().unwrap_or("") == "TMPDIR=/tmp"));
+        assert!(env
+            .iter()
+            .any(|e| e.as_str().unwrap_or("") == "HOME=/workspace"));
+        assert!(env
+            .iter()
+            .any(|e| e.as_str().unwrap_or("") == "TMPDIR=/tmp"));
         // Resource guards: pids limit + process rlimits (nofile/nproc).
         assert!(
             parsed["linux"]["resources"]["pids"]["limit"]
