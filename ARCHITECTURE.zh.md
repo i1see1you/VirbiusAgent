@@ -473,7 +473,7 @@ pub struct GvisorPoolConfig {
 
 **执行流程**：`execute(language, code)` → 从预热池获取容器（热路径 ~50ms）→ 写入 stdin → 读取 stdout → 销毁已用容器 → 后台补充新容器。冷启动 1-5s。
 
-**降级策略**：gVisor 不可用时（runsc 未安装），自动降级为 Landlock subprocess + 超时 5s 强制 kill + 限制内存。
+**降级策略**：无降级。runsc 缺失时池不可用、本地执行 fail-closed（`sandbox_unavailable`）——没有 Landlock 或非沙箱回退（Landlock 子进程仅为设计参考）。限额诚实性：未开启 cgroup 强制（`VIRBIUS_GVISOR_ENFORCE_CGROUPS`）时 memory/cpu/pids 不强制，结果 `_meta` 如实上报 `gvisor_limits_enforced=false`。启动时 reconciler 会清理上一实例遗留的容器与 bundle 目录。
 
 ### 2.5 与 virbius-control 的同步
 

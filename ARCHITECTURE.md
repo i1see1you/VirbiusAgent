@@ -249,6 +249,11 @@ ToolCallRequest { name, args }
   |
   +-- name = "virbius__shell" | "virbius__python" | "virbius__node"
   |    gVisor (runsc) container, one per execution, no network
+  |    isolation: read-only rootfs + per-exec tmpfs (/workspace scratch, /tmp);
+  |               pids limit + RLIMIT_NOFILE/NPROC always; cgroup-backed
+  |               memory/cpu enforcement opt-in (VIRBIUS_GVISOR_ENFORCE_CGROUPS)
+  |    honesty: result _meta and virbius/status report limits_enforced
+  |    recovery: startup reconciler sweeps stale containers/bundles
   |    Requirements (all must hold, otherwise the call is refused):
   |      1. node config   local_exec.mode = "gvisor"
   |      2. license       allowed_tools lists the canonical name explicitly
@@ -481,7 +486,13 @@ pub struct GvisorPoolConfig {
 
 **Execution flow**: `execute(language, code)` → get container from warm pool (hot path ~50ms) → write to stdin → read stdout → destroy used container → background replenishment. Cold start 1-5s.
 
-**Degradation strategy**: When gVisor is unavailable (runsc not installed), automatically degrade to Landlock subprocess + 5s timeout forced kill + memory limit.
+**Degradation strategy**: none. When runsc is missing the pool is unavailable
+and local exec fails closed (`sandbox_unavailable`) — there is no Landlock or
+unsandboxed fallback (the Landlock subprocess path is design reference only).
+Resource-limit honesty: without cgroup enforcement
+(`VIRBIUS_GVISOR_ENFORCE_CGROUPS`), memory/cpu/pids are not enforced and the
+result `_meta` reports `gvisor_limits_enforced=false`. A startup reconciler
+removes containers and bundle dirs left by a previous instance.
 
 ### 2.5 Synchronization with virbius-control
 

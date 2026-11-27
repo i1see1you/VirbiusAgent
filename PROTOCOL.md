@@ -1186,6 +1186,16 @@ The proxy executes code itself only for the **reserved local namespace**:
 Non-Linux hosts return `sandbox_unavailable`. Removing gVisor makes local
 execution unavailable rather than unsafe.
 
+**Isolation baseline**: the sandbox rootfs is read-only; each execution gets an
+isolated tmpfs at `/workspace` (size = `scratch_bytes`, `cwd`/`HOME`) and `/tmp`
+(`tmp_bytes`), so files written by one execution never leak to another.
+`RLIMIT_NOFILE`/`RLIMIT_NPROC` and the per-stream output cap always apply.
+Cgroup-backed memory/cpu/pids enforcement is opt-in
+(`VIRBIUS_GVISOR_ENFORCE_CGROUPS=1` or `"enforce_cgroups": true` in the gVisor
+rule body); without it the result `_meta` honestly reports
+`gvisor_limits_enforced=false`. A startup reconciler removes containers and
+bundle dirs left by a previous proxy instance.
+
 **Policy identity**: local exec is evaluated under its canonical name. The
 pipeline, engine, tool policies, arg transforms, trace and audit all use
 `virbius__shell` / `virbius__python` / `virbius__node`; there is no legacy-name
@@ -1205,11 +1215,16 @@ whose original name starts with `virbius__` always get the `{upstream}__` prefix
 ```json
 { "sandbox_used": "gvisor", "degraded": false, "truncated": false,
   "limit_reason": null, "exit_code": 0,
-  "limits": { "codeBytes": 65536, "wallMs": 30000 } }
+  "limits": { "codeBytes": 65536, "wallMs": 30000 },
+  "gvisor_limits_enforced": false, "gvisor_scratch_bytes": 67108864,
+  "gvisor_pids_limit": 128, "gvisor_nofile_limit": 512 }
 ```
 `truncated`/`limit_reason` are part of the frozen contract; the output cap is
 enforced per stream (1 MiB) and the reader keeps draining after the cap so the
-child never deadlocks.
+child never deadlocks. `gvisor_limits_enforced=false` means cgroups were
+skipped (rootless default): the gvisor numeric limits above are reported but
+not cgroup-enforced — process rlimits and the tmpfs/rootfs isolation always
+apply.
 
 **Stable error reasons**: `local_exec_not_granted` (-32016),
 `local_exec_node_disabled` (-32017), `sandbox_unavailable` (-32018),

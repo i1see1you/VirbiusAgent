@@ -111,6 +111,18 @@ pub struct GvisorPoolConfig {
     pub cpu_quota: f64,
     /// Network isolation: if true, container has no network access.
     pub network_disabled: bool,
+    /// Writable scratch (tmpfs) mounted at /workspace per execution, in bytes.
+    pub scratch_bytes: u64,
+    /// Separate /tmp tmpfs size, in bytes.
+    pub tmp_bytes: u64,
+    /// Max processes inside the sandbox (OCI pids limit).
+    pub pids_limit: i64,
+    /// RLIMIT_NOFILE for the sandboxed process.
+    pub nofile_limit: u64,
+    /// RLIMIT_NPROC for the sandboxed process.
+    pub nproc_limit: u64,
+    /// Drop `--ignore-cgroups` so OCI memory/cpu/pids are applied via cgroups.
+    pub enforce_cgroups: bool,
     /// Root filesystem path for the container (e.g. an Alpine rootfs).
     pub rootfs_path: String,
     /// Directory for runsc's own runtime state (containers/sock). Must be
@@ -130,6 +142,12 @@ impl Default for GvisorPoolConfig {
             memory_limit_bytes: 256 * 1024 * 1024, // 256 MB
             cpu_quota: 1.0,
             network_disabled: true,
+            scratch_bytes: 64 * 1024 * 1024,
+            tmp_bytes: 16 * 1024 * 1024,
+            pids_limit: 128,
+            nofile_limit: 512,
+            nproc_limit: 128,
+            enforce_cgroups: false,
             rootfs_path: "/opt/virbius/rootfs".to_string(),
             state_root: "/tmp/virbius-gvisor-state".to_string(),
         }
@@ -157,6 +175,12 @@ impl GvisorPoolConfig {
             memory_limit_bytes: cfg.memory_limit_bytes,
             cpu_quota: cfg.cpu_quota,
             network_disabled: cfg.network_disabled,
+            scratch_bytes: cfg.scratch_bytes,
+            tmp_bytes: cfg.tmp_bytes,
+            pids_limit: cfg.pids_limit,
+            nofile_limit: cfg.nofile_limit,
+            nproc_limit: cfg.nproc_limit,
+            enforce_cgroups: cfg.enforce_cgroups,
             rootfs_path: cfg.rootfs_path.clone(),
             state_root: Self::default().state_root,
         };
@@ -179,6 +203,12 @@ fn overlay_host_paths(config: &mut GvisorPoolConfig) {
     if let Ok(s) = std::env::var("VIRBIUS_GVISOR_STATE_ROOT") {
         if !s.is_empty() {
             config.state_root = s;
+        }
+    }
+    if let Ok(v) = std::env::var("VIRBIUS_GVISOR_ENFORCE_CGROUPS") {
+        let v = v.trim().to_ascii_lowercase();
+        if v == "1" || v == "true" || v == "yes" {
+            config.enforce_cgroups = true;
         }
     }
 }
@@ -270,6 +300,8 @@ struct GvisorPoolState {
     runsc_available: bool,
     /// False when no canary/full gVisor rule is in the current manifest.
     delivered: bool,
+    /// Stale-resource reconciler ran once for this process.
+    reconciled: bool,
     generation: u64,
 }
 
@@ -294,6 +326,7 @@ impl GvisorPool {
                 warm: HashMap::new(),
                 runsc_available: false,
                 delivered: false,
+                reconciled: false,
                 generation: 0,
             })),
         }
@@ -348,8 +381,65 @@ impl GvisorPool {
                 state.delivered = true;
                 state.runsc_available = runsc_available;
                 state.generation = state.generation.wrapping_add(1);
+                let should_reconcile = runsc_available && !state.reconciled;
+                state.reconciled = true;
+                drop(state);
+                if should_reconcile {
+                    // First time this process sees a usable pool: clean what a
+                    // previous (possibly SIGKILLed) instance left behind, BEFORE
+                    // any new execution. Single-instance-per-state_root is a
+                    // documented M1 assumption.
+                    Self::reconcile_stale_with(&Self::global().snapshot_config());
+                }
             }
         }
+    }
+
+    fn snapshot_config(&self) -> GvisorPoolConfig {
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .config
+            .clone()
+    }
+
+    /// Remove containers and bundle dirs left by a previous process instance.
+    ///
+    /// Called once, on the first pool availability transition. Assumes this
+    /// process is the only proxy using `state_root`/`bundle_root` (M1
+    /// single-tenant, one proxy per host).
+    fn reconcile_stale_with(config: &GvisorPoolConfig) -> usize {
+        let mut cleaned = 0usize;
+        let out = Command::new(&config.runsc_path)
+            .arg("--root")
+            .arg(&config.state_root)
+            .arg("list")
+            .output();
+        if let Ok(out) = out {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for id in parse_runsc_list_ids(&text) {
+                Self::delete_container_with(config, &id);
+                let _ = std::fs::remove_dir_all(PathBuf::from(&config.bundle_root).join(&id));
+                cleaned += 1;
+            }
+        }
+        // Bundle dirs without a matching container (crash between mkdir and
+        // spawn, or runsc delete already succeeded). Safe at startup: nothing
+        // of ours is running yet.
+        if let Ok(entries) = std::fs::read_dir(&config.bundle_root) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    let _ = std::fs::remove_dir_all(entry.path());
+                }
+            }
+        }
+        if cleaned > 0 {
+            eprintln!(
+                "virbius-gvisor: reconciled {} stale container(s) from a previous instance",
+                cleaned
+            );
+        }
+        cleaned
     }
 
     /// Isolation limits from the currently delivered config, if any.
@@ -400,6 +490,7 @@ impl GvisorPool {
                 warm: HashMap::new(),
                 runsc_available,
                 delivered: true,
+                reconciled: true,
                 generation: 0,
             })),
         }
@@ -690,10 +781,15 @@ impl GvisorPool {
         std::fs::write(&config_path, &config_json)
             .map_err(|e| format!("write config.json: {e}"))?;
 
-        let mut child = Command::new(&config.runsc_path)
-            .arg("--root")
-            .arg(&config.state_root)
-            .arg("--ignore-cgroups")
+        let mut cmd = Command::new(&config.runsc_path);
+        cmd.arg("--root").arg(&config.state_root);
+        if !config.enforce_cgroups {
+            // Rootless / no-cgroup hosts: skip cgroup setup (OCI memory/cpu/pids
+            // are then NOT enforced; process rlimits still apply). Callers must
+            // report `limits_enforced` honestly instead of pretending isolation.
+            cmd.arg("--ignore-cgroups");
+        }
+        let mut child = cmd
             .arg("run")
             .arg("--bundle")
             .arg(&bundle_dir)
@@ -739,10 +835,15 @@ impl GvisorPool {
                 "args": language.sandbox_args(),
                 "env": [
                     "PATH=/usr/local/bin:/usr/bin:/bin",
-                    "HOME=/tmp",
+                    "HOME=/workspace",
+                    "TMPDIR=/tmp",
                     "LANG=en_US.UTF-8"
                 ],
-                "cwd": "/tmp",
+                "cwd": "/workspace",
+                "rlimits": [
+                    { "type": "RLIMIT_NOFILE", "soft": config.nofile_limit, "hard": config.nofile_limit },
+                    { "type": "RLIMIT_NPROC", "soft": config.nproc_limit, "hard": config.nproc_limit }
+                ],
                 "capabilities": {
                     "bounding": [],
                     "effective": [],
@@ -754,13 +855,34 @@ impl GvisorPool {
             },
             "root": {
                 "path": config.rootfs_path,
-                "readonly": false
+                "readonly": true
             },
             "hostname": "sandbox",
+            "mounts": [
+                {
+                    "destination": "/workspace",
+                    "type": "tmpfs",
+                    "source": "tmpfs",
+                    "options": [
+                        format!("size={}", config.scratch_bytes),
+                        "mode=0750", "uid=1000", "gid=1000", "nosuid", "nodev", "noexec"
+                    ]
+                },
+                {
+                    "destination": "/tmp",
+                    "type": "tmpfs",
+                    "source": "tmpfs",
+                    "options": [
+                        format!("size={}", config.tmp_bytes),
+                        "mode=1777", "nosuid", "nodev"
+                    ]
+                }
+            ],
             "linux": {
                 "resources": {
                     "memory": { "limit": mem_limit, "swap": mem_limit },
-                    "cpu": { "quota": (cpu_quota * 100000.0) as i64, "period": 100000 }
+                    "cpu": { "quota": (cpu_quota * 100000.0) as i64, "period": 100000 },
+                    "pids": { "limit": config.pids_limit }
                 },
                 "namespaces": [
                     { "type": "pid" },
@@ -910,6 +1032,23 @@ fn uuid_v4_short() -> String {
     id[..16].to_string()
 }
 
+/// Parse `runsc list` output into container ids. The first line is the
+/// `ID PID STATUS ...` header; every following line starts with the id.
+fn parse_runsc_list_ids(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .skip(1)
+        .filter_map(|line| {
+            let id = line.split_whitespace().next().unwrap_or("");
+            if id.is_empty() {
+                None
+            } else {
+                Some(id.to_string())
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -984,6 +1123,93 @@ mod tests {
                 .unwrap()
                 > 0
         );
+        // P0 file isolation: read-only rootfs, per-exec scratch/tmpfs mounts.
+        assert_eq!(
+            parsed["root"]["readonly"].as_bool(),
+            Some(true),
+            "rootfs must be read-only"
+        );
+        let mounts = parsed["mounts"].as_array().expect("mounts present");
+        let ws = mounts
+            .iter()
+            .find(|m| m["destination"] == "/workspace")
+            .expect("/workspace tmpfs mount");
+        assert_eq!(ws["type"], "tmpfs");
+        assert!(
+            ws["options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|o| o.as_str().unwrap_or("").starts_with("size=")),
+            "workspace tmpfs must carry a size limit"
+        );
+        assert!(
+            mounts.iter().any(|m| m["destination"] == "/tmp"),
+            "/tmp tmpfs mount present"
+        );
+        // Process env/cwd pinned to the scratch layout.
+        assert_eq!(parsed["process"]["cwd"], "/workspace");
+        let env = parsed["process"]["env"].as_array().unwrap();
+        assert!(env.iter().any(|e| e.as_str().unwrap_or("") == "HOME=/workspace"));
+        assert!(env.iter().any(|e| e.as_str().unwrap_or("") == "TMPDIR=/tmp"));
+        // Resource guards: pids limit + process rlimits (nofile/nproc).
+        assert!(
+            parsed["linux"]["resources"]["pids"]["limit"]
+                .as_i64()
+                .unwrap()
+                > 0
+        );
+        let rlimits = parsed["process"]["rlimits"].as_array().expect("rlimits");
+        assert!(rlimits
+            .iter()
+            .any(|r| r["type"] == "RLIMIT_NOFILE" && r["hard"].as_u64().unwrap() > 0));
+        assert!(rlimits
+            .iter()
+            .any(|r| r["type"] == "RLIMIT_NPROC" && r["hard"].as_u64().unwrap() > 0));
+    }
+
+    #[test]
+    fn oci_config_uses_applied_isolation_fields() {
+        let pool = GvisorPool::new(GvisorPoolConfig {
+            scratch_bytes: 32 * 1024 * 1024,
+            tmp_bytes: 8 * 1024 * 1024,
+            pids_limit: 96,
+            nofile_limit: 256,
+            nproc_limit: 64,
+            ..GvisorPoolConfig::default()
+        });
+        let parsed: serde_json::Value =
+            serde_json::from_str(&pool.build_oci_config(Language::Shell)).unwrap();
+        let ws = parsed["mounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["destination"] == "/workspace")
+            .unwrap();
+        assert!(ws["options"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("size=33554432")));
+        assert_eq!(parsed["linux"]["resources"]["pids"]["limit"], 96);
+        let rl = parsed["process"]["rlimits"].as_array().unwrap();
+        let nofile = rl.iter().find(|r| r["type"] == "RLIMIT_NOFILE").unwrap();
+        assert_eq!(nofile["hard"], 256);
+        let nproc = rl.iter().find(|r| r["type"] == "RLIMIT_NPROC").unwrap();
+        assert_eq!(nproc["hard"], 64);
+    }
+
+    #[test]
+    fn parse_runsc_list_ids_skips_header_and_blanks() {
+        let out = "ID       PID         STATUS\tBUNDLE PATH\n\
+                   c-abc123 1234  RUNNING /tmp/bundles/c-abc123\n\
+                   \n\
+                   c-def456 -    CREATED /tmp/bundles/c-def456\n";
+        assert_eq!(
+            parse_runsc_list_ids(out),
+            vec!["c-abc123".to_string(), "c-def456".to_string()]
+        );
+        assert!(parse_runsc_list_ids("ID PID STATUS\n").is_empty());
+        assert!(parse_runsc_list_ids("").is_empty());
     }
 
     #[test]
@@ -1009,6 +1235,12 @@ mod tests {
             cpu_quota: 0.5,
             network_disabled: false,
             exec_timeout_ms: 5_000,
+            scratch_bytes: 32 * 1024 * 1024,
+            tmp_bytes: 8 * 1024 * 1024,
+            pids_limit: 96,
+            nofile_limit: 256,
+            nproc_limit: 64,
+            enforce_cgroups: true,
         }
     }
 

@@ -267,18 +267,44 @@ pub async fn route_request(
 /// license claims and no recent decisions — those belong to the admin
 /// listener, not to a channel any agent can speak on.
 fn virbius_status_response(id: &Value, session_mgr: &SessionManager) -> Value {
+    let local_exec_status = local_exec_status_snapshot();
     serde_json::json!({
         "jsonrpc": "2.0",
         "id": id,
         "result": {
             "version": env!("CARGO_PKG_VERSION"),
             "sessions_active": session_mgr.len(),
-            "local_exec": {
-                "mode": local_exec_settings().mode.as_str(),
-                "canonical": ["virbius__shell", "virbius__python", "virbius__node"],
-                "sandbox": "gvisor"
-            },
+            "local_exec": local_exec_status,
         }
+    })
+}
+
+// Honest enforcement snapshot: `limits_enforced` reflects whether cgroups are
+// actually applied (not just configured), so a rootless host cannot pretend
+// its memory/cpu/pids limits are real.
+#[cfg(target_os = "linux")]
+fn local_exec_status_snapshot() -> Value {
+    use virbius_core::sandbox::GvisorPool;
+    let gvisor_limits = GvisorPool::global().delivered_limits();
+    serde_json::json!({
+        "mode": local_exec_settings().mode.as_str(),
+        "canonical": ["virbius__shell", "virbius__python", "virbius__node"],
+        "sandbox": "gvisor",
+        "limits_enforced": gvisor_limits.as_ref().map(|c| c.enforce_cgroups),
+        "scratch_bytes": gvisor_limits.as_ref().map(|c| c.scratch_bytes),
+        "pids_limit": gvisor_limits.as_ref().map(|c| c.pids_limit)
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn local_exec_status_snapshot() -> Value {
+    serde_json::json!({
+        "mode": local_exec_settings().mode.as_str(),
+        "canonical": ["virbius__shell", "virbius__python", "virbius__node"],
+        "sandbox": "gvisor",
+        "limits_enforced": false,
+        "scratch_bytes": Value::Null,
+        "pids_limit": Value::Null
     })
 }
 
@@ -2352,6 +2378,10 @@ async fn execute_in_sandbox(
                     meta["gvisor_min_warm"] = serde_json::json!(limits.min_warm);
                     meta["gvisor_exec_timeout_ms"] =
                         serde_json::json!(limits.exec_timeout.as_millis() as u64);
+                    meta["gvisor_limits_enforced"] = serde_json::json!(limits.enforce_cgroups);
+                    meta["gvisor_scratch_bytes"] = serde_json::json!(limits.scratch_bytes);
+                    meta["gvisor_pids_limit"] = serde_json::json!(limits.pids_limit);
+                    meta["gvisor_nofile_limit"] = serde_json::json!(limits.nofile_limit);
                 }
             }
             serde_json::json!({

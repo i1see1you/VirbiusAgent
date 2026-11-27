@@ -61,6 +61,16 @@ Optional tool policy (per canonical name) for timeout/schema/fast-path:
 `none` / `landlock` on a **local** tool is refused (`sandbox_unavailable`), not
 downgraded. Omitting the policy is fine (node mode decides).
 
+**Resource-limit honesty**: by default `runsc` starts with `--ignore-cgroups`
+(rootless-compatible), so the OCI memory/cpu/pids limits from the gVisor rule
+body are **not enforced** — every result `_meta` and the `virbius/status`
+snapshot report `gvisor_limits_enforced=false` instead of pretending. Opt into
+real cgroup enforcement with `VIRBIUS_GVISOR_ENFORCE_CGROUPS=1` (or
+`"enforce_cgroups": true` in the gVisor rule body); a host that cannot apply
+cgroups then fails closed at pool availability. Process rlimits
+(RLIMIT_NOFILE/RLIMIT_NPROC) and the read-only-rootfs + per-execution tmpfs
+scratch apply either way.
+
 ---
 
 ## 3. Issue the license
@@ -94,6 +104,14 @@ uses it as the fallback license at `initialize`.
 The proxy's client transport is **SSE** (`GET /sse` + `POST /messages/?session_id=`),
 not Streamable HTTP. There is no `POST /` endpoint by default.
 
+> **Native-MCP spike (2026-11-27, verified)**: the framework integrations below
+> were verified end-to-end against a live proxy with `VIRBIUS_LICENSE_FILE`
+> fallback — tool discovery, JSON schema, error mapping (`McpError` preserves
+> `-32016/-32018` reasons), concurrent calls, and disconnect semantics all work
+> with **zero adapter code**. Pinned stacks:
+> `langchain-mcp-adapters 0.3.2` + `langchain-core 1.8.5` + `mcp 1.30.0`;
+> `openai-agents 0.26.0` (Python 3.11). Re-verify when bumping these.
+
 ### Generic `mcp.json`
 ```json
 {
@@ -124,6 +142,31 @@ async with MCPServerSse(params={"url": "http://127.0.0.1:9090/sse"}) as mcp:
     agent = Agent(name="demo", mcp_servers=[mcp])
 ```
 > Verify the exact `MCPServerSse` signature against your installed SDK version.
+> One `MCPServerSse` context = one persistent MCP session: audit events for the
+> whole agent run share a `session_id`. If the stream dies mid-run the session
+> ends with `ClosedResourceError` on the next call — recreate the context; the
+> SDK never auto-reconnects or re-sends a `tools/call`.
+
+### Integration checklist (required)
+
+1. **Remove/disable the framework's original executors** (LangChain `ShellTool`/
+   `PythonREPLTool`, custom `subprocess` tools, OpenInterpreter `computer`):
+   the proxy only protects calls that reach it as `virbius__*`. A leftover
+   original tool is an unsandboxed bypass.
+2. **Do not add client-side retries for `tools/call`.** Disconnect semantics
+   are fail-fast by design: an in-flight call whose response is lost surfaces
+   as `McpError("Connection closed")` and is never re-sent (verified for both
+   frameworks). An agent that retries would double-execute code.
+3. **License hygiene**: the proxy holds the license via `VIRBIUS_LICENSE_FILE`;
+   keep the JWT short-lived (no revocation streaming yet) and never bake it
+   into the agent image.
+4. **Session semantics**: `langchain-mcp-adapters` opens a NEW session per tool
+   invocation (audit events do not share a `session_id` across calls);
+   `openai-agents` keeps one persistent session per context. Plan audit
+   correlation accordingly.
+5. **Connection errors on a down proxy** surface as an `anyio` `ExceptionGroup`
+   (wrapped) — treat any exception group member mentioning connection failure
+   as "proxy unreachable", not as a tool denial.
 
 ---
 
@@ -149,9 +192,18 @@ Local result `_meta`:
   "truncated": false,
   "limit_reason": null,
   "exit_code": 0,
-  "limits": { "codeBytes": 65536, "wallMs": 30000 }
+  "limits": { "codeBytes": 65536, "wallMs": 30000 },
+  "gvisor_limits_enforced": false,
+  "gvisor_scratch_bytes": 67108864,
+  "gvisor_pids_limit": 128,
+  "gvisor_nofile_limit": 512
 }
 ```
+`gvisor_limits_enforced=false` is the default (rootless-compatible) state: the
+rootfs is read-only with per-execution tmpfs scratch at `/workspace` and `/tmp`,
+rlimits and the output cap always apply, but cgroup-backed memory/cpu/pids are
+not. The rootfs is **read-only** — files written inside a sandboxed execution
+live in `/workspace` (scratch) and are discarded when the container exits.
 
 Stable error reasons: `local_exec_not_granted`, `local_exec_node_disabled`,
 `sandbox_unavailable`, `code_too_large`, `local_exec_busy`,

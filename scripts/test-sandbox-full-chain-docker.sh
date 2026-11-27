@@ -268,6 +268,12 @@ print(json.dumps({
     "cpu_quota": 0.5,
     "network_disabled": True,
     "exec_timeout_ms": 5000,
+    "scratch_bytes": 33554432,
+    "tmp_bytes": 8388608,
+    "pids_limit": 96,
+    "nofile_limit": 256,
+    "nproc_limit": 64,
+    "enforce_cgroups": False,
   },
 }))
 PY
@@ -348,6 +354,12 @@ assert_json "$MF" "d.get('gvisor_config',{}).get('runsc_path')" "$GVISOR_RUNSC" 
 assert_json "$MF" "int(d.get('gvisor_config',{}).get('memory_limit_bytes') or 0)" "$GVISOR_MEM" "gvisor_config.memory_limit_bytes from rule body"
 assert_json "$MF" "int(d.get('gvisor_config',{}).get('min_warm') or 0)" "3" "gvisor_config.min_warm from rule body"
 assert_json "$MF" "int(d.get('gvisor_config',{}).get('exec_timeout_ms') or 0)" "5000" "gvisor_config.exec_timeout_ms from rule body"
+assert_json "$MF" "int(d.get('gvisor_config',{}).get('scratch_bytes') or 0)" "33554432" "gvisor_config.scratch_bytes from rule body (P0)"
+assert_json "$MF" "int(d.get('gvisor_config',{}).get('tmp_bytes') or 0)" "8388608" "gvisor_config.tmp_bytes from rule body (P0)"
+assert_json "$MF" "int(d.get('gvisor_config',{}).get('pids_limit') or 0)" "96" "gvisor_config.pids_limit from rule body (P0)"
+assert_json "$MF" "int(d.get('gvisor_config',{}).get('nofile_limit') or 0)" "256" "gvisor_config.nofile_limit from rule body (P0)"
+assert_json "$MF" "int(d.get('gvisor_config',{}).get('nproc_limit') or 0)" "64" "gvisor_config.nproc_limit from rule body (P0)"
+assert_json "$MF" "d.get('gvisor_config',{}).get('enforce_cgroups')" "False" "gvisor_config.enforce_cgroups from rule body (P0)"
 api POST "/api/v1/admin/tenants/$TENANT/deploy-rollout/$DID/rollback" \
   '{"note":"e2e done with canary assertions"}' >/dev/null || true
 
@@ -713,6 +725,181 @@ if $TIMEOUT; then ok "blocked exec returned bounded sandbox_exec_timeout (stdin 
 docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
 rm -rf "$FAKE_RUNSC_DIR"
 
+# ─── Phase 6: P0 hardening — reconciler, honest _meta, cgroups flag ─────────
+# Operator-API driven end to end: the rule body carries the P0 isolation
+# fields (delivered via edge manifest API assertions in Phase 2e), and the
+# proxy runs against a test-only runsc stub that can list/delete (reconciler)
+# and execute (success path). No SQLite/Redis access anywhere.
+
+info "6a. success-mode runsc stub (run→ok, list→stale ids, delete→ok)"
+STUB_DIR=$(mktemp -d /tmp/sbx-runsc-p0.XXXXXX)
+cat > "$STUB_DIR/runsc" <<'EOF'
+#!/bin/sh
+case " $* " in
+  *" list "*)
+    echo "ID       PID         STATUS    BUNDLE PATH"
+    echo "virbius-shell-staleA - CREATED  /tmp/virbius-gvisor/virbius-shell-staleA"
+    echo "virbius-shell-staleB - CREATED  /tmp/virbius-gvisor/virbius-shell-staleB"
+    exit 0 ;;
+  *" delete "*) exit 0 ;;
+  *" run "*)
+    cat >/dev/null 2>&1 || true
+    echo "sandboxed-ok"
+    exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+chmod +x "$STUB_DIR/runsc"
+STALE_DIR=$(mktemp -d /tmp/sbx-stale.XXXXXX)
+mkdir -p "$STALE_DIR/virbius-shell-staleA" "$STALE_DIR/virbius-shell-staleB"
+echo stale > "$STALE_DIR/virbius-shell-staleA/config.json"
+ok "stub + stale bundle dirs ready (mounted at the manifest's runsc/bundle paths)"
+
+info "6b. startup reconciler must sweep a previous instance's leftovers"
+start_proxy "$ROOT/$COMPOSE_DIR/populated" \
+  -v "$STUB_DIR/runsc:/e2e-gvisor-runsc:ro" \
+  -v "$STALE_DIR:/tmp/virbius-gvisor" \
+  || err "proxy failed to start (P0 reconciler probe)"
+sleep 2
+if docker logs "$PROXY_NAME" 2>&1 | grep -q "reconciled 2 stale container(s)"; then
+  ok "startup reconciler reported 2 stale containers cleaned"
+else
+  docker logs "$PROXY_NAME" 2>&1 | tail -20
+  err "reconciler did not run/clean the stale containers at startup"
+fi
+LEFT=$(docker exec "$PROXY_NAME" ls -A /tmp/virbius-gvisor 2>/dev/null || true)
+if echo "$LEFT" | grep -q "staleA\|staleB"; then
+  err "stale bundle dirs survived reconcile: $LEFT"
+fi
+ok "stale bundle dirs removed from bundle_root"
+
+info "6c. honest result _meta on a successful (stubbed) gVisor execution"
+TMP=$(mktemp -d /tmp/sbx-p0meta.XXXXXX)
+mcp_session "$TMP"
+P0_SID=$(mcp_read 20 | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
+[[ -n "$P0_SID" ]] || { mcp_close "$TMP"; err "SSE session_id missing for P0 meta probe"; }
+mcp_post "$P0_SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" --arg t "$TENANT" --arg a "$CANON_APP" \
+  '{_meta:{app_id:$a,tenant_id:$t,license_jwt:$jwt}}')"
+mcp_wait_id 1 20 >/dev/null
+mcp_post "$P0_SID" 30 tools/call '{"name":"virbius__shell","arguments":{"command":"echo p0"}}'
+M=$(mcp_wait_id 30 25)
+echo "$M" | jq -e '.result._meta.sandbox_used == "gvisor"' >/dev/null \
+  || { mcp_close "$TMP"; err "expected gvisor execution via stub: $M"; }
+echo "$M" | jq -e '.result.content[0].text | contains("sandboxed-ok")' >/dev/null \
+  || { mcp_close "$TMP"; err "stub stdout missing (high-risk output is wrapped in trust_boundary): $M"; }
+ok "stub stdout delivered inside the high-risk trust_boundary envelope"
+echo "$M" | jq -e '.result._meta.exit_code == 0' >/dev/null \
+  || { mcp_close "$TMP"; err "exit_code != 0: $M"; }
+echo "$M" | jq -e '.result._meta.gvisor_limits_enforced == false' >/dev/null \
+  || { mcp_close "$TMP"; err "limits_enforced must be false by default (no cgroups): $M"; }
+echo "$M" | jq -e '.result._meta.gvisor_scratch_bytes == 33554432' >/dev/null \
+  || { mcp_close "$TMP"; err "scratch_bytes not reported from rule body: $M"; }
+echo "$M" | jq -e '.result._meta.gvisor_pids_limit == 96' >/dev/null \
+  || { mcp_close "$TMP"; err "pids_limit not reported from rule body: $M"; }
+echo "$M" | jq -e '.result._meta.gvisor_nofile_limit == 256' >/dev/null \
+  || { mcp_close "$TMP"; err "nofile_limit not reported from rule body: $M"; }
+ok "_meta: gvisor execution + honest limits_enforced=false + P0 field plumbing"
+
+info "6d. virbius/status trimmed snapshot agrees with the result _meta"
+mcp_post "$P0_SID" 31 'virbius/status' '{}'
+ST=$(mcp_wait_id 31 15)
+mcp_close "$TMP"
+echo "$ST" | jq -e '.result.local_exec.limits_enforced == false' >/dev/null \
+  || err "status limits_enforced must be false by default: $ST"
+echo "$ST" | jq -e '.result.local_exec.scratch_bytes == 33554432' >/dev/null \
+  || err "status scratch_bytes missing: $ST"
+ok "virbius/status: limits_enforced=false + scratch plumbing (no admin surface needed)"
+
+info "6e. operator flips enforce_cgroups=true via console rule upsert (API only)"
+# Real console flow for editing a rule that is in the execution plane (the API
+# blocks editing while canary/full — RuleService edit lock): roll back to
+# dry_run, take the rule offline (disable), edit (upsert), then re-promote
+# draft -> dry_run -> canary -> full. Every step goes through the ops API.
+api PATCH "/api/v1/admin/tenants/$TENANT/rules/$GV_ID/rollout" \
+  '{"rollout_state":"dry_run","comment":"e2e p0 rollback before edit"}' >/dev/null
+api PATCH "/api/v1/admin/tenants/$TENANT/rules/$GV_ID/rollout" \
+  '{"rollout_state":"disabled","comment":"e2e p0 take offline before edit"}' >/dev/null
+api PATCH "/api/v1/admin/tenants/$TENANT/rules/$GV_ID/rollout" \
+  '{"rollout_state":"draft","comment":"e2e p0 reopen draft for edit"}' >/dev/null
+ok "full -> dry_run -> disabled -> draft (edit-lock honored, rule re-opened for edit)"
+api POST "/api/v1/admin/tenants/$TENANT/rules" "$(python3 - <<PY
+import json
+print(json.dumps({
+  "rule_id": "$GV_ID",
+  "bundle_id": "default",
+  "layer": "sandbox",
+  "runtime": "gvisor",
+  "reason_code": "E2E_SBX_GV",
+  "risk_score": 0,
+  "intent_action": "allow",
+  "scope": {"bind_scope": "global"},
+  "body": {
+    "runsc_path": "$GVISOR_RUNSC",
+    "rootfs_path": "/opt/virbius/rootfs",
+    "min_warm": 3,
+    "max_idle": 7,
+    "memory_limit_bytes": $GVISOR_MEM,
+    "cpu_quota": 0.5,
+    "network_disabled": True,
+    "exec_timeout_ms": 5000,
+    "scratch_bytes": 33554432,
+    "tmp_bytes": 8388608,
+    "pids_limit": 96,
+    "nofile_limit": 256,
+    "nproc_limit": 64,
+    "enforce_cgroups": True,
+  },
+}))
+PY
+)" >/dev/null
+api PATCH "/api/v1/admin/tenants/$TENANT/rules/$GV_ID/rollout" \
+  '{"rollout_state":"dry_run","comment":"e2e p0 re-arm"}' >/dev/null
+api PATCH "/api/v1/admin/tenants/$TENANT/rules/$GV_ID/rollout" \
+  '{"rollout_state":"canary","canary_percent":5,"force":true,"comment":"e2e p0"}' >/dev/null
+api PATCH "/api/v1/admin/tenants/$TENANT/rules/$GV_ID/rollout" \
+  '{"rollout_state":"full","force":true,"comment":"e2e p0"}' >/dev/null
+ok "edited rule re-promoted to full (draft -> dry_run -> canary -> full)"
+VER=$(api GET "/api/v1/admin/tenants/$TENANT/deploy-rollout/next-version?bundle_id=default" \
+  | jq -r '.data.version')
+PREP=$(jq -n --arg ver "$VER" \
+  '{bundle_id:"default",bundle_version:$ver,layer:"edge",description:"p0 enforce_cgroups"}')
+DID=$(api POST "/api/v1/admin/tenants/$TENANT/deploy-rollout/prepare" "$PREP" \
+  | jq -r '.data.deploy_id')
+[[ -n "$DID" && "$DID" != "null" ]] || err "prepare (enforce_cgroups) returned no deploy_id"
+MF=$(read_canary_manifest)
+assert_json "$MF" "d.get('gvisor_config',{}).get('enforce_cgroups')" "True" \
+  "delivered manifest carries enforce_cgroups=true after console upsert"
+ok "console upsert delivers enforce_cgroups=true via the edge manifest API"
+
+info "6f. proxy with enforce_cgroups=true: result _meta and status flip honestly"
+docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
+start_proxy "$ROOT/$COMPOSE_DIR/enforced" \
+  -v "$STUB_DIR/runsc:/e2e-gvisor-runsc:ro" \
+  -v "$STALE_DIR:/tmp/virbius-gvisor" \
+  || err "proxy failed to start (enforced manifest)"
+sleep 2
+TMP=$(mktemp -d /tmp/sbx-p0enforced.XXXXXX)
+mcp_session "$TMP"
+EF_SID=$(mcp_read 20 | sed -n 's/.*session_id=\([^&]*\).*/\1/p')
+[[ -n "$EF_SID" ]] || { mcp_close "$TMP"; err "SSE session_id missing for enforced probe"; }
+mcp_post "$EF_SID" 1 initialize "$(jq -n --arg jwt "$CANON_JWT" --arg t "$TENANT" --arg a "$CANON_APP" \
+  '{_meta:{app_id:$a,tenant_id:$t,license_jwt:$jwt}}')"
+mcp_wait_id 1 20 >/dev/null
+mcp_post "$EF_SID" 40 tools/call '{"name":"virbius__shell","arguments":{"command":"echo enforced"}}'
+EM=$(mcp_wait_id 40 25)
+echo "$EM" | jq -e '.result._meta.gvisor_limits_enforced == true' >/dev/null \
+  || { mcp_close "$TMP"; err "enforced config must report limits_enforced=true: $EM"; }
+ok "_meta.gvisor_limits_enforced=true under enforce_cgroups rule"
+mcp_post "$EF_SID" 41 'virbius/status' '{}'
+EST=$(mcp_wait_id 41 15)
+mcp_close "$TMP"
+echo "$EST" | jq -e '.result.local_exec.limits_enforced == true' >/dev/null \
+  || err "status must agree with enforced config: $EST"
+ok "virbius/status: limits_enforced=true (configured == reported)"
+
+docker rm -f "$PROXY_NAME" >/dev/null 2>&1 || true
+rm -rf "$STUB_DIR" "$STALE_DIR"
+
 info "5c. revoke API-issued licenses through the ops-console API"
 api POST "/api/v1/admin/tenants/$TENANT/licenses/$CANON_LIC_ID/revoke" \
   '{"reason":"sandbox e2e cleanup"}' >/dev/null
@@ -739,5 +926,10 @@ echo "  [x] bare 'shell' is an ordinary upstream tool; no migration hint"
 echo "  [x] tool registry + default chain rule (via API) use canonical names"
 echo "  [x] concurrency=1 holds slot during blocking exec (local_exec_busy)"
 echo "  [x] stdin write bounded -> sandbox_exec_timeout (no unbounded hang)"
+echo "  [x] P0 rule-body fields delivered: scratch/tmp/pids/nofile/nproc/enforce_cgroups"
+echo "  [x] startup reconciler sweeps stale containers + bundle dirs (log + FS check)"
+echo "  [x] successful gVisor exec (stub) -> _meta limits_enforced=false by default"
+echo "  [x] _meta/status plumb scratch_bytes/pids_limit/nofile_limit from rule body"
+echo "  [x] console upsert delivers enforce_cgroups=true; _meta/status flip honestly"
 echo "Cleanup: ./scripts/test-sandbox-full-chain-docker.sh --cleanup"
 exit 0

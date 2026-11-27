@@ -53,6 +53,12 @@ fn test_config(rootfs: &str) -> GvisorPoolConfig {
         memory_limit_bytes: 128 * 1024 * 1024,
         cpu_quota: 1.0,
         network_disabled: true,
+        scratch_bytes: 32 * 1024 * 1024,
+        tmp_bytes: 8 * 1024 * 1024,
+        pids_limit: 64,
+        nofile_limit: 256,
+        nproc_limit: 64,
+        enforce_cgroups: false,
         state_root: "/tmp/virbius-gvisor-test-state".to_string(),
     }
 }

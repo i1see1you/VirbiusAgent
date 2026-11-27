@@ -744,6 +744,12 @@ public class ArtifactService {
                 config.put("cpu_quota", body.getOrDefault("cpu_quota", 1.0));
                 config.put("network_disabled", body.getOrDefault("network_disabled", true));
                 config.put("exec_timeout_ms", body.getOrDefault("exec_timeout_ms", 30000L));
+                config.put("scratch_bytes", body.getOrDefault("scratch_bytes", 67108864L));
+                config.put("tmp_bytes", body.getOrDefault("tmp_bytes", 16777216L));
+                config.put("pids_limit", body.getOrDefault("pids_limit", 128));
+                config.put("nofile_limit", body.getOrDefault("nofile_limit", 512L));
+                config.put("nproc_limit", body.getOrDefault("nproc_limit", 128L));
+                config.put("enforce_cgroups", body.getOrDefault("enforce_cgroups", false));
                 return config;
             } catch (Exception e) {
                 log.warn("failed to parse gvisor rule body for {}: {}", rule.ruleId(), e.getMessage());

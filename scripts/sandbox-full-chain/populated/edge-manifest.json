@@ -30,7 +30,13 @@
     "memory_limit_bytes": 67108864,
     "cpu_quota": 0.5,
     "network_disabled": true,
-    "exec_timeout_ms": 5000
+    "exec_timeout_ms": 5000,
+    "scratch_bytes": 33554432,
+    "tmp_bytes": 8388608,
+    "pids_limit": 96,
+    "nofile_limit": 256,
+    "nproc_limit": 64,
+    "enforce_cgroups": false
   },
   "sdk_config": {
     "audit_sample_rate_allow": 0.1,

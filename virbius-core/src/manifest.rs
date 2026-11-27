@@ -335,6 +335,27 @@ pub struct GvisorConfig {
     /// Execution timeout in milliseconds.
     #[serde(default = "default_gvisor_timeout_ms")]
     pub exec_timeout_ms: u64,
+    /// Writable scratch (tmpfs) mounted at /workspace per execution, in bytes.
+    #[serde(default = "default_scratch_bytes")]
+    pub scratch_bytes: u64,
+    /// Separate /tmp tmpfs size, in bytes.
+    #[serde(default = "default_tmp_bytes")]
+    pub tmp_bytes: u64,
+    /// Max processes inside the sandbox (OCI pids limit; enforced only when
+    /// cgroups are applied, i.e. `enforce_cgroups`).
+    #[serde(default = "default_pids_limit")]
+    pub pids_limit: i64,
+    /// RLIMIT_NOFILE for the sandboxed process (applied without cgroups).
+    #[serde(default = "default_nofile_limit")]
+    pub nofile_limit: u64,
+    /// RLIMIT_NPROC for the sandboxed process (applied without cgroups).
+    #[serde(default = "default_nproc_limit")]
+    pub nproc_limit: u64,
+    /// Drop `--ignore-cgroups` so OCI memory/cpu/pids are applied via cgroups.
+    /// Default false: rootless / no-cgroup hosts keep working, and the result
+    /// `_meta` reports `gvisor_limits_enforced=false` honestly.
+    #[serde(default)]
+    pub enforce_cgroups: bool,
 }
 
 fn default_runsc_path() -> String {
@@ -357,6 +378,21 @@ fn default_cpu_quota() -> f64 {
 }
 fn default_gvisor_timeout_ms() -> u64 {
     30000
+}
+fn default_scratch_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+fn default_tmp_bytes() -> u64 {
+    16 * 1024 * 1024
+}
+fn default_pids_limit() -> i64 {
+    128
+}
+fn default_nofile_limit() -> u64 {
+    512
+}
+fn default_nproc_limit() -> u64 {
+    128
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -599,5 +635,26 @@ mod manifest_parse_debug {
         .expect("populated gvisor_config");
         assert_eq!(cfg.runsc_path, "/opt/custom/runsc");
         assert_eq!(cfg.memory_limit_bytes, 64);
+        // P0 isolation fields default when the rule body omits them.
+        assert_eq!(cfg.scratch_bytes, 64 * 1024 * 1024);
+        assert_eq!(cfg.tmp_bytes, 16 * 1024 * 1024);
+        assert_eq!(cfg.pids_limit, 128);
+        assert_eq!(cfg.nofile_limit, 512);
+        assert_eq!(cfg.nproc_limit, 128);
+        assert!(!cfg.enforce_cgroups);
+    }
+
+    #[test]
+    fn gvisor_isolation_fields_override_from_manifest() {
+        let cfg = parse_delivered_gvisor_config(serde_json::json!({
+            "runsc_path": "/usr/local/bin/runsc",
+            "scratch_bytes": 33554432,
+            "pids_limit": 96,
+            "enforce_cgroups": true
+        }))
+        .expect("populated gvisor_config");
+        assert_eq!(cfg.scratch_bytes, 33554432);
+        assert_eq!(cfg.pids_limit, 96);
+        assert!(cfg.enforce_cgroups);
     }
 }
